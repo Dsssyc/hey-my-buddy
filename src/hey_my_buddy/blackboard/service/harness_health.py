@@ -216,6 +216,8 @@ class HarnessHealth:
                 self.board.record_service_issue(f'harness-discovery:{name}', error)
                 record = {'harness': name, 'status': 'unhealthy',
                           'reason': make_reason('harness.probe-failed', operation='probe')}
+            else:
+                self.board.clear_service_issue(f'harness-discovery:{name}')
             if record.get('status') == 'unknown':
                 with self.board.db.write() as db:
                     if self._closed or self.board.upgrading():
@@ -431,6 +433,8 @@ class HarnessHealth:
                         self.refresh(name)
                     except (BoardError, OSError) as error:
                         self.board.record_service_issue(f'harness-scan:{name}', error)
+                    else:
+                        self.board.clear_service_issue(f'harness-scan:{name}')
             finally:
                 self._pending.release()
         self._thread = threading.Thread(target=run, name='harness-discovery', daemon=True)

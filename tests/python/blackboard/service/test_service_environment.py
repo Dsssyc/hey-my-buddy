@@ -20,6 +20,7 @@ from hey_my_buddy.protocol import transport
 #: long-lived service process, plus a representative attempt credential.
 HOST_SESSION_VARIABLES = {
     "CLAUDECODE": "1",
+    "HMB_DEBUG": "1",
     "CLAUDE_CODE_ENTRYPOINT": "cli",
     "CLAUDE_CODE_SESSION_ID": "9f1c4a2e-0000-4000-8000-000000000001",
     "CLAUDE_CODE_SSE_PORT": "12345",

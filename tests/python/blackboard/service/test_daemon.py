@@ -79,6 +79,38 @@ class DaemonAdmissionTests(BoardTestCase):
         issue = daemon.store.service_issues()[0]
         self.assertEqual((issue["stage"], issue["code"], issue["message"]),
                          ("workspace-cleanup", "OSError", "fixture cleanup refused"))
+        daemon._cleanup_accepted_workspaces()
+        self.assertEqual(daemon.store.service_issues(), [issue])
+        daemon.store.db.close()
+        recovered = Daemon(daemon.directory)
+        self.addCleanup(recovered.store.db.close)
+        recovered.store.initialize()
+        self.assertEqual(recovered.store.service_issues(), [issue])
+        recovered.queue_workspace_cleanup("one")
+        with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace", return_value={"removed": True}):
+            recovered._cleanup_accepted_workspaces()
+        self.assertEqual(recovered.store.service_issues(), [])
+        with recovered.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT kind FROM events ORDER BY seq DESC LIMIT 1").fetchone()[0],
+                             "service.issue_resolved")
+
+    def test_expected_workspace_retention_is_not_a_service_issue(self):
+        daemon = Daemon(self.directory / "state")
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        retained = BoardError("NOT_READY", "The accepted checkout must be retained", reasons=["unsealed-changes"])
+        for previous_failure in (False, True):
+            with self.subTest(previous_failure=previous_failure):
+                if previous_failure:
+                    daemon.store.record_service_issue("workspace-cleanup", OSError("earlier cleanup failure"))
+                daemon.queue_workspace_cleanup("retained")
+                with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace", side_effect=retained):
+                    daemon._cleanup_accepted_workspaces()
+                self.assertEqual(daemon.store.service_issues(), [])
+        with daemon.store.db.read() as db:
+            recorded = [json.loads(row[0])["code"] for row in db.execute(
+                "SELECT payload_json FROM events WHERE kind='service.issue'")]
+        self.assertNotIn("NOT_READY", recorded)
 
     def test_cancel_failure_is_visible_and_remaining_tasks_are_cancelled(self):
         daemon = Daemon(self.directory / "state")
@@ -93,6 +125,14 @@ class DaemonAdmissionTests(BoardTestCase):
                 self.assertEqual(cancel.call_count, 2)
             issue = next(item for item in daemon.store.service_issues() if item["stage"] == stage)
             self.assertEqual(issue["code"], "CONFLICT")
+            with patch.object(daemon.store, "active_work", return_value=work), \
+                 patch.object(daemon.store, "task_cancel", return_value={}):
+                self.assertEqual(method(None), 2)
+            self.assertNotIn(stage, [item["stage"] for item in daemon.store.service_issues()])
+            daemon.store.record_service_issue(stage, BoardError("CONFLICT", "earlier cancellation refused"))
+            with patch.object(daemon.store, "active_work", return_value={"queuedTasks": [], "attempts": []}):
+                self.assertEqual(method(None), 0)
+            self.assertNotIn(stage, [item["stage"] for item in daemon.store.service_issues()])
 
     def test_invalid_startup_setting_uses_the_existing_startup_error_record(self):
         with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory), "HMB_MAX_CONCURRENT": "invalid"}), \
