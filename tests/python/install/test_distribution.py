@@ -58,6 +58,7 @@ class DistributionTests(unittest.TestCase):
                     "hey_my_buddy/_distribution/package/packaging/runtime-assets.json",
                     "hey_my_buddy/_distribution/package/packaging/hatch_build.py",
                     "hey_my_buddy/_distribution/package/src/hey_my_buddy/install/runtime.py",
+                    "hey_my_buddy/_distribution/package/src/hey_my_buddy/protocol/reason-codes.json",
                     "hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/index.html",
                     "hey_my_buddy/install/package_install.py",
                 }
@@ -76,8 +77,8 @@ class DistributionTests(unittest.TestCase):
                 names = archive.getnames()
                 for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
                                "skills/hey-my-buddy/SKILL.md", "docs/reference/architecture.md",
-                               "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/console/assets/index.html",
-                               "src/hey_my_buddy/build-info.json"):
+                               "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/protocol/reason-codes.json",
+                               "src/hey_my_buddy/console/assets/index.html", "src/hey_my_buddy/build-info.json"):
                     self.assertTrue(any(name.endswith("/" + suffix) for name in names), suffix)
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in names))
                 # The sdist carries the source commit for a later Git-less wheel build.

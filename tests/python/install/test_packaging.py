@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "skills" / "hey-my-buddy" / "scripts" / "hey-my-buddy"
-REQUIRED_RESOURCES = {"console.assets", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"}
+REQUIRED_RESOURCES = {"console.assets", "reasons.codes", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"}
 
 
 def load_build_skill():
