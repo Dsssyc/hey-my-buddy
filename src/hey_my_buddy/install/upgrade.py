@@ -13,9 +13,11 @@ import sqlite3
 import stat
 import subprocess
 import time
+import tempfile
+from datetime import datetime, timezone
 import uuid
 
-from ..blackboard.store import backup, private_migration
+from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from ..protocol import schemas
@@ -268,20 +270,122 @@ def restore(state: Path, current: Path) -> None:
     backup.sync_dir(state)
 
 
-def layout_readiness(state: Path) -> dict:
-    """Admit only exact, stopped legacy paths that this upgrade can relocate."""
-    return private_migration.require_readiness(state, backup.preflight(state))
+def backup_readiness(state: Path) -> dict:
+    report = backup.preflight(state)
+    if not report['ok']:
+        raise BoardError('BACKUP_PREFLIGHT_FAILED', 'Backup inventory contains unsafe paths',
+                         rejected=report['rejected'])
+    return report
 
 
-def _private_summary(journal: dict, *, rolled_back: bool = False) -> dict | None:
-    record = journal.get('privateMigration')
-    if not record or 'movedCount' not in record:
-        return None
-    result = {key: record.get(key, 0 if key != 'paths' else []) for key in
-              ('count', 'movedCount', 'deletedCount', 'credentialCleanupCount', 'paths')}
-    if rolled_back:
-        result['rolledBack'] = True
-    return result
+@contextmanager
+def archive_read(state: Path):
+    """Inspect a private SQLite copy, including WAL, without creating live sidecars.
+
+    The admission samples may race a writer; the authoritative destructive check
+    runs after detachment under both owner locks.
+    """
+    with tempfile.TemporaryDirectory(prefix='buddy-upgrade-read-') as raw:
+        trial = Path(raw) / 'board.sqlite3'
+        backup._private_copy(state / 'board.sqlite3', trial)
+        wal = state / 'board.sqlite3-wal'
+        if wal.exists():
+            backup._private_copy(wal, trial.with_name('board.sqlite3-wal'))
+        with closing(sqlite3.connect(trial)) as connection:
+            connection.execute('BEGIN')
+            yield connection
+
+
+def require_archive_readiness(state: Path) -> None:
+    """The destructive pending upgrade has stricter admission than an idle cutover."""
+    with archive_read(state) as connection:
+        schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        if schema is None or str(schema[0]) not in (str(PREVIOUS_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+            raise BoardError('UNSUPPORTED_SCHEMA', 'Upgrade accepts schema 18 or 19 only')
+        if int(schema[0]) == SCHEMA_VERSION:
+            return
+        from ..blackboard.tasks import host_conclusions
+        connection.row_factory = sqlite3.Row
+        active = [(row['run_id'], row['state']) for row in connection.execute(
+            "SELECT * FROM workflow_runs WHERE state IN ('executing','awaiting-host','waiting-helpers','delivered')")
+            if row['state'] != 'delivered' or host_conclusions.current(connection, row,
+                connection.execute('SELECT * FROM tasks WHERE task_id=?', (row['run_id'],)).fetchone()) is None]
+        active += [row for row in connection.execute(
+            "SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')")
+                   if row[0] not in {item[0] for item in active}]
+        unresolved = [row[0] for row in connection.execute(
+            "SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1")]
+    checkouts = []
+    root = state / 'workspaces'
+    _restore_guard(root)
+    if root.exists():
+        for allocation in sorted(root.iterdir()):
+            checkout = allocation / 'checkout'
+            if checkout.exists() or checkout.is_symlink():
+                checkouts.append({'workspaceId': allocation.name, 'path': str(checkout)})
+    if active or unresolved or checkouts:
+        raise BoardError('UPGRADE_NOT_IDLE', 'Archive upgrade requires concluded micro tasks, confirmed stops and reclaimed managed checkouts',
+                         active=[{'runId': row[0], 'state': row[1]} for row in active],
+                         unresolvedAttempts=unresolved, managedCheckouts=checkouts)
+
+
+def archive_backup(state: Path, saved: dict, journal: dict, marker: Path) -> dict:
+    """Publish the verified stopped-board backup as a permanent archive."""
+    source = Path(saved['path'])
+    manifest = backup.verify(source)
+    if not manifest['pluginCommit']:
+        raise BoardError('UPGRADE_ARCHIVE_IDENTITY_UNAVAILABLE', 'Archive requires the previous runtime source commit')
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+    target = state / 'archives' / f"{stamp}-schema-{manifest['schema']}"
+    _restore_guard(target)
+    target.parent.mkdir(mode=0o700, exist_ok=True)
+    manifest['archivedFrom'] = {'sourceCommit': manifest['pluginCommit'],
+                                'version': manifest['contract'], 'schema': manifest['schema']}
+    write_journal(source / 'manifest.json', manifest)
+    # Recovery can find either side of this rename from the durable intent.
+    journal['archivePath'] = str(target)
+    write_journal(marker, journal)
+    source.rename(target)
+    backup.sync_dir(source.parent)
+    backup.sync_dir(target.parent)
+    saved = {**saved, 'path': str(target)}
+    journal.update(phase='archived', backup=saved)
+    write_journal(marker, journal)
+    return saved
+
+
+def archive_history_paths(state: Path, archive: Path) -> list[Path]:
+    """Validate archive and live history before replacing or deleting anything."""
+    manifest = backup.verify(archive)
+    paths = []
+    for relative, record in manifest['files'].items():
+        parts = Path(relative).parts
+        if parts[0] != 'state' or parts[1] in backup.STATE_FILES:
+            continue
+        path = state.joinpath(*parts[1:])
+        _restore_guard(path)
+        if path.stat().st_size != record['bytes'] or backup.digest(path) != record['sha256']:
+            raise BoardError('UPGRADE_ARCHIVE_CHANGED', 'History no longer matches its archive', path=str(path.relative_to(state)))
+        paths.append(path)
+    with gzip.open(archive / 'board.sqlite3.gz', 'rb') as stream:
+        archived_digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if backup.digest(state / 'board.sqlite3') != archived_digest:
+        raise BoardError('UPGRADE_ARCHIVE_CHANGED', 'Board bytes no longer match the archive')
+    return paths
+
+
+def clear_archived_history(state: Path, paths: list[Path]) -> dict:
+    """Execute the validated archive inventory under the exclusive owner locks."""
+    for path in paths:
+        path.unlink()
+        parent = path.parent
+        while parent != state:
+            if any(parent.iterdir()):
+                break
+            parent.rmdir()
+            parent = parent.parent
+    backup.sync_dir(state)
+    return {'removedFiles': len(paths)}
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict) -> dict:
@@ -305,8 +409,10 @@ def verify_started(state: Path, target: Path, health: dict, before: dict) -> dic
 
 
 def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
-    """Run the one migration after backup, retaining its exact data-verification boundary."""
+    """Replace schema 18 with a fresh current board carrying only settings."""
     from ..blackboard.store import migrations
+    from ..blackboard.store.db import Database
+    require_archive_readiness(state)
     baseline = idle_snapshot(state, event_head=before.get('eventHead'))
     changed = [name for name, value in before['fingerprints'].items()
                if baseline['fingerprints'].get(name) != value]
@@ -314,11 +420,23 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
     if changed or inventory or baseline['schema'] != before['schema']:
         raise BoardError('UPGRADE_MIGRATION_FAILED', 'Board no longer matches its verified backup',
                          tables=sorted(set(changed + inventory)))
-    with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
-        summary = migrations.migrate_17_to_18(connection)
-    expected = idle_snapshot(state, event_head=before.get('eventHead'))
+    if baseline['schema'] != PREVIOUS_SCHEMA_VERSION:
+        raise BoardError('UPGRADE_MIGRATION_FAILED', 'Fresh-board upgrade expects schema 18', tables=['meta'])
+    with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        settings = migrations.read_settings(connection)
+    with tempfile.TemporaryDirectory(prefix='.new-board-', dir=state) as raw:
+        fresh = Database(Path(raw))
+        fresh.initialize()
+        with fresh.write() as connection:
+            migrations.write_settings(connection, settings)
+        for suffix in ('-wal', '-shm'):
+            (state / ('board.sqlite3' + suffix)).unlink(missing_ok=True)
+        os.replace(fresh.path, state / 'board.sqlite3')
+        backup.sync_dir(state)
+    expected = idle_snapshot(state)
     expected['runtimeSettings'] = before.get('runtimeSettings', {})
-    return summary, expected
+    return {'fromSchema': PREVIOUS_SCHEMA_VERSION, 'toSchema': SCHEMA_VERSION,
+            'settingsRows': {name: len(rows) for name, rows in settings['tables'].items()}}, expected
 
 
 def _failure_reason(error: Exception) -> dict:
@@ -434,9 +552,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The live installed service does not match its recorded runtime identity')
     preserved = {'BUDDY_MAX_CONCURRENT':str(health_before['maxConcurrent']), 'BUDDY_WAIT_CAPACITY':str(health_before['waitCapacity'])}
     runtime_settings = {'maxConcurrent':health_before['maxConcurrent'], 'waitCapacity':health_before['waitCapacity']}
+    require_archive_readiness(state)
     before = idle_snapshot(state)
     before['runtimeSettings'] = runtime_settings
-    layout_readiness(state)
+    backup_readiness(state)
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
@@ -450,9 +569,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         attached = probe(state, previous)
         if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
             raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
+        require_archive_readiness(state)
         before = idle_snapshot(state)
         before['runtimeSettings'] = runtime_settings
-        layout_readiness(state)
+        backup_readiness(state)
         skill_stage = None
         skill_previous = None
         if skill_source is not None:
@@ -483,24 +603,26 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             # A request may have entered the previous daemon before its entry
             # fence became visible. Recheck after fencing, and take the backup
             # only after detach proves there are no remaining database writers.
+            require_archive_readiness(state)
             before = idle_snapshot(state)
             before['runtimeSettings'] = runtime_settings
             journal['before'] = before
             write_journal(marker, journal)
             # The fence can expose a path changed after the earlier inventory.
             # Refuse it while the previous service still owns its endpoint.
-            layout_readiness(state)
+            backup_readiness(state)
             # The exclusive maintenance owner uses the same backup implementation
             # after all previous daemon writers have stopped.
             detach(state, previous)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
+                require_archive_readiness(state)
                 before = idle_snapshot(state)
                 before['runtimeSettings'] = runtime_settings
-                readiness = layout_readiness(state)
+                backup_readiness(state)
                 journal['before'] = before
                 if backed_up is None:
-                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'])
+                    backed_up = backup.create(BoardStore(state), runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=endpoint['contractVersion'], offline=True)
                 stored = backup.verify(Path(backed_up['path']))
                 if stored.get('databaseSnapshot') is not None:
                     before = {**stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
@@ -509,16 +631,16 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 write_journal(marker, journal)
                 expected = before
                 if before.get('schema') == PREVIOUS_SCHEMA_VERSION:
-                    migration, expected = migrate_board(state, before)
-                    journal.update(phase='migrated', migration=migration, expected=expected)
+                    backed_up = archive_backup(state, backed_up, journal, marker)
+                    history_paths = archive_history_paths(state, Path(backed_up['path']))
+                    journal.update(phase='board-replacing')
                     write_journal(marker, journal)
-                from ..blackboard.store.workspace_identity_migration import migrate_workspace_identity
-                identity_migration, expected = migrate_workspace_identity(state, expected)
-                journal.update(phase='identity-migrated', identityMigration=identity_migration, expected=expected)
-                write_journal(marker, journal)
-                journal['privateMigration'] = {**readiness['plan'], 'applied': False}
-                write_journal(marker, journal)
-                private_summary = private_migration.apply(state, journal, lambda value: write_journal(marker, value))
+                    migration, expected = migrate_board(state, before)
+                    journal.update(phase='board-created', migration=migration, expected=expected)
+                    write_journal(marker, journal)
+                    cleanup = clear_archived_history(state, history_paths)
+                    journal.update(phase='history-cleared', historyCleanup=cleanup)
+                    write_journal(marker, journal)
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
@@ -541,7 +663,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             except Exception as cleanup_error:
                 pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
-                    'privateMigration': private_summary,
+                    'archive': backed_up if journal.get('archivePath') else None,
                     'rollback':None, 'runtimePruning':pruning}
         except Exception as failure:
             reason = _failure_reason(failure)
@@ -561,10 +683,9 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
-                if backed_up is not None:
+                if backed_up is not None and journal['phase'] not in ('preflight', 'backed-up', 'archived'):
                     with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                         restore(state, Path(backed_up['path']))
-                        private_migration.rollback(state, journal, lambda value: write_journal(marker, value))
                 # A race admitted work before the old daemon detached: preserve it
                 # and restart the previous runtime without restoring an older DB.
                 recovered = start(state, previous)
@@ -578,7 +699,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
                         'backup':backed_up, 'rollback':evidence,
-                        'privateMigration':_private_summary(journal, rolled_back=True)}
+                        'archive': backed_up if journal.get('archivePath') else None}
             except Exception as recovery:
                 journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
                 write_journal(marker, journal)
@@ -592,8 +713,6 @@ def recover(state: Path, root: Path) -> dict:
     marker = state / 'upgrade.json'
     journal = json.loads(marker.read_text())
     _skill_paths(journal)  # Validate destructive recovery paths before touching a service.
-    if journal.get('privateMigration'):
-        private_migration.validate_journal(state.resolve(), journal['privateMigration'])
     from .launcher import write_active_runtime
     previous, target = Path(journal['previous']), Path(journal['target'])
     for path in (previous, target):
@@ -602,8 +721,6 @@ def recover(state: Path, root: Path) -> dict:
     target_health = probe(state, target)
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
-        if journal.get('privateMigration') and journal['privateMigration'].get('applied') is not True:
-            raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Verified runtime has unfinished private relocation')
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
@@ -611,7 +728,7 @@ def recover(state: Path, root: Path) -> dict:
         _finish_skill(journal)
         clear_journal(marker)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
-                'privateMigration':_private_summary(journal)}
+                'archive': journal.get('archivePath')}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
@@ -636,10 +753,18 @@ def recover(state: Path, root: Path) -> dict:
         saved = journal.get('backup')
         if saved is not None:
             current = state / 'backups/current'
-            if Path(saved['path']).resolve() != current.resolve():
-                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path is not the single current backup')
+            archive = journal.get('archivePath')
+            if archive is not None:
+                candidate = Path(archive)
+                import re
+                if candidate.parent != state / 'archives' or re.fullmatch(r'\d{8}T\d{12}Z-schema-18', candidate.name) is None:
+                    raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal archive path is invalid')
+                _restore_guard(candidate)
+                if candidate.exists():
+                    current = candidate
+            if Path(saved['path']) not in (state / 'backups/current', current):
+                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match its archive')
             restore(state, current)
-        private_migration.rollback(state, journal, lambda value: write_journal(marker, value))
         before = idle_snapshot(state)
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
@@ -649,4 +774,4 @@ def recover(state: Path, root: Path) -> dict:
     write_journal(state / 'upgrade-last.json', journal)
     clear_journal(marker)
     return {'upgraded':False, 'recoveredJournal':True, 'backup':journal.get('backup'), 'rollback':evidence,
-            'privateMigration':_private_summary(journal, rolled_back=True)}
+            'archive': journal.get('archivePath')}

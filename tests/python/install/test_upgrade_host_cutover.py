@@ -114,7 +114,7 @@ class HostCutoverTests(RealWorkspaceTestCase):
                 "task": "private upgrade goal", "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "worktree", "access": "write"}}
 
-    def test_real_upgrade_preserves_host_boundary_receipts_and_retriable_wait(self):
+    def test_same_schema_upgrade_preserves_host_boundary_receipts_and_retriable_wait(self):
         previous = self.private_runtime("previous")
         target = self.private_runtime("target")
         environment = self.child_environment({"BUDDY_RUNTIME_ROOT": str(previous.parent),
@@ -122,23 +122,13 @@ class HostCutoverTests(RealWorkspaceTestCase):
         environment.pop("PYTHONPATH", None)
         environment.pop("BUDDY_DEV_SOURCE", None)
         entry_modules = launcher.entry_modules
-        spawn = subprocess.Popen
-
         def fixture_modules(path):
             return {**entry_modules(path), "daemon": "hey_my_buddy._upgrade_fixture_daemon"}
-
-        def observe_spawn(*args, **kwargs):
-            child = spawn(*args, **kwargs)
-            if kwargs.get("start_new_session"):
-                self.children = getattr(self, "children", [])
-                self.children.append(child)
-            return child
 
         # The real coordinator launches both generations from their own
         # interpreters. Only preparation is replaced by already-built fixtures.
         with mock.patch.dict(os.environ, environment, clear=True), \
                 mock.patch.object(launcher, "entry_modules", side_effect=fixture_modules), \
-                mock.patch.object(subprocess, "Popen", side_effect=observe_spawn), \
                 mock.patch.object(upgrade.runtime, "materialize", return_value={"runtimeDir": str(target)}):
             try:
                 started = upgrade.start(self.directory, previous)

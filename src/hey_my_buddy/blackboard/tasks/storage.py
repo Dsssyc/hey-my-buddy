@@ -540,7 +540,7 @@ def inspect(store) -> dict:
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
-        if path.name in {'workspaces','harnesses','backups'} or path == runtime_root:
+        if path.name in {'workspaces','harnesses','backups','archives'} or path == runtime_root:
             continue
         add('durable', path, ['durable-record'])
     if harnesses.exists() and not private_dirs.linked(harnesses):

@@ -228,6 +228,21 @@ def preflight_entries(state: Path):
     yield from _scan(state / 'attempts', attempt_depth=2)
     for name in ('controls', 'submissions'):
         yield from _scan(state / name)
+    # Workspace inputs and sealed outputs are durable evidence, independently
+    # of the checkout lifetime. Never enter checkouts or allocation locks.
+    workspaces = state / 'workspaces'
+    if _linked(workspaces) or workspaces.exists() and not workspaces.is_dir():
+        yield 'rejected', workspaces, 'linked-path' if _linked(workspaces) else 'non-directory-path'
+    elif workspaces.exists():
+        for allocation in sorted(workspaces.iterdir()):
+            if re.fullmatch(r'ws-[0-9a-f]{32}', allocation.name) is None:
+                continue
+            if _linked(allocation) or not allocation.is_dir():
+                yield 'rejected', allocation, 'linked-path' if _linked(allocation) else 'non-directory-path'
+                continue
+            for name in ('input.json', 'manifest.json'):
+                yield from _single(allocation / name)
+            yield from _scan(allocation / 'outputs')
     # Retired DSH archive receipts remain ordinary historical evidence. A linked
     # journal root or an undeclared name must never enter a verified backup.
     session_journals = state / 'worker-session-cleanup'
@@ -262,26 +277,19 @@ def preflight_entries(state: Path):
 
 def preflight(state: Path) -> dict:
     """Report copying/skipping/refusal without locks, writes, hashing or startup."""
-    from . import private_migration
     result = {kind: {'count': 0, 'paths': [], 'entries': []}
               for kind in ('copied', 'skipped', 'rejected')}
-    # Full skipped inventory (the samples below are bounded): the relocation
-    # cross-check must judge every skipped entry, not the first twenty.
-    skipped: list[str] = []
     for kind, path, reason in preflight_entries(state):
         row = result[kind]
         row['count'] += 1
-        if kind == 'skipped':
-            skipped.append(path.relative_to(state).as_posix())
         if len(row['entries']) < 20:
             relative = _shown_path(path.relative_to(state).as_posix())
             row['paths'].append(relative)
             row['entries'].append({'path': relative, 'reason': reason})
-    legacy = private_migration.legacy_readiness(state, skipped)
     return {'policy': attempt_evidence.POLICY,
-            'ok': result['rejected']['count'] == 0 and legacy['ready'],
+            'ok': result['rejected']['count'] == 0,
             'needsAttention': result['skipped']['count'] > 0 or result['rejected']['count'] > 0,
-            'legacyPlan': legacy, **result}
+            **result}
 
 
 def preflight_command(params: dict) -> dict:
@@ -433,13 +441,12 @@ def _verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
             if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
-        if manifest.get('schema') == PREVIOUS_SCHEMA_VERSION:
-            # A pre-upgrade backup must also prove it migrates cleanly.
-            from .migrations import migrate_17_to_18
-            with closing(sqlite3.connect(trial / 'board.sqlite3', isolation_level=None)) as connection:
-                migrate_17_to_18(connection)
-        # Exercise the real current-schema opener in a separate private directory.
-        Database(trial).initialize()
+        with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
+            schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if schema is None or int(schema[0]) != manifest['schema']:
+                raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
+        if manifest['schema'] == SCHEMA_VERSION:
+            Database(trial).initialize()
     return manifest
 
 
@@ -575,7 +582,7 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
+def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION, offline: bool = False) -> dict:
     started = time.monotonic()
     if _linked_component(store.directory):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
@@ -586,6 +593,9 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             relative = _shown_path(path.relative_to(state).as_posix())
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup refuses ' + relative + ': ' + reason,
                              path=relative, reason=reason)
+    wal = state / 'board.sqlite3-wal'
+    if offline and wal.exists() and wal.stat().st_size:
+        raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')
     root = state / 'backups'
     incoming, current, previous, journal, _ = _backup_paths(root)
     root.mkdir(mode=0o700, exist_ok=True)
@@ -612,11 +622,15 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         incoming.mkdir(mode=0o700)
         snapshot = incoming / 'board.sqlite3'
         _guard(state / 'board.sqlite3')
-        with _open(snapshot, 'xb'):
-            pass
-        _guard(snapshot)
-        with store.db.connect() as source, closing(sqlite3.connect(snapshot)) as target:
-            source.backup(target)
+        if offline:
+            # The coordinator owns both writer locks and has detached every owner.
+            # Copy the stopped database verbatim so the archive preserves its bytes.
+            _private_copy(state / 'board.sqlite3', snapshot)
+        else:
+            with _open(snapshot, 'xb'):
+                pass
+            with store.db.connect() as source, closing(sqlite3.connect(snapshot)) as target:
+                source.backup(target)
         os.chmod(snapshot, 0o600)
         with closing(sqlite3.connect(snapshot)) as connection:
             snapshot_metadata = database_snapshot(connection)
