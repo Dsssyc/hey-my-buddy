@@ -408,20 +408,31 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.end.native_exit_code, -15)
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
-    def test_unverified_no_tool_policy_and_model_continue_with_readback_facts(self):
-        for case, check in (("config-mismatch", "configReadback"), ("wrong-model", "selectedModel")):
+    def test_unverified_no_tool_policy_continues_with_readback_facts(self):
+        result = self.fast_run("config-mismatch", FastCorrection(FAST_SCHEMA, "Pick a profile"))
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertTrue(result.model_started)
+        facts = native_run.native_evidence(result)
+        self.assertEqual(facts["policyCheck"]["configReadback"]["status"], "unknown")
+        self.assertEqual(facts["nativeConfigPolicy"]["web_search"], "enabled")
+
+    def test_unreadable_no_tool_model_continues_with_unknown_checked_model(self):
+        for case in ("missing-model", "unreadable-model"):
             with self.subTest(case=case):
-                correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
-                result = self.fast_run(case, correction)
+                result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a profile"))
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertTrue(result.model_started)
-                facts = native_run.native_evidence(result)
-                self.assertEqual(facts["policyCheck"][check]["status"], "unknown")
-                if case == "wrong-model":
-                    self.assertEqual(result.configuration.checked.model.value, "other")
-                    self.assertIsNone(result.configuration.checked.effort)
-                else:
-                    self.assertEqual(facts["nativeConfigPolicy"]["web_search"], "enabled")
+                self.assertIsNone(result.configuration.checked.model)
+                self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
+
+    def test_different_no_tool_model_is_refused_before_model_input(self):
+        result = self.fast_run("wrong-model", FastCorrection(FAST_SCHEMA, "Pick a profile"))
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "configuration-mismatch")
+        self.assertIsNone(result.model_started)
+        self.assertEqual(native_run.native_evidence(result)["nativeThreadReceipt"]["model"], "other")
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        self.assertNotIn("turns", trace)
 
     def test_unfamiliar_startup_items_continue_and_reach_result_facts(self):
         for case, label in (("startup-unknown", "futureThing"),
@@ -685,6 +696,37 @@ class ReviewSeamTests(CodexSeamCase):
                 else:
                     self.assertIs(facts["nativeConfigPolicy"]["permissions"]["buddy-router"]["network"]["enabled"], True)
 
+    def test_unreadable_review_model_continues_with_unknown_checked_model(self):
+        for case in ("readonly-model-missing", "readonly-model-unreadable"):
+            with self.subTest(case=case):
+                result = self.review_run(case)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertTrue(result.model_started)
+                self.assertIsNone(result.configuration.checked.model)
+                self.assertEqual(native_run.native_evidence(result)["policyCheck"]["selectedModel"]["status"], "unknown")
+
+    def test_different_review_model_is_refused_before_model_input(self):
+        result = self.review_run("readonly-model-mismatch")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "readonly-configuration-mismatch")
+        self.assertIsNone(result.model_started)
+        self.assertEqual(native_run.native_evidence(result)["nativePolicy"]["model"], "different-model")
+        trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+        self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
+
+    def test_review_without_read_only_sandbox_is_refused_before_model_input(self):
+        for case in ("readonly-sandbox-mismatch", "readonly-sandbox-unreadable"):
+            with self.subTest(case=case):
+                result = self.review_run(case)
+                self.assertEqual(result.end.status, "error")
+                self.assertEqual(result.end.reason_code, "readonly-policy-unverified")
+                self.assertIsNone(result.model_started)
+                facts = native_run.native_evidence(result)
+                self.assertIn("nativePolicy", facts)
+                self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "unknown")
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
+
     def test_review_unknown_item_shapes_continue_through_bounded_capture(self):
         result = self.review_run("readonly-unknown-item-shape", capture_evidence=True,
                                  observer=lambda _facts: FEEDBACK_CONTINUE)
@@ -738,6 +780,12 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertLessEqual(len(error["message"].encode()), 4096)
         self.assertIs(error["messageTruncated"], True)
         self.assertNotIn("\ufffd", error["message"])
+
+    def test_unreadable_initial_config_uses_empty_native_config_and_continues(self):
+        result = self.worker_run("config-unreadable")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertTrue(result.model_started)
+
     def test_unreadable_catalog_continues_worker_turn_without_confirming_selection(self):
         result = self.worker_run("bad-catalog")
         self.assertEqual(result.end.status, "ok", result.end.message)

@@ -93,18 +93,43 @@ class NativeFactsTests(unittest.TestCase):
         result = SimpleNamespace(evidence_refs=refs)
         self.assertEqual(native_run._read_evidence_ref(result, "fast-thread-receipt")["approvalPolicy"], "on-request")
 
-    def test_review_model_mismatch_continues_as_unknown_with_actual_model(self):
-        receipt = {**self.receipt, "model": "different-model", "modelProvider": "native-provider"}
-        thread, state = self.configure("review", receipt, {})
-        self.assertEqual(thread, "thread")
-        self.assertEqual(state.policy_checks["selectedModel"]["status"], "unknown")
-        checked = native_run._checked_configuration(self.request, state, "review").checked
-        self.assertEqual(checked.model.value, "different-model")
-        self.assertEqual(checked.provider.value, "native-provider")
-        self.assertIsNone(checked.effort)
-        refs = native_run._evidence_refs(self.request, state, native_run._RunFacts())
-        result = SimpleNamespace(evidence_refs=refs)
-        self.assertEqual(native_run._read_evidence_ref(result, "review-thread-receipt")["model"], "different-model")
+    def test_different_native_model_still_refuses_even_beyond_readback_bound(self):
+        for mode, code in (("review", "readonly-configuration-mismatch"), ("fast", "configuration-mismatch")):
+            for model in ("different-model", "", "x" * (STRICT_RESULT_BYTES + 1)):
+                with self.subTest(mode=mode, model_length=len(model)):
+                    receipt = {**self.receipt, "model": model}
+                    with self.assertRaises(CodexProtocolError) as caught:
+                        self.configure(mode, receipt, {})
+                    self.assertEqual(caught.exception.code, code)
+
+    def test_unreadable_review_model_continues_with_unconfirmed_model_fact(self):
+        for model in (None, 17, []):
+            with self.subTest(model=model):
+                receipt = {**self.receipt, "model": model}
+                thread, state = self.configure("review", receipt, {})
+                self.assertEqual(thread, "thread")
+                self.assertEqual(state.policy_checks["selectedModel"]["status"], "unknown")
+                checked = native_run._checked_configuration(self.request, state, "review").checked
+                self.assertIsNone(checked.model)
+                self.assertIsNone(checked.effort)
+
+    def test_review_sandbox_capability_still_refuses_missing_or_non_read_only_type(self):
+        for sandbox in (None, [], "new-shape", {}, {"type": "workspaceWrite"}):
+            with self.subTest(sandbox=sandbox):
+                receipt = {**self.receipt, "sandbox": sandbox}
+                with self.assertRaises(CodexProtocolError) as caught:
+                    self.configure("review", receipt, {})
+                self.assertEqual(caught.exception.code, "readonly-policy-unverified")
+
+    def test_other_review_receipt_restrictions_continue_as_unverified(self):
+        for change in ({"activePermissionProfile": {"id": "different"}},
+                       {"activePermissionProfile": []}, {"approvalPolicy": "on-request"},
+                       {"sandbox": {"type": "readOnly", "networkAccess": True}},
+                       {"sandbox": {"type": "readOnly", "networkAccess": []}}):
+            with self.subTest(change=change):
+                thread, state = self.configure("review", {**self.receipt, **change}, {})
+                self.assertEqual(thread, "thread")
+                self.assertEqual(state.policy_checks["threadReceipt"]["status"], "unknown")
 
     def test_review_checkout_and_thread_ownership_still_refuse(self):
         for top, nested, reason in (({"cwd": str(self.root / "foreign")}, {}, "readonly-configuration-mismatch"),
@@ -120,7 +145,7 @@ class NativeFactsTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, reason)
 
     def test_unreadable_policy_shapes_continue_as_unknown(self):
-        receipt = {**self.receipt, "activePermissionProfile": [], "sandbox": "new-shape"}
+        receipt = {**self.receipt, "activePermissionProfile": [], "sandbox": {"type": "readOnly", "networkAccess": []}}
         thread, state = self.configure("review", receipt,
                                                 {"features": [], "permissions": "new-shape"})
         self.assertEqual(thread, "thread")
@@ -138,9 +163,9 @@ class NativeFactsTests(unittest.TestCase):
 
     def test_large_unverified_policy_fields_keep_bounded_projectable_facts(self):
         large = "x" * (STRICT_RESULT_BYTES + 1)
-        receipt = {**self.receipt, "model": large, "modelProvider": large,
+        receipt = {**self.receipt, "model": None, "modelProvider": large,
                    "approvalPolicy": large, "activePermissionProfile": {"id": large},
-                   "sandbox": {"type": large}}
+                   "sandbox": {"type": "readOnly", "networkAccess": large}}
         config = {"web_search": large, "approval_policy": large, "default_permissions": large,
                   "permissions": {"buddy-router": {"filesystem": {large: "write"}}}}
         for mode in ("fast", "review"):

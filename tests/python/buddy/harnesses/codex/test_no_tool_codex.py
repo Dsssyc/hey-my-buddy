@@ -194,21 +194,20 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(correction_code('{"reason":"too long"}', bounded), 'answer-shape')
 
     def test_policy_readback_differences_and_deadline(self):
-        for case in ("config-mismatch", "wrong-model"):
-            with self.subTest(case=case):
-                outcome, _control, directory = self.run_case(case)
-                self.assertEqual(outcome.status, 'ok', outcome.result)
-                self.assertIs(outcome.result["modelStarted"], True)
-                self.assertIs(outcome.result["zeroToolVerified"], True)
-                self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
-                if case == "config-mismatch":
-                    self.assertEqual(outcome.result["policyCheck"]["configReadback"]["status"], "unknown")
-                    self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
-                else:
-                    self.assertEqual(outcome.result["policyCheck"]["selectedModel"]["status"], "unknown")
-                    self.assertEqual(outcome.result["requested"]["model"], "fixture-model")
-                    self.assertIsNone(outcome.result["resolved"])
-                    self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
+        outcome, _control, directory = self.run_case("config-mismatch")
+        self.assertEqual(outcome.status, 'ok', outcome.result)
+        self.assertIs(outcome.result["modelStarted"], True)
+        self.assertIs(outcome.result["zeroToolVerified"], True)
+        self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
+        self.assertEqual(outcome.result["policyCheck"]["configReadback"]["status"], "unknown")
+        self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
+        outcome, _control, directory = self.run_case("wrong-model")
+        self.assertEqual(outcome.status, 'failed', outcome.result)
+        self.assertEqual(outcome.result["code"], "configuration-mismatch")
+        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertIs(outcome.result["zeroToolVerified"], False)
+        self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
+        self.assertNotIn("turns", json.loads((directory / "trace.json").read_text()))
         outcome, control, _directory = self.run_case("hang", timeout=1)
         self.assertEqual(outcome.status, 'failed', outcome.result)
         self.assertEqual(outcome.result["code"], "deadline")

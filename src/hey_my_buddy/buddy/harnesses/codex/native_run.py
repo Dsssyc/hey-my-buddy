@@ -566,7 +566,8 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
     connection.call("account/read", {"refreshToken": False})
-    configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config") or {}
+    configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config")
+    configured = configured if isinstance(configured, dict) else {}
     catalog, listed_ids = _catalog(connection, prep.version, native_provider(configured))
     state.catalog_read = {"discovery": catalog["discoveries"][0], "warnings": catalog["warnings"]}
     if spec.get("model") not in listed_ids:
@@ -733,6 +734,12 @@ def _configure_review(connection: Connection, request: RunRequest,
                                   and sandbox.get("networkAccess") is False) else "unknown"}
     state.native_model = _bounded(response.get("model"), 128)
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
+    if not isinstance(sandbox, dict) or sandbox.get("type") != "readOnly":
+        raise CodexProtocolError("readonly-policy-unverified",
+                                 "Codex did not acknowledge a read-only sandbox")
+    if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
+        raise CodexProtocolError("readonly-configuration-mismatch",
+                                 "Codex acknowledged a different read-only model")
     if not isinstance(response.get("cwd"), str) or Path(response["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only checkout")
@@ -769,6 +776,8 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     state.native_model = _bounded(response.get("model"), 128)
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
     state.policy_checks["threadReceipt"] = {"status": "confirmed" if response.get("approvalPolicy") == "never" else "unknown"}
+    if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
+        raise CodexProtocolError("configuration-mismatch", "Codex acknowledged a different no-tool model")
     if not isinstance(thread_id, str) or not thread_id:
         raise CodexProtocolError("wrong-native-thread", "Codex returned no no-tool thread identity")
     if not isinstance(thread.get("cwd"), str) or Path(thread["cwd"]).resolve() != Path(cwd).resolve():

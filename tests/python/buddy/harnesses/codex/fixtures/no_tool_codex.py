@@ -67,9 +67,14 @@ def main():
         elif method == "thread/start":
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
             trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
-            send({"id": ident, "result": {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
-                "model": "other" if case == "wrong-model" else params["model"],
-                "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}})
+            receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
+                       "model": "other" if case == "wrong-model" else params["model"],
+                       "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
+            if case == "missing-model":
+                del receipt["model"]
+            elif case == "unreadable-model":
+                receipt["model"] = ["new-native-shape"]
+            send({"id": ident, "result": receipt})
         elif method == "turn/start":
             turns += 1
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])

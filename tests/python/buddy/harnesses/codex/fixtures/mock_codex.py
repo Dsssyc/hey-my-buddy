@@ -154,7 +154,7 @@ def main():
             configured = dict(native_config)
             if case == 'readonly-config-mismatch' and 'permissions' in configured:
                 configured['permissions']['buddy-router']['network']['enabled'] = True
-            send({'id': ident, 'result': {'config': configured}})
+            send({'id': ident, 'result': {'config': [] if case == 'config-unreadable' else configured}})
         elif method == "account/read":
             if case == "account-unknown":
                 account = {"type": "unrecognized"}
@@ -216,6 +216,16 @@ def main():
                       if params.get('permissions') else {})
             if case == 'readonly-policy-mismatch':
                 policy['sandbox']['networkAccess'] = True
+            elif case == 'readonly-sandbox-mismatch':
+                policy['sandbox']['type'] = 'workspaceWrite'
+            elif case == 'readonly-sandbox-unreadable':
+                policy['sandbox'] = []
+            elif case == 'readonly-model-mismatch':
+                policy['model'] = 'different-model'
+            elif case == 'readonly-model-missing':
+                del policy['model']
+            elif case == 'readonly-model-unreadable':
+                policy['model'] = 17
             send({"id": ident, "result": {**policy, "thread": {"id": thread_id, "cwd": params["cwd"],
                                                        "modelProvider": provider, "turns": []}}})
         elif method == "thread/read":
