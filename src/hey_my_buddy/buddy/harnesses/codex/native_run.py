@@ -1000,10 +1000,9 @@ def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
                   "nativeTurnStarted": evidence.started,
                   "nativeTurnStatus": (evidence.completed or {}).get("status", "incomplete"),
                   "eventSeq": evidence.event_seq, "bindingSaved": False}
-    if evidence.superseded_final_answers:
-        checkpoint["supersededFinalAnswers"] = {
-            "count": len(evidence.superseded_final_answers),
-            "records": list(evidence.superseded_final_answers)}
+    checkpoint["supersededFinalAnswers"] = {
+        "count": len(evidence.superseded_final_answers),
+        "records": list(evidence.superseded_final_answers)}
     item = evidence.final_item or getattr(evidence, "last_agent_item", None)
     if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
         raw = item["text"].encode()

@@ -166,7 +166,7 @@ class CodexAdapterTests(unittest.TestCase):
                     self.assertEqual(turn["outcome"]["summary"], "fixture work completed")
                     self.assertEqual(turn["provenance"]["finalItemId"], "final-1" if case == "ok" else "final-2")
                 if parsable is None:
-                    self.assertNotIn("supersededFinalAnswers", checkpoint)
+                    self.assertEqual(checkpoint["supersededFinalAnswers"], {"count": 0, "records": []})
                     continue
                 state = json.loads(Path(self.environment["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 native_turn = state["threads"][outcome.result["sessionId"]]["turns"][-1]
