@@ -252,7 +252,7 @@ class WindowsWorkspaceTests(unittest.TestCase):
             pass
         (self.root / ".lock").unlink()
         (self.root / ".lock").symlink_to("elsewhere")
-        with self.assertRaises(BoardError if os.name == "nt" else OSError):
+        with self.assertRaises(BoardError):
             with workspace._lock(self.root):
                 pass
         self.assertFalse((self.root / "elsewhere").exists())

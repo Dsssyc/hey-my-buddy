@@ -1,6 +1,7 @@
 """Paths and guarded filesystem operations for harness-owned private state."""
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -64,20 +65,21 @@ def _guard_parents(path: Path) -> None:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path contains a linked component', path=str(component))
 
 
-def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
-    """Open a guarded ordinary file, pinning real ancestors on POSIX."""
+def open_regular_fd(path: Path, flags: int, mode: int = 0o600, *, check_parents: bool = True) -> int:
+    """Open an ordinary leaf, optionally pinning and checking POSIX ancestors."""
     path = _absolute(path)
     if os.name == 'nt':
         from .windows_files import open_regular_fd as windows_open
         return windows_open(path, flags, mode)
-    _guard_parents(path)
+    if check_parents:
+        _guard_parents(path)
     if '..' in path.parts or flags & os.O_TRUNC and not flags & os.O_EXCL:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
     fd = None
     parent_fd = None
     try:
         flags |= getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
-        if os.open in os.supports_dir_fd and os.name != 'nt':
+        if check_parents and os.open in os.supports_dir_fd:
             directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
             parent_fd = os.open(path.anchor, directory_flags)
             for name in path.parts[1:-1]:
@@ -91,11 +93,14 @@ def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
         if (not stat.S_ISREG(metadata.st_mode)
                 or getattr(metadata, 'st_file_attributes', 0) & _REPARSE_POINT):
             raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path))
-        _guard_parents(path)
+        if check_parents:
+            _guard_parents(path)
         return fd
-    except BaseException:
+    except BaseException as error:
         if fd is not None:
             os.close(fd)
+        if isinstance(error, OSError) and error.errno in (errno.ELOOP, errno.EISDIR):
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path)) from error
         raise
     finally:
         if parent_fd is not None:
@@ -183,7 +188,6 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
     """Remove one real tree, retaining exact files or subtrees and their parents."""
     path = _absolute(path)
     keep = frozenset(_absolute(item) for item in keep)
-    _guard_parents(path.parent)
     if not path.exists() and not linked(path):
         return False
     if linked(path):
@@ -191,7 +195,6 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private removal target is not a directory', path=str(path))
     def descend(directory: Path) -> bool:
-        _guard_parents(directory)
         with os.scandir(directory) as entries:
             children = [Path(entry.path) for entry in entries]
         retained = False
