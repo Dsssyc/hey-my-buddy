@@ -43,7 +43,7 @@ function fixture(records: Task[] = []) {
     configuration: { revision: 1, decisionProfileId: profiles[0].profileId },
     profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
-    preferences: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
+    preferences: [], annotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
     tasks: { runs: records, total: records.length },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,
@@ -91,8 +91,11 @@ describe("desktop console", () => {
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
     expect(within(detail).getByRole("button", { name: /非思考，已启用，正在查看/ })).toBeTruthy();
     expect(within(detail).getByRole("button", { name: /low，未启用/ })).toBeTruthy();
-    await user.click(within(detail).getByRole("tab", { name: "能力评价" }));
+    await user.click(within(detail).getByRole("tab", { name: "评价与意见" }));
+    // The automatic assessment stays read-only; only the separate opinion is editable.
+    expect(within(detail).getByText("自动评价（只读）")).toBeTruthy();
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
+    expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
     await user.click(within(detail).getByRole("tab", { name: "证据" }));
     expect(within(detail).queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(within(detail).queryByRole("checkbox")).toBeNull();
@@ -102,37 +105,37 @@ describe("desktop console", () => {
     expect(f.command).not.toHaveBeenCalled();
   });
 
-  it("keeps one assessment draft across efforts, models, detail tabs and main pages without a lease", async () => {
+  it("keeps one opinion draft across efforts, models, detail tabs and main pages without a lease", async () => {
     const f = fixture();
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("switch", { name: "编辑模式" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.clear(await screen.findByLabelText("当前评价"));
-    await user.type(screen.getByLabelText("当前评价"), "off 评价草稿");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "off 人工意见");
     await user.click(screen.getByRole("button", { name: /^max，已启用/ }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash max");
-    await user.clear(screen.getByLabelText("当前评价"));
-    await user.type(screen.getByLabelText("当前评价"), "max 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "");
+    await user.type(screen.getByLabelText("我的意见"), "max 人工意见");
     await user.click(screen.getByRole("button", { name: /^GLM-5\.3(?!-Flash)/ }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 GLM-5.3 high");
-    await user.clear(screen.getByLabelText("当前评价"));
-    await user.type(screen.getByLabelText("当前评价"), "ZCode 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "");
+    await user.type(screen.getByLabelText("我的意见"), "ZCode 人工意见");
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     await user.selectOptions(screen.getByLabelText("用户偏好"), "prefer");
     await user.click(screen.getByRole("link", { name: "路由配置" }));
-    expect(screen.queryByRole("textbox", { name: "当前评价" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "我的意见" })).toBeNull();
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "ZCode 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "ZCode 人工意见");
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "off 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "off 人工意见");
     await user.click(screen.getByRole("button", { name: /^max/ }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "max 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "max 人工意见");
     // A read-only refresh keeps the draft; only Save would take a lease.
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "max 评价草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "max 人工意见");
+    // The automatic card stays program-owned in edit mode and cannot be typed into.
+    expect(screen.getAllByText("原评价 deepseek-flash max").length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("当前评价")).toBeNull();
     await user.click(screen.getByRole("tab", { name: "证据" }));
     expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();

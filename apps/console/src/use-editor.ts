@@ -12,9 +12,14 @@ import {
   changedProfileIds,
   configurationChanged as configurationDiffers,
   draftDiffers,
+  historyView,
   makeDraft,
   publication,
+  rebaseDraft,
+  withHistory,
 } from "./draft";
+import type { HistoryEntries } from "./draft";
+import { attentionIssues, blockingIssues } from "./policy";
 import type { Draft, Snapshot, WriterGrant } from "./types";
 
 /** Queue poll while another writer holds the table; each renew also extends the lease. */
@@ -54,8 +59,9 @@ export type EditorConflict = { basedOn: number; latest: number };
  * Turning the switch on is entirely local: it clones the published table into a
  * draft and never asks the board for a lease. Only "保存更改" takes the existing
  * evaluation_write_begin grant, waits for it if another writer is ahead, renews
- * it, and publishes. A lost reply keeps the same command/request identity so a
- * retry can never republish a different payload.
+ * it, and publishes the dirty human patches through `user_policy_publish`. A lost
+ * reply keeps the same command/request identity so a retry can never republish a
+ * different payload.
  *
  * Every intent that could still exist on the board is either resolved or
  * retained for retry: an unresolved begin is re-sent with its original request
@@ -72,6 +78,7 @@ export function useEditor(
   const [mode, setMode] = useState(false);
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<HistoryEntries | null>(null);
   const [grant, setGrantState] = useState<WriterGrant | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
@@ -87,6 +94,9 @@ export function useEditor(
   csrf.current = snapshot.csrfToken;
   const alive = useRef(true);
   const grantRef = useRef<WriterGrant | null>(null);
+  const baselineRef = useRef<Draft | null>(null);
+  /** Retained profiles loaded from `model_profiles`; merged into the local view. */
+  const historyRef = useRef<HistoryEntries | null>(null);
   const draftRef = useRef<Draft | null>(null);
   /** A begin whose reply was lost; kept so a retry reuses the same request ID. */
   const pendingBegin = useRef<BeginIntent | null>(null);
@@ -103,6 +113,10 @@ export function useEditor(
   const setGrant = useCallback((value: WriterGrant | null) => {
     grantRef.current = value;
     setGrantState(value);
+  }, []);
+  const setBaselineValue = useCallback((value: Draft | null) => {
+    baselineRef.current = value;
+    setBaseline(value);
   }, []);
   const setDraft: Dispatch<SetStateAction<Draft | null>> = useCallback((update) => {
     setDraftState((previous) => {
@@ -125,6 +139,31 @@ export function useEditor(
   const configurationDirty = useMemo(
     () => (baseline && draft ? configurationDiffers(baseline, draft) : false),
     [baseline, draft],
+  );
+  // One console view: published/loaded program facts, retained history rows and
+  // the local human draft when editing. Cards, samples and evidence stay taken
+  // from the recorded snapshot/history, never from the draft.
+  const view: Snapshot = useMemo(() => {
+    const recorded = historyView(snapshot, historyEntries);
+    return draft
+      ? {
+          ...recorded,
+          profiles: draft.profiles,
+          preferences: draft.preferences,
+          annotations: draft.annotations,
+          configuration: draft.configuration,
+        }
+      : recorded;
+  }, [snapshot, draft, historyEntries]);
+  // A new enable/pin/selector needs a currently legal model; unrelated patches
+  // never wait for an old stale pin or decision setting to be repaired.
+  const blocking = useMemo(
+    () => (baseline && draft ? blockingIssues(baseline, draft) : []),
+    [baseline, draft],
+  );
+  const attention = useMemo(
+    () => attentionIssues(view),
+    [view],
   );
   // A newer publication is only a conflict once no reply is still pending: after a
   // lost publish reply the revision may have advanced because of *this* draft.
@@ -195,7 +234,7 @@ export function useEditor(
   function closeDraft(preserveIntent = false) {
     setMode(false);
     setDraft(null);
-    setBaseline(null);
+    setBaselineValue(null);
     draftRef.current = null;
     setConfirming(false);
     setWaiting(false);
@@ -220,10 +259,12 @@ export function useEditor(
     }
     setNotice("");
     if (!draftRef.current) {
-      const next = makeDraft(snapshot);
+      // Retained history rows join the draft from the start, so disabling a
+      // retired configuration is an ordinary local edit with a recorded baseline.
+      const next = withHistory(makeDraft(snapshot), historyRef.current);
       draftRef.current = next;
       setDraft(next);
-      setBaseline(structuredClone(next));
+      setBaselineValue(structuredClone(next));
     }
     setMode(true);
   }
@@ -509,7 +550,7 @@ export function useEditor(
 
   async function publish(payload: ReturnType<typeof publication>) {
     try {
-      await api.command("evaluation_write_publish", payload, csrf.current);
+      await api.command("user_policy_publish", payload, csrf.current);
       if (!alive.current) return;
       pendingSave.current = null;
       pendingBegin.current = null;
@@ -556,7 +597,8 @@ export function useEditor(
 
   async function save() {
     const current = draftRef.current;
-    if (!current || busy) {
+    const base = baseline;
+    if (!current || !base || busy) {
       if (busy) setBlocked("正在读取模型目录或保存中，请稍后再试；草稿不会丢失。");
       return;
     }
@@ -567,12 +609,26 @@ export function useEditor(
     setBlocked("");
     setError("");
     setNotice("");
+    // A blocked patch (a new enable, pin or selector for an unavailable model)
+    // is refused locally with the exact reason, so no other patch is published
+    // against a payload the board would reject as a whole. The check reads the
+    // live draft instead of a possibly older render memo.
+    const blocked = blockingIssues(base, current);
+    if (blocked.length) {
+      setError(`有 ${blocked.length} 项修改当前不能提交：${blocked.map((issue) => issue.message).join(" ")}`);
+      return;
+    }
     setSaving(true);
     try {
       if (pendingSave.current) {
         // The staged payload carries its own writer identity, so a lost reply can
         // still be resolved even if the local lease mirror expired.
         await publish(pendingSave.current);
+        return;
+      }
+      if (!draftDiffers(base, current)) {
+        // Publishing an empty patch would advance the revision for nothing.
+        setNotice("没有需要保存的用户修改。");
         return;
       }
       if (snapshot.tableRevision !== current.tableRevision) {
@@ -583,7 +639,7 @@ export function useEditor(
       if (!owner) return;
       const ready = await ensureActive(owner);
       if (!ready) return;
-      const payload = publication(current, ready, crypto.randomUUID());
+      const payload = publication(base, current, ready, crypto.randomUUID());
       pendingSave.current = payload;
       await publish(payload);
     } finally {
@@ -643,10 +699,10 @@ export function useEditor(
           return;
         }
       }
-      const next = makeDraft(snapshot);
+      const next = withHistory(makeDraft(snapshot), historyRef.current);
       draftRef.current = next;
       setDraft(next);
-      setBaseline(structuredClone(next));
+      setBaselineValue(structuredClone(next));
       pendingBegin.current = null;
       pendingSave.current = null;
       unresolvedAbort.current = null;
@@ -665,10 +721,49 @@ export function useEditor(
     setNotice("正在取消等待…");
   }
 
+  /**
+   * Adopts retained profile rows loaded from `model_profiles`. They become part
+   * of the local view immediately, and of the draft and its baseline when a
+   * draft exists, so a disable or an opinion on a retired configuration stays a
+   * normal diffed patch instead of an untracked insertion.
+   */
+  function adoptHistory(entries: HistoryEntries | null) {
+    historyRef.current = entries;
+    setHistoryEntries(entries);
+    const current = draftRef.current;
+    const base = baselineRef.current;
+    if (!current || !base || saving || confirming || uncertain) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
+    const nextDraft = withHistory(current, entries);
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    setBaselineValue(withHistory(base, entries));
+  }
+
+  /**
+   * Adopts a freshly published snapshot (this page's own program directory
+   * discovery, or another program publication) without discarding unsubmitted
+   * user patches. Directory facts come only from the board; the dirty human
+   * patches are replayed onto the new revision.
+   */
+  function rebase(next: Snapshot) {
+    const current = draftRef.current;
+    const base = baseline;
+    if (!current || !base) return;
+    if (saving || confirming || uncertain) return;
+    if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
+    const adopted = rebaseDraft(current, base, next);
+    const mergedDraft = withHistory(adopted.draft, historyRef.current);
+    draftRef.current = mergedDraft;
+    setDraft(mergedDraft);
+    setBaselineValue(withHistory(adopted.baseline, historyRef.current));
+  }
+
   return {
     mode,
     editing,
     draft,
+    view,
     setDraft,
     baseline,
     grant,
@@ -680,6 +775,8 @@ export function useEditor(
     dirty,
     changedProfiles,
     configurationDirty,
+    blocking,
+    attention,
     conflict,
     error,
     notice,
@@ -693,6 +790,8 @@ export function useEditor(
     saveAndExit,
     discard,
     reloadLatest,
+    rebase,
+    adoptHistory,
     cancelSave,
   };
 }

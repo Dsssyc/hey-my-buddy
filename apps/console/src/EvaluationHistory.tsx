@@ -11,10 +11,17 @@ export type EvaluationRevision = {
   revision: number;
   kind: string;
   actor: string | null;
+  /**
+   * Older publications count profiles/cards/preferences; `user_policy_publish`
+   * counts the human patches it provided. Only recorded numbers are rendered.
+   */
   counts: {
-    profiles: number;
-    cards: number;
-    preferences: number;
+    profiles?: number;
+    cards?: number;
+    preferences?: number;
+    profileSettings?: number;
+    preferenceChanges?: number;
+    annotationChanges?: number;
     provided?: string[];
   };
   createdAt: string;
@@ -32,6 +39,15 @@ const kindText: Record<string, string> = {
   initial: "初始版本",
 };
 
+const COUNT_KEYS = [
+  "profiles",
+  "cards",
+  "preferences",
+  "profileSettings",
+  "preferenceChanges",
+  "annotationChanges",
+] as const;
+
 function count(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : Number.NaN;
 }
@@ -45,10 +61,9 @@ export function parseHistoryPage(value: unknown): EvaluationHistoryPage {
       && typeof item.kind === "string"
       && (item.actor === null || typeof item.actor === "string")
       && typeof item.createdAt === "string"
-      && !!item.counts
-      && !Number.isNaN(count(item.counts.profiles))
-      && !Number.isNaN(count(item.counts.cards))
-      && !Number.isNaN(count(item.counts.preferences))
+      && !!item.counts && typeof item.counts === "object"
+      && COUNT_KEYS.every(key => item.counts[key] === undefined || !Number.isNaN(count(item.counts[key])))
+      && COUNT_KEYS.some(key => item.counts[key] !== undefined)
       && (item.counts.provided === undefined || (Array.isArray(item.counts.provided) && item.counts.provided.every(entry => typeof entry === "string"))))
     && (page.nextCursor === null || (Number.isInteger(page.nextCursor) && page.nextCursor > 0))
     && Number.isInteger(page.total);
@@ -57,7 +72,17 @@ export function parseHistoryPage(value: unknown): EvaluationHistoryPage {
 }
 
 function countsText(item: EvaluationRevision): string {
-  const base = `配置 ${item.counts.profiles} · 卡片 ${item.counts.cards} · 偏好 ${item.counts.preferences}`;
+  const parts: string[] = [];
+  const add = (label: string, value: number | undefined) => {
+    if (typeof value === "number" && Number.isInteger(value) && value >= 0) parts.push(`${label} ${value}`);
+  };
+  add("配置", item.counts.profiles);
+  add("卡片", item.counts.cards);
+  add("偏好", item.counts.preferences);
+  add("启用补丁", item.counts.profileSettings);
+  add("偏好补丁", item.counts.preferenceChanges);
+  add("意见补丁", item.counts.annotationChanges);
+  const base = parts.join(" · ") || "未记录计数";
   return item.counts.provided?.length ? `${base} · 提供：${item.counts.provided.join("、")}` : base;
 }
 

@@ -42,6 +42,7 @@ const initial = (): Snapshot => ({
     },
   ],
   preferences: [],
+  annotations: [],
   evidence: [],
   decisions: [],
   sampleCounts: { "flash-off": 3 },
@@ -180,11 +181,14 @@ describe("console interactions", () => {
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "本地草稿");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "本地草稿");
     await user.click(screen.getByRole("link", { name: "路由配置" }));
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "待积累实际证据本地草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "本地草稿");
+    // The automatic assessment is program-owned and stays read-only in edit mode.
+    expect(screen.queryByLabelText("当前评价")).toBeNull();
+    expect(screen.getAllByText("待积累实际证据").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await user.click(await screen.findByRole("button", { name: "放弃修改" }));
     expect(api.command).not.toHaveBeenCalled();

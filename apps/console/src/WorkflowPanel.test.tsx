@@ -47,6 +47,27 @@ describe("governed workflow console", () => {
     expect(screen.queryByText(/模型调用次数：/)).toBeNull();
   });
 
+  it("renders only the recorded activity projection and never a completion estimate", async () => {
+    const f = fixture();
+    Object.assign(f.props.task, {
+      activity: { phase: "tool-running", observedAt: "2026-09-25T10:00:00Z", lastToolActivityAt: "2026-09-25T09:59:00Z",
+        toolName: "apply_patch", counts: { toolCalls: 2 } },
+      terminationReason: "deadline",
+      status: "cancelled",
+    });
+    const user = userEvent.setup();
+    render(<WorkflowPanel {...f.props} />);
+    await user.click(screen.getByRole("tab", { name: "概览" }));
+    const view = screen.getByRole("region", { name: "执行活动（只读）" });
+    expect(view.textContent).toContain("工具执行中");
+    expect(view.textContent).toContain("apply_patch");
+    expect(view.textContent).toContain("工具调用 2");
+    expect(view.textContent).toContain("模型回合未记录");
+    expect(view.textContent).toContain("执行时限到期");
+    expect(view.textContent).not.toMatch(/\d+\s*%/);
+    expect(f.mutation).not.toHaveBeenCalled();
+  });
+
   it("leaves helper model fields absent for automatic routing", async () => {
     const f = fixture();
     f.props.snapshot.profiles = [];

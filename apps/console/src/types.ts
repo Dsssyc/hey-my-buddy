@@ -18,6 +18,10 @@ export type Preference = {
   mode: "prefer" | "pin" | "exclude";
   reason: string;
 };
+/**
+ * Automatic, evidence-linked assessment. Published only by a maintenance
+ * Harness through `assessment_publish`; the human console never writes it.
+ */
 export type Card = {
   profileId: string;
   revision: number;
@@ -26,6 +30,13 @@ export type Card = {
   limitations: string[];
   risks: string[];
   evidenceIds: string[];
+  updatedAt: string | null;
+};
+/** One human opinion, stored apart from the automatic card and its evidence. */
+export type Annotation = {
+  profileId: string;
+  text: string;
+  revision: number;
   updatedAt: string | null;
 };
 export type Evidence = {
@@ -82,6 +93,12 @@ export type Task = {
   queueReason?: string | null;
   delegation?: Delegation;
   spec?: Record<string, unknown>;
+  /** Bounded per-attempt activity projection; null or absent means unknown. */
+  activity?: TaskActivity | null;
+  /** Recorded real termination cause when the task view carries it directly. */
+  terminationReason?: string | null;
+  /** Selected attempt receipt; its `result.terminationReason` is the durable cause. */
+  selectedAttempt?: AttemptReceipt | null;
   workflow?: {
     state: string;
     awaitingHost: boolean;
@@ -92,6 +109,46 @@ export type Task = {
   };
   workflowShutdown?: Shutdown;
   [key: string]: unknown;
+};
+/** Public attempt receipt. The claim capability and nonce verifier never appear. */
+export type AttemptReceipt = {
+  attemptId?: string;
+  generation?: number;
+  executionState?: string;
+  resultAvailable?: boolean;
+  shutdownConfirmed?: boolean;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  terminationReason?: string | null;
+};
+/** Phases the frozen ADR-010 activity projection allows; nothing else claims progress. */
+export type ActivityPhase =
+  | "starting"
+  | "waiting-model"
+  | "streaming-model"
+  | "tool-running"
+  | "waiting-external"
+  | "waiting-host"
+  | "finishing"
+  | "unknown";
+export type ActivityCounts = {
+  modelTurns?: number | null;
+  toolCalls?: number | null;
+};
+/**
+ * Bounded `worker_progress` activity. Unknown fields stay absent instead of being
+ * invented; there is deliberately no percentage or completion estimate here.
+ */
+export type TaskActivity = {
+  phase: ActivityPhase;
+  observedAt?: string | null;
+  eventSeq?: number | null;
+  nativeSessionId?: string | null;
+  lastNativeActivityAt?: string | null;
+  lastToolActivityAt?: string | null;
+  toolName?: string | null;
+  waitingReason?: string | null;
+  counts?: ActivityCounts | null;
 };
 export type Shutdown = {
   selfConfirmed: boolean;
@@ -123,6 +180,13 @@ export type Snapshot = {
   profiles: Profile[];
   preferences: Preference[];
   cards: Card[];
+  /** Human opinions, kept apart from the automatic evidence-linked cards. */
+  annotations: Annotation[];
+  /**
+   * Retired configurations the snapshot does not list. The console pages them
+   * through `model_profiles`; they are never silently dropped from the count.
+   */
+  unavailableProfileCount?: number;
   evidence: Evidence[];
   decisions: Decision[];
   /** Recorded verification samples per profile; independent of published card prose. */
@@ -143,7 +207,18 @@ export type WriterGrant = {
   queuePosition?: number;
   waitingWriters?: number;
 };
+/** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "profiles" | "preferences" | "cards" | "configuration"
+  "profiles" | "preferences" | "annotations" | "configuration"
 > & { tableRevision: number };
+/** One page of retained profile identities, including unavailable history. */
+export type ProfilePage = {
+  profiles: Profile[];
+  cards: Card[];
+  annotations: Annotation[];
+  preferences: Preference[];
+  sampleCounts: Record<string, number>;
+  tableRevision: number;
+  nextCursor: string | null;
+};

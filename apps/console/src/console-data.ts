@@ -20,8 +20,11 @@ export function modelFamilies(profiles: Profile[]): ModelFamily[] {
     || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
 export function preferredVariant(family: ModelFamily, preferences: Preference[]) {
-  return family.profiles.find(p => p.enabled && preferences.some(x => x.profileId === p.profileId && ["pin", "prefer"].includes(x.mode)))
-    || family.profiles.find(p => p.enabled) || family.profiles[0];
+  // An unavailable variant never pre-empts an available one for the initial view.
+  const available = family.profiles.filter(p => p.available);
+  const pool = available.length ? available : family.profiles;
+  return pool.find(p => p.enabled && preferences.some(x => x.profileId === p.profileId && ["pin", "prefer"].includes(x.mode)))
+    || pool.find(p => p.enabled) || pool[0];
 }
 export function taskProject(task: Task) {
   return task.delegation?.project || { id: "unknown", label: "未记录项目", path: null };
@@ -40,7 +43,10 @@ export function taskExecutor(task: Task) {
  * The optional access only keeps a board that has not shipped `sampleCounts` yet
  * from blanking the page; the legacy per-card field is never read.
  */
-export function recordedSampleCount(snapshot: Snapshot, profileId: string): number {
+export function recordedSampleCount(
+  snapshot: { sampleCounts?: Record<string, number> },
+  profileId: string,
+): number {
   const recorded = snapshot.sampleCounts?.[profileId];
   return typeof recorded === "number" && Number.isFinite(recorded) ? recorded : 0;
 }

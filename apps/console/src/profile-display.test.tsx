@@ -27,7 +27,7 @@ const flashOff: Profile = {
   effort: "off",
   available: true,
   enabled: true,
-  capabilities: ["execution:dsh", "effort:off"],
+  capabilities: ["execution:dsh", "effort:off", "decision:dsh"],
   contextWindow: 1000000,
   source: "catalog:fixture",
   description: "",
@@ -38,7 +38,7 @@ const proMax: Profile = {
   label: "DeepSeek-V4-Pro · max",
   model: "deepseek-v4-pro",
   effort: "max",
-  capabilities: ["execution:dsh", "effort:max"],
+  capabilities: ["execution:dsh", "effort:max", "decision:dsh"],
 };
 
 function catalogSnapshot(): Snapshot {
@@ -53,6 +53,7 @@ function catalogSnapshot(): Snapshot {
     profiles: [flashOff, proMax],
     preferences: [],
     cards: [],
+    annotations: [],
     evidence: [],
     decisions: [],
     sampleCounts: { [flashOffId]: 6 },
@@ -143,7 +144,7 @@ describe("profile display", () => {
 });
 
 describe("decision profile selector", () => {
-  it("renders one localized effort per option and still publishes the raw identity", async () => {
+  it("offers only decision-capable candidates and publishes one configuration patch", async () => {
     let state = catalogSnapshot();
     let published: Record<string, any> | null = null;
     const grant: WriterGrant = {
@@ -166,7 +167,7 @@ describe("decision profile selector", () => {
         };
         return grant;
       }
-      if (operation === "evaluation_write_publish") {
+      if (operation === "user_policy_publish") {
         published = params;
         state = {
           ...state,
@@ -210,14 +211,15 @@ describe("decision profile selector", () => {
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(published!.configuration.decisionProfileId).toBe(flashOffId);
     expect(published!.configuration).not.toHaveProperty("autoMaintain");
-    expect(published!.profiles).toContainEqual(
-      expect.objectContaining({
-        profileId: flashOffId,
-        label: "DeepSeek-V41-Flash · off",
-        model: "deepseek-flash",
-        effort: "off",
-      }),
-    );
+    // Only the decision selector changed, so nothing else is sent: no full table,
+    // no provider/model/effort/available field and no card.
+    expect(published).not.toHaveProperty("profiles");
+    expect(published).not.toHaveProperty("cards");
+    expect(published).not.toHaveProperty("preferenceChanges");
+    expect(published).not.toHaveProperty("annotationChanges");
+    expect(Object.keys(published!).sort()).toEqual([
+      "commandId", "configuration", "expectedRevision", "generation", "writerId", "writerToken",
+    ]);
   });
 });
 

@@ -11,6 +11,7 @@ import { excerpt } from "./task-state";
 import { DetailTabs } from "./DetailTabs";
 import { useRecordDraft } from "./record-drafts";
 import { RoutingDetails } from "./RoutingDetails";
+import { TaskActivityView } from "./task-activity";
 
 const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boolean);
 
@@ -113,6 +114,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {(value.currentTurn?.summary?.length || 0) > 360 && <details><summary>展开回合摘要</summary><p className="task-description">{value.currentTurn?.summary}</p></details>}
         {value.currentTurn?.summaryTruncated && <p className="small muted">当前摘要已截断。完整记录可通过 get 的 includeAudit 选项读取。</p>}
         {!!value.currentTurn?.remaining?.length && <ul>{value.currentTurn.remaining.map((item, i) => <li key={i}>{item}</li>)}</ul>}
+        <TaskActivityView task={task} />
       </section>
       </div>
       <div id={tabsId + "-routing"} role="tabpanel" aria-labelledby={tabsId + "-routing-tab"} hidden={selectedSection !== "routing"}>

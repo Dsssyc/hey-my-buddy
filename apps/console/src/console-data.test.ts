@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { modelFamilies, recordedSampleCount, taskHost, taskProject } from "./console-data";
-import type { Card, Profile, Snapshot, Task } from "./types";
+import { modelFamilies, preferredVariant, recordedSampleCount, taskHost, taskProject } from "./console-data";
+import type { Card, Preference, Profile, Snapshot, Task } from "./types";
 
 const profile = (profileId: string, adapter: string, provider: string, effort: string): Profile => ({
   profileId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
@@ -16,6 +16,20 @@ describe("console grouping and recorded attribution", () => {
     expect(families.map(f => f.profiles.map(p => p.profileId).sort()).sort()).toEqual([
       ["dsh-high", "dsh-low"], ["other-harness"], ["other-provider"],
     ].sort());
+  });
+
+  it("prefers an available variant when the family also holds a retired one", () => {
+    const retiredEnabled = { ...profile("retired", "dsh", "provider-a", "max"), available: false, enabled: true };
+    const availableDisabled = { ...profile("available", "dsh", "provider-a", "low"), enabled: false };
+    const family = modelFamilies([retiredEnabled, availableDisabled])[0];
+    // Inspecting the family never lands on a retired variant while one is listed.
+    expect(preferredVariant(family, []).profileId).toBe("available");
+    expect(preferredVariant(family, [{ profileId: "retired", mode: "prefer", reason: "历史" } as Preference]).profileId)
+      .toBe("available");
+    // When every variant is retired, an enabled variant still wins over a disabled one.
+    const allRetired = modelFamilies([retiredEnabled, { ...availableDisabled, available: false }])[0];
+    expect(preferredVariant(allRetired, [{ profileId: "available", mode: "prefer", reason: "历史" } as Preference]).profileId)
+      .toBe("retired");
   });
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {

@@ -1,7 +1,8 @@
 import type { Snapshot } from "./types";
 import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
-import { effortText, profileTitle } from "./profile-display";
+import { effortText, profileTitle, profileTitleOr } from "./profile-display";
+import { decisionAttention, decisionCandidates, hasDecisionCapability } from "./policy";
 
 export function Settings({
   snapshot,
@@ -12,14 +13,24 @@ export function Settings({
 }) {
   const data = editor.draft || snapshot,
     editing = editor.editing;
-  const current = data.profiles.find(
-    (p) => p.profileId === data.configuration.decisionProfileId,
-  );
+  const currentId = data.configuration.decisionProfileId;
+  const current = data.profiles.find((p) => p.profileId === currentId);
+  const publishedId = snapshot.configuration.decisionProfileId;
   const publishedCurrent = snapshot.profiles.find(
-    (p) => p.profileId === snapshot.configuration.decisionProfileId,
+    (p) => p.profileId === publishedId,
   );
-  const draftName = current ? profileTitle(current) : "尚未配置";
-  const publishedName = publishedCurrent ? profileTitle(publishedCurrent) : "尚未配置";
+  const draftName = current ? profileTitle(current) : currentId || "尚未配置";
+  const publishedName = publishedCurrent
+    ? profileTitle(publishedCurrent)
+    : publishedId || "尚未配置";
+  // Candidates must be enabled, currently available and declare a decision
+  // capability that Host reports; coding ability alone is not enough.
+  const candidates = decisionCandidates(data.profiles);
+  const currentIsCandidate = candidates.some((p) => p.profileId === currentId);
+  const attention = decisionAttention(data);
+  const ineligible = data.profiles.filter(
+    (p) => p.enabled && !p.available && hasDecisionCapability(p),
+  ).length;
   return (
     <div className="settings-page">
       <section className="panel settings-panel">
@@ -33,7 +44,7 @@ export function Settings({
           <span>决策模型配置{editor.configurationDirty && <span className="unsaved-mark">未保存</span>}</span>
           <select
             disabled={!editing}
-            value={data.configuration.decisionProfileId || ""}
+            value={currentId || ""}
             onChange={(e) =>
               editor.setDraft((d) =>
                 d
@@ -49,15 +60,33 @@ export function Settings({
             }
           >
             <option value="">尚未配置</option>
-            {data.profiles
-              .filter((p) => p.enabled)
-              .map((p) => (
-                <option key={p.profileId} value={p.profileId}>
-                  {profileTitle(p)}
-                </option>
-              ))}
+            {/* A stale configured value stays visible without becoming a selectable candidate. */}
+            {currentId && !currentIsCandidate && (
+              <option value={currentId} disabled>
+                {profileTitleOr(current, currentId)}（需要处理）
+              </option>
+            )}
+            {candidates.map((p) => (
+              <option key={p.profileId} value={p.profileId}>
+                {profileTitle(p)}
+              </option>
+            ))}
           </select>
         </label>
+        <p className="small muted">
+          只有已启用、目录可用且声明决策能力的配置才会成为候选；{candidates.length} 个候选
+          {ineligible > 0 ? ` · ${ineligible} 个已启用配置当前不可用` : ""}。
+        </p>
+        {candidates.length === 0 && (
+          <p className="small muted">
+            当前没有候选：请先启用一个目录可用且声明决策能力的配置；若目录资料尚未更新，可在“模型卡片”执行一次模型发现。
+          </p>
+        )}
+        {attention && (
+          <p className="banner attention-banner" role="status">
+            {attention.message}
+          </p>
+        )}
         {current ? (
           <div className="configuration-summary">
             <div className="profile-avatar">
@@ -72,8 +101,15 @@ export function Settings({
               </p>
             </div>
             <Badge tone={current.available ? "green" : "amber"}>
-              {current.available ? "目录可用" : "待确认"}
+              {current.available ? "目录可用" : "目录不可用"}
             </Badge>
+          </div>
+        ) : currentId ? (
+          <div className="quiet-note">
+            <Icon name="models" />
+            <p>
+              当前决策配置 {currentId} 已不在目录中。选择一个可用的候选配置，或等待目录再次发现它；保存其他修改不受影响。
+            </p>
           </div>
         ) : (
           <div className="quiet-note">
@@ -91,7 +127,7 @@ export function Settings({
         <div className="policy-note">
           <h3>用户偏好与事实分别保存</h3>
           <p>
-            明确指定、优先考虑和排除各有含义。偏好影响后续选择，不会改写已有验收，也不会改变运行中任务的配置。
+            明确指定、优先考虑和排除各有含义。偏好影响后续选择，不会改写已有验收，也不会改变运行中任务的配置。保存只提交你实际修改的字段。
           </p>
         </div>
       </section>

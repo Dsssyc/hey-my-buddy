@@ -13,7 +13,7 @@ function snapshot(): Snapshot {
     csrfToken: "csrf", tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: null },
-    profiles: [], cards: [], preferences: [], evidence: [], decisions: [],
+    profiles: [], cards: [], preferences: [], annotations: [], evidence: [], decisions: [],
     sampleCounts: {}, tasks: { runs: [], total: 0 },
     capabilities: { evaluationWriteGate: true },
   };

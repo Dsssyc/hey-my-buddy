@@ -21,6 +21,8 @@ function catalog(): Profile[] {
   }));
 }
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
+/** A configuration that only a completed program discovery can add. */
+const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
 type Outcome = "begin" | "renew" | "publish" | "abort";
 type Script = Partial<Record<Outcome, ("network" | "conflict" | "queued" | "active" | "drift" | "forbidden")[]>>;
@@ -34,6 +36,7 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean } = {})
     profiles,
     cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
+    annotations: [{ profileId: flashOff, text: "原人工意见", revision: 1, updatedAt: null }],
     preferences: [], evidence: [], decisions: [],
     sampleCounts: { [flashOff]: 5, "dsh:deepseek-official:deepseek-flash:high": 2 },
     tasks: { runs: [], total: 0 },
@@ -69,13 +72,14 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean } = {})
       state = { ...state, gate: { phase: "writing", readers: 0, waitingWriters: 0, writer: { ...grant, kind: "human" } } };
       return { ...grant, state: "active", phase: "writing" };
     }
-    if (operation === "evaluation_write_publish") {
+    if (operation === "user_policy_publish") {
       published.push(params);
       const scripted = take("publish");
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "conflict") {
         state = { ...state, tableRevision: state.tableRevision + 1,
-          cards: state.cards.map(c => c.profileId === flashOff ? { ...c, summary: "他人发布的评价 V3" } : c) };
+          annotations: [...state.annotations.filter(a => a.profileId !== flashOff),
+            { profileId: flashOff, text: "他人发布的人工意见 V3", revision: 2, updatedAt: null }] };
         throw new ApiError("REVISION_CONFLICT", "stale revision");
       }
       state = { ...state, tableRevision: state.tableRevision + 1,
@@ -88,6 +92,14 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean } = {})
       if (scripted === "network") throw new ApiError("NETWORK", "lost abort reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "console session refused");
       return { aborted: true };
+    }
+    if (operation === "model_catalog_refresh") {
+      // The program publishes the directory itself; the page only re-reads it.
+      state = { ...state, tableRevision: state.tableRevision + 1,
+        profiles: [...state.profiles, { profileId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
+          provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
+          capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
+      return { tableRevision: state.tableRevision };
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -126,16 +138,19 @@ describe("edit mode and the write lease", () => {
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("编辑中")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    const summary = await screen.findByLabelText("当前评价");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    const summary = await screen.findByLabelText("我的意见");
     await user.clear(summary);
     await user.type(summary, "本地草稿，未发布");
     expect(screen.getByText(/编辑中 · 未保存 · 1 个配置/)).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    await waitFor(() => expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_publish"]));
+    await waitFor(() => expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]));
     expect(f.published[0]).toMatchObject({ expectedRevision: 2, writerId: "writer" });
-    expect(f.published[0].cards.find((c: any) => c.profileId === flashOff).summary).toBe("本地草稿，未发布");
+    // Only the changed human opinion is published: no profiles table and no card.
+    expect(f.published[0].annotationChanges).toEqual([{ profileId: flashOff, text: "本地草稿，未发布" }]);
+    expect(f.published[0]).not.toHaveProperty("profiles");
+    expect(f.published[0]).not.toHaveProperty("cards");
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
   });
@@ -145,14 +160,25 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    expect(await screen.findByLabelText("当前评价")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    expect(await screen.findByLabelText("我的意见")).toBeTruthy();
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.queryByLabelText("当前评价")).toBeNull();
-    expect(screen.getByText("开启右上角“编辑模式”后可以修改此配置的评价。")).toBeTruthy();
+    expect(screen.queryByLabelText("我的意见")).toBeNull();
+    expect(screen.getByText("开启右上角“编辑模式”后可以写下或清除人工意见；自动评价始终只读。")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
+  });
+
+  it("never publishes an empty patch when the draft matches the published table", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openModels(f.api, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("没有需要保存的用户修改。");
+    expect(f.command).not.toHaveBeenCalled();
+    expect(f.published).toHaveLength(0);
   });
 
   it("reuses the same begin request when the grant reply was lost", async () => {
@@ -160,15 +186,15 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "补充");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格请求的结果/);
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await waitFor(() => expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2));
     const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
     expect(begins[1][1]).toEqual(begins[0][1]);
-    expect(f.operations.at(-1)).toBe("evaluation_write_publish");
+    expect(f.operations.at(-1)).toBe("user_policy_publish");
   });
 
   it("waits behind another writer and releases the queued intent on cancel", async () => {
@@ -176,17 +202,17 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "排队中的草稿");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "排队中的草稿");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
     await waitFor(() => expect(f.operations).toContain("evaluation_write_abort"), { timeout: 4000 });
     await screen.findByText("已取消等待，编辑资格已释放；草稿保持不变。");
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash off排队中的草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见排队中的草稿");
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
-    expect(f.operations).not.toContain("evaluation_write_publish");
+    expect(f.operations).not.toContain("user_policy_publish");
   });
 
   it("publishes after the queued intent becomes active", async () => {
@@ -194,11 +220,11 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "等待后发布");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "等待后发布");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。", {}, { timeout: 5000 });
-    expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_renew", "evaluation_write_publish"]);
+    expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_renew", "user_policy_publish"]);
     expect(f.published[0]).toMatchObject({ writerId: "writer", generation: 1 });
   });
 
@@ -207,8 +233,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "补充");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格状态/, {}, { timeout: 4000 });
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -224,12 +250,12 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "结果不明");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "结果不明");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认保存结果/);
     // The draft and its staged payload survive an edit freeze until confirmed.
-    expect(screen.getAllByText("原评价 deepseek-flash off结果不明").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("原人工意见结果不明").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/编辑中 · 未保存/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "确认保存结果" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
@@ -243,22 +269,22 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    const summary = await screen.findByLabelText("当前评价");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    const summary = await screen.findByLabelText("我的意见");
     await user.clear(summary);
     await user.type(summary, "基于 V2 的草稿");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const banner = (await screen.findAllByRole("alert")).find(node => node.className.includes("conflict-banner"))!;
     expect(banner).toBeTruthy();
     expect(within(banner).getByText(/共享评价表已发布 V3/)).toBeTruthy();
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "基于 V2 的草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "基于 V2 的草稿");
     expect(f.operations).toContain("evaluation_write_abort");
     // Deliberate reload adopts the latest publication and keeps editing.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
     await screen.findByText("已加载评价表 V3。请核对后重新保存。");
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "他人发布的评价 V3");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "他人发布的人工意见 V3");
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
-    await user.type(screen.getByLabelText("当前评价"), "（复核）");
+    await user.type(screen.getByLabelText("我的意见"), "（复核）");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(f.published.at(-1)).toMatchObject({ expectedRevision: 3 });
@@ -269,24 +295,24 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "未保存的补充");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "未保存的补充");
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     const dialog = await screen.findByRole("dialog", { name: "有未保存的修改" });
     await user.click(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash off未保存的补充");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见未保存的补充");
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await user.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: "放弃修改" }));
     await screen.findByText("已放弃未发布的修改。");
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.queryByLabelText("当前评价")).toBeNull();
+    expect(screen.queryByLabelText("我的意见")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "保存并退出");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "保存并退出");
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await user.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: "保存并退出" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
@@ -299,14 +325,14 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "离线草稿");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "离线草稿");
     const save = screen.getByRole("button", { name: "保存更改" });
     expect(save.getAttribute("aria-disabled")).toBe("true");
     await user.click(save);
     expect(f.command).not.toHaveBeenCalled();
     expect((await screen.findAllByText(/没有评价表写入资格/)).length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash off离线草稿");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见离线草稿");
   });
 
   it("explains a guarded save from the keyboard without sending a request", async () => {
@@ -323,15 +349,42 @@ describe("edit mode and the write lease", () => {
     expect((await screen.findAllByText(/没有评价表写入资格/)).length).toBeGreaterThan(0);
   });
 
-  it("explains why discovery is unavailable before any profile is selected", async () => {
+  it("refreshes program directory facts on discovery without uploading a draft", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: "发现模型" }));
-    await screen.findByText("开启编辑模式后才能把发现的配置加入草稿。");
-    expect(f.command).not.toHaveBeenCalled();
+    await screen.findByText(/目录已更新：新增 1 个配置/);
+    expect(f.operations).toEqual(["model_catalog_refresh"]);
+    expect(f.published).toHaveLength(0);
+    // The program publication is visible without entering edit mode, starts
+    // disabled and never uploads the local table.
+    expect(await screen.findByRole("heading", { name: "模型 3" })).toBeTruthy();
+    const added = f.snapshot().profiles.find(p => p.profileId === discovered);
+    expect(added).toBeTruthy();
+    expect(added!.enabled).toBe(false);
+  });
+
+  it("keeps an unsaved opinion while discovery refreshes the directory", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openModels(f.api, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "，保留的意见");
+    await user.click(screen.getByRole("button", { name: "发现模型" }));
+    await screen.findByText(/目录已更新：新增 1 个配置/);
+    expect(f.operations).toEqual(["model_catalog_refresh"]);
+    expect(f.published).toHaveLength(0);
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见，保留的意见");
+    // The rebased draft publishes only the human patch at the refreshed revision.
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0]).toMatchObject({ expectedRevision: 3 });
+    expect(f.published[0].annotationChanges).toEqual([{ profileId: flashOff, text: "原人工意见，保留的意见" }]);
+    expect(f.published[0]).not.toHaveProperty("profiles");
   });
 
   it("keeps evidence read-only in edit mode and never records an observation", async () => {
@@ -393,7 +446,10 @@ describe("edit mode and the write lease", () => {
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(screen.queryByText(/启用状态未保存/)).toBeNull();
-    expect(f.published.at(-1)!.profiles.find((p: any) => p.profileId === flashOff).enabled).toBe(false);
+    // A disable publishes one enablement patch and nothing program-owned.
+    expect(f.published.at(-1)!.profileSettings).toEqual([{ profileId: flashOff, enabled: false }]);
+    expect(f.published.at(-1)).not.toHaveProperty("profiles");
+    expect(f.published.at(-1)).not.toHaveProperty("cards");
   });
 
   it("shows the publication history read-only and pages it without model calls", async () => {
@@ -419,6 +475,22 @@ describe("edit mode and the write lease", () => {
     expect(history.mock.calls.every(([operation]) => operation === "evaluation_history")).toBe(true);
   });
 
+  it("renders human patch counts from the new publication history", async () => {
+    const f = fixture();
+    const history = vi.fn(async () => ({ revisions: [{ revision: 12, kind: "human", actor: "console",
+      counts: { profileSettings: 1, preferenceChanges: 1, annotationChanges: 2,
+        provided: ["annotationChanges", "preferenceChanges", "profileSettings"] },
+      createdAt: "2026-09-25T10:00:00Z" }], nextCursor: null, total: 1 }));
+    const api = { snapshot: f.api.snapshot, tasks: f.api.tasks, task: f.api.task, command: history } as unknown as ConsoleApi;
+    const user = userEvent.setup();
+    await openModels(api, user);
+    await user.click(screen.getByRole("button", { name: "更新记录" }));
+    await screen.findByText(/已发布版本 · 1/);
+    // Human publications count their patch fields; nothing is rendered as undefined.
+    expect(screen.getByText("启用补丁 1 · 偏好补丁 1 · 意见补丁 2 · 提供：annotationChanges、preferenceChanges、profileSettings")).toBeTruthy();
+    expect(history).toHaveBeenCalledExactlyOnceWith("evaluation_history", { limit: 20 }, "csrf");
+  });
+
   it("renders a real switch track with read-only/editing state and scopes the tint to model and settings", async () => {
     const f = fixture();
     const user = userEvent.setup();
@@ -433,11 +505,11 @@ describe("edit mode and the write lease", () => {
     expect(editSwitch.querySelector(".switch-track .switch-thumb")).toBeTruthy();
     expect(editSwitch.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("只读")).toBeTruthy();
-    expect(screen.queryByText("草稿只在本页保存；发布前不会影响正在运行的任务。")).toBeNull();
+    expect(screen.queryByText("草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。")).toBeNull();
     await user.click(editSwitch);
     expect(editSwitch.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("编辑中")).toBeTruthy();
-    expect(screen.getByText("草稿只在本页保存；发布前不会影响正在运行的任务。")).toBeTruthy();
+    expect(screen.getByText("草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。")).toBeTruthy();
     expect(screen.getByRole("region", { name: "模型卡片" }).className).toContain("edit-mode");
     // Hidden sibling panels are queried structurally: their accessible name is
     // empty while hidden, so role+name would not resolve them.
@@ -463,8 +535,8 @@ describe("edit mode and the write lease", () => {
     await openModels(f.api, user);
     const editSwitch = screen.getByRole("switch", { name: "编辑模式" });
     await user.click(editSwitch);
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "未保存的补充");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "未保存的补充");
     await user.click(editSwitch);
     const dialog = await screen.findByRole("dialog", { name: "有未保存的修改" });
     const header = document.querySelector("header.app-header")!;
@@ -495,8 +567,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "未确认的编辑资格");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "未确认的编辑资格");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格请求的结果/);
     expect(f.operations).toEqual(["evaluation_write_begin"]);
@@ -517,15 +589,15 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    const summary = await screen.findByLabelText("当前评价");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    const summary = await screen.findByLabelText("我的意见");
     await user.type(summary, "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格请求的结果/);
     // Reverting the draft makes leaving edit mode take the clean exit path.
-    const restored = await screen.findByLabelText("当前评价");
+    const restored = await screen.findByLabelText("我的意见");
     await user.clear(restored);
-    await user.type(restored, "原评价 deepseek-flash off");
+    await user.type(restored, "原人工意见");
     expect(screen.queryByText(/编辑中 · 未保存/)).toBeNull();
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await screen.findByText(/退出前未能确认编辑资格已释放/);
@@ -534,8 +606,8 @@ describe("edit mode and the write lease", () => {
     expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin"]);
     // The request identity survives the exit, so the next save resolves it.
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "再次编辑");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "再次编辑");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
@@ -549,15 +621,15 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "排队后取消");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "排队后取消");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
     await screen.findByText(/未能确认编辑资格已释放/);
     expect(screen.queryByText("已取消等待，编辑资格已释放；草稿保持不变。")).toBeNull();
-    expect(screen.getByLabelText("当前评价")).toHaveProperty("value", "原评价 deepseek-flash off排队后取消");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见排队后取消");
     // The next save retries the retained abort with its original command ID.
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
@@ -572,8 +644,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "被拒绝的释放");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "被拒绝的释放");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
@@ -588,8 +660,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "过期后继续");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "过期后继续");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
@@ -606,7 +678,7 @@ describe("edit mode and the write lease", () => {
     // The dead lease was not aborted again, and nothing was claimed as released.
     expect(f.operations.filter(op => op === "evaluation_write_abort")).toHaveLength(1);
     expect(f.operations.filter(op => op === "evaluation_write_begin")).toHaveLength(2);
-    expect(f.published.at(-1)!.cards.find((c: any) => c.profileId === flashOff).summary).toContain("过期后继续");
+    expect(f.published.at(-1)!.annotationChanges.find((c: any) => c.profileId === flashOff).text).toContain("过期后继续");
   });
 
   it("keeps the draft editable after a cancelled wait and publishes the next attempt", async () => {
@@ -614,20 +686,20 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "排队");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "排队");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const cancel = await screen.findByRole("button", { name: "取消等待" });
     await waitFor(() => expect(f.operations).toContain("evaluation_write_renew"), { timeout: 4000 });
     await user.click(cancel);
     await screen.findByText("已取消等待，编辑资格已释放；草稿保持不变。");
     // A confirmed cancellation clears the uncertain state: typing stays possible.
-    const summary = screen.getByLabelText("当前评价") as HTMLTextAreaElement;
+    const summary = screen.getByLabelText("我的意见") as HTMLTextAreaElement;
     expect(summary.disabled).toBe(false);
     await user.type(summary, "后继续编辑");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
-    expect(f.published.at(-1)!.cards.find((c: any) => c.profileId === flashOff).summary).toContain("后继续编辑");
+    expect(f.published.at(-1)!.annotationChanges.find((c: any) => c.profileId === flashOff).text).toContain("后继续编辑");
   });
 
   it("clears uncertainty after a definitive begin failure so editing continues", async () => {
@@ -635,16 +707,16 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "首次冲突");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "首次冲突");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/记录已更新，此操作未提交/);
-    const summary = screen.getByLabelText("当前评价") as HTMLTextAreaElement;
+    const summary = screen.getByLabelText("我的意见") as HTMLTextAreaElement;
     expect(summary.disabled).toBe(false);
     await user.type(summary, "后重试");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
-    expect(f.published.at(-1)!.cards.find((c: any) => c.profileId === flashOff).summary).toContain("后重试");
+    expect(f.published.at(-1)!.annotationChanges.find((c: any) => c.profileId === flashOff).text).toContain("后重试");
   });
 
   it("stops renewing an idle writer while a publish outcome is unknown", async () => {
@@ -652,8 +724,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "结果不明");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "结果不明");
     vi.useFakeTimers();
     try {
       await act(async () => {
@@ -677,8 +749,8 @@ describe("edit mode and the write lease", () => {
     const user = userEvent.setup();
     await openModels(f.api, user);
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("tab", { name: "能力评价" }));
-    await user.type(await screen.findByLabelText("当前评价"), "补充");
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格请求的结果/);
     await new Promise(resolve => setTimeout(resolve, 900));

@@ -8,6 +8,7 @@ import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { canRetry, excerpt, needsReview, resultText, taskStatus } from "./task-state";
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
+import { TaskActivityView } from "./task-activity";
 
 export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked }: {
   task: Task; snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
@@ -58,6 +59,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       <p className="small muted">来源字段只展示已记录的信息；执行结束与验收分别记录。</p>
       {recordInfo}
       <details className="detail-section"><summary>原始任务</summary><p className="read-text">{task.task}</p></details>
+      <TaskActivityView task={task} />
       <section className="detail-section"><h3>交付结果</h3><pre className="result-text">{detail ? resultText(detail) : "正在读取结果…"}</pre></section>
       <div className="actions">
         {["queued", "running", "cancelling"].includes(task.status) && <button className="button danger" disabled={busy || task.status === "cancelling"}
