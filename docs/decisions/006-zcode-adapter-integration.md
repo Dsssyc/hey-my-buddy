@@ -61,7 +61,7 @@ daemon 与 supervisor 是分离的 OS 进程。Worker 对象跑在 supervisor �
 
 ### Worker 循环与适配器无关性
 
-[worker/worker.py](../../src/buddy/worker/worker.py) 的执行循环通过注册表 `adapter(name)` 取实现，本身完全不知道执行器是什么。它统一承担：claim 幂等（nonce 与 `claimRequestId` 在调用前先 fsync 落盘，`ReceiptSpool`，worker.py:47 起）；租约续期与每 2 秒的只读 cancel 意图观测（worker.py:617 起）；deadline 到点终止进程组（worker.py:511-522）；结果事务被服务确认前保留不可变完成回执，未确认回执在下次 supervisor 启动时重放。这意味着新执行器不需要重新实现任何调度、恢复或终止语义。
+`../../src/buddy/worker/worker.py`（已在 `2fadf958` 删除） 的执行循环通过注册表 `adapter(name)` 取实现，本身完全不知道执行器是什么。它统一承担：claim 幂等（nonce 与 `claimRequestId` 在调用前先 fsync 落盘，`ReceiptSpool`，worker.py:47 起）；租约续期与每 2 秒的只读 cancel 意图观测（worker.py:617 起）；deadline 到点终止进程组（worker.py:511-522）；结果事务被服务确认前保留不可变完成回执，未确认回执在下次 supervisor 启动时重放。这意味着新执行器不需要重新实现任何调度、恢复或终止语义。
 
 ### 契约与校验面
 
@@ -102,7 +102,7 @@ buddy submit(requestId, adapter="dsh", cwd, task, timeoutSeconds, [model/provide
 
 ### run.mjs 承担的职责
 
-runner（[scripts/run.mjs](../../harnesses/dsh/scripts/run.mjs)，`DSH_PROFILE = 'headless'`，run.mjs:38；最终 argv 组装在 run.mjs:634）在适配器与 dsh 之间补齐了：settings 副本与 per-run model/provider/effort patch（原设置永不修改）；进程组所有权与 `shutdownConfirmed` 判定；stdout/capture 日志（0700/0600）；超过 32,000 字节任务的文件投递；`finalText`（dsh stdout 头部至多 6000 字符）与截断标志；workspace 分组与 inquiry 桥挂载；以及那句贯穿全仓的诚实提醒——退出 0 只表示 agent 跑完，不表示任务正确。
+runner（`../../harnesses/dsh/scripts/run.mjs`（已在 `3c042df6` 删除），`DSH_PROFILE = 'headless'`，run.mjs:38；最终 argv 组装在 run.mjs:634）在适配器与 dsh 之间补齐了：settings 副本与 per-run model/provider/effort patch（原设置永不修改）；进程组所有权与 `shutdownConfirmed` 判定；stdout/capture 日志（0700/0600）；超过 32,000 字节任务的文件投递；`finalText`（dsh stdout 头部至多 6000 字符）与截断标志；workspace 分组与 inquiry 桥挂载；以及那句贯穿全仓的诚实提醒——退出 0 只表示 agent 跑完，不表示任务正确。
 
 ### 导出：对执行器的真实要求
 
@@ -160,7 +160,7 @@ runner（[scripts/run.mjs](../../harnesses/dsh/scripts/run.mjs)，`DSH_PROFILE =
 
 ### A1：command 适配器直接跑 zcode CLI
 
-`command` 适配器（[adapters/command.py](../../src/buddy/adapters/command.py)）以 `shell=False` 运行恰好一个显式 argv 进程，同样获得进程组所有权、deadline、cancel、shutdown 证据、日志与 artifacts（stdout/stderr/task.txt 三个工件）。今天就可以提交：
+`command` 适配器（`../../src/buddy/adapters/command.py`（已在 `2fadf958` 删除））以 `shell=False` 运行恰好一个显式 argv 进程，同样获得进程组所有权、deadline、cancel、shutdown 证据、日志与 artifacts（stdout/stderr/task.txt 三个工件）。今天就可以提交：
 
 ```sh
 "$BUDDY" submit '{"requestId":"zcode-smoke-1","adapter":"command",
@@ -175,7 +175,7 @@ runner（[scripts/run.mjs](../../harnesses/dsh/scripts/run.mjs)，`DSH_PROFILE =
 
 ### A2：external 适配器，ZCode 会话作为 caller-owned agent
 
-反向方向同样零改动：ZCode 会话（或任何能跑 Python 的宿主）用 `BoardClient` 认领 `external` 任务、自己做、自己回报。[workers.md](../reference/workers.md) 给出完整可运行示例（注册 worker → 先 fsync 落盘 nonce/claimRequestId → claim → progress → submit_result 带 artifacts 与 shutdownConfirmed），仓库内 [buddy/examples/external_worker.py](../../src/buddy/examples/external_worker.py) 是同流程的打包版本，端到端行为有 `test_blackboard.py::TestExtensibility::test_an_external_agent_completes_a_real_task_through_the_public_api` 持续验证。调用方式是 `uv run --project deepseek-delegate python worker.py`，不触碰 SQLite、不读 daemon token。适合"ZCode 用黑板"：把长任务挂到黑板、跨会话恢复、让别的 worker 代跑。示例本身不含 supervisor 循环（租约续期、cancel 观测、deadline、回执重放），长驻 agent 要按 workers.md 的契约补齐。
+反向方向同样零改动：ZCode 会话（或任何能跑 Python 的宿主）用 `BoardClient` 认领 `external` 任务、自己做、自己回报。[workers.md](../reference/workers.md) 给出完整可运行示例（注册 worker → 先 fsync 落盘 nonce/claimRequestId → claim → progress → submit_result 带 artifacts 与 shutdownConfirmed），仓库内 `../../src/buddy/examples/external_worker.py`（已在 `2fadf958` 删除） 是同流程的打包版本，端到端行为有 `test_blackboard.py::TestExtensibility::test_an_external_agent_completes_a_real_task_through_the_public_api` 持续验证。调用方式是 `uv run --project deepseek-delegate python worker.py`，不触碰 SQLite、不读 daemon token。适合"ZCode 用黑板"：把长任务挂到黑板、跨会话恢复、让别的 worker 代跑。示例本身不含 supervisor 循环（租约续期、cancel 观测、deadline、回执重放），长驻 agent 要按 workers.md 的契约补齐。
 
 ### A 路径的定位
 

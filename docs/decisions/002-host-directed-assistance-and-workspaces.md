@@ -119,11 +119,11 @@ Host 需要了解某个具体 Harness 实例可选择的模型、合法参数及
 | 范围 | 当前依据 | 目标所需能力 |
 | --- | --- | --- |
 | 回合结果与任务状态 | [store.py](../../src/hey_my_buddy/blackboard/store/store.py) 的 `worker_result` 接受 `ok`、`failed`、`cancelled`；`ok` 且停止已确认会完成 Task | 正常 yield 结果、非终态等待、独立接续资格 |
-| DSH 接续 | [service.py](../../src/hey_my_buddy/blackboard/service/service.py) 明确没有自动 resume；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 使用一次性 headless | 能声明恢复方式、接收结构化输入并开始下一回合的 adapter |
+| DSH 接续 | [service.py](../../src/hey_my_buddy/blackboard/service/service.py) 明确没有自动 resume；`../../harnesses/dsh/scripts/run.mjs`（已在 `3c042df6` 删除） 使用一次性 headless | 能声明恢复方式、接收结构化输入并开始下一回合的 adapter |
 | Host 决定 | [workers.md](../reference/workers.md) 的当前公共客户端包含任务提交等操作 | 将 Worker 的协助建议与 Host 的派发决定分开认证和记录 |
 | 工作区占用 | [store.py](../../src/hey_my_buddy/blackboard/store/store.py) 按 canonical cwd 父子重叠和显式资源检查 | checkout 身份、明确分配、快照与写入权移交 |
 | 工作区参数 | [usage.md](../reference/usage.md) 中 `workspace` 布尔值控制 DSH 会话分组 | 独立的执行工作区合同，保留现有字段含义 |
-| 模型与参数 | [schemas.py](../../src/hey_my_buddy/protocol/schemas.py) 接受 `model`、`provider`、`effort` 字符串；[run.mjs](../../harnesses/dsh/scripts/run.mjs) 返回 `requested` 配置 | 让 Host 获得可选择组合与参数依据，当前综合提案见 [ADR-004](004-buddy-decision-support-and-console.md)，历史研究见 ADR-003 |
+| 模型与参数 | [schemas.py](../../src/hey_my_buddy/protocol/schemas.py) 接受 `model`、`provider`、`effort` 字符串；`../../harnesses/dsh/scripts/run.mjs`（已在 `3c042df6` 删除） 返回 `requested` 配置 | 让 Host 获得可选择组合与参数依据，当前综合提案见 [ADR-004](004-buddy-decision-support-and-console.md)，历史研究见 ADR-003 |
 | 成本（延期、可选） | [schemas.py](../../src/hey_my_buddy/protocol/schemas.py) 的提交字段没有金额或 token 预算 | 不要求本轮实现；有可靠来源时才考虑观测与可执行政策 |
 
 “Worker 只能建议、Host 才能派发”需要在实际调用能力上实现；提示词或 `owner` 标签不构成强制权限边界。同一用户下拥有完整 shell 与凭据访问权的进程也不能被宣称已经实现操作系统级隔离。具体权限机制、数据库迁移、C-Two 方法签名和 adapter 恢复实现仍需在开发设计中确定。

@@ -54,10 +54,10 @@ The integrated layout matrix covers widths 390, 760, 900, 1024, 1280 and 1440 wi
 
 | Requirement | Before | Release after |
 | --- | --- | --- |
-| T1 intent title | [Before](../../tmp/016/screenshots/before/T1-title-mismatch.png) | [After](../../tmp/016/screenshots/after-release/T1-title-mismatch.png) |
-| T2 hierarchy | [Before](../../tmp/016/screenshots/before/T2-layer-hierarchy.png) | [After](../../tmp/016/screenshots/after-release/T2-layer-hierarchy.png) |
-| T3 delegation card | [Before](../../tmp/016/screenshots/before/T3-delegation-card.png) | [After](../../tmp/016/screenshots/after-release/T3-delegation-card.png) |
-| T4 detail header | [Before](../../tmp/016/screenshots/before/T4-detail-duplicate-title.png) | [After](../../tmp/016/screenshots/after-release/T4-detail-duplicate-title.png) |
+| T1 intent title | `../../tmp/016/screenshots/before/T1-title-mismatch.png`（本机证据，没有进仓库） | `../../tmp/016/screenshots/after-release/T1-title-mismatch.png`（本机证据，没有进仓库） |
+| T2 hierarchy | `../../tmp/016/screenshots/before/T2-layer-hierarchy.png`（本机证据，没有进仓库） | `../../tmp/016/screenshots/after-release/T2-layer-hierarchy.png`（本机证据，没有进仓库） |
+| T3 delegation card | `../../tmp/016/screenshots/before/T3-delegation-card.png`（本机证据，没有进仓库） | `../../tmp/016/screenshots/after-release/T3-delegation-card.png`（本机证据，没有进仓库） |
+| T4 detail header | `../../tmp/016/screenshots/before/T4-detail-duplicate-title.png`（本机证据，没有进仓库） | `../../tmp/016/screenshots/after-release/T4-detail-duplicate-title.png`（本机证据，没有进仓库） |
 
 ## Authorized orphan shutdown
 
