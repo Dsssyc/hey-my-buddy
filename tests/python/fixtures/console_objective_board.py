@@ -221,7 +221,6 @@ class SyntheticBoard:
             "workerId": "synthetic-router", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
             "nonce": NONCE, "status": "ok", "shutdownConfirmed": True,
             "result": {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
-                       "tableRevision": document["tableRevision"],
                        "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                        "usage": {"elapsedMs": 0, "toolCalls": 0},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
@@ -274,12 +273,8 @@ class SyntheticBoard:
         # It is not a Git repository and no Git operation is performed.
         (self.state / "fictional-project/.git").mkdir(parents=True)
         self.call("model_catalog_refresh", {"requestId": "synthetic-catalog"})
-        with self.board.store.db.read() as connection:
-            revision = connection.execute("SELECT table_revision FROM evaluation_state WHERE id=1").fetchone()[0]
-        expected_revision = revision
         self.board.console_call("user_policy_publish", {
             "commandId": "synthetic-policy",
-            "expectedRevision": expected_revision,
             "profileSettings": [{"profileId": item, "enabled": True} for item in
                                 (PROFILE_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},

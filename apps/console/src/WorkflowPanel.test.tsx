@@ -39,7 +39,7 @@ function fixture() {
     children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task,
   };
   const snapshot = {
-    csrfToken: "fixture-csrf",
+    csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     profiles: [{ profileId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
   } as Snapshot;

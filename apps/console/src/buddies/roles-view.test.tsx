@@ -30,8 +30,8 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-const IDENTITY = new Set(["commandId", "expectedRevision"]);
-/** What a publication carries besides who publishes and against which revision. */
+const IDENTITY = new Set(["commandId"]);
+/** What a publication carries besides its idempotency key. */
 const patchOf = (params: Record<string, any>) => Object.fromEntries(Object.entries(params).filter(([key]) => !IDENTITY.has(key)));
 const interval = 45;
 
@@ -134,7 +134,7 @@ describe("the Router list", () => {
   it("keeps a large decision history out of the roles page", async () => {
     const decision = (id: string) => ({
       decisionId: id, kind: "select" as const, status: "completed", task: "不应出现在配置页的长任务说明。".repeat(200),
-      profileId: MEDIUM_ID, selectedProfile: null, tableRevision: 3, configurationRevision: 2, reason: "", evidence: [],
+      profileId: MEDIUM_ID, selectedProfile: null, reason: "", evidence: [],
       createdAt: "2026-09-24T08:00:00Z", runId: id, decisionModel: null, requested: {}, input: {}, inputSha256: id, output: {},
     });
     const f = fixture(snapshot({ routers: [MEDIUM_ID], extra: { decisions: Array.from({ length: 50 }, (_, i) => decision(`history-${i}`)) } as unknown as Partial<Snapshot> }));
@@ -211,7 +211,7 @@ describe("adding to the list", () => {
     expect(within(line(MEDIUM)).queryByText(/当前|候补|不可用|等待重试/)).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID] } });
   });
@@ -223,7 +223,7 @@ describe("adding to the list", () => {
     await addRouter(user, PENDING);
     expect(listed()).toEqual([FLASH, MEDIUM, PENDING]);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
   });
 
@@ -235,7 +235,7 @@ describe("adding to the list", () => {
     expect(choice(PENDING).getAttribute("aria-disabled")).toBeNull();
     await user.click(choice(PENDING));
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [PENDING_ID] } });
   });
 
@@ -378,7 +378,7 @@ describe("moving and removing", () => {
     expect(listed()).toEqual([FLASH, MEDIUM, PENDING]);
     expect(unsavedIn("列表")).toHaveLength(1);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [FLASH_ID, MEDIUM_ID, PENDING_ID] } });
   });
 
@@ -389,7 +389,7 @@ describe("moving and removing", () => {
     await user.click(moveUp(PENDING));
     expect(listed()).toEqual([MEDIUM, PENDING, FLASH]);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID, PENDING_ID, FLASH_ID] } });
   });
 
@@ -413,7 +413,7 @@ describe("moving and removing", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(queryAddDialog()).toBeNull();
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [MEDIUM_ID, PENDING_ID] } });
   });
 
@@ -430,7 +430,7 @@ describe("moving and removing", () => {
     expect(f.command).not.toHaveBeenCalled();
     await user.click(remove(MEDIUM));
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [] } });
   });
 
@@ -518,7 +518,7 @@ describe("what leaves the roles view out of use", () => {
     await selectModel(user, "claude / anthropic / claude-sonnet-5", "Claude Code");
     await user.click(defaultPreference("优先"));
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
     expect(f.published[0]).not.toHaveProperty("configuration");
     expect(f.published[0].familyPreferenceChanges).toEqual([
@@ -569,8 +569,8 @@ describe("what leaves the roles view out of use", () => {
     expect(listed()).toEqual([MEDIUM]);
     expect(modeOption("审阅").getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByText("正在保存或读取目录；请稍后修改。")).toBeNull();
-    saving.resolve({ published: true, tableRevision: 5 });
-    await screen.findByText("已发布新版本");
+    saving.resolve({ published: true,});
+    await screen.findByText("设置已保存");
     expect(addButton().getAttribute("aria-disabled")).toBeNull();
   });
 });
@@ -595,7 +595,7 @@ describe("the settings of the role", () => {
     expect(unsavedIn("默认模式")).toHaveLength(1);
     expect(unsavedIn("列表")).toHaveLength(0);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { defaultRoutingMode: "fast" } });
   });
 
@@ -615,7 +615,7 @@ describe("the settings of the role", () => {
     expect(budget.queryByText("300 秒")).toBeNull();
     expect(unsavedIn("审阅预算")).toHaveLength(1);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routingBudget: "brief" } });
   });
 
@@ -639,7 +639,7 @@ describe("the settings of the role", () => {
     expect(intervalInput()).toHaveProperty("value", String(interval));
     expect(unsavedIn("重试间隔")).toHaveLength(1);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerRetryIntervalSeconds: interval } });
   });
 
@@ -662,7 +662,7 @@ describe("the settings of the role", () => {
     expect(intervalInput().getAttribute("aria-invalid")).toBeNull();
     expect(within(section("重试间隔")).queryByText(/需要 1–2147483647/)).toBeNull();
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerRetryIntervalSeconds: 7 } });
   });
 
@@ -677,7 +677,7 @@ describe("the settings of the role", () => {
     await user.click(modeOption("审阅"));
     expect([unsavedIn("列表").length, unsavedIn("默认模式").length, unsavedIn("审阅预算").length]).toEqual([1, 0, 1]);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(patchOf(f.published[0])).toEqual({ configuration: { routerProfileIds: [], routingBudget: "deep" } });
   });
 });
@@ -706,7 +706,7 @@ describe("the records of routing", () => {
 
   it("writes the window's counts as names with numbers, leaves out what is zero, and does not work out successes", async () => {
     const f = fixture(snapshot({ routingHealth: health({
-      sampleCount: 18, failureCount: 4, consecutiveFailures: 2, abstentionCount: 3, cancelledCount: 1, staleCount: 2,
+      sampleCount: 18, failureCount: 4, consecutiveFailures: 2, abstentionCount: 3, cancelledCount: 1,
       budgetExhaustedCount: 0, boundsRejectedCount: 2,
       lastSuccessAt: "2026-09-25T08:02:00.000Z", lastSuccessDecisionId: "dec-41",
     }) }));
@@ -715,15 +715,14 @@ describe("the records of routing", () => {
     expect(fact("连续失败")).toBe("连续失败2");
     expect(fact("弃权")).toBe("弃权3");
     expect(fact("取消")).toBe("取消1");
-    expect(fact("过期")).toBe("过期2");
     expect(fact("越界")).toBe("越界2");
     expect(fact("最近成功")).toBe(`最近成功${time("2026-09-25T08:02:00.000Z")}`);
     // A zero, and a count the service does not carry, are not written; nor is a success rate.
     expect(records().queryByText("预算耗尽")).toBeNull();
     expect(records().queryByText("输入变化")).toBeNull();
     expect(records().queryByText(/成功 \d/)).toBeNull();
-    // Abstentions, cancellations and stale results are not failures; this is the hint of the word.
-    expect(records().getByText("失败").getAttribute("aria-description")).toBe("弃权、取消与过期不算失败");
+    // Abstentions and cancellations are not failures; this is the hint of the word.
+    expect(records().getByText("失败").getAttribute("aria-description")).toBe("弃权与取消不算失败");
   });
 
   it("writes the recorded outcomes of the Router beside the failures: budget, bounds and changed input", async () => {

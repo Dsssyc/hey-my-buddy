@@ -732,7 +732,7 @@ def _render_output(method: str, response, mode: str):
         # its actual current dispatch identity, including explicit absent actors.
         fields = (
             "routerProfileIds", "routerIdentities", "routerProfileId", "routerProfile", "routerIndex",
-            "budget", "routingBudget", "routerRetryIntervalSeconds", "configurationRevision", "decisionModel", "routingBoundary",
+            "budget", "routingBudget", "routerRetryIntervalSeconds", "decisionModel", "routingBoundary",
         )
         rendered = {**rendered, "routing": {**projected, **{key: routing[key] for key in fields if key in routing}}}
     pending = response.get("pendingRequests")

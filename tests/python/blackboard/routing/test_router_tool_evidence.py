@@ -9,6 +9,7 @@ the publication transaction grafts onto the frozen input document. The suite
 checks the pure wrapper and the real publication boundary.
 """
 import json
+import uuid
 import unittest
 from unittest.mock import patch
 
@@ -101,9 +102,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.catalog_fixture()
 
     def configure(self, board, **settings):
-        revision = board.call("console_snapshot", {})["tableRevision"]
         return board.console_call("user_policy_publish", {
-            "commandId": f"publish-{revision}", "expectedRevision": revision, "configuration": settings})
+            "commandId": "publish-" + str(uuid.uuid4()), "configuration": settings})
 
     def request_route(self, board, request_id, worker="router"):
         result = board.call("selection_request", {"requestId": request_id, "task": "choose"})

@@ -83,11 +83,10 @@ type SnapshotWithHarnesses = Snapshot & { harnesses: HarnessHealth[] };
 
 function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHarnesses {
   const base: Snapshot = {
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    tableRevision: 4,
 
-    configuration: { revision: 1, routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
+    configuration: { routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
@@ -111,7 +110,7 @@ function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Sn
       return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
         preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
         familyPreferences: state.familyPreferences,
-        modelConcurrency: state.modelConcurrency, tableRevision: state.tableRevision, nextCursor: null };
+        modelConcurrency: state.modelConcurrency, nextCursor: null };
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -210,7 +209,7 @@ describe("marks for what waits", () => {
     const f = fixture(mediumId, { routingHealth: {
       available: false, currentRouterProfileId: null, reasonCode: "router-unavailable",
       windowSize: 20, sampleCount: 2, failureCount: 2, consecutiveFailures: 2,
-      abstentionCount: 0, cancelledCount: 0, staleCount: 0,
+      abstentionCount: 0, cancelledCount: 0,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
     } });
     renderBuddy("#buddies", f);

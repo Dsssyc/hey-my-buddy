@@ -38,8 +38,8 @@ class CurrentRouterTestCase(BoardTestCase):
     def add_profile(self, profile_id, *, adapter="dsh", provider="fixture", available=1, enabled=1, model=None):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,?,?,?)",
                        (profile_id, profile_id, adapter, provider, model or profile_id, "max",
                         available, enabled, canonical_json(permission_capabilities(adapter))))
 
@@ -56,8 +56,6 @@ class CurrentRouterTestCase(BoardTestCase):
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
-            revision = int(db.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
-            db.execute("UPDATE evaluation_state SET configuration_revision=? WHERE id=1", (revision + 1,))
 
     def record(self, profile_id, *, outcome="no_answer", plane="work", request="route-1", phase="preflight",
                code="timeout", index=0, task=None, attempt=None, now=T0, facts=None):
@@ -104,14 +102,14 @@ class CurrentRouterTestCase(BoardTestCase):
             requested["routerCalled"] = called
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,"
-                "created_at) VALUES(?,?,?,?,?,?,?)",
-                (decision, "failed", "task", profile_id, 0, "", at))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,reason,"
+                "created_at) VALUES(?,?,?,?,?,?)",
+                (decision, "failed", "task", profile_id, "", at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
-                "generation,expected_revision,requested_json,output_json,created_at,updated_at)"
-                " VALUES(?,?,'select','digest',?,?,?,?,?,?,?,?)",
-                (decision, request, task_id, attempt_id, 0, 0,
+                "generation,requested_json,output_json,created_at,updated_at)"
+                " VALUES(?,?,'select','digest',?,?,?,?,?,?,?)",
+                (decision, request, task_id, attempt_id, 0,
                  canonical_json(requested), canonical_json(output or {}), at, at))
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
@@ -124,7 +122,7 @@ class CurrentRouterTestCase(BoardTestCase):
 
 
 class ResolutionTests(CurrentRouterTestCase):
-    def test_empty_list_reports_not_configured_with_revision_facts(self):
+    def test_empty_list_reports_not_configured_with_empty_facts(self):
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertIsNone(resolution.profile)
@@ -132,7 +130,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertIsNone(resolution.router_index)
         self.assertEqual(resolution.problem["code"], "router-not-configured")
         self.assertEqual(resolution.facts["routerProfileIds"], [])
-        self.assertEqual(resolution.facts["configurationRevision"], 0)
+        self.assertNotIn("configurationRevision", resolution.facts)
         self.assertEqual(resolution.inspections, ())
 
     def test_selects_first_eligible_and_snapshots_complete_facts(self):
@@ -149,7 +147,7 @@ class ResolutionTests(CurrentRouterTestCase):
             "routerIdentities": [{"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
                                  {"adapter": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}],
             "routingMode": "fast", "routingBudget": "deep", "routerRetryIntervalSeconds": 45,
-            "configurationRevision": 1, "budget": {"timeoutSeconds": 60},
+            "budget": {"timeoutSeconds": 60},
         })
         self.assertEqual(resolution.inspections[-1]["selected"], True)
         # The profile is a copy of the published row; mutating it touches nothing.
@@ -305,18 +303,14 @@ class ResolutionTests(CurrentRouterTestCase):
                 router.current_router(db, after_index=-2, now=T0)
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
-    def test_version_two_settings_fail_the_unfrozen_read_without_migrating(self):
+    def test_unfrozen_read_uses_current_settings_without_version_marker(self):
         self.add_profile(A)
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('router_configuration_version','2')"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         before = self.board_.call("console_snapshot", {})
-        self.assertEqual(before["configurationError"]["code"], "router-settings-upgrade-required")
-        self.assertIsNone(before["configuration"])
+        self.assertIsNone(before["configurationError"])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.problem["code"], "router-settings-upgrade-required")
-        self.assertEqual(resolution.facts["configurationRevision"], before["configurationError"]["revision"])
+        self.assertEqual(resolution.problem["code"], "router-not-configured")
+        self.assertEqual(resolution.facts["routerProfileIds"], before["configuration"]["routerProfileIds"])
 
 
 class FrozenContinuationTests(CurrentRouterTestCase):
@@ -338,18 +332,17 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         self.assertEqual(resolution.router_index, 1)
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 600)
         self.assertEqual(resolution.facts["routingMode"], "fast")
-        self.assertEqual(resolution.facts["configurationRevision"], facts["configurationRevision"])
+        self.assertNotIn("configurationRevision", resolution.facts)
 
-    def test_frozen_identity_drift_is_refused_per_candidate(self):
+    def test_frozen_identity_drift_keeps_the_original_actor(self):
         facts = self.prepare()
         with self.board_.store.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET model='replaced' WHERE profile_id=?", (B,))
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, frozen=facts, after_index=0, now=T0)
-        self.assertIsNone(resolution.profile)
-        self.assertEqual(resolution.problem["code"], "router-profile-changed")
-        self.assertEqual(resolution.problem["routerIndex"], 1)
-        self.assertEqual(resolution.problem["profileId"], B)
+        self.assertIsNone(resolution.problem)
+        self.assertEqual(resolution.profile_id, B)
+        self.assertEqual(resolution.profile["model"], "bravo")
 
     def test_frozen_review_deadline_override_survives_next_router_resolution(self):
         facts = self.prepare()
@@ -385,7 +378,7 @@ class FrozenContinuationTests(CurrentRouterTestCase):
                        {**facts, "routerIdentities": []},
                        {key: value for key, value in facts.items() if key != "routerRetryIntervalSeconds"},
                        {**facts, "routingMode": "auto"}, {**facts, "routerRetryIntervalSeconds": 0},
-                       {**facts, "configurationRevision": -1}):
+                       {**facts, "routerIdentities": [42, facts["routerIdentities"][1]]}):
             with self.subTest(broken=broken):
                 with self.assertRaises(BoardError) as caught:
                     with self.board_.store.db.read() as db:
@@ -534,11 +527,11 @@ class HistoryProjectionTests(CurrentRouterTestCase):
                        " VALUES(NULL,NULL,NULL,'router.no_answer','{broken json',?)", (T0,))
             db.execute("INSERT INTO events(task_id,attempt_id,revision,kind,payload_json,created_at)"
                        " VALUES(NULL,NULL,NULL,'router.answered','{\"unrelated\": true}',?)", (T0,))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,"
-                       "reason,created_at) VALUES('dec-bad','failed','t',NULL,0,'',?)", (T0,))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,"
+                       "reason,created_at) VALUES('dec-bad','failed','t',NULL,'',?)", (T0,))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
-                       "expected_revision,requested_json,output_json,created_at,updated_at)"
-                       " VALUES('dec-bad','route-bad','select','digest',0,'{broken','{}',?,?)", (T0, T0))
+                       "requested_json,output_json,created_at,updated_at)"
+                       " VALUES('dec-bad','route-bad','select','digest','{broken','{}',?,?)", (T0, T0))
             self.board_.store._append_event(db, "decision.failed", payload={"decisionId": "dec-bad"})
         with self.board_.store.db.read() as db:
             timeline = router_history.profile_timeline(db, profile_id=A)

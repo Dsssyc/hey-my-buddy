@@ -36,7 +36,7 @@ export function createAuthorityLatch() {
 }
 export type AuthorityLatch = ReturnType<typeof createAuthorityLatch>;
 
-/* Every authenticated window may edit; a stale publication is refused. */
+/* Every authenticated window may edit. */
 
 /**
  * Copy for an expired or invalid login (cookie). The cookie applies to the

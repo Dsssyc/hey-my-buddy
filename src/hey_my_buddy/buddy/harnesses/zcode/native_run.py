@@ -29,7 +29,6 @@ import dataclasses
 import hashlib
 import os
 import queue
-import re
 import secrets
 import subprocess
 import sys

@@ -88,7 +88,6 @@ export function validRoutingConfiguration(value: unknown): value is Configuratio
   if (!config || typeof config !== "object" || Array.isArray(config)) return false;
   const interval = config.routerRetryIntervalSeconds;
   return !["decisionProfileId", "routerProfileId", "fastRouterProfileId", "reviewRouterProfileId"].some(key => key in config)
-    && Number.isInteger(config.revision)
     && validRouterProfileIds(config.routerProfileIds)
     && typeof interval === "number" && Number.isInteger(interval) && interval >= 1 && interval <= ROUTER_RETRY_INTERVAL_MAX
     && (config.defaultRoutingMode === "fast" || config.defaultRoutingMode === "review")
@@ -100,8 +99,7 @@ function validConfigurationState(data: Snapshot): boolean {
   if (data.configuration !== null) return validRoutingConfiguration(data.configuration) && error == null;
   return !!error && typeof error === "object" && !Array.isArray(error)
     && error.code === "router-settings-upgrade-required"
-    && typeof error.message === "string" && error.message.trim().length > 0
-    && Number.isSafeInteger(error.revision) && error.revision >= 0;
+    && typeof error.message === "string" && error.message.trim().length > 0;
 }
 
 /** One per-buddy health entry; a malformed field refuses the whole entry. */
@@ -139,7 +137,7 @@ export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
   const health = value as RoutingHealth | null;
   if (!health || typeof health !== "object" || Array.isArray(health)) return undefined;
   const counts = [health.windowSize, health.sampleCount, health.failureCount, health.consecutiveFailures,
-    health.abstentionCount, health.cancelledCount, health.staleCount];
+    health.abstentionCount, health.cancelledCount];
   if (counts.some(count => !Number.isSafeInteger(count) || count < 0)
     || [health.budgetExhaustedCount, health.boundsRejectedCount, health.inputChangedCount, health.attemptCount,
       health.unattributedCount]
@@ -607,7 +605,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = (await conditionalRead("/console", signal)) as { data: Snapshot; verifiedAtMs: number | null };
       if (
         !data ||
-        !Number.isInteger(data.tableRevision) ||
+        !Number.isSafeInteger(data.eventCursor) || data.eventCursor < 0 ||
         !validConfigurationState(data) ||
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.preferences) ||

@@ -76,7 +76,7 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
     ? audit.evidence : null;
   return <section className="decision-detail" aria-label="决策依据详情">
     <div className="row-between"><h3>选择依据</h3>
-      <Badge tone={!abstention && ["failed", "needs-host", "stale", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
+      <Badge tone={!abstention && ["failed", "needs-host", "cancelled"].includes(audit.status) ? "amber" : "neutral"}>
         {abstention ? decisionStatus.abstention : decisionStatus[audit.status] || audit.status}</Badge></div>
     <InlineText key={audit.decisionId} recordId={audit.decisionId} text={reason} className="read-text decision-reason" />
     {audit.error && audit.error !== audit.reason && <p className="error-message">{audit.error}</p>}
@@ -84,8 +84,6 @@ export function DecisionDetails({ decisionId, api, csrfToken, active = true, ref
       <dt>选中配置</dt><dd>{configurationText(audit.selectedProfile)}</dd>
       <dt>路由模型</dt><dd>{configurationText(model)}</dd>
       <dt>实际模式</dt><dd>{noRouterCall ? "未调用 Router" : recordedRoutingMode(audit.routingMode)}</dd>
-      <dt>评价表版本</dt><dd>V{audit.tableRevision}</dd>
-      <dt>决策配置版本</dt><dd>{audit.configurationRevision == null ? "未记录" : `V${audit.configurationRevision}`}</dd>
       <dt>记录时间</dt><dd>{formatDate(audit.createdAt)}</dd>
     </dl>
     <>

@@ -1,3 +1,4 @@
+import uuid
 """Single Router mode, pure legacy conversion and durable routing tests; no native model calls."""
 import unittest
 from unittest.mock import patch
@@ -21,9 +22,8 @@ class RoutingModesTests(BoardTestCase):
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', True, create=True))
 
     def configure(self, board, **settings):
-        revision = board.call('console_snapshot', {})['tableRevision']
         return board.console_call('user_policy_publish', {
-            'commandId': f'publish-{revision}', 'expectedRevision': revision, 'configuration': settings})
+            'commandId': f"publish-{uuid.uuid4()}", 'configuration': settings})
 
     def test_fresh_board_defaults_fast_and_patch_preserves_omitted_settings(self):
         board = self.board()
@@ -102,7 +102,6 @@ class RoutingModesTests(BoardTestCase):
             fact = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'").fetchone()[0])
             self.assertEqual(fact['code'], 'router-review-unsupported')
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers').fetchone()[0], 0)
 
     def test_replay_does_not_reresolve_default_or_budget(self):
         board = self.board()
@@ -157,7 +156,7 @@ class RoutingModesTests(BoardTestCase):
                 facts.pop('toolEvidence')
             board.call('worker_result', {'workerId': worker, 'attemptId': claim['attempt']['attemptId'],
                 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True,
-                'result': {**facts, 'status': 'ok', 'operation': 'select', 'tableRevision': claim['decisionInput']['tableRevision'],
+                'result': {**facts, 'status': 'ok', 'operation': 'select',
                     'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                     'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count},
                     'decision': {'profileId': PROFILE_ID, 'reason': 'candidate match', 'evidence': []}}})

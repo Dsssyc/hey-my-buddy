@@ -1,6 +1,5 @@
 """Current native facts change without replacing user history or accepting late results."""
 from copy import deepcopy
-import json
 from unittest.mock import patch
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog_store
@@ -23,11 +22,10 @@ class CatalogObservationTests(BoardTestCase):
 
     def table_facts(self):
         with self.e.db.read() as db:
-            return (db.execute('SELECT table_revision FROM evaluation_state').fetchone()[0],
-                    db.execute('SELECT COUNT(*) FROM evaluation_revisions').fetchone()[0],
-                    db.execute('SELECT COUNT(*) FROM events').fetchone()[0])
+            return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
+                    [tuple(row) for row in db.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')])
 
-    def test_identical_read_records_observation_and_confirmed_time_without_revision_or_event(self):
+    def test_identical_read_records_observation_and_confirmed_time_without_event(self):
         first = self.record(catalog())
         facts = self.table_facts()
         with self.e.db.read() as db:
@@ -36,7 +34,6 @@ class CatalogObservationTests(BoardTestCase):
         with patch.object(self.b.store, '_notify') as notify:
             second = self.record({**catalog(), 'discoveredAt': self.clock.value})
         self.assertEqual(self.table_facts(), facts)
-        self.assertEqual(second['tableRevision'], first['tableRevision'])
         self.assertTrue(second['duplicate'])
         self.assertGreater(second['observationId'], first['observationId'])
         notify.assert_not_called()
@@ -47,37 +44,31 @@ class CatalogObservationTests(BoardTestCase):
             self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
                                         (second['observationId'],)).fetchone()[0], self.clock.value)
 
-    def test_provenance_and_discovery_identity_alone_do_not_change_revision(self):
+    def test_provenance_and_discovery_identity_alone_do_not_change_profile_facts(self):
         first = self.record(catalog())
         facts = self.table_facts()
         different = {**catalog(), 'source': 'another-native-reading', 'harnessVersion': 'next',
                      'warnings': ['observation detail'], 'quota': {'remaining': 42}, 'observedAt': 'now'}
         second = self.record(different)
         self.assertNotEqual(first['discoveryId'], second['discoveryId'])
-        self.assertEqual(self.table_facts(), facts)
+        self.assertEqual(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
-            row = db.execute('SELECT source,created_revision,updated_revision FROM evaluation_profiles').fetchone()
+            row = db.execute('SELECT source FROM evaluation_profiles').fetchone()
         self.assertEqual(row['source'], 'catalog:' + second['discoveryId'])
-        self.assertEqual(row['created_revision'], row['updated_revision'])
 
-    def test_catalog_revision_profile_count_keeps_the_number_of_entries_in_the_applied_reading(self):
+    def test_applied_reading_keeps_current_profiles_and_pending_absence(self):
         payload = catalog(models=('alpha', 'beta'))
         self.record(payload)
         payload['providers'][0]['models'][0]['name'] = 'changed alpha'
-        changed = self.record(payload)
+        self.record(payload)
         missing = deepcopy(payload)
         missing['providers'][0]['models'].pop()
-        pending = self.record(missing)
+        self.record(missing)
         with self.e.db.read() as db:
-            changed_counts = json.loads(db.execute('SELECT counts_json FROM evaluation_revisions WHERE revision=?',
-                                                  (changed['tableRevision'],)).fetchone()[0])
-            pending_counts = json.loads(db.execute('SELECT counts_json FROM evaluation_revisions WHERE revision=?',
-                                                  (pending['tableRevision'],)).fetchone()[0])
-        self.assertEqual(changed_counts['profiles'], 2, 'The unchanged beta row still belongs to this reading')
-        self.assertEqual(pending_counts['profiles'], 1, 'The absent beta row is outside this reading')
-        self.assertEqual(set(changed_counts), {'profiles', 'observationId', 'provided'})
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles').fetchone()[0], 2)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM catalog_pending').fetchone()[0], 1)
 
-    def test_metadata_fields_each_advance_one_revision(self):
+    def test_metadata_fields_update_profile_facts(self):
         payload = catalog()
         self.record(payload)
         for field, value in [('name', 'new label'), ('description', 'new description'),
@@ -90,32 +81,29 @@ class CatalogObservationTests(BoardTestCase):
                 payload['providers'][0]['models'][0][field] = value
                 response = self.record(payload)
                 after = self.table_facts()
-                self.assertEqual(after[:2], (before[0] + 1, before[1] + 1))
-                self.assertEqual(response['tableRevision'], after[0])
-                self.assertGreater(after[2], before[2])
-                with self.e.db.read() as db:
-                    self.assertEqual(db.execute('SELECT updated_revision FROM evaluation_profiles').fetchone()[0], after[0])
+                self.assertNotIn('tableRevision', response)
+                self.assertGreater(after[0], before[0])
+                self.assertNotEqual(after[1], before[1])
 
-    def test_addition_pending_confirmation_and_recovery_version_only_actual_changes(self):
-        first = self.record(catalog())
-        added = self.record(catalog(models=('alpha', 'beta')))
-        self.assertEqual(added['tableRevision'], first['tableRevision'] + 1)
-        pending = self.record(catalog(models=('alpha',)))
-        self.assertEqual(pending['tableRevision'], added['tableRevision'] + 1)
+    def test_addition_pending_confirmation_and_recovery_change_only_actual_facts(self):
+        self.record(catalog())
+        self.record(catalog(models=('alpha', 'beta')))
+        self.record(catalog(models=('alpha',)))
         facts = self.table_facts()
         self.clock.advance(3599)
         self.record(catalog(models=('alpha',)))
         self.assertEqual(self.table_facts(), facts)
         self.clock.advance(2)
         confirmed = self.record(catalog(models=('alpha',)))
-        self.assertEqual(confirmed['tableRevision'], pending['tableRevision'] + 1)
+        self.assertGreater(self.table_facts()[0], facts[0])
         facts = self.table_facts()
         self.record(catalog(models=('alpha',)))
         self.assertEqual(self.table_facts(), facts)
-        recovered = self.record(catalog(models=('alpha', 'beta')))
-        self.assertEqual(recovered['tableRevision'], confirmed['tableRevision'] + 1)
+        self.record(catalog(models=('alpha', 'beta')))
+        with self.e.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1').fetchone()[0], 2)
 
-    def test_unknown_reading_keeps_revision_unless_it_restores_retained_availability(self):
+    def test_unknown_reading_keeps_profiles_unless_it_restores_retained_availability(self):
         self.record(catalog())
         facts = self.table_facts()
         self.record(catalog(models=('untrusted',), account_status='unknown'))
@@ -123,17 +111,18 @@ class CatalogObservationTests(BoardTestCase):
         with self.e.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_UNHEALTHY'")
         restored = self.record(catalog(models=(), status='unknown'))
-        self.assertEqual(restored['tableRevision'], facts[0] + 1)
+        self.assertGreater(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
-            row = db.execute('SELECT available,updated_revision FROM evaluation_profiles').fetchone()
-        self.assertEqual(tuple(row), (1, restored['tableRevision']))
+            row = db.execute('SELECT available FROM evaluation_profiles').fetchone()
+        self.assertEqual(row['available'], 1)
 
-    def test_effort_retirement_changes_revision_once(self):
+    def test_effort_retirement_changes_profile_once(self):
         payload = catalog()
         payload['providers'][0]['models'][0]['efforts'] = ['max', 'high']
-        first = self.record(payload)
-        retired = self.record(catalog())
-        self.assertEqual(retired['tableRevision'], first['tableRevision'] + 1)
+        self.record(payload)
+        self.record(catalog())
+        with self.e.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=0').fetchone()[0], 1)
         facts = self.table_facts()
         self.record(catalog())
         self.assertEqual(self.table_facts(), facts)
@@ -157,9 +146,7 @@ class CatalogObservationTests(BoardTestCase):
         profile_id = 'claude:anthropic:claude-fixture:max'
         with self.e.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
-            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy',1)", (profile_id,))
-            created_revision = db.execute('SELECT created_revision FROM evaluation_profiles WHERE profile_id=?',
-                                          (profile_id,)).fetchone()[0]
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy')", (profile_id,))
         native = _catalog({'account': {'apiProvider': 'firstParty', 'email': 'subscriber@example.invalid',
                                       'organization': 'fixture-organization', 'subscriptionType': 'max'},
                            'models': [{'value': 'fixture', 'resolvedModel': 'claude-fixture',
@@ -170,13 +157,13 @@ class CatalogObservationTests(BoardTestCase):
             self.clock.advance(3601)
             self.record(native)
             with self.e.db.read() as db:
-                rows = db.execute("SELECT profile_id,provider,enabled,available,created_revision "
+                rows = db.execute("SELECT profile_id,provider,enabled,available "
                                   "FROM evaluation_profiles WHERE adapter='claude'").fetchall()
                 self.assertEqual([tuple(row) for row in rows],
-                                 [(profile_id, 'anthropic', 1, 1, created_revision)])
+                                 [(profile_id, 'anthropic', 1, 1)])
                 self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_preferences WHERE profile_id=?',
                                                   (profile_id,)).fetchone()),
-                                 (profile_id, 'prefer', 'keep this buddy', 1))
+                                 (profile_id, 'prefer', 'keep this buddy'))
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM catalog_pending WHERE adapter='claude'").fetchone()[0], 0)
 
     def test_a_ba_restores_identity_and_preserves_human_intent(self):
@@ -184,8 +171,8 @@ class CatalogObservationTests(BoardTestCase):
         profile_id = 'dsh:fixture:alpha:max'
         with self.e.db.write() as db:
             db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
-            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','human text',1,'now')")
-            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason',1)", (profile_id,))
+            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','human text','now')")
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','my reason')", (profile_id,))
         # A first confirmed absence is pending, not a retirement: the profile
         # keeps its metadata, its routability and the user's intent (ADR-027).
         self.record(catalog(models=()))

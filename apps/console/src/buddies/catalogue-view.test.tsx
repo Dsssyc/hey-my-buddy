@@ -29,9 +29,9 @@ function profile(family: typeof sonnet, effort: string, extra: Partial<Profile> 
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 4,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile(sonnet, "medium", { enabled: true }), profile(sonnet, "high"), profile(sol, "medium"), profile(sol, "low")],
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
@@ -52,7 +52,7 @@ function fixture(state: Snapshot = snapshot(), replies: Record<string, Reply> = 
   const command = vi.fn(async (operation: string, params: Record<string, any>) => {
     if (replies[operation]) return replies[operation](params);
 
-    if (operation === "user_policy_publish") { published.push(params); return { published: true, tableRevision: state.tableRevision + 1 }; }
+    if (operation === "user_policy_publish") { published.push(params); return { published: true,}; }
     throw new Error(`Unexpected command: ${operation}`);
   });
   const api = {
@@ -71,7 +71,7 @@ function open(f: ReturnType<typeof fixture>) {
 /** One page of retained rows, as `model_profiles` returns it. */
 function page(profiles: Profile[], state: Snapshot) {
   return { profiles, preferences: [], preferenceOverrides: [], familyPreferences: [], familyAnnotations: [],
- modelConcurrency: [], tableRevision: state.tableRevision, nextCursor: null };
+ modelConcurrency: [], nextCursor: null };
 }
 
 afterEach(() => {
@@ -220,7 +220,7 @@ describe("a model's default preference", () => {
     expect(within(pane()).getAllByRole("img", { name: "未保存" }).length).toBeGreaterThan(0);
     expect(within(levelPreference("medium")).getByRole("radio", { name: "跟随模型" }).getAttribute("aria-checked")).toBe("true");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0].familyPreferenceChanges).toEqual([{ ...sol, mode: "prefer", reason: "机械改动" }]);
     expect(f.published[0]).not.toHaveProperty("preferenceChanges");
     // Back to 不设 removes the reason field with the default.

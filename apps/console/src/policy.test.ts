@@ -55,11 +55,10 @@ const otherHarness: Profile = { ...worker, profileId: "zcode:bigmodel-api:glm:hi
 
 function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {}): Snapshot {
   return {
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    tableRevision: 3,
 
-    configuration: { revision: 1, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     preferences: [],
     familyPreferences: [],
@@ -262,8 +261,7 @@ describe("blocking new changes", () => {
 
   it("saves review mode when the first item is fast-only and the next item supports review", () => {
     const first = { ...coder, capabilities: ["routing:fast"] };
-    const baseline = makeDraft(snapshot([first, worker], { configuration: {
-      revision: 1, routerProfileIds: [first.profileId, worker.profileId], routerRetryIntervalSeconds: 600,
+    const baseline = makeDraft(snapshot([first, worker], { configuration: { routerProfileIds: [first.profileId, worker.profileId], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard",
     } }));
     const changed = { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "review" as const } };
@@ -275,7 +273,7 @@ describe("blocking new changes", () => {
 describe("stale settings needing attention", () => {
   it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { revision: 2, routerProfileIds: [retired.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { routerProfileIds: [retired.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     const attention = decisionAttention(baseline)!;
     expect(attention.router).toBe(true);
@@ -310,7 +308,7 @@ describe("stale settings needing attention", () => {
     expect(attentionIssues(healthy)).toEqual([]);
     const stale = makeDraft(snapshot([{ ...worker, enabled: false }, low], {
       familyPreferences: [{ ...family, mode: "pin", reason: "" }],
-      configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     const issues = attentionIssues(stale);
     expect(issues).toHaveLength(1);
@@ -326,7 +324,7 @@ describe("stale settings needing attention", () => {
 
   it("treats a missing decision profile as needing attention, not as an error", () => {
     const baseline = makeDraft(snapshot([worker], {
-      configuration: { revision: 2, routerProfileIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { routerProfileIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);

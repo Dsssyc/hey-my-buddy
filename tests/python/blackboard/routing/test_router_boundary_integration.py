@@ -200,18 +200,13 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.snapshot_of(private["decisionId"]), frozen)
         self.assertEqual(self.snapshot_of(request["decisionId"]), original)
 
-    def test_settings_and_table_changes_are_changed_without_model_reason_guessing(self):
+    def test_settings_edit_does_not_change_the_frozen_no_answer_path(self):
         request, first = self.start()
         self.set_settings(ids=[B, A], mode="review", interval=30)
         self.report(first, self.failure(first), status="failed")
-        boundary = self.boundary(request["decisionId"])
-        self.assertEqual(boundary["kind"], "routing-changed")
-        self.assertEqual(boundary["retryAt"], self.clock.value)
-        self.assertEqual(boundary["facts"]["routerProfileIds"], [A, B])
-        self.assertEqual(boundary["facts"]["routingMode"], "fast")
-        self.assertEqual(boundary["facts"]["routerRetryIntervalSeconds"], 600)
-        self.assertIn("取消后重新提交没有用", boundary["reason"])
-        self.assertNotEqual(boundary["routerTrials"][0]["outcome"], "no_answer")
+        self.assertIsNone(self.boundary(request["decisionId"]))
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "queued")
+        self.assertEqual(self.snapshot_of(request["decisionId"])["facts"]["routerProfileIds"], [A, B])
 
     def test_current_view_has_actor_b_even_queued_and_original_request_stays_actor_free(self):
         request, first = self.start()
@@ -266,19 +261,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.tasks(), [])
         self.assertEqual(self.attempts(), [])
 
-    def test_old_settings_keep_frozen_packet_without_guessing_mode_or_converting_meta(self):
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE meta SET value='2' WHERE key='router_configuration_version'")
-            prior = dict(db.execute("SELECT key,value FROM meta WHERE key GLOB 'router_*'").fetchall())
-        request = self.request()
-        boundary = self.boundary(request["decisionId"])
-        self.assert_packet(boundary, require_schema=False)
-        self.assertEqual(boundary["code"], "router-settings-upgrade-required")
-        self.assertIsNone(boundary["facts"]["routingMode"])
-        with self.board_.store.db.read() as db:
-            self.assertEqual(dict(db.execute("SELECT key,value FROM meta WHERE key GLOB 'router_*'").fetchall()), prior)
-        self.assertEqual(self.tasks(), [])
-
     def test_model_byte_and_entry_caps_preserve_untruncated_host_packet(self):
         delta = "dsh:fixture:delta:max"
         self.add_profile(C, model="charlie")
@@ -296,8 +278,8 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_later_profiles_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','private note',0,?)", (T0,))
-            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','private preference',0)", (B,))
+            db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','private note',?)", (T0,))
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','private preference')", (B,))
         request = self.request()
         frozen = self.boundary(request["decisionId"])
         with self.board_.store.db.write() as db:
@@ -404,16 +386,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertIsNone(self.boundary(no_candidate["decisionId"]))
         self.assertIsNone(self.snapshot_of(no_candidate["decisionId"]))
 
-    def test_reader_changes_are_program_changes_not_failed_router_trials(self):
-        request, first = self.start()
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE evaluation_readers SET released_at=?", (T0,))
-        self.report(first, self.failure(first), status="failed")
-        boundary = self.boundary(request["decisionId"])
-        self.assertEqual(boundary["kind"], "routing-changed")
-        self.assertEqual(boundary["routerTrials"][0]["outcome"], "changed")
-        self.assertEqual(self.router_events("router.no_answer", "router.answered"), [])
-
     def test_cancelled_dispatch_stays_cancelled_without_new_router_failure(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
@@ -463,8 +435,8 @@ class GovernedBoundaryTests(WorkflowTestCase):
         with self.board_.store.db.write() as db:
             for profile_id, model in ((A, "alpha"), (B, "bravo")):
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                           "available,enabled,capabilities_json,created_revision,updated_revision) "
-                           "VALUES(?,?,'dsh','fixture',?,'max',1,1,?,0,0)",
+                           "available,enabled,capabilities_json) "
+                           "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
                            (profile_id, profile_id, model, canonical_json(permission_capabilities("dsh"))))
             router._write_settings(db, {**router.configuration(db), "routerProfileIds": []})
 

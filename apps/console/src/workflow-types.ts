@@ -32,8 +32,6 @@ export type RoutingRecord = {
   routingMode?: RoutingMode | null;
   decisionId?: string | null;
   taskId?: string | null;
-  tableRevision?: number | null;
-  configurationRevision?: number | null;
   selectedProfile?: ExecutionConfiguration | null;
   reason?: string | null;
   constraints?: Partial<ExecutionConfiguration>;

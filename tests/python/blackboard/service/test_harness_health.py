@@ -195,7 +195,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(self.native.call_count, 2)
         self.assertEqual(len(self.refreshed), 2)
 
-    def test_stat_change_reprobes_without_advancing_unchanged_catalog_revision(self):
+    def test_stat_change_reprobes_without_changing_profile_facts(self):
         from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
         evaluation = EvaluationStore(self.board)
         readings = []
@@ -211,7 +211,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(self.native.call_count, 2)
         self.assertEqual(len(readings), 2)
         self.assertGreater(readings[1]['observationId'], readings[0]['observationId'])
-        self.assertEqual(readings[1]['tableRevision'], readings[0]['tableRevision'])
+        self.assertEqual(readings[1]['profiles'], readings[0]['profiles'])
 
     def test_negative_auth_observation_expires_even_without_file_changes(self):
         self.discovered = {'adapter': 'codex', 'status': 'login-required', 'reasonCode': 'HARNESS_LOGIN_REQUIRED'}

@@ -5,7 +5,7 @@ import { App } from "./App";
 import type { ConsoleApi } from "./api";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ModelConcurrencyEntry, Profile, Snapshot } from "./types";
-import { conflictNotice, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
+import { listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashHigh = "dsh:deepseek-official:deepseek-flash:high";
@@ -40,9 +40,9 @@ type LimitPatch = { adapter: string; provider: string; model: string; limit: num
 function fixture(options: { discoveryLimit?: number } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
 
     familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
@@ -64,27 +64,24 @@ function fixture(options: { discoveryLimit?: number } = {}) {
       published.push(params);
       const limits = (params.modelConcurrency ?? []) as LimitPatch[];
       state = { ...state, modelConcurrency: limits.length ? applyLimits(limits) : state.modelConcurrency,
-        tableRevision: state.tableRevision + 1,
  };
-      return { published: true, tableRevision: state.tableRevision };
+      return { published: true,};
     }
 
 
     if (operation === "model_profiles") {
       return { profiles, familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
-        modelConcurrency: structuredClone(state.modelConcurrency),
-        tableRevision: state.tableRevision, nextCursor: null };
+        modelConcurrency: structuredClone(state.modelConcurrency), nextCursor: null };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes directory facts itself. A discovery can also
-      // carry another writer's concurrency limit for the flash family, which
-      // a stale local draft must never silently overwrite.
-      state = { ...state, tableRevision: state.tableRevision + 1,
+      // carry another writer's concurrency limit for the flash family.
+      state = { ...state,
         ...(options.discoveryLimit !== undefined
           ? { modelConcurrency: applyLimits([{ adapter: "dsh", provider: "deepseek-official",
               model: "deepseek-flash", limit: options.discoveryLimit }]) }
           : {}) };
-      return { tableRevision: state.tableRevision };
+      return {};
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -155,7 +152,7 @@ describe("a model's concurrency", () => {
     // The one setting of the model is the only unsaved change.
     await screen.findByText(/1 项未保存/);
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
     expect(f.published[0].modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
@@ -201,7 +198,7 @@ describe("a model's concurrency", () => {
     await user.clear(input);
     await user.type(input, "4");
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0].modelConcurrency[0].limit).toBe(4);
   });
 
@@ -223,13 +220,13 @@ describe("a model's concurrency", () => {
     await user.type(input, "4");
     await unsaved();
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published[0].modelConcurrency).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 4 },
     ]);
   });
 
-  it("keeps a conflicting limit at its own revision when discovery finds another value", async () => {
+  it("saves a local limit over a changed discovery limit", async () => {
     const f = fixture({ discoveryLimit: 4 });
     const user = userEvent.setup();
     await openFlashCard(f, user);
@@ -238,19 +235,10 @@ describe("a model's concurrency", () => {
     await unsaved();
     await user.click(screen.getByRole("button", { name: "发现模型" }));
     await screen.findByText("没有新的 buddy");
-    const banner = conflictNotice()!;
-    expect(banner).toBeTruthy();
-    expect(banner.textContent).toContain("并发上限");
-    expect(banner.textContent).toContain("已在 V");
-    expect(banner.textContent).toContain("dsh/deepseek-official/deepseek-flash");
     expect(concurrencyInput()).toHaveProperty("value", "6");
-    // Saving the stale draft under V3 is refused without an explicit resolution.
     await user.click(screen.getByRole("button", { name: "保存" }));
-    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
-    expect(f.published).toHaveLength(0);
-    // Deliberate reload adopts the other writer's published limit.
-    await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载 V3；请核对后保存。");
-    expect(concurrencyInput()).toHaveProperty("value", "4");
+    await screen.findByText("设置已保存");
+    expect(f.published[0].modelConcurrency).toEqual([{ adapter: "dsh", provider: "deepseek-official",
+      model: "deepseek-flash", limit: 6 }]);
   });
 });

@@ -13,12 +13,12 @@ function profile(profileId: string, capabilities: string[], enabled = true): Pro
 
 const failing: RoutingHealth = {
   available: true, currentRouterProfileId: reviewer, windowSize: 20, sampleCount: 3, failureCount: 2, consecutiveFailures: 2,
-  abstentionCount: 0, cancelledCount: 0, staleCount: 0, lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
+  abstentionCount: 0, cancelledCount: 0, lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
 };
 
 function attention(options: { routers?: string[]; mode?: "fast" | "review"; health?: RoutingHealth; configuration?: null; quota?: number } = {}) {
   const configuration = options.configuration === null ? null
-    : { revision: 1, routerProfileIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
+    : { routerProfileIds: options.routers ?? [reviewer], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
   const profiles = [profile(reviewer, ["execution:claude", "routing:fast", "decision"]), profile(worker, ["execution:codex"])];
   const harnesses = [

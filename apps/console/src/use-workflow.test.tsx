@@ -32,7 +32,7 @@ function fixture() {
     children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task,
   };
   const snapshot = {
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "session-a", canWrite: false, reason: null },
   } as Snapshot;
   const calls: [string, Record<string, unknown>][] = [];

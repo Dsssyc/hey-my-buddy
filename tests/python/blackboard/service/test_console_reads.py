@@ -25,7 +25,7 @@ from hey_my_buddy.console.read_cache import (
 
 
 def stable_projection(value: dict = None):
-    value = value if value is not None else {"tableRevision": 0, "items": [1, 2, 3]}
+    value = value if value is not None else {"items": [1, 2, 3]}
 
     def generate():
         return dict(value), None
@@ -215,25 +215,25 @@ class MarkerTests(BoardTestCase):
         # The next check reconnects to whatever the path now names.
         self.assertIsNotNone(cache.marker())
 
-    def _replacement_at_revision_97(self, board):
-        """A same-schema replacement database with table_revision=97."""
+    def _replacement_with_content_marker(self, board):
+        """A same-schema replacement database with different ordinary content."""
         import sqlite3
         from contextlib import closing
 
         replacement = board.store.directory / "replacement.sqlite3"
         with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
             source.backup(target)
-            target.execute("UPDATE evaluation_state SET table_revision=97 WHERE id=1")
+            target.execute("INSERT INTO meta(key,value) VALUES('cache-content-test','replacement')")
             target.commit()
         os.replace(replacement, board.store.db.path)
 
-    def _revision_projection(self, board):
+    def _content_projection(self, board):
         def generate():
             with board.store.db.read() as connection:
-                revision = connection.execute(
-                    "SELECT table_revision FROM evaluation_state WHERE id=1"
-                ).fetchone()[0]
-            return {"revision": revision}, None
+                row = connection.execute(
+                    "SELECT value FROM meta WHERE key='cache-content-test'"
+                ).fetchone()
+            return {"content": row[0] if row else "original"}, None
 
         return generate
 
@@ -249,7 +249,7 @@ class MarkerTests(BoardTestCase):
         board = self.board()
         cache = ReadCache(board.store.db)
         self.addCleanup(cache.close)
-        generate = self._revision_projection(board)
+        generate = self._content_projection(board)
 
         def read(key, session, validator=None):
             return cache.serve(
@@ -259,18 +259,18 @@ class MarkerTests(BoardTestCase):
 
         old_a = read("a", "s1")
         old_b = read("b", "s2")
-        self.assertEqual(json.loads(old_a.entry.body)["revision"], 0)
-        self._replacement_at_revision_97(board)
+        self.assertEqual(json.loads(old_a.entry.body)["content"], "original")
+        self._replacement_with_content_marker(board)
         new_a = read("a", "s1", old_a.entry.validator("identity"))
         self.assertFalse(new_a.not_modified)
-        self.assertEqual(json.loads(new_a.entry.body)["revision"], 97)
+        self.assertEqual(json.loads(new_a.entry.body)["content"], "replacement")
         new_b = read("b", "s2", old_b.entry.validator("identity"))
         self.assertFalse(
             new_b.not_modified,
             "A new SQLite connection may restart data_version at the old value; reprojecting "
             "one cache key must invalidate all remaining query/session entries",
         )
-        self.assertEqual(json.loads(new_b.entry.body)["revision"], 97)
+        self.assertEqual(json.loads(new_b.entry.body)["content"], "replacement")
 
     def test_a_reopened_connection_with_a_repeated_data_version_invalidates_the_cache(self):
         """Same file, transient error: the reopened marker re-reads the same value.
@@ -319,19 +319,19 @@ class MarkerTests(BoardTestCase):
         def racing_generate():
             attempts["n"] += 1
             if attempts["n"] == 1:
-                self._replacement_at_revision_97(board)
+                self._replacement_with_content_marker(board)
             with board.store.db.read() as connection:
-                revision = connection.execute(
-                    "SELECT table_revision FROM evaluation_state WHERE id=1"
-                ).fetchone()[0]
-            return {"revision": revision, "attempt": attempts["n"]}, None
+                row = connection.execute(
+                    "SELECT value FROM meta WHERE key='cache-content-test'"
+                ).fetchone()
+            return {"content": row[0] if row else "original", "attempt": attempts["n"]}, None
 
         outcome = cache.serve(
             kind="console", key="k", session="s", extra_marker=(), generate=racing_generate
         )
         self.assertGreaterEqual(attempts["n"], 2)
         body = json.loads(outcome.entry.body)
-        self.assertEqual(body["revision"], 97)
+        self.assertEqual(body["content"], "replacement")
         self.assertEqual(body["attempt"], attempts["n"])
         again = cache.serve(
             kind="console", key="k", session="s", extra_marker=(), generate=racing_generate,

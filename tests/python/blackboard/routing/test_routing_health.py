@@ -31,8 +31,8 @@ class RoutingHealthTests(BoardTestCase):
         attempt_id = f"attempt-health-{self.sequence}" if invoked else None
         now = self.clock.advance(1)
         if output is None:
-            output = {"operation": kind, "status": "ok" if status in ("completed", "stale") else "error"}
-            if status in ("completed", "stale"):
+            output = {"operation": kind, "status": "ok" if status == "completed" else "error"}
+            if status == "completed":
                 output["decision"] = {"profileId": "worker-fixture", "reason": "fixture choice", "evidence": []}
         if code is not None:
             output = {**output, "code": code}
@@ -42,8 +42,8 @@ class RoutingHealthTests(BoardTestCase):
                    "completedAt": now}
         with self.db.write() as connection:
             connection.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,table_revision,created_at)"
-                " VALUES(?,'running','fixture selection',0,?)", (decision_id, now))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
+                " VALUES(?,'running','fixture selection',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
                         "decision": {"decisionId": decision_id, "kind": kind, "timeoutSeconds": 60}}
@@ -88,11 +88,10 @@ class RoutingHealthTests(BoardTestCase):
                     "decisionId": decision_id, "runId": f"task-health-{count}",
                     "at": now, "code": "router-budget-exhausted"})
 
-    def test_cancel_stale_and_program_selection_cannot_restore_health(self):
+    def test_cancel_and_program_selection_cannot_restore_health(self):
         for _ in range(3):
             self.timeout()
             self.settle("cancelled", code="router-budget-exhausted")
-            self.settle("stale", code="router-budget-exhausted")
         self.settle("completed", invoked=False, output={
             "programSelection": {"code": "single-candidate", "profileId": "worker-fixture", "candidateCount": 1}})
         health = self.coordinator.health_summary()
@@ -102,7 +101,6 @@ class RoutingHealthTests(BoardTestCase):
         self.assertEqual(health["budgetExhaustedCount"], 3)
         self.assertEqual(health["consecutiveFailures"], 3)
         self.assertEqual(health["cancelledCount"], 3)
-        self.assertEqual(health["staleCount"], 3)
         self.assertIsNone(health["lastSuccessAt"])
         self.assertIsNone(health["lastSuccessDecisionId"])
         success_id, success_at = self.settle("completed", termination="completed")

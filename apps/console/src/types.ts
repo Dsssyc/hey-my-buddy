@@ -126,7 +126,6 @@ export type Profile = {
   billing?: BillingFact;
   quotaExhausted?: boolean;
   quotaRetry?: QuotaRetryWindow;
-  newlyDiscovered?: boolean;
   profileId: string;
   label: string;
   adapter: string;
@@ -169,7 +168,6 @@ export type PreferenceOverride = { profileId: string; mode: OverrideMode; reason
 /** The family's human note. */
 export type FamilyAnnotation = ModelFamily & {
   text: string;
-  revision: number;
   updatedAt: string | null;
 };
 export type Decision = {
@@ -179,7 +177,6 @@ export type Decision = {
   status: string;
   task: string;
   profileId: string | null;
-  tableRevision: number;
   reason: string;
   evidence?: { kind: "annotation" | "preference" | "file"; ref: string }[] | null;
   createdAt: string;
@@ -319,7 +316,6 @@ export type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: numbe
  * `reviewRouterProfileId`, `decisionProfileId`) are never valid keys again.
  */
 export type Configuration = {
-  revision: number;
   routerProfileIds: string[];
   routerRetryIntervalSeconds: number;
   defaultRoutingMode: RoutingMode;
@@ -370,7 +366,7 @@ export type RoutingHealth = {
   unattributedCount?: number;
   unattributed?: { decisionId: string; at: string; outcome: string; code: string | null }[];
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
-  abstentionCount: number; cancelledCount: number; staleCount: number;
+  abstentionCount: number; cancelledCount: number;
   budgetExhaustedCount?: number; boundsRejectedCount?: number; inputChangedCount?: number;
   /** Window entries that reached a model attempt; a request stays one entry. */
   attemptCount?: number;
@@ -410,12 +406,13 @@ export type BackupPreflight = {
 export type Snapshot = {
   harnesses?: HarnessHealth[];
   csrfToken: string;
+  /** Last recorded event in the coherent board read. */
+  eventCursor: number;
   /** Authenticated browser session; missing or malformed fails closed. */
   consoleSession: ConsoleSession;
   consoleAccess?: ConsoleAccess;
-  tableRevision: number;
   configuration: Configuration | null;
-  configurationError?: { code: string; message: string; revision: number } | null;
+  configurationError?: { code: string; message: string } | null;
   profiles: Profile[];
   /** Effective preferences (read-only view); `source` names where each came from. */
   preferences: Preference[];
@@ -454,7 +451,6 @@ export type Draft = Pick<
   Snapshot,
   "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations" | "configuration"
 > & {
-  tableRevision: number;
   /**
    * User limit settings keyed by the exact family tuple. Occupancy (`active`)
    * is never carried here, so a draft cannot publish it.
@@ -476,7 +472,6 @@ export type ProfilePage = {
   familyAnnotations?: FamilyAnnotation[];
   /** Concurrent-task entries for the families this page represents. */
   modelConcurrency: ModelConcurrencyEntry[];
-  tableRevision: number;
   nextCursor: string | null;
 };
 

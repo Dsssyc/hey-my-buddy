@@ -421,7 +421,7 @@ class ModelFactsTestCase(EvaluationTestCase):
         replay = self.publish_with(board, grant, "cmd-1", profileSettings=patch)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(len(calls), 1)
-        self.assertEqual(first["revision"], replay["revision"])
+        self.assertEqual(first["counts"], replay["counts"])
 
     def test_failed_fetch_keeps_the_committed_publication_and_retains(self):
         board = self.board()

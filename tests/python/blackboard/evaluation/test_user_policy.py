@@ -16,15 +16,15 @@ class UserPolicyTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for profile_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,created_revision,updated_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (profile_id, profile_id, 'dsh', 'fixture', profile_id, 'max', available, 1, '["decision"]', 0, 0))
+                db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (profile_id, profile_id, 'dsh', 'fixture', profile_id, 'max', available, 1, '["decision"]'))
             db.execute("UPDATE meta SET value=? WHERE key='router_profile_ids'", (json.dumps(['retired']),))
-            db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent',0)")
+            db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
     def user(self, operation, params):
         return self.board_.call(operation, {**params, 'consoleAuthority': self.session})
 
     def publication_params(self):
-        return {"expectedRevision": self.board_.call('console_snapshot', {})['tableRevision']}
+        return {}
 
     def payload(self, params, command='publish', **changes):
         return {**params, 'commandId': command, **changes}
@@ -70,7 +70,7 @@ class UserPolicyTests(BoardTestCase):
             with self.assertRaises(BoardError):
                 self.user('user_policy_publish', self.payload(grant, **changes))
         snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['tableRevision'], 0)
+        self.assertNotIn('tableRevision', snapshot)
         self.assertEqual(snapshot['familyAnnotations'], [])
         self.assertTrue(next(p for p in snapshot['profiles'] if p['profileId'] == 'live')['enabled'])
 

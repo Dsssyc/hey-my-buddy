@@ -45,8 +45,7 @@ class RouterFailoverTests(unittest.TestCase):
         # controller must provide context rather than letting the code decide.
         self.assertEqual(self.classify(code="router-out-of-bounds"), "no-answer")
         self.assertEqual(self.classify(code="router-out-of-bounds", circumstances_changed=True), "changed")
-        for code in ("input-changed", "router-configuration-changed", "router-table-changed",
-                     "reader-expired", "owner-fenced"):
+        for code in ("router-input-changed", "router-out-of-bounds", "owner-fenced"):
             with self.subTest(code=code):
                 self.assertEqual(self.classify(code=code, circumstances_changed=True), "changed")
 

@@ -33,7 +33,7 @@ function profiles(): Profile[] {
 
 function snapshot(list: Profile[] = profiles()): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "s", canWrite: true, reason: null }, tableRevision: 1,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "s", canWrite: true, reason: null },
 
     configuration: null, profiles: list, preferences: [], familyPreferences: [], preferenceOverrides: [],
  familyAnnotations: [], decisions: [],
@@ -141,12 +141,11 @@ describe("the table's blocks", () => {
     expect(chips.find(chip => chip.profile.profileId === "dsh:deepseek-official:flash:off")!.preference).toBeNull();
   });
 
-  it("marks a model as new when this page discovered it or the board says so", () => {
-    const list = profiles().map(entry => entry.model === "sol" ? { ...entry, newlyDiscovered: true } : entry);
-    const recorded = snapshot(list);
+  it("marks a model as new when this page discovered it", () => {
+    const recorded = snapshot(profiles());
     const fresh = JSON.stringify(["dsh", "second-provider", "pro"]);
     const marked = blocks({ recorded, fresh: [fresh] }).flatMap(block => block.models).filter(model => model.fresh).map(model => modelIdentity(model.family));
-    expect(marked).toEqual(["codex / openai / sol", "dsh / second-provider / pro"]);
+    expect(marked).toEqual(["dsh / second-provider / pro"]);
   });
 });
 

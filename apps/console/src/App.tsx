@@ -124,7 +124,6 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   // computed over every run, never inferred from a page of recent rows.
   const pending = snapshot.tasks.pendingCount;
   const saveRefusal = editor.saveBlockedReason;
-  const conflictVersions = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   // Draft banners belong to the Buddy settings page; the records page shows none.
   const draftTab = tab === "buddies";
   const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
@@ -176,16 +175,6 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         {connectionError && <Notice tone="fail" role="alert">
           <span className="min-w-0 wrap-anywhere">{connectionError}</span>
           <Button variant="outline" size="sm" onClick={() => void refresh()}>{t("connection.retry")}</Button>
-        </Notice>}
-        {draftTab && editor.conflict && !editor.confirming && <Notice tone="hand" role="alert">
-          <Hint text={conflictVersions}><span>{t("draft.conflict")}</span></Hint>
-          {editor.rebaseConflicts.length > 0 && <ul className="order-last basis-full list-disc pl-8 text-xs">
-            {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
-          </ul>}
-          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
-            onClick={() => void editor.reloadLatest()}>{t("draft.reload")}</Button>
-          <Button variant="outline" size="sm" aria-disabled={editor.busy || undefined}
-            onClick={() => void editor.discard()}>{t("draft.discardChanges")}</Button>
         </Notice>}
         {draftTab && editor.confirming && editor.uncertain && <Notice tone="hand" role="status">
           <span>{t("draft.unresolvedNote")}</span>

@@ -127,7 +127,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertEqual(first.get("/api/console")[0], 401)
         self.assertEqual(json.loads((board.directory / "console-sessions.json").read_text())["sessions"], [])
 
-    def test_two_cookie_free_writers_keep_publication_revision_fences(self):
+    def test_two_cookie_free_writers_apply_last_write(self):
         board = self.board()
         board.call("model_catalog_refresh", {"requestId": "two-windows-catalog"})
         _, first = self.open_console(board)
@@ -136,20 +136,14 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertIsNone(first.cookie)
         self.assertIsNone(second.cookie)
         for index, browser in enumerate((first, second)):
-            revision = before[index]["tableRevision"]
             csrf = before[index]["csrfToken"]
             status, _, body = browser.command("user_policy_publish", {
-                "commandId": f"window-publish-{index}", "expectedRevision": revision,
+                "commandId": f"window-publish-{index}",
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": index == 0}],
             }, csrf=csrf)
-            if index == 0:
-                self.assertEqual(status, 200, body)
-            else:
-                self.assertEqual(status, 409, body)
-                self.assertEqual(json.loads(body)["error"]["code"], "REVISION_CONFLICT")
+            self.assertEqual(status, 200, body)
         current = first.bootstrap()
-        self.assertGreater(current["tableRevision"], before[0]["tableRevision"])
-        self.assertTrue(next(p for p in current["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+        self.assertFalse(next(p for p in current["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
 
     def test_access_setting_write_failure_preserves_authority_and_revision(self):
         board = self.board()

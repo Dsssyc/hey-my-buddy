@@ -133,7 +133,6 @@ CATALOG = (
 #: The harness whose buddies cannot work in the preview, and the recorded reason.
 LOGGED_OUT_HARNESS = "claude"
 PENDING_MODEL = ("zcode", "zai", "glm-5")
-NEW_MODEL = ("codex", "openai", "gpt-5-mini")
 #: The one 503 message both the server's error scenario and the emitted
 #: ``error/`` fixtures use, so the frontend test asserts the same string.
 ERROR_SCENARIO_MESSAGE = "synthetic preview: simulated read failure (--scenario error)"
@@ -344,14 +343,13 @@ ACTIVE_REQUEST = {
     "acceptance": "合成预览：仅检查渲染分支，不产生真实验收", "childTaskId": None,
 }
 def routing(decision_id: str, task_id: str, status: str, selected: dict | None, reason: str,
-            constraints: dict, configuration_revision: int | None, *,
+            constraints: dict, *,
             user_outcome: str = "none",
             elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768,
             mode: str = "review", requested_mode: str = "review", fallback: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
     return {"status": status, "decisionId": decision_id, "taskId": task_id, "attemptId": f"att-{task_id}",
-            "generation": 1, "tableRevision": 7 if decision_id else None,
-            "configurationRevision": configuration_revision, "selectedProfile": selected, "reason": reason,
+            "generation": 1, "selectedProfile": selected, "reason": reason,
             "routingMode": mode, "requestedRoutingMode": requested_mode, "fallback": fallback,
             "constraints": constraints,
             "source": "model-selection" if decision_id else None,
@@ -366,18 +364,18 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
 
 ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed", CFG_FLASH,
                      "合成预览：选择 DeepSeek Flash；符合委派偏好，偏离用户偏好以缩短路由等待。",
-                     {}, 2, user_outcome="alternative",
+                     {}, user_outcome="alternative",
                      mode="fast", requested_mode="review",
                      fallback={"from": "review", "to": "fast", "code": "REVIEW_UNAVAILABLE",
                                "reason": "合成预览：审阅 Router 不可用"},
                      elapsed_ms=60000, tool_calls=0, bytes_read=0)
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
-                     "合成预览：候选超出路由边界，等待 Host 选择配置。", {"adapter": "claude"}, 1)
+                     "合成预览：候选超出路由边界，等待 Host 选择配置。", {"adapter": "claude"})
 ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "cancelled", None,
-                     "合成预览：Host 取消路由并显式指定执行配置。", {"adapter": "claude"}, 1)
+                     "合成预览：Host 取消路由并显式指定执行配置。", {"adapter": "claude"})
 ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a2-router-abstention",
                                "abstention", None, "合成预览：证据不足，主动放弃选择并等待 Host。",
-                               {"adapter": "claude"}, 1, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
+                               {"adapter": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
 
 
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
@@ -1252,8 +1250,6 @@ def profile_views() -> list[dict]:
                 view["unavailableReason"] = "HARNESS_UNHEALTHY"
             if pending:
                 view["pendingSince"] = "2026-09-26T03:00:00Z"
-            if (adapter, provider, model) == NEW_MODEL and effort not in enabled:
-                view["newlyDiscovered"] = True
             views.append(view)
     # The four buddies the runs use come first, as the snapshot always listed them.
     used = [f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}" for cfg in CONFIGS]
@@ -1288,7 +1284,7 @@ def policy_views() -> dict:
         "familyPreferences": defaults,
         "preferenceOverrides": overrides,
         "preferences": sorted(effective, key=lambda entry: entry["profileId"]),
-        "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note", "revision": 1,
+        "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note",
                                "updatedAt": "2026-09-26T00:00:00Z"}],
     }
 
@@ -1418,11 +1414,11 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
     writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
+        "eventCursor": 7,
         "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
         "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
                            "reason": None if writable else "superseded"},
-        "tableRevision": 7,
-        "configuration": {"revision": 1, "routerProfileIds": [entry["profileId"] for entry in routers],
+        "configuration": {"routerProfileIds": [entry["profileId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
@@ -1434,7 +1430,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
         "unavailableProfileCount": sum(1 for profile in profiles if not profile["available"]),
         **policy_views(), "decisions": [],
         "routingHealth": {"windowSize": 20, "sampleCount": 4, "failureCount": 1,
-                          "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1, "staleCount": 0,
+                          "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
                           "lastSuccessAt": instant(6, 5), "lastSuccessDecisionId": ROUTING_A1["decisionId"],
                           "available": True, "reasonCode": None, "currentRouterProfileId": routers[0]["profileId"],
@@ -1456,7 +1452,6 @@ def decision_view(router: dict) -> dict:
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "profileId": None, "selectedProfile": routing["selectedProfile"],
             "decisionModel": {"requested": None, "resolved": None, "observed": None},
-            "tableRevision": routing["tableRevision"] or 7, "expectedRevision": 7,
             "reason": routing["reason"], "evidence": [],
             "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
             "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
@@ -1479,8 +1474,7 @@ def selection_get(params: dict) -> dict:
     if params.get("includeAudit"):
         routing = router["routing"]
         view.update({"attemptId": None, "generation": 1,
-                     "configurationRevision": routing["configurationRevision"], "readerId": None,
-                     "requested": {"constraints": routing["constraints"]}, "input": None,
+                                          "requested": {"constraints": routing["constraints"]}, "input": None,
                      "inputSha256": None, "output": None,
                      "requestedProfile": routing["selectedProfile"]})
     return {"decision": view}
@@ -1515,8 +1509,7 @@ def workflow_get(params: dict) -> dict:
         for router in records:
             routing = router["routing"]
             entries.append({"status": routing["status"], "decisionId": routing["decisionId"],
-                     "taskId": routing["taskId"], "tableRevision": routing["tableRevision"],
-                     "configurationRevision": routing["configurationRevision"],
+                     "taskId": routing["taskId"],
                      "selectedProfile": routing["selectedProfile"], "reason": routing["reason"],
                      "constraints": routing["constraints"], "createdAt": router["createdAt"],
                      "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
@@ -1575,7 +1568,7 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
     elif operation == "model_profiles":
         profiles = profile_views()
         result = {"profiles": profiles, **policy_views(),
-                  "modelConcurrency": concurrency_rows(), "tableRevision": 7, "nextCursor": None}
+                  "modelConcurrency": concurrency_rows(), "nextCursor": None}
     if scenario == "error":
         # Validate first, then simulate the read failure: a missing or unknown
         # identifier still answers 400/404 instead of being masked by the 503.

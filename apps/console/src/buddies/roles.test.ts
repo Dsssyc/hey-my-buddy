@@ -35,8 +35,8 @@ describe("the warning of the recorded window", () => {
     expect(summary.warning).toEqual({ kind: "failing", count: 4 });
   });
 
-  it("does not count abstentions, cancellations and stale results as failures", () => {
-    expect(healthSummary(health({ abstentionCount: 3, cancelledCount: 2, staleCount: 1 })).warning).toBeNull();
+  it("does not count abstentions or cancellations as failures", () => {
+    expect(healthSummary(health({ abstentionCount: 3, cancelledCount: 2,})).warning).toBeNull();
   });
 });
 
@@ -215,11 +215,11 @@ describe("the note under the list", () => {
 describe("the counts written beside their names", () => {
   it("leaves out what is zero or not recorded, and keeps the order of the names", () => {
     const counts = recordCounts(health({
-      consecutiveFailures: 2, abstentionCount: 0, cancelledCount: 1, staleCount: 2,
+      consecutiveFailures: 2, abstentionCount: 0, cancelledCount: 1,
       budgetExhaustedCount: 0, inputChangedCount: 1,
     }));
     expect(counts).toEqual([
-      { name: "consecutiveFailures", n: 2 }, { name: "cancelled", n: 1 }, { name: "stale", n: 2 }, { name: "inputChanged", n: 1 },
+      { name: "consecutiveFailures", n: 2 }, { name: "cancelled", n: 1 }, { name: "inputChanged", n: 1 },
     ]);
   });
 });

@@ -156,7 +156,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "tableRevision", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "decisions", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -184,7 +184,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         _stated, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         csrf = snapshot["csrfToken"]
-        body = {"operation": "user_policy_publish", "params": {"commandId": "w1", "expectedRevision": 0, "profileSettings": []}}
+        body = {"operation": "user_policy_publish", "params": {"commandId": "w1", "profileSettings": []}}
 
         # No session cookie at all.
         status, _headers, data = http_call(
@@ -212,7 +212,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "POST", browser.prefix + "/api/command", body=body, headers={"X-Buddy-CSRF": "nope"}
         )
         self.assertEqual(status, 403)
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 0)
+        self.assertEqual(board.call("console_snapshot", {})["configuration"], snapshot["configuration"])
 
     def test_foreign_origin_host_and_cross_site_requests_are_refused(self):
         board = self.board()
@@ -321,7 +321,6 @@ class ConsoleSecurityTests(ConsoleTestCase):
             "user_policy_publish",
             {
                 "commandId": "browser-publish",
-                "expectedRevision": refreshed["tableRevision"],
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
                 "modelConcurrency": [{**family, "limit": 4}],
             },
@@ -329,7 +328,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         )
         self.assertEqual(status, 200, data)
         result = json.loads(data)["result"]
-        self.assertEqual(result["revision"], refreshed["tableRevision"] + 1)
+        self.assertTrue(result["published"])
         self.assertTrue(next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
         status, _headers, data = browser.get("/api/console")
         self.assertEqual(status, 200)
@@ -389,7 +388,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         catalog.discover = lambda: (_ for _ in ()).throw(AssertionError("GET must not discover models"))
         try:
             snapshot = browser.bootstrap()
-            self.assertEqual(snapshot["tableRevision"], 0)
+            self.assertNotIn("tableRevision", snapshot)
         finally:
             catalog.discover = original
 
@@ -752,7 +751,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             status, headers, body = browser.get("/api/console")
             self.assertEqual(status, 200, body[:300])
             snapshot = json.loads(body)
-            self.assertEqual(snapshot["tableRevision"], 0)
+            self.assertNotIn("tableRevision", snapshot)
             self.assertIn("csrfToken", snapshot)
             self.assertNotIn("access-control-allow-origin", headers)
             code, status_reply = self.cli("console", json.dumps({"action": "status"}))
@@ -778,7 +777,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertIn("not claimed", caps["limitations"]["osIsolation"])
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)
-            self.assertEqual(snapshot["tableRevision"], 0)
+            self.assertNotIn("tableRevision", snapshot)
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "cli-cat"}))
             self.assertEqual(code, 0, refreshed)
             self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
@@ -787,15 +786,15 @@ class ConsoleDaemonTests(ConsoleTestCase):
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
             status, _headers, body = browser.command("user_policy_publish", {
-                "commandId": "cli-publish", "expectedRevision": refreshed["tableRevision"],
+                "commandId": "cli-publish",
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             published = json.loads(body)["result"]
-            self.assertEqual(published["revision"], refreshed["tableRevision"] + 1)
+            self.assertTrue(published["published"])
             code, final = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, final)
-            self.assertEqual(final["tableRevision"], published["revision"])
+            self.assertNotIn("tableRevision", final)
             self.assertTrue(next(p for p in final["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
             self.assertNotIn("autoMaintain", final["configuration"])
 

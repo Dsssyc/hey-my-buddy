@@ -125,14 +125,12 @@ class CapacityTestCase(BoardTestCase):
 
     def seed_evaluation(self, board, *, model_limit: int | None = None) -> dict:
         """Enable two candidates so capacity tests exercise actual Router work."""
-        refreshed = board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        expected_revision = refreshed["tableRevision"]
+        board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
         params = {
             "commandId": "seed-1",
 
 
 
-            "expectedRevision": expected_revision,
             "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
                                 {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
@@ -970,16 +968,14 @@ class DaemonPoolTests(CapacityTestCase):
             both = wait_for(both_running, timeout=60)
             self.assertIsNotNone(both, "two business attempts never overlapped")
 
-            refreshed = client.call("model_catalog_refresh", {"requestId": "pool-catalog"})
+            client.call("model_catalog_refresh", {"requestId": "pool-catalog"})
             from console.test_console import Browser
             opened = client.call("console", {"action": "open"})
             browser = Browser(opened["url"])
             csrf = browser.bootstrap()["csrfToken"]
-            expected_revision = refreshed["tableRevision"]
             status, _headers, body = browser.command("user_policy_publish", {
                 "commandId": "pool-seed-1",
 
-                "expectedRevision": expected_revision,
                 # Keep this a real Router attempt competing for the free pool
                 # slot; a sole legal candidate is now resolved synchronously.
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},

@@ -47,10 +47,10 @@ function fixture(records: Task[] = []) {
   // fixture computes it with the server's own dedup semantics.
   const pendingCount = new Set(records.filter(t => t.workflow?.awaitingHost)
     .map(t => t.delegation?.rootRunId || t.runId)).size;
-  const snapshot: Snapshot = { csrfToken: "csrf",
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
+  const snapshot: Snapshot = { csrfToken: "csrf", eventCursor: 0,
+    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
     modelConcurrency: [],

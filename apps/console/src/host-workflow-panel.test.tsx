@@ -59,7 +59,7 @@ function workflow(overrides: Partial<Workflow> = {}): Workflow {
 
 function fixture(value: Workflow = workflow()) {
   const snapshot = {
-    csrfToken: "fixture-csrf",
+    csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     profiles: [],
   } as unknown as Snapshot;

@@ -1,9 +1,6 @@
-"""Router list settings backend: version-3 storage, strict patches, explicit upgrade.
+"""Router list settings backend: stored list, strict patches and publication.
 
-Only private boards are used. Version-2 settings and the old single slots must
-surface ``router-settings-upgrade-required`` from reads, startup initialization and
-publications without ever running the pure conversion or migrating the old keys;
-unrelated user fields stay publishable. The list save path requires published,
+Only private boards are used. The list save path requires published,
 identity-complete buddies and nothing more: enabled, availability, health, quota and
 mode eligibility stay resolver concerns.
 """
@@ -33,8 +30,8 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.write() as db:
             for profile_id in (A, B):
                 db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                           "available,enabled,capabilities_json,created_revision,updated_revision)"
-                           " VALUES(?,?,?,?,?,?,1,1,?,0,0)",
+                           "available,enabled,capabilities_json)"
+                           " VALUES(?,?,?,?,?,?,1,1,?)",
                            (profile_id, profile_id, "dsh", "fixture", profile_id, "max",
                             canonical_json(permission_capabilities("dsh"))))
 
@@ -46,26 +43,25 @@ class RouterListConfigurationTests(BoardTestCase):
         return self.board_.call(operation, {**params, "consoleAuthority": self.session})
 
     def publish(self, configuration=None, *, command=None, **changes):
-        """One authenticated console publication at the current table revision."""
+        """One authenticated console publication."""
         self.counter += 1
-        revision = self.board_.call("console_snapshot", {})["tableRevision"]
-        payload = {"expectedRevision": revision, "commandId": command or f"publish-{self.counter}"}
+        payload = {"commandId": command or f"publish-{self.counter}"}
         if configuration is not None:
             payload["configuration"] = configuration
         result = self.user("user_policy_publish", {**payload, **changes})
         return result
 
-    def test_fresh_private_board_initializes_version_three_defaults(self):
+    def test_fresh_private_board_initializes_router_defaults(self):
         snapshot = self.board_.call("console_snapshot", {})
         self.assertEqual(snapshot["configuration"], {
-            "revision": 0, "routerProfileIds": [], "routerRetryIntervalSeconds": 600,
+            "routerProfileIds": [], "routerRetryIntervalSeconds": 600,
             "defaultRoutingMode": "fast", "routingBudget": "standard",
             "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
                                     "bytesRead": 524288},
         })
         self.assertIsNone(snapshot["configurationError"])
         meta = self.meta()
-        self.assertEqual(meta["router_configuration_version"], "3")
+        self.assertNotIn("router_configuration_version", meta)
         self.assertEqual(meta["router_profile_ids"], "[]")
         self.assertEqual(meta["router_retry_interval_seconds"], "600")
         self.assertEqual(meta["router_default_mode"], "fast")
@@ -75,13 +71,13 @@ class RouterListConfigurationTests(BoardTestCase):
     def test_publish_writes_list_settings_and_projection(self):
         result = self.publish({"routerProfileIds": [A, B], "routerRetryIntervalSeconds": 30,
                                "defaultRoutingMode": "review", "routingBudget": "deep"})
-        self.assertGreater(result["configurationRevision"], 0)
+        self.assertTrue(result["published"])
         snapshot = self.board_.call("console_snapshot", {})
         self.assertEqual(snapshot["configuration"]["routerProfileIds"], [A, B])
         self.assertEqual(snapshot["configuration"]["routerRetryIntervalSeconds"], 30)
         self.assertEqual(snapshot["configuration"]["defaultRoutingMode"], "review")
         self.assertEqual(snapshot["configuration"]["routingBudget"], "deep")
-        self.assertEqual(snapshot["configuration"]["revision"], result["configurationRevision"])
+        self.assertNotIn("revision", snapshot["configuration"])
         meta = self.meta()
         self.assertEqual(json.loads(meta["router_profile_ids"]), [A, B])
         self.assertEqual(meta["router_retry_interval_seconds"], "30")
@@ -121,8 +117,8 @@ class RouterListConfigurationTests(BoardTestCase):
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?)",
                        (canonical_json(permission_capabilities("dsh")),))
         with self.assertRaises(BoardError) as caught:
             self.publish({"routerProfileIds": ["incomplete"]})
@@ -131,19 +127,19 @@ class RouterListConfigurationTests(BoardTestCase):
         # the resolver explains them per item later.
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,1,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,?,1,?)",
                        ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
                         canonical_json(permission_capabilities("dsh"))))
             db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id='disabled'")
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,0,1,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
                         canonical_json(permission_capabilities("dsh"))))
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,1,1,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,1,1,?)",
                        ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
                         canonical_json(permission_capabilities("zcode"))))
         self.publish({"routerProfileIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
@@ -153,8 +149,8 @@ class RouterListConfigurationTests(BoardTestCase):
     def test_interval_and_budget_patches_do_not_require_availability(self):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,0,1,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
                         canonical_json(permission_capabilities("dsh"))))
         self.publish({"routerProfileIds": ["offline"]})
@@ -162,41 +158,6 @@ class RouterListConfigurationTests(BoardTestCase):
         configuration = self.board_.call("console_snapshot", {})["configuration"]
         self.assertEqual(configuration["routerProfileIds"], ["offline"])
         self.assertEqual(configuration["routerRetryIntervalSeconds"], 1)
-
-    def version_two_board(self):
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('router_configuration_version','2')"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-            db.execute("INSERT INTO meta(key,value) VALUES('router_profile_id','old-slot')"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-
-    def test_version_two_reads_report_upgrade_required_and_never_migrate(self):
-        self.version_two_board()
-        before = self.meta()
-        with self.assertRaises(BoardError) as caught:
-            with self.board_.store.db.read() as db:
-                router.configuration(db)
-        self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
-        with self.assertRaises(BoardError) as caught:
-            with self.board_.store.db.write() as db:
-                router.initialize_configuration(db)
-        self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
-        snapshot = self.board_.call("console_snapshot", {})
-        self.assertIsNone(snapshot["configuration"])
-        self.assertEqual(snapshot["configurationError"]["code"], "router-settings-upgrade-required")
-        self.assertEqual(self.meta(), before)
-
-    def test_version_two_publication_rejects_configuration_and_keeps_unrelated_fields(self):
-        self.version_two_board()
-        before = self.meta()
-        with self.assertRaises(BoardError) as caught:
-            self.publish({"routerRetryIntervalSeconds": 30})
-        self.assertEqual(caught.exception.code, "router-settings-upgrade-required")
-        self.assertEqual(self.meta(), before)
-        # An unrelated user patch still publishes.
-        result = self.publish(None, familyAnnotationChanges=[{"adapter": "dsh", "provider": "fixture",
-                                                              "model": A, "text": "user note"}])
-        self.assertTrue(result["published"])
 
     def test_configuration_reads_are_side_effect_free(self):
         self.publish({"routerProfileIds": [A, B]})

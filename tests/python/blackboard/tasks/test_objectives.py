@@ -486,8 +486,8 @@ class RoutingSpanTests(WorkflowTestCase):
 
     def decision(self, board, task_id, *, output=None, status='completed', selected=None, profile_id='frozen-profile'):
         with board.store.db.write() as db:
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,created_at)"
-                       " VALUES('recorded-decision',?,'task',?,1,'frozen reason','2026-01-01T00:00:00Z')", (status, profile_id))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,reason,created_at)"
+                       " VALUES('recorded-decision',?,'task',?,'frozen reason','2026-01-01T00:00:00Z')", (status, profile_id))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,requested_json,created_at,updated_at)"
                        " VALUES('recorded-decision','recorded-request','select','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
                        (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
@@ -518,8 +518,8 @@ class RoutingSpanTests(WorkflowTestCase):
         # Changing the owner's current execution configuration cannot rewrite this history.
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,created_at)"
-                       " VALUES('current-decision','completed','current task','current-profile',2,'current reason','2026-01-02T00:00:00Z')")
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,reason,created_at)"
+                       " VALUES('current-decision','completed','current task','current-profile','current reason','2026-01-02T00:00:00Z')")
             db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,selected_json,output_json,created_at,updated_at)"
                        " VALUES('current-decision','current-request','select','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')",
                        (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))

@@ -61,17 +61,16 @@ class EvaluationTestCase(BoardTestCase):
     def seed_catalog(self, board) -> dict:
         return board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
 
-    def publication_params(self, board, expected: int | None = None) -> dict:
-        return {"expectedRevision": self.snapshot(board)["tableRevision"] if expected is None else expected}
+    def publication_params(self, board) -> dict:
+        return {}
 
-    def publish_with(self, board, params: dict, command_id: str, *, expected: int | None = None, **collections) -> dict:
+    def publish_with(self, board, params: dict, command_id: str, **collections) -> dict:
         return board.console_call("user_policy_publish", {
-            **params, "commandId": command_id,
-            **({"expectedRevision": expected} if expected is not None else {}), **collections,
+            **params, "commandId": command_id, **collections,
         })
 
-    def publish(self, board, *, request_id: str = "write-1", command_id: str = "cmd-1", expected: int | None = None, **collections) -> dict:
-        return self.publish_with(board, self.publication_params(board, expected), command_id, **collections)
+    def publish(self, board, *, request_id: str = "write-1", command_id: str = "cmd-1", **collections) -> dict:
+        return self.publish_with(board, self.publication_params(board), command_id, **collections)
 
     def seed_profiles(self, board, *profiles) -> dict:
         self.seed_catalog(board)
@@ -84,7 +83,7 @@ class EvaluationTestCase(BoardTestCase):
 
 
 # ---------------------------------------------------------------------------
-# Published revisions and validation
+# Published settings and validation
 # ---------------------------------------------------------------------------
 class EvaluationPublishTests(EvaluationTestCase):
     def test_catalog_permissions_persist_through_user_publication(self):
@@ -102,8 +101,8 @@ class EvaluationPublishTests(EvaluationTestCase):
     def test_fresh_snapshot_is_unconfigured_without_a_verified_router(self):
         board = self.board()
         snapshot = self.snapshot(board)
-        self.assertEqual(snapshot["tableRevision"], 0)
-        self.assertEqual({key: snapshot["configuration"][key] for key in ("revision", "routerProfileIds")}, {"revision": 0, "routerProfileIds": []})
+        self.assertNotIn("tableRevision", snapshot)
+        self.assertEqual(snapshot["configuration"]["routerProfileIds"], [])
         self.assertEqual(snapshot["configuration"]["routingBudget"], "standard")
         self.assertEqual(snapshot["profiles"], [])
         self.assertEqual(snapshot["familyPreferences"], [])
@@ -120,12 +119,12 @@ class EvaluationPublishTests(EvaluationTestCase):
 
     def test_user_patches_preserve_omitted_fields(self):
         board = self.board()
-        catalog = self.seed_catalog(board)
+        self.seed_catalog(board)
         first = self.publish(board, command_id="c1",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True}],
                              preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "cheap and fast"}],
                              familyAnnotationChanges=[{**family_key(PROFILE), "text": "human context"}])
-        self.assertEqual(first["revision"], catalog["tableRevision"] + 1)
+        self.assertTrue(first["published"])
         self.publish(board, command_id="c2", profileSettings=[])
         snapshot = self.snapshot(board)
         self.assertTrue(next(item for item in snapshot["profiles"] if item["profileId"] == PROFILE_ID)["enabled"])
@@ -138,18 +137,19 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.refused_publish(board, "INVALID_ARGUMENT",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True, "available": True}])
 
-    def test_two_setting_drafts_conflict_without_partial_changes(self):
+    def test_two_setting_drafts_last_write_wins_and_command_replays(self):
         board = self.board()
         self.seed_catalog(board)
         params = self.publication_params(board)
         first = self.publish_with(board, params, "first-tab", familyAnnotationChanges=[{**family_key(PROFILE), "text": "first"}])
-        self.assert_code("REVISION_CONFLICT", self.publish_with, board, params, "second-tab",
-                         profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+        second = self.publish_with(board, params, "second-tab",
+                                   familyAnnotationChanges=[{**family_key(PROFILE), "text": "second"}])
         snapshot = self.snapshot(board)
-        self.assertEqual(snapshot["tableRevision"], first["revision"])
+        self.assertTrue(first["published"] and second["published"])
         self.assertFalse(next(p for p in snapshot["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
-        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "first")
+        self.assertEqual(snapshot["familyAnnotations"][0]["text"], "second")
         self.assertTrue(self.publish_with(board, params, "first-tab", familyAnnotationChanges=[{**family_key(PROFILE), "text": "first"}])["duplicate"])
+        self.assertEqual(self.snapshot(board)["familyAnnotations"][0]["text"], "second")
 
     def test_profile_execution_identity_is_program_owned(self):
         board = self.board()
@@ -184,23 +184,21 @@ class EvaluationPublishTests(EvaluationTestCase):
         mock_readonly.install(self)
         board = self.board()
         self.seed_profiles(board)
-        published = self.publish(board, request_id="w2", command_id="c2",
-                                 configuration={"routerProfileIds": [PROFILE_ID]})
+        self.publish(board, request_id="w2", command_id="c2",
+                     configuration={"routerProfileIds": [PROFILE_ID]})
         self.assertEqual(self.snapshot(board)["configuration"]["routerProfileIds"], [PROFILE_ID])
-        self.assertEqual(self.snapshot(board)["configuration"]["revision"], 1)
         self.assertEqual(self.snapshot(board)["configuration"]["routingBudget"], "standard")
         self.refused_publish(board, "INVALID_ARGUMENT", request_id="w3", command_id="c3",
                              configuration={"routerProfileIds": [PROFILE_ID], "autoMaintain": True})
         self.refused_publish(board, "NOT_FOUND", request_id="w4", command_id="c4",
                              configuration={"routerProfileIds": ["dsh:nope:nope:off"]})
-        self.assertEqual(self.snapshot(board)["tableRevision"], published["revision"])
+        self.assertEqual(self.snapshot(board)["configuration"]["routerProfileIds"], [PROFILE_ID])
 
     def test_availability_is_refreshed_by_catalog_and_new_enable_requires_it(self):
         board = self.board()
         self.refused_publish(board, "NOT_FOUND", request_id="w1", command_id="c1",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
-        refreshed = self.seed_catalog(board)
-        self.assertEqual(self.snapshot(board)["tableRevision"], refreshed["tableRevision"])
+        self.seed_catalog(board)
         self.assertTrue(next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)["available"])
         self.refused_publish(board, "NOT_FOUND", request_id="w2", command_id="c2",
                              profileSettings=[{"profileId": "dsh:nope:nope:off", "enabled": True}])
@@ -222,7 +220,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         grant = self.publication_params(board)
         base = {"commandId": "same-command", **grant}
         payload = {**base, "familyAnnotationChanges": [{**family_key(PROFILE), "text": "first"}]}
-        first = board.console_call("user_policy_publish", payload)
+        board.console_call("user_policy_publish", payload)
         self.assertTrue(board.console_call("user_policy_publish", payload)["duplicate"])
         self.assert_code("CONFLICT", board.console_call, "user_policy_publish",
                          {**base, "familyAnnotationChanges": []})
@@ -231,7 +229,7 @@ class EvaluationPublishTests(EvaluationTestCase):
         other = self.publication_params(board)
         self.assert_code("INVALID_ARGUMENT", self.publish_with, board, other, "fresh-command",
                          familyAnnotationChanges=None)
-        self.assertEqual(self.snapshot(board)["tableRevision"], first["revision"])
+        self.assertEqual(self.snapshot(board)["familyAnnotations"][0]["text"], "first")
 
 
     def test_snapshot_never_leaks_credentials(self):
@@ -313,12 +311,12 @@ class EvaluationPublishTests(EvaluationTestCase):
         note = self.snapshot(board)["familyAnnotations"][0]
         self.assertEqual((note["adapter"], note["provider"], note["model"]),
                          (PROFILE["adapter"], PROFILE["provider"], PROFILE["model"]))
-        self.assertEqual((note["text"], note["revision"]), ("first note", first["revision"]))
+        self.assertEqual(note["text"], "first note")
         self.assertTrue(note["updatedAt"])
-        second = self.publish(board, request_id="w2", command_id="c2",
-                              familyAnnotationChanges=[{**family_key(PROFILE), "text": "second note"}])
+        self.publish(board, request_id="w2", command_id="c2",
+                     familyAnnotationChanges=[{**family_key(PROFILE), "text": "second note"}])
         updated = self.snapshot(board)["familyAnnotations"][0]
-        self.assertEqual((updated["text"], updated["revision"]), ("second note", second["revision"]))
+        self.assertEqual(updated["text"], "second note")
         self.publish(board, request_id="w3", command_id="c3",
                      familyAnnotationChanges=[{**family_key(PROFILE), "text": ""}])
         self.assertEqual(self.snapshot(board)["familyAnnotations"], [])
@@ -338,13 +336,13 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertTrue(all(item["enabled"] is False for item in proposals), "discovered profiles start disabled")
         self.assertTrue(all(item["available"] is True for item in proposals))
         self.assertIn("refreshed", refreshed["note"])
-        self.assertEqual(self.snapshot(board)["tableRevision"], refreshed["tableRevision"])
+        self.assertNotIn("tableRevision", refreshed)
         self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
-        # A new observation of identical native metadata keeps the table revision.
+        profile_ids = [profile["profileId"] for profile in self.snapshot(board)["profiles"]]
+        # A new observation of identical native metadata keeps the same profiles.
         repeated = board.call("model_catalog_refresh", {"requestId": "cat-2"})
         self.assertTrue(repeated["duplicate"])
-        self.assertEqual(repeated["tableRevision"], refreshed["tableRevision"])
-        self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
+        self.assertEqual([profile["profileId"] for profile in self.snapshot(board)["profiles"]], profile_ids)
 
         # A failed discovery keeps the previous recorded catalog and the table.
         from hey_my_buddy.blackboard.catalog import catalog
@@ -356,7 +354,7 @@ class CatalogRefreshTests(EvaluationTestCase):
             self.assert_code("CATALOG_UNAVAILABLE", board.call, "model_catalog_refresh", {"requestId": "cat-3"})
         finally:
             catalog.discover = original
-        self.assertEqual(self.snapshot(board)["tableRevision"], repeated["tableRevision"])
+        self.assertEqual(len(self.snapshot(board)["profiles"]), len(proposals))
 
 
 if __name__ == "__main__":
@@ -369,7 +367,7 @@ class ConsoleCoreTests(BoardTestCase):
     def test_core_carries_the_state_keys_and_snapshot_wraps_them(self):
         board = self.board()
         core = board.evaluation.console_core()
-        for key in ("tableRevision", "configuration", "configurationError", "profiles",
+        for key in ("configuration", "configurationError", "profiles",
                     "modelConcurrency", "unavailableProfileCount", "preferences", "familyAnnotations",
                     "familyPreferences", "preferenceOverrides", "decisions"):
             self.assertIn(key, core)

@@ -33,7 +33,7 @@ OUTCOMES = ("answered", "no_answer")
 ACTIVE_ATTEMPT_STATES = ("starting", "executing", "finalizing", "uncertain")
 #: Terminal decision kinds whose immutable records can prove an effective outcome.
 _RECORD_KINDS = ("decision.completed", "decision.failed", "decision.needs_host",
-                 "decision.cancelled", "decision.stale")
+                 "decision.cancelled")
 _RECORD_KIND_LITERALS = "(" + ",".join(f"'{kind}'" for kind in _RECORD_KINDS) + ")"
 #: json_valid guards every json_extract over an untrusted stored column: a malformed
 #: payload must fail neither the write path's expression index nor a projection read
@@ -98,8 +98,8 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
                    facts: dict, now: str) -> dict:
     """Record one idempotent Router outcome fact for any plane; never executes anything.
 
-    The idempotency key is plane/requestId/routerIndex/phase/taskId/attemptId/outcome
-    with ``routerIndex`` taken from ``facts``; its receipt lives in ``router_outcomes`` and
+    The idempotency key is plane/requestId/selectionRetry/routerIndex/phase/taskId/attemptId/outcome
+    with ``routerIndex`` and the retry marker taken from ``facts``; its receipt lives in ``router_outcomes`` and
     commits in the caller's transaction together with the event. A replay with the
     same facts returns the original record, different facts raise ``CONFLICT``.
     Only callers that observed an actual outcome record one: cancellations, input or
@@ -120,12 +120,17 @@ def record_outcome(connection, *, profile_id: str, plane: str, request_id: str, 
     if not isinstance(facts, dict) or isinstance(facts.get("routerIndex"), bool) \
             or not isinstance(facts.get("routerIndex"), int) or facts["routerIndex"] < 0:
         raise BoardError("INVALID_ARGUMENT", "facts must carry a nonnegative routerIndex")
+    if type(facts.get("selectionRetry", False)) is not bool:
+        raise BoardError("INVALID_ARGUMENT", "selectionRetry must be boolean")
     router_index = facts["routerIndex"]
+    selection_retry = facts.get("selectionRetry", False)
     payload = {"plane": plane, "requestId": request_id, "routerIndex": router_index,
                "profileId": profile_id, "phase": phase, "taskId": task_id,
                "attemptId": attempt_id, "outcome": outcome, "code": code}
+    if selection_retry:
+        payload["selectionRetry"] = True
     key = hashlib.sha256(canonical_json(
-        [plane, request_id, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
+        [plane, request_id, selection_retry, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
     kind = f"router.{outcome}"
     stored = connection.execute("SELECT plane,request_id,router_index,profile_id,phase,task_id,attempt_id,"
                                 "outcome,code,event_seq FROM router_outcomes WHERE receipt_id=?", (key,)).fetchone()
@@ -211,7 +216,7 @@ def _classify_record(kind: str, output: dict, receipt: dict | None, event_payloa
         if code == "router-input-changed":
             return "changed", code
         return "no_answer", code
-    if kind in ("decision.cancelled", "decision.stale"):
+    if kind == "decision.cancelled":
         return "neutral", code
     return "unknown", code
 

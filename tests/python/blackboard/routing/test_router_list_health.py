@@ -35,8 +35,8 @@ class RouterListHealthTestCase(BoardTestCase):
     def add_profile(self, profile_id, *, adapter="dsh", provider="fixture", available=1, enabled=1):
         with self.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
-                       "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
+                       "available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,?,?,?)",
                        (profile_id, profile_id, adapter, provider, profile_id, "max", available, enabled,
                         canonical_json(permission_capabilities(adapter))))
 
@@ -47,8 +47,6 @@ class RouterListHealthTestCase(BoardTestCase):
             if interval is not None:
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
-            revision = int(db.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
-            db.execute("UPDATE evaluation_state SET configuration_revision=? WHERE id=1", (revision + 1,))
 
     def record(self, profile_id, *, outcome="no_answer", request=None, code="timeout", index=0,
                phase="runtime", now=None, task=None, attempt=None):
@@ -101,13 +99,13 @@ class RouterListHealthTestCase(BoardTestCase):
                      "routingBasis": {"candidateCount": candidates}}
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,table_revision,reason,"
-                "created_at) VALUES(?,?,?,?,?,?,?)",
-                (decision, "failed", "task", profile_id, 0, "", at))
+                "INSERT INTO evaluation_decisions(decision_id,status,task,profile_id,reason,"
+                "created_at) VALUES(?,?,?,?,?,?)",
+                (decision, "failed", "task", profile_id, "", at))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,attempt_id,"
-                "generation,expected_revision,requested_json,output_json,created_at,updated_at)"
-                " VALUES(?,?,'select','digest',?,?,0,0,?,?,?,?)",
+                "generation,requested_json,output_json,created_at,updated_at)"
+                " VALUES(?,?,'select','digest',?,?,0,?,?,?,?)",
                 (decision, f"legacy-request-{decision}", task_id, attempt_id,
                  canonical_json(requested), canonical_json(output or {}), at, at))
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
@@ -391,17 +389,16 @@ class NoWriteTests(RouterListHealthTestCase):
         self.assertEqual(first_entry["retryAt"], "2026-01-01T00:10:00.000Z")
         self.assertEqual(self.entry(again, A)["retryAt"], first_entry["retryAt"])
 
-    def test_health_read_leaves_settings_revision_and_receipts_untouched(self):
+    def test_health_read_leaves_settings_and_receipts_untouched(self):
         self.add_profile(A)
         self.set_settings(ids=[A])
         self.record(A, outcome="answered", code=None, index=0)
         with self.db.read() as db:
-            revision = int(db.execute("SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
+            settings = router.configuration(db)
             receipts = db.execute("SELECT * FROM router_outcomes ORDER BY receipt_id").fetchall()
         self.state()
         with self.db.read() as db:
-            self.assertEqual(int(db.execute(
-                "SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0]), revision)
+            self.assertEqual(router.configuration(db), settings)
             self.assertEqual(db.execute(
                 "SELECT * FROM router_outcomes ORDER BY receipt_id").fetchall(), receipts)
             self.assertEqual(receipts[0]["outcome"], "answered")

@@ -48,7 +48,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
             "generation": owned["attempt"]["generation"], "nonce": NONCE,
             "status": status, "shutdownConfirmed": shutdown,
-            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select", "tableRevision": owned["decisionInput"]["tableRevision"],
+            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select",
                        "stopEvidence": {"shutdownConfirmed": shutdown, "native": {"shutdownConfirmed": shutdown}},
                        "usage": {"elapsedMs": 100, "toolCalls": 0},
                        "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
@@ -86,6 +86,23 @@ class TestWorkflowRouting(WorkflowTestCase):
         claim = self.claim(board)
         self.assertEqual({key: claim["claim"]["task"]["spec"][key] for key in CONFIGURATION}, CONFIGURATION)
         self.assertEqual(self.catalog_validation.call_count, 1)
+
+    def test_settings_edit_does_not_stop_a_queued_router_selection(self):
+        board = self.board()
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
+        submitted = self.routed(board, requiredCapabilities=["effort:high"])
+        decision_id = submitted["routing"]["decisionId"]
+        board.console_call("user_policy_publish", {
+            "commandId": "change-router-list",
+            "configuration": {"routerProfileIds": [SECOND_PROFILE_ID]},
+        })
+        claimed = self.router_claim(board, submitted, claim_id="after-settings-change")
+        self.assertIsNotNone(claimed["claim"])
+        self.assertEqual(claimed["claim"]["decisionInput"]["profile"]["model"], PROFILE["model"])
+        self.select(board, claimed, profile_id=SECOND_PROFILE_ID)
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["routing"]["decisionId"], decision_id)
+        self.assertEqual(view["routing"]["status"], "completed")
 
     def test_omitted_configuration_has_one_durable_decision_and_immutable_request(self):
         board = self.board()
@@ -312,33 +329,6 @@ class TestWorkflowRouting(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             self.continue_run(board, fresh, command_id="foreign", targetRunId=unrelated["runId"], configuration=CONFIGURATION, reason="Host attempted to configure an unrelated goal")
         self.assertEqual(raised.exception.code, "UNAUTHORIZED")
-
-    def test_changed_revision_fences_router_instead_of_refreshing_frozen_input(self):
-        board = self.board()
-        # Two effort-high candidates keep this a queued Router decision;
-        # a sole candidate would complete before any claim.
-        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE))
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        submitted = self.routed(board, requiredCapabilities=["effort:high"])
-        board.console_call("user_policy_publish", {
-            "commandId": "changed", "expectedRevision": revision,
-            "configuration": {"routerProfileIds": [SECOND_PROFILE_ID]},
-        })
-        claimed = self.router_claim(board, submitted, claim_id="after-settings-change")
-        self.assertIsNone(claimed["claim"])
-        old = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
-        self.assertEqual(old["status"], "stale")
-        self.assertEqual(old["input"]["profile"]["model"], PROFILE["model"])
-        self.assertEqual(old["input"]["tableRevision"], revision)
-        current = board.call("workflow_get", {"runId": submitted["runId"]})
-        pending = self.continue_run(board, current, command_id="reroute-new-router", reroute=True)
-        continued = self.prepare_reroute(board, pending)
-        fresh = self.router_claim(board, continued, claim_id="new-router")
-        self.assertEqual(fresh["claim"]["decisionInput"]["profile"]["model"], SECOND_PROFILE["model"])
-        self.select(board, fresh, profile_id=SECOND_PROFILE_ID)
-        view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(view["routing"]["tableRevision"], revision + 1)
-        self.assertEqual(view["routing"]["configurationRevision"], 2)
 
     def test_installed_validation_race_with_takeover_cannot_start_old_snapshot(self):
         board = self.board()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router
@@ -31,13 +32,8 @@ class SingleRouterRequestTests(BoardTestCase):
         return board.call("selection_get", {"decisionId": response["decisionId"], "includeAudit": True})["decision"]
 
     def configure(self, board, **settings):
-        revision = board.call("console_snapshot", {})["tableRevision"]
-        return self.publish_user_patch(board, request_id=f"settings-{revision}", command_id=f"settings-{revision}",
+        return self.publish_user_patch(board, request_id="settings-" + str(uuid.uuid4()), command_id="settings-" + str(uuid.uuid4()),
                                        configuration=settings)
-
-    def legacy(self, board):
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE meta SET value='1' WHERE key='router_configuration_version'")
 
     def test_multi_candidate_freezes_complete_router_and_input_hash(self):
         board = self.board()
@@ -52,7 +48,6 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
             self.assertEqual(document["budget"], router.budget("deep"))
-            self.assertEqual(document["configurationRevision"], view["configurationRevision"])
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
         self.assertEqual(view["input"]["profile"], identity)
@@ -168,34 +163,9 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertIsNone(view["runId"])
         self.assertNotIn("fallback", view)
 
-    def test_legacy_settings_become_a_specific_multi_candidate_boundary(self):
-        board = self.board()
-        self.seed(board)
-        self.legacy(board)
-        view = self.audit(board, self.request(board))
-        self.assertEqual(view["status"], "needs-host")
-        self.assertEqual(view["routerProblem"]["code"], "router-settings-upgrade-required")
-        self.assertIsNone(view["routingMode"])
-        self.assertIsNone(view["budget"])
-        self.assertIsNone(view["runId"])
-
-    def test_sole_candidate_bypasses_even_legacy_router_settings(self):
-        board = self.board()
-        self.seed(board)
-        self.legacy(board)
-        with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("direct path must not resolve")):
-            view = self.audit(board, self.request(board, requiredCapabilities=["input:image"]))
-        self.assertEqual(view["status"], "completed")
-        self.assertEqual(view["profileId"], PROFILE_ID)
-        self.assertIs(view["routerCalled"], False)
-        self.assertIsNone(view["input"])
-        self.assertIsNone(view["routingMode"])
-        self.assertIsNone(view["runId"])
-
     def test_zero_candidates_keep_their_own_boundary_without_router_resolution(self):
         board = self.board()
         self.seed(board)
-        self.legacy(board)
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("empty bounds must not resolve")):
             view = self.audit(board, self.request(board, requiredCapabilities=["not-present"]))
         self.assertEqual(view["status"], "needs-host")
@@ -254,19 +224,19 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {key: snapshot[key] for key in (
             "routerProfileIds", "routerIdentities", "routingMode", "routingBudget",
-            "routerRetryIntervalSeconds", "configurationRevision", "budget")})
+            "routerRetryIntervalSeconds", "budget")})
         # The claim layer, covered by the settings-drift claim test, refuses
         # execution after this change. The shared resolver reads frozen facts.
 
-    def test_frozen_current_router_rejects_changed_identity_and_rechecks_health(self):
+    def test_frozen_current_router_keeps_identity_and_rechecks_health(self):
         board = self.board()
         self.seed(board)
         snapshot = self.audit(board, self.request(board))["requested"]
         with board.store.db.write() as connection:
             connection.execute("UPDATE evaluation_profiles SET effort='high' WHERE profile_id=?", (PROFILE_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
-            self.assertIsNone(resolution.profile)
-            self.assertEqual(resolution.problem["code"], "router-profile-changed")
+            self.assertEqual(resolution.profile["effort"], "off")
+            self.assertIsNone(resolution.problem)
             self.assertEqual(resolution.facts["routerProfileIds"], [PROFILE_ID])
             connection.execute("UPDATE evaluation_profiles SET effort='off',enabled=0 WHERE profile_id=?", (PROFILE_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
@@ -278,14 +248,12 @@ class SingleRouterRequestTests(BoardTestCase):
         response = self.request(board)
         view = self.audit(board, response)
         historical = {**view["requested"], "requestedRoutingMode": "review", "fallback": {"from": "review", "to": "fast", "code": "old"}}
-        historical.pop("configurationRevision")
         with board.store.db.write() as connection:
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (canonical_json(historical), response["decisionId"]))
         view = self.audit(board, response)
         self.assertEqual(view["requested"], historical)
         self.assertNotIn("fallback", view)
         self.assertNotIn("requestedRoutingMode", view)
-        self.assertEqual(view["configurationRevision"], 1)
 
     def test_complete_input_byte_limit_includes_snapshot_and_schema(self):
         board = self.board()
@@ -364,15 +332,13 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         history = board.call("workflow_get", {"runId": original["runId"], "routingHistory": {"limit": 10}})["routingHistory"]
         self.assertEqual(history["total"], 1)
         entry = history["entries"][0]
-        for key in ("routerProfileId", "routerProfile", "routingMode", "budget", "configurationRevision"):
+        for key in ("routerProfileId", "routerProfile", "routingMode", "budget"):
             self.assertEqual(entry[key], original["routing"][key])
         self.assertNotIn("fallback", entry)
 
-    def test_complete_host_buddy_bypasses_router_and_legacy_settings(self):
+    def test_complete_host_buddy_bypasses_router_settings(self):
         board = self.board()
         self.seed(board)
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE meta SET value='1' WHERE key='router_configuration_version'")
         with patch("hey_my_buddy.blackboard.routing.router.current_router", side_effect=AssertionError("complete buddy must not resolve")):
             view = self.submit(board)
         self.assertEqual(view["routing"]["status"], "explicit")

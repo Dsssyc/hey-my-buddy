@@ -101,14 +101,12 @@ type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 
 function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
-    csrfToken: "csrf",
+    csrfToken: "csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    tableRevision: 4,
 
-    configuration: options.configurationUnavailable ? null : { revision: 1,
-      routerProfileIds: options.routerProfileId === undefined ? [mediumId] : options.routerProfileId === null ? [] : [options.routerProfileId],
+    configuration: options.configurationUnavailable ? null : { routerProfileIds: options.routerProfileId === undefined ? [mediumId] : options.routerProfileId === null ? [] : [options.routerProfileId],
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
-    configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置", revision: 1 } : null,
+    configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置",} : null,
     profiles: profiles(),
     preferences: [],
     familyPreferences: options.familyPreferences ?? [],
@@ -132,7 +130,6 @@ function snapshot(options: Options = {}): HarnessSnapshot {
 function applyPublication(state: HarnessSnapshot, params: Record<string, any>): HarnessSnapshot {
   const next: HarnessSnapshot = {
     ...state,
-    tableRevision: state.tableRevision + 1,
 
     familyPreferences: [...state.familyPreferences],
     preferenceOverrides: [...state.preferenceOverrides],
@@ -157,7 +154,7 @@ function applyPublication(state: HarnessSnapshot, params: Record<string, any>): 
   }
   for (const change of params.familyAnnotationChanges ?? []) {
     next.familyAnnotations = next.familyAnnotations.filter(entry => key(entry) !== key(change));
-    next.familyAnnotations.push({ ...change, revision: 1, updatedAt: null });
+    next.familyAnnotations.push({ ...change, updatedAt: null });
   }
   return { ...next, preferences: effective(next) };
 }
@@ -175,13 +172,13 @@ function fixture(options: Options = {}) {
       return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
         preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
         familyPreferences: state.familyPreferences,
-        modelConcurrency: state.modelConcurrency, tableRevision: state.tableRevision, nextCursor: null };
+        modelConcurrency: state.modelConcurrency, nextCursor: null };
     }
 
     if (operation === "user_policy_publish") {
       published.push(params);
       state = applyPublication(state, params);
-      return { published: true, tableRevision: state.tableRevision };
+      return { published: true,};
     }
     if (operation === "storage_plan") {
       return { planId: "plan-1", createdAt: "2026-09-28T12:00:00Z",
@@ -378,7 +375,7 @@ describe("a level's own preference", () => {
     expect(within(modelRow(SONNET)).queryByText("high")).toBeNull();
     expect(within(screen.getByRole("region", { name: "未保存的修改" })).getByText("1 项未保存")).toBeTruthy();
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: "none", reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
     expect(f.published.at(-1)).not.toHaveProperty("familyPreferenceChanges");
@@ -405,7 +402,7 @@ describe("a level's own preference", () => {
     expect(chip(SONNET, "medium").textContent).toContain("优先");
     expect(within(level("medium")).getByRole("textbox")).toHaveProperty("readOnly", true);
     await user.click(saveButton());
-    await screen.findByText("已发布新版本");
+    await screen.findByText("设置已保存");
     expect(f.published.at(-1)!.preferenceChanges).toEqual([{ profileId: mediumId, mode: null, reason: "" }]);
     expect(f.published.at(-1)).not.toHaveProperty("annotationChanges");
   });

@@ -13,7 +13,7 @@ import { familyKey, modelFamilies } from "../console-data";
 import { historyView } from "../draft";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
-import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, useProfileHistory } from "../use-profile-history";
+import { MAX_HISTORY_PROFILES, PROFILE_PAGE_SIZE, historySourceKey, useProfileHistory } from "../use-profile-history";
 import { useViewPreference } from "../view-preferences";
 import type { BuddyAttention } from "./attention";
 import { BuddyHeader } from "./BuddyHeader";
@@ -53,7 +53,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const handledLocation = useRef<string | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [refused, setRefused] = useState(false);
-  const history = useProfileHistory(api, snapshot.csrfToken, snapshot.tableRevision,
+  const sourceKey = historySourceKey(snapshot);
+  const history = useProfileHistory(api, snapshot.csrfToken, sourceKey,
     { query, adapter: "", enabled: active && showUnavailable, autoOpen: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
@@ -79,7 +80,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   // continue on their own; the hook's display budget is the hard stop, and this
   // counter keeps a server that repeats a cursor from being asked forever.
   const autoPages = useRef(0);
-  useEffect(() => { autoPages.current = 0; }, [query, snapshot.tableRevision]);
+  useEffect(() => { autoPages.current = 0; }, [query, sourceKey]);
   useEffect(() => {
     if (!showUnavailable) { autoPages.current = 0; return; }
     if (!active || history.error || history.loading || !history.hasMore) return;
@@ -88,8 +89,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     history.loadMore();
   }, [active, showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
   // Retained rows that were read join the view and, while editing, the draft. The
-  // revision also clears a page of the previous table before it could seed a baseline.
-  useEffect(() => { editor.adoptHistory(history.page); }, [history.page, snapshot.tableRevision]);
+  // Content changes clear an older page before it could seed a baseline.
+  useEffect(() => { editor.adoptHistory(history.page, sourceKey); }, [history.page, sourceKey]);
   // Deep selections cut through local filters without changing the saved preferences.
   useEffect(() => {
     if (!active || !location.target || handledLocation.current === buddyHash(location)) return;

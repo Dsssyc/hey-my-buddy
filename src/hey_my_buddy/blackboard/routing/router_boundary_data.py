@@ -16,8 +16,7 @@ from ...errors import BoardError
 from ..tasks import workspace_identity
 
 _CHANGED_CODES = frozenset({
-    "router-input-changed", "router-configuration-changed", "router-profile-changed",
-    "router-table-changed", "router-reader-open", "router-reader-fenced",
+    "router-input-changed",
     "router-out-of-bounds", "router-dispatch-unverified", "workflow-routing-fenced",
     "ACCOUNT_BINDING_CHANGED", "CONFIGURATION_CONFLICT", "router-input-too-large",
 })
@@ -101,12 +100,26 @@ def router_trials(connection, row, *, now):
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if snapshot is None:
         return []
-    facts = snapshot["facts"]
+    request = _json(row["requested_json"], {})
+    facts = request if request.get("selectionRetry") else snapshot["facts"]
     events = _events(connection, row)
+    if request.get("selectionRetry"):
+        rerouted = next((event["seq"] for event in reversed(events)
+                         if event["kind"] == "decision.selection_rerouted"), None)
+        if rerouted is not None:
+            events = [event for event in events if event["seq"] > rerouted]
     terminal = next((event for event in reversed(events) if event["kind"] in (
-        "decision.completed", "decision.needs_host", "decision.cancelled", "decision.stale", "decision.failed")), None)
-    inspected = {item["index"]: item for item in snapshot["inspections"]}
-    dispatched = {item["routerIndex"]: item for item in router_sequence.dispatches(connection, row["decision_id"])}
+        "decision.completed", "decision.needs_host", "decision.cancelled", "decision.failed")), None)
+    inspected = ({item["index"]: item for item in request.get("selectionRetryInspections", [])}
+                 if request.get("selectionRetry") else
+                 {item["index"]: item for item in snapshot["inspections"]})
+    dispatches = router_sequence.dispatches(connection, row["decision_id"])
+    if request.get("selectionRetry"):
+        retry_prefix = f"decision:{row['request_id']}:1:"
+        dispatches = tuple(item for item in dispatches if connection.execute(
+            "SELECT request_id FROM tasks WHERE task_id=?", (item["taskId"],)
+        ).fetchone()["request_id"].startswith(retry_prefix))
+    dispatched = {item["routerIndex"]: item for item in dispatches}
     for event in events:
         payload = event["payload"]
         if event["kind"] == "router.no_answer" and payload.get("phase") == "preflight" and payload.get("taskId") is None:
@@ -180,8 +193,8 @@ def router_trials(connection, row, *, now):
                     and event["payload"].get("taskId") in (None, task_id)
                     and event["payload"].get("attemptId") is None), None)) is not None:
                 _preflight_no_answer(connection, item, no_answer, state, now)
-            elif row["decision_task_id"] == task_id and row["status"] in ("cancelled", "stale", "needs-host", "failed"):
-                item.update(outcome="cancelled" if row["status"] == "cancelled" else "changed" if row["status"] == "stale" or row["error"] in _CHANGED_CODES else "skipped",
+            elif row["decision_task_id"] == task_id and row["status"] in ("cancelled", "needs-host", "failed"):
+                item.update(outcome="cancelled" if row["status"] == "cancelled" else "changed" if row["error"] in _CHANGED_CODES else "skipped",
                             phase="preflight", code=row["error"], reason=row["reason"])
             item["shutdownConfirmed"] = True if _stopped(connection, task_id) else None
             trials.append(item)
@@ -231,7 +244,7 @@ def router_trials(connection, row, *, now):
                 trial.update(outcome="answered", phase="publication", reason=output["decision"].get("reason"))
             elif receipt.get("status") == "cancelled" or attempt["cancel_requested_at"] or (task and task["state"] == "cancelled") or (row["decision_task_id"] == task_id and row["status"] == "cancelled"):
                 trial.update(outcome="cancelled", code="router-cancelled", reason="The dispatch was cancelled")
-            elif row["decision_task_id"] == task_id and (row["status"] == "stale" or row["error"] in _CHANGED_CODES):
+            elif row["decision_task_id"] == task_id and row["error"] in _CHANGED_CODES:
                 trial.update(outcome="changed", code=row["error"], reason=row["reason"])
             elif not confirmed and (receipt or attempt["execution_state"] in ("uncertain", "finished")):
                 trial.update(outcome="stopUnknown", code="router-stop-unconfirmed", reason="The dispatch stop is unconfirmed")
@@ -379,7 +392,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     """Build a current readable Host boundary from frozen evidence, without writes."""
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     execution_changed = row["status"] == "completed" and route is not None and route["state"] in ("needs-host", "fenced")
-    if row["status"] not in ("needs-host", "failed", "stale", "cancelled") and not execution_changed:
+    if row["status"] not in ("needs-host", "failed", "cancelled") and not execution_changed:
         return None
     request = _json(row["requested_json"], {})
     # Direct sole/explicit selections and no-legal-candidates have their own
@@ -396,7 +409,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
         kind = "routing-changed"
     elif current and row["status"] == "needs-host" and row["error"] is None:
         kind = "router-abstained"
-    elif row["status"] == "stale" or any(item["outcome"] == "changed" for item in trials) or (
+    elif any(item["outcome"] == "changed" for item in trials) or (
             code in _CHANGED_CODES and not any(item["taskId"] == row["decision_task_id"] and item["outcome"] == "no_answer" for item in trials)):
         kind = "routing-changed"
     else:
@@ -404,11 +417,17 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     reason = (route["reason"] if execution_changed else row["reason"]) or "Router 不可用：没有可用答案"
     if kind == "router-unavailable" and "Router 不可用" not in reason:
         reason = "Router 不可用：" + reason
-    facts = deepcopy(snapshot.get("hostPacket") or snapshot["baseInput"])
-    facts.update(deepcopy(snapshot["facts"]))
-    facts["inspections"] = deepcopy(snapshot["inspections"])
+    if request.get("selectionRetry"):
+        facts = deepcopy(_json(row["input_json"], {}))
+        facts.update(deepcopy(request))
+        facts["inspections"] = deepcopy(request.get("selectionRetryInspections", []))
+    else:
+        facts = deepcopy(snapshot.get("hostPacket") or snapshot["baseInput"])
+        facts.update(deepcopy(snapshot["facts"]))
+        facts["inspections"] = deepcopy(snapshot["inspections"])
     candidates = facts.get("profiles") or []
-    retry_at = _retry_at(connection, snapshot["facts"], trials, now=now, kind=kind)
+    retry_at = _retry_at(connection, request if request.get("selectionRetry") else snapshot["facts"],
+                         trials, now=now, kind=kind)
     if retry_at is None:
         reason += "; cached qualification, health or quota has no recorded recovery time"
     stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id)

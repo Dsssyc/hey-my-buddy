@@ -81,12 +81,10 @@ class DecisionTestCase(BoardTestCase):
         preferences=None,
     ) -> dict:
         board.call("model_catalog_refresh", {"requestId": "catalog-seed"})
-        revision = board.call("console_snapshot", {})["tableRevision"]
         result = board.console_call(
             "user_policy_publish",
             {
                 "commandId": "seed-1",
-                "expectedRevision": revision,
                 "profileSettings": [{"profileId": item["profileId"], "enabled": True} for item in profiles],
                 "preferenceChanges": preferences or [],
                 "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [decision_profile] if decision_profile else []},
@@ -97,10 +95,9 @@ class DecisionTestCase(BoardTestCase):
 
 
     def publish_user_patch(self, board, *, request_id: str, command_id: str, **changes) -> dict:
-        revision = board.call("console_snapshot", {})["tableRevision"]
         return board.console_call("user_policy_publish", {
             "commandId": command_id,
-            "expectedRevision": revision, **changes,
+            **changes,
         })
 
 
@@ -119,12 +116,6 @@ class DecisionTestCase(BoardTestCase):
 
     def decision(self, board, decision_id: str, *, audit: bool = True) -> dict:
         return board.call("selection_get", {"decisionId": decision_id, "includeAudit": audit})["decision"]
-
-    def open_readers(self, board) -> int:
-        with board.store.db.read() as connection:
-            return connection.execute(
-                "SELECT COUNT(*) FROM evaluation_readers WHERE released_at IS NULL"
-            ).fetchone()[0]
 
     def assert_code(self, code: str, callable_, *args, **kwargs) -> BoardError:
         with self.assertRaises(BoardError) as caught:
@@ -203,7 +194,6 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(document["operation"], "select")
         self.assertEqual(document["requestId"], "pick-1")
         self.assertEqual(document["task"], "fix the failing parser test")
-        self.assertEqual(document["tableRevision"], decision["expectedRevision"])
         self.assertEqual(
             [profile["profileId"] for profile in document["profiles"]], [PROFILE_ID, SECOND_PROFILE_ID]
         )
@@ -307,11 +297,13 @@ class SelectionRequestTests(DecisionTestCase):
                                         preferenceChanges=[{"profileId": bounded, "mode": mode, "reason": "new hard bound"}])
                 self.run_worker(board, worker_id=f"w-freeze-{mode}")
                 decision = self.decision(board, request["decisionId"])
-                self.assertEqual(decision["input"], frozen)
-                self.assertEqual(decision["status"], "needs-host")
-                self.assertEqual(decision["output"]["code"], "router-table-changed")
-                self.assertIsNone(decision["attemptId"])
-                self.assertIsNone(decision["selectedProfile"])
+                with board.store.db.read() as connection:
+                    retained = json.loads(connection.execute("SELECT document_json FROM router_dispatches WHERE task_id=?", (request["runId"],)).fetchone()[0])
+                self.assertEqual(retained, frozen)
+                self.assertEqual(decision["status"], "completed")
+                self.assertEqual(decision["profileId"], PROFILE_ID if mode == "pin" else SECOND_PROFILE_ID)
+                self.assertFalse(decision["routerCalled"])
+                self.assertTrue(decision["requested"]["selectionRetry"])
 
     def test_fixed_fields_and_capabilities_are_rechecked_at_adoption(self):
         board = self.board()
@@ -335,14 +327,24 @@ class SelectionRequestTests(DecisionTestCase):
                     request = board.call("selection_request", {"requestId": f"freeze-{name}",
                                          "task": "bounded selection", **constraints})
                 frozen = self.decision(board, request["decisionId"])["input"]
+                client = board.client()
+                worker = f"w-freeze-{name}"
+                client.register_worker(worker, adapter="decision", capabilities=["decision"])
+                claim = client.claim(worker, f"claim-{name}", "n" * 32, task_id=request["runId"])["claim"]
                 with board.store.db.write() as connection:
                     before = connection.execute(f"SELECT {field} FROM evaluation_profiles WHERE profile_id=?", (SECOND_PROFILE_ID,)).fetchone()[0]
                     connection.execute(f"UPDATE evaluation_profiles SET {field}=? WHERE profile_id=?", (replacement, SECOND_PROFILE_ID))
-                self.run_worker(board, worker_id=f"w-freeze-{name}")
+                output = {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
+                          "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                          "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": None},
+                          "usage": {"elapsedMs": 100, "toolCalls": 0},
+                          "decision": self.valid_decision(claim["decisionInput"], SECOND_PROFILE_ID)}
+                client.submit_result(worker, claim["attempt"]["attemptId"], claim["attempt"]["generation"],
+                                     "n" * 32, {"status": "ok", "shutdownConfirmed": True, "result": output})
                 decision = self.decision(board, request["decisionId"])
-                self.assertEqual(decision["input"], frozen)
-                self.assertEqual(decision["status"], "needs-host")
-                self.assertEqual(decision["output"]["code"], "router-out-of-bounds")
+                self.assertTrue(decision["requested"].get("selectionRetry"), decision)
+                self.assertIn(decision["status"], ("queued", "completed"))
+                self.assertNotEqual(decision["profileId"], SECOND_PROFILE_ID)
                 with board.store.db.write() as connection:
                     connection.execute(f"UPDATE evaluation_profiles SET {field}=? WHERE profile_id=?", (before, SECOND_PROFILE_ID))
 
@@ -404,20 +406,17 @@ class SelectionRequestTests(DecisionTestCase):
 
 
 class DecisionGateTests(DecisionTestCase):
-    def test_table_change_before_claim_keeps_request_frozen(self):
+    def test_preference_change_before_claim_keeps_input_and_completes(self):
         board = self.board()
         self.seed(board)
-        revision = board.call("console_snapshot", {})["tableRevision"]
         request = self.request(board)
         self.publish_user_patch(board, request_id="before-claim", command_id="before-claim",
                                 preferenceChanges=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "new preference"}])
         self.run_worker(board)
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["status"], "needs-host")
-        self.assertEqual(decision["output"]["code"], "router-table-changed")
-        self.assertIsNone(decision["attemptId"])
-        self.assertEqual(decision["expectedRevision"], revision)
-        self.assertEqual(decision["input"]["tableRevision"], revision)
+        self.assertEqual(decision["status"], "completed")
+        self.assertIsNotNone(decision["attemptId"])
+        self.assertEqual(decision["input"]["preferences"], [])
 
 
 
@@ -473,7 +472,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["output"]["code"], "router-stop-unconfirmed")
         self.assertEqual(self.own_receipt(board, decision)["result"]["code"], "invalid-native-result")
         self.assertFalse(decision["stopEvidence"]["shutdownConfirmed"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_native_error_envelope_fails_honestly(self):
         board = self.board()
@@ -482,7 +480,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["status"], "needs-host")
         self.assertIn("call-timeout", decision["error"])
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
-        self.assertEqual(board.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_out_of_candidate_is_not_adopted_and_has_its_own_health_count(self):
         board = self.board()
@@ -562,7 +559,6 @@ class DecisionFailureTests(DecisionTestCase):
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?",
                                                         (decision["runId"],)).fetchone()[0], 1)
-        self.assertEqual(self.open_readers(board), 0)
 
     def test_json_string_answer_is_parsed_by_the_generic_collector(self):
         board = self.board()
@@ -671,7 +667,6 @@ class DecisionFailureTests(DecisionTestCase):
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
         self.assertEqual(task["attemptState"], "uncertain")
-        self.assertEqual(self.open_readers(board), 0)
 
     def test_worker_deadline_is_bounded_without_inventing_native_stop_evidence(self):
         board = self.board()
@@ -684,7 +679,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "failed")
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
-        self.assertEqual(self.open_readers(board), 0)
 
     def test_restart_fences_a_running_decision_and_a_late_result_never_publishes(self):
         board = self.board()
@@ -694,21 +688,18 @@ class DecisionFailureTests(DecisionTestCase):
         client.register_worker("w-restart", adapter="dsh", capabilities=["dsh", "decision"])
         claim = client.claim("w-restart", "claim-restart", "n" * 32, task_id=first["runId"])["claim"]
         self.assertIsNotNone(claim)
-        self.assertEqual(self.open_readers(board), 1)
 
         # A fresh store over the same state directory is exactly what a daemon restart
         # does: in-flight attempts become uncertain and the decision is fenced.
         restarted = self.board()
         decision = self.decision(restarted, first["decisionId"])
-        self.assertEqual(decision["status"], "stale")
+        self.assertEqual(decision["status"], "failed")
         self.assertIn("restarted", decision["reason"])
-        self.assertEqual(self.open_readers(restarted), 0)
 
         envelope = {
             **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
-            "tableRevision": decision["expectedRevision"],
             "requested": {"provider": PROFILE["provider"], "model": PROFILE["model"], "reasoningEffort": PROFILE["effort"]},
             "resolved": None,
             "observed": None,
@@ -725,14 +716,13 @@ class DecisionFailureTests(DecisionTestCase):
             {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0},
         )
         late = self.decision(restarted, first["decisionId"])
-        self.assertEqual(late["status"], "stale")
+        self.assertEqual(late["status"], "failed")
         self.assertIsNone(late["profileId"])
         self.assertIsNone(late["output"])
         with restarted.store.db.read() as connection:
             receipt = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                                     (claim["attempt"]["attemptId"],)).fetchone()[0])
         self.assertEqual(receipt["result"]["decision"]["reason"], "too late")
-        self.assertEqual(restarted.call("console_snapshot", {})["tableRevision"], 2)
 
     def test_a_lost_reply_replays_without_re_executing_or_republishing(self):
         board = self.board()
@@ -746,7 +736,6 @@ class DecisionFailureTests(DecisionTestCase):
             **claim_tool_receipt(claim),
             "status": "ok",
             "operation": "select",
-            "tableRevision": document["tableRevision"],
             "requested": document["profile"],
             "resolved": None,
             "observed": None,
@@ -828,8 +817,6 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "profileId",
                 "selectedProfile",
                 "decisionModel",
-                "tableRevision",
-                "expectedRevision",
                 "reason",
                 "evidence",
                 "policyCheck",
@@ -837,7 +824,7 @@ class DecisionSurfaceTests(DecisionTestCase):
                 "routingBasis",
                 "constraints", "requiredCapabilities",
                 "routerCalled",
-                "routingMode", "routerProfileId", "routerProfile", "routerProblem", "configurationRevision",
+                "routingMode", "routerProfileId", "routerProfile", "routerProblem",
                 "routerProfileIds", "routerIdentities", "routerRetryIntervalSeconds", "routingBudget", "routerIndex", "routerTrials",
                 "usage",
                 "nativeIdentity",

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type ConsoleApi } from "./api";
 import type { FamilyAnnotation, Profile, Snapshot } from "./types";
-import { chip, conflictNotice, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
+import { chip, defaultPreference, effortCell, level, levelSwitch, listed, modelRow, pane, selectModel } from "./buddies/page.testing";
 
 /** One family with an enabled and a disabled effort, plus a second enabled family. */
 function catalog(): Profile[] {
@@ -24,18 +24,18 @@ function catalog(): Profile[] {
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const flashFamily = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
 const FLASH = "dsh / deepseek-official / deepseek-flash";
-const flashNote = (text: string, revision = 1): FamilyAnnotation => ({ ...flashFamily, text, revision, updatedAt: null });
+const flashNote = (text: string): FamilyAnnotation => ({ ...flashFamily, text, updatedAt: null });
 /** A configuration that only a completed program discovery can add. */
 const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 
-type Script = { publish?: ("network" | "conflict" | "forbidden")[] };
+type Script = { publish?: ("network" | "forbidden")[] };
 
 function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
 
-    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
 
     familyAnnotations: [flashNote("原备注")],
@@ -58,24 +58,26 @@ function fixture(script: Script = {}, options: { discoveryNote?: string } = {}) 
       const scripted = publishQueue.shift();
       if (scripted === "network") throw new ApiError("NETWORK", "lost publish reply");
       if (scripted === "forbidden") throw new ApiError("FORBIDDEN", "stale CSRF after restart");
-      if (scripted === "conflict") {
-        state = { ...state, tableRevision: state.tableRevision + 1, familyAnnotations: [flashNote("他人发布的备注 V3", 2)] };
-        throw new ApiError("REVISION_CONFLICT", "stale revision");
-      }
-      state = { ...state, tableRevision: state.tableRevision + 1,
- };
-      return { published: true, tableRevision: state.tableRevision };
+      state = { ...state,
+        familyAnnotations: params.familyAnnotationChanges
+          ? params.familyAnnotationChanges.map((change: { text: string }) => flashNote(change.text))
+          : state.familyAnnotations,
+        profiles: params.profileSettings
+          ? state.profiles.map(profile => ({ ...profile, enabled: params.profileSettings.find(
+              (change: { profileId: string; enabled: boolean }) => change.profileId === profile.profileId)?.enabled ?? profile.enabled }))
+          : state.profiles,
+      };
+      return { published: true };
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes the directory itself; the page only re-reads it.
-      // A discovery can also publish another writer's human field, which must
-      // never be silently overwritten by a stale local draft.
-      state = { ...state, tableRevision: state.tableRevision + 1,
-        ...(options.discoveryNote ? { familyAnnotations: [flashNote(options.discoveryNote, 2)] } : {}),
+      // A discovery can coincide with another settings publication.
+      state = { ...state,
+        ...(options.discoveryNote ? { familyAnnotations: [flashNote(options.discoveryNote)] } : {}),
         profiles: [...state.profiles, { profileId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
-      return { tableRevision: state.tableRevision };
+      return { discovered: true };
     }
     throw new Error(`Unexpected command: ${operation}`);
   });
@@ -102,7 +104,7 @@ const note = () => within(pane()).getByRole("textbox", { name: "备注" }) as HT
 
 const saveBar = () => screen.queryByRole("region", { name: "未保存的修改" });
 const save = () => within(saveBar()!).getByRole("button", { name: /^(保存|重试同一保存)$/ });
-const PUBLISHED = "已发布新版本";
+const PUBLISHED = "设置已保存";
 
 /** Foregrounding uses the existing visibility-gated snapshot read, without a global refresh. */
 async function readSnapshotOnForeground(snapshot: ConsoleApi["snapshot"]) {
@@ -138,7 +140,8 @@ describe("direct editing and the save bar", () => {
     expect(f.command).not.toHaveBeenCalled();
     await user.click(save());
     await waitFor(() => expect(f.operations).toEqual(["user_policy_publish"]));
-    expect(f.published[0]).toMatchObject({ expectedRevision: 2, commandId: expect.any(String) });
+    expect(f.published[0]).toMatchObject({ commandId: expect.any(String) });
+    expect(f.published[0]).not.toHaveProperty("expectedRevision");
     // Only the changed family note is published: no profiles table and no card.
     expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("annotationChanges");
@@ -227,28 +230,23 @@ describe("direct editing and the save bar", () => {
     expect(f.published[2]).toEqual(f.published[0]);
   });
 
-  it("keeps a conflicting draft and offers a deliberate reload or discard", async () => {
-    const f = fixture({ publish: ["conflict"] });
+  it("publishes a local note over a concurrent note and rereads the saved value", async () => {
+    const f = fixture();
     const user = userEvent.setup();
     await openBuddy(f.api, user);
     await user.clear(note());
-    await user.type(note(), "基于 V2 的草稿");
-    await user.click(save());
-    const banner = await waitFor(() => { const found = conflictNotice(); expect(found).toBeTruthy(); return found!; });
-    expect(within(banner).getByText(/设置已更新/)).toBeTruthy();
-    expect(note().value).toBe("基于 V2 的草稿");
-    expect(f.operations).toEqual(["user_policy_publish"]);
-    // Deliberate reload adopts the latest publication.
-    await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载 V3；请核对后保存。");
-    expect(note().value).toBe("他人发布的备注 V3");
-    await user.type(note(), "（复核）");
+    await user.type(note(), "我的备注");
+    f.setSnapshot({ ...f.snapshot(), familyAnnotations: [flashNote("其他窗口的备注")] });
+    await readSnapshotOnForeground(f.api.snapshot);
+    expect(note().value).toBe("我的备注");
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(f.published.at(-1)).toMatchObject({ expectedRevision: 3 });
+    expect(f.published).toHaveLength(1);
+    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "我的备注" }]);
+    expect(note().value).toBe("我的备注");
   });
 
-      it("refreshes program directory facts on discovery without uploading a draft", async () => {
+  it("refreshes program directory facts on discovery without uploading a draft", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -268,49 +266,17 @@ describe("direct editing and the save bar", () => {
     expect(saveBar()).toBeNull();
   });
 
-  it("keeps a conflicting draft at its own revision when discovery finds another value", async () => {
-    const f = fixture({}, { discoveryNote: "他人发现期间发布" });
+  it("keeps a local note during discovery when the recorded note also changes", async () => {
+    const f = fixture({}, { discoveryNote: "其他窗口的备注" });
     const user = userEvent.setup();
     await openBuddy(f.api, user);
-    await user.type(note(), "，我的草稿");
+    await user.type(note(), "，我的补充");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
     await screen.findByText("新增 1 个 buddy，默认不启用");
-    // Field-level three-way check: C was published for the same field our draft
-    // changes, so the draft keeps B and its own expectedRevision.
-    const banner = conflictNotice()!;
-    expect(banner).toBeTruthy();
-    expect(banner.textContent).toContain("已在 V");
-    expect(note().value).toBe("原备注，我的草稿");
-    expect(f.published).toHaveLength(0);
-    // Saving B under V3 is refused without an explicit conflict resolution.
+    expect(note().value).toBe("原备注，我的补充");
     await user.click(save());
-    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
-    expect(f.published).toHaveLength(0);
-    await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
-    await screen.findByText("已加载 V3；请核对后保存。");
-    expect(note().value).toBe("他人发现期间发布");
-  });
-
-  it("keeps a dirty old-version draft for CAS conflict when a poll finds a publication", async () => {
-    const f = fixture();
-    const user = userEvent.setup();
-    await openBuddy(f.api, user);
-    await user.type(note(), "，未保存");
-    // Another writer published V3; the foreground snapshot read only
-    // re-reads state and must not rebase, rewrite or discard the local draft.
-    f.setSnapshot({ ...f.snapshot(), tableRevision: 3, familyAnnotations: [flashNote("他人 V3", 2)] });
-    await readSnapshotOnForeground(f.api.snapshot);
-    const banner = await waitFor(() => { const found = conflictNotice(); expect(found).toBeTruthy(); return found!; });
-    expect(note().value).toBe("原备注，未保存");
-    expect(f.published).toHaveLength(0);
-    await user.click(save());
-    expect((await screen.findAllByText(/设置已更新/)).length).toBeGreaterThan(0);
-    expect(f.published).toHaveLength(0);
-    // Discard is the deliberate resolution; nothing was published implicitly.
-    await user.click(within(banner).getByRole("button", { name: "放弃修改" }));
-    await screen.findByText("草稿已放弃");
-    expect(f.operations).not.toContain("user_policy_publish");
-    expect(note().value).toBe("他人 V3");
+    await screen.findByText(PUBLISHED);
+    expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "原备注，我的补充" }]);
   });
 
   it("keeps an unsaved note while discovery refreshes the directory", async () => {
@@ -325,7 +291,7 @@ describe("direct editing and the save bar", () => {
     // The rebased draft publishes only the human patch at the refreshed revision.
     await user.click(save());
     await screen.findByText(PUBLISHED);
-    expect(f.published[0]).toMatchObject({ expectedRevision: 3 });
+    expect(f.published[0]).not.toHaveProperty("expectedRevision");
     expect(f.published[0].familyAnnotationChanges).toEqual([{ ...flashFamily, text: "原备注，保留的备注" }]);
     expect(f.published[0]).not.toHaveProperty("profiles");
   });

@@ -19,7 +19,7 @@ NONCE = 'g' * 32
 def stopped_answer(claim, *, profile_id=PROFILE_ID):
     """A deterministic native receipt, with each required fact explicit."""
     document = claim['decisionInput']
-    return {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'tableRevision': document['tableRevision'],
+    return {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select',
             'requested': document['profile'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
             'zeroToolVerified': True,
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
@@ -48,28 +48,24 @@ class SingleRouterClaimTests(DecisionTestCase):
         response = self.claim_route(board, request)
         self.assertIsNone(response['claim'])
         view = self.decision(board, request['decisionId'])
-        changed_identity = code in ('router-not-published', 'router-incomplete')
-        unavailable = code in ('router-no-tool-unsupported', 'router-review-unsupported', 'router-quota-exhausted')
-        expected_code = 'router-profile-changed' if changed_identity else 'router-unavailable' if unavailable else code
-        expected_status = 'stale' if code == 'router-configuration-changed' else 'needs-host'
-        self.assertEqual(view['status'], expected_status)
+        unavailable = code in ('router-not-published', 'router-incomplete', 'router-no-tool-unsupported',
+                               'router-review-unsupported', 'router-quota-exhausted')
+        expected_code = 'router-unavailable' if unavailable else code
+        self.assertEqual(view['status'], 'needs-host')
         self.assertEqual(view['output']['code'], expected_code)
         self.assertEqual(view['input'], frozen['input'])
         self.assertEqual(view['requested'], frozen['requested'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers').fetchone()[0], 0)
             event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind=?",
-                                                  ('decision.stale' if expected_status == 'stale' else 'decision.needs_host',)).fetchone()[0])
+                                                  ('decision.needs_host',)).fetchone()[0])
             self.assertEqual(event['errorCode'], expected_code)
             failures = [json.loads(row[0]) for row in connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'")]
             if unavailable:
                 self.assertEqual([entry['code'] for entry in failures], [code])
-            elif changed_identity or code == 'router-configuration-changed':
-                self.assertEqual(failures, [])
         self.readonly_start.assert_not_called()
 
-    def test_setting_revision_identity_mode_and_budget_changes_never_refresh_claim(self):
+    def test_settings_edits_do_not_replace_the_queued_claim_input(self):
         for settings in ({'routerProfileIds': [SECOND_PROFILE_ID]}, {'defaultRoutingMode': 'fast'},
                          {'routingBudget': 'brief'}):
             with self.subTest(settings=settings):
@@ -78,18 +74,22 @@ class SingleRouterClaimTests(DecisionTestCase):
                 request = self.request(board)
                 frozen = self.decision(board, request['decisionId'])
                 self.publish_user_patch(board, request_id='change', command_id='change', configuration=settings)
-                self.assert_unclaimed(board, request, 'router-configuration-changed', frozen)
+                claimed = self.claim_route(board, request)['claim']
+                self.assertIsNotNone(claimed)
+                self.assertEqual(claimed['decisionInput'], frozen['input'])
                 board.close()
                 self._stack.remove(board)
 
-    def test_published_router_identity_drift_is_not_a_different_family_claim(self):
+    def test_published_router_identity_edit_keeps_the_frozen_claim(self):
         board = self.board()
         self.seed(board)
         request = self.request(board)
         frozen = self.decision(board, request['decisionId'])
         with board.store.db.write() as connection:
             connection.execute('UPDATE evaluation_profiles SET model=? WHERE profile_id=?', ('deepseek-v4-pro', PROFILE_ID))
-        self.assert_unclaimed(board, request, 'router-profile-changed', frozen)
+        claimed = self.claim_route(board, request)['claim']
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed['decisionInput'], frozen['input'])
 
     def test_profile_removal_incomplete_disabled_and_unavailable_are_specific_boundaries(self):
         for sql, code in (("DELETE FROM evaluation_profiles WHERE profile_id=?", 'router-not-published'),
@@ -138,7 +138,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,updated_revision,created_at,updated_at) VALUES(?,?,?,1,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
                                (PROFILE['adapter'], PROFILE['provider'], PROFILE['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -162,7 +162,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,updated_revision,created_at,updated_at) VALUES(?,?,?,1,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
@@ -300,20 +300,19 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.readonly_start.assert_not_called()
         self.input_prepare.assert_not_called()
 
-    def test_claim_reader_attempt_and_started_event_roll_back_together(self):
+    def test_claim_attempt_and_started_event_roll_back_together(self):
         board = self.board()
         self.seed(board)
         request = self.request(board)
         original = board.store.decisions._mark_running
         def failed_mark(*args, **kwargs):
             original(*args, **kwargs)
-            raise BoardError('fixture-failure', 'fail after reader and decision binding')
+            raise BoardError('fixture-failure', 'fail after decision binding')
         with patch.object(board.store.decisions, '_mark_running', side_effect=failed_mark):
             with self.assertRaises(BoardError):
                 self.claim_route(board, request)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers').fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.started'").fetchone()[0], 0)
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'queued')
@@ -340,7 +339,6 @@ class SingleRouterClaimTests(DecisionTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.completed'").fetchone()[0], 0)
             self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM evaluation_readers WHERE released_at IS NULL').fetchone()[0], 0)
 
     def test_cached_qualification_loss_does_not_invalidate_an_effectively_valid_answer(self):
         board = self.board()

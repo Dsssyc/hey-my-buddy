@@ -42,9 +42,9 @@ def current(db):
 
 
 def _profile_content(row):
-    # Reading provenance and revision stamps do not change a buddy's facts.
+    # Reading provenance does not change a buddy's facts.
     return {key: row[key] for key in row.keys()
-            if key not in ('source', 'created_revision', 'updated_revision')}
+            if key != 'source'}
 
 
 def record(evaluation, discovered, observation_id=None, *, health_generation=None):
@@ -72,11 +72,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         now = evaluation._now()
         duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
         db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,discovered_at,source,harness_version,provider_version,payload_json,created_at) VALUES(?,?,?,?,?,?,?)', (discovery_id, now, payload['source'], payload.get('harnessVersion'), payload.get('providerVersion'), canonical_json(payload), now))
-        revision = int(evaluation._state(db)['table_revision']) + 1
         before = {row['profile_id']: _profile_content(row)
                   for row in db.execute('SELECT * FROM evaluation_profiles')}
         pending_before = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
-        applied, stale, provided_profiles = [], [], 0
+        applied, stale = [], []
         transitions = []
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
                               TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
@@ -188,7 +187,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 existing_row = db.execute('SELECT adapter,provider,model,effort FROM evaluation_profiles WHERE profile_id=?', (p['profileId'],)).fetchone()
                 if existing_row and tuple(existing_row) != tuple(p[key] for key in ('adapter', 'provider', 'model', 'effort')):
                     raise BoardError('CATALOG_INVALID', 'A native profile ID collided with a different execution identity', profileId=p['profileId'])
-                db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason,created_revision,updated_revision) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason'], revision, revision))
+                db.execute('INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?) ON CONFLICT(profile_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['profileId'], p['label'], p['adapter'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason']))
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
             # recovers the family, clears its first absence and says so once.
             for family in families:
@@ -206,29 +205,24 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                         transition['pendingSince'] = since
                     transitions.append(transition)
             _write_pending_map(db, name, pending)
-            provided_profiles += len(entries)
         table_changed = False
         for row in db.execute('SELECT * FROM evaluation_profiles').fetchall():
             if before.get(row['profile_id']) != _profile_content(row):
                 table_changed = True
-                db.execute('UPDATE evaluation_profiles SET updated_revision=? WHERE profile_id=?',
-                           (revision, row['profile_id']))
         pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY adapter,provider,model')]
         table_changed = table_changed or pending_before != pending_after
         active_count = db.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1').fetchone()[0]
         if active_count > 200:
             raise BoardError('CATALOG_LIMIT', 'The current native profile set exceeds 200 configurations; no entries were silently dropped')
         if table_changed:
-            db.execute('UPDATE evaluation_state SET table_revision=?,updated_at=? WHERE id=1', (revision, now))
-            db.execute('INSERT INTO evaluation_revisions(revision,kind,actor,counts_json,created_at) VALUES(?,?,?,?,?)', (revision, 'catalog', 'native-discovery', canonical_json({'profiles': provided_profiles, 'observationId': observation_id, 'provided': ['catalog']}), now))
-        actual_revision = int(evaluation._state(db)['table_revision'])
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'tableRevision': actual_revision, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'profiles': CatalogView.from_payload(payload).proposed_profiles(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
+            db.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
+        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'profiles': CatalogView.from_payload(payload).proposed_profiles(), 'appliedAdapters': applied, 'staleAdapters': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
         db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')
-            evaluation.board._append_event(db, kind, revision=actual_revision, payload=transition)
+            evaluation.board._append_event(db, kind, payload=transition)
         if table_changed:
-            evaluation.board._append_event(db, 'evaluation.catalog_discovered', revision=actual_revision, payload={'discoveryId': discovery_id, 'observationId': observation_id, 'appliedAdapters': applied, 'staleAdapters': stale})
+            evaluation.board._append_event(db, 'evaluation.catalog_discovered', payload={'discoveryId': discovery_id, 'observationId': observation_id, 'appliedAdapters': applied, 'staleAdapters': stale})
         head = evaluation.board._head_of(db)
     if table_changed:
         evaluation.board._notify(head)
@@ -275,5 +269,4 @@ def profiles(evaluation, params):
         families = {(value['adapter'], value['provider'], value['model']) for value in values}
         return {'profiles': values, **user_policy.policy_view(db, ids),
                 'modelConcurrency': evaluation.board.model_capacity_rows(db, families),
-                'tableRevision': int(evaluation._state(db)['table_revision']),
                 'nextCursor': rows[limit - 1]['profile_id'] if len(rows) > limit else None}

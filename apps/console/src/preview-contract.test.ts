@@ -121,7 +121,6 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
       const snapshot: Snapshot = await api.snapshot();
       const harnesses = snapshotHarnesses(snapshot);
       outcome.facts = {
-        tableRevision: snapshot.tableRevision,
         configuration: snapshot.configuration,
         // The slim snapshot carries the server's board-wide pending count;
         // full execution records stay on the paginated tasks read.
