@@ -104,10 +104,10 @@ def outcome(case):
     if case == "assistance":
         disposition = "assistance"
         request = {"summary": "Need helper", "attempted": "Inspected source", "neededWork": "Check dependency",
-                   "expectedArtifacts": [], "acceptance": "Dependency verified"}
+                   "expectedArtifacts": [], "acceptance": "Dependency verified", "suggestedProfileId": None}
     if case == "completed-request":
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
-                   "expectedArtifacts": [], "acceptance": "Already complete"}
+                   "expectedArtifacts": [], "acceptance": "Already complete", "suggestedProfileId": None}
     summary = "fixture work completed"
     if case == "long-summary-citation":
         summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
@@ -135,7 +135,11 @@ def main():
                 target[key] = value
     for index, argument in enumerate(sys.argv[:-1]):
         if argument == "-c":
-            merge(native_config, tomllib.loads(sys.argv[index + 1]))
+            key, _, literal = sys.argv[index + 1].partition("=")
+            patch = tomllib.loads("value = " + literal)["value"]
+            for segment in reversed(key.split(".")):
+                patch = {segment: patch}
+            merge(native_config, patch)
     for raw in sys.stdin:
         req = json.loads(raw)
         if "id" not in req:
@@ -242,6 +246,16 @@ def main():
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)
+            if case in ("schema-failure", "long-schema-failure"):
+                turn = {"id": turn_id, "status": "failed", "items": [], "error": {
+                    "message": "Invalid schema: required is missing suggestedProfileId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,
+                    "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 400}},
+                    "additionalDetails": "invalid_request_error / invalid_json_schema",
+                    "unrelated": "do not retain this field"}}
+                send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
+                state["threads"][thread_id]["turns"].append(turn)
+                write_state(state)
+                continue
             if case == "hang":
                 # Only the hang scenario records an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
@@ -339,7 +353,7 @@ def main():
             status = "failed" if case in ("failed", "approval-failed", "quota-failure") else "completed"
             turn = {"id": turn_id, "status": status, "items": [] if case == "no-final" else [item]}
             if case == "quota-failure":
-                turn["error"] = {"message": "provider wording that must never be retained",
+                turn["error"] = {"message": "native usage limit exceeded",
                                  "codexErrorInfo": "usageLimitExceeded"}
             send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})
             state["threads"][thread_id]["turns"].append(turn)

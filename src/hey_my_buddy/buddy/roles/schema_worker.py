@@ -14,7 +14,8 @@ from .turn_io import validate_outcome
 from .prompts import worker_prompt
 
 
-def outcome_schema(*, summary_description: str | None = None, suggested_profile: bool = False) -> dict:
+def outcome_schema(*, summary_description: str | None = None, suggested_profile: bool = False,
+                   require_suggested_profile: bool = False) -> dict:
     request = {
         "type": "object", "additionalProperties": False,
         "required": ["summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"],
@@ -25,6 +26,8 @@ def outcome_schema(*, summary_description: str | None = None, suggested_profile:
     }
     if suggested_profile:
         request["properties"]["suggestedProfileId"] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+        if require_suggested_profile:
+            request["required"].append("suggestedProfileId")
     summary = {"type": "string"}
     if summary_description is not None:
         summary["description"] = summary_description

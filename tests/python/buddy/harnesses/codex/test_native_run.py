@@ -190,6 +190,46 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.native_identity.session_id, "thread-1")
         self.assertEqual(result.tool_evidence.value["toolCalls"], 0)
 
+    def test_thread_scoped_unknown_notification_is_retained_without_stopping_fast_call(self):
+        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        result = self.fast_run("thread-notification", correction)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(correction.stop_reason)
+        facts = native_run.native_evidence(result)["threadNotifications"]
+        self.assertEqual(facts, {"countsByType": {"thread/futureNotification": 1}, "total": 1})
+
+    def test_explicit_foreign_identity_is_refused_with_method_in_message(self):
+        # A known method isolates the identity guard from the still-pending
+        # batch 4 rule that refuses unknown turn-scoped methods.
+        for case, text, method in (("foreign-turn", "Foreign native turn", "thread/status/changed"),
+                                   ("foreign-thread", "Unbound native event", "thread/futureNotification")):
+            with self.subTest(case=case):
+                correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+                result = self.fast_run(case, correction)
+                self.assertEqual(result.end.reason_code, "invalid-native-result")
+                self.assertIn(text, result.end.message)
+                self.assertIn(method, result.end.message)
+                self.assertLessEqual(len(result.end.message.encode()), 512)
+
+    def test_fast_failed_turn_retains_native_error_in_public_evidence(self):
+        correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
+        result = self.fast_run("native-failure", correction)
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertEqual(result.native_error.value["error"]["message"], "Native request failed: invalid_json_schema")
+        self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
+
+    def test_foreign_turn_refusal_bounds_multibyte_method_name(self):
+        from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
+        state = {"started": False, "completed": None, "final": None}
+        carrier = native_run._FastProtocol("thread-1", "turn-1", state,
+                                           TurnEvidence("thread-1", "turn-1"), native_run._RunState())
+        with self.assertRaises(CodexProtocolError) as caught:
+            carrier({"method": "未知通知" * 1000,
+                     "params": {"threadId": "thread-1", "turn": {}, "turnId": "other-turn"}})
+        self.assertEqual(caught.exception.code, "invalid-native-result")
+        self.assertIn("未知通知", str(caught.exception))
+        self.assertLessEqual(len(str(caught.exception).encode()), 512)
+
     def test_native_usage_survives_corrections_and_reaches_the_fast_receipt(self):
         from hey_my_buddy.buddy.roles.run_execution import _fast_result
         for case, input_tokens, cached_tokens, output_tokens, completeness in (
@@ -446,6 +486,28 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
+    def test_review_cli_permission_table_preserves_dots_spaces_and_quotes_in_checkout(self):
+        import tomllib
+        self.cwd = self.base / '.managed worktree' / 'space "quote"' / 'checkout'
+        self.cwd.mkdir(parents=True)
+        request = self.request(tool_scope="read", output_schema=REVIEW_SCHEMA, prompt="Review")
+        prep = native_run._prepare(request, "review")
+        pairs = [prep.command[index + 1].split("=", 1)
+                 for index, value in enumerate(prep.command[:-1]) if value == "-c"]
+        self.assertEqual({key for key, _ in pairs},
+                         {"web_search", "approval_policy", "default_permissions", "permissions.buddy-router"})
+        profile = tomllib.loads("value = " + dict(pairs)["permissions.buddy-router"])["value"]
+        expected = tomllib.loads(native_run.read_only_config(str(self.cwd)))["permissions"]["buddy-router"]
+        self.assertEqual(profile, expected)
+        self.assertEqual(profile["filesystem"][str(self.cwd.resolve())], "read")
+        result = self.review_run("ok")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+
+    def test_review_failed_turn_retains_native_error_in_public_evidence(self):
+        result = self.review_run("schema-failure")
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertIn("suggestedProfileId", result.native_error.value["error"]["message"])
+        self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
     def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
         self.set_case("readonly-repair")
         prompt = "Select from the frozen packet"
@@ -556,6 +618,26 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_native_failed_completion_keeps_error_attribution_without_quota_guess(self):
+        from hey_my_buddy.buddy.roles.run_execution import _worker_facts
+        result = self.worker_run("schema-failure")
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertIsNone(result.native_failure)
+        failure = result.native_error.value
+        self.assertEqual(failure["nativeThreadId"], result.native_identity.session_id)
+        self.assertEqual(failure["nativeTurnId"], result.native_identity.turn_id)
+        self.assertEqual(failure["error"]["message"], "Invalid schema: required is missing suggestedProfileId")
+        self.assertEqual(failure["error"]["codexErrorInfo"], {"httpConnectionFailed": {"httpStatusCode": 400}})
+        self.assertNotIn("unrelated", failure["error"])
+        self.assertEqual(_worker_facts(result)["nativeFailure"], failure)
+
+    def test_multibyte_native_error_text_is_bounded_and_marks_truncation(self):
+        result = self.worker_run("long-schema-failure")
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        error = result.native_error.value["error"]
+        self.assertLessEqual(len(error["message"].encode()), 4096)
+        self.assertIs(error["messageTruncated"], True)
+        self.assertNotIn("\ufffd", error["message"])
     def test_completed_worker_turn_reports_checkpoint_binding_and_activity(self):
         result = self.worker_run("ok")
         self.assertEqual(result.end.status, "ok", result.end.message)

@@ -76,6 +76,7 @@ from ..run_contract import (
     MAX_UNKNOWN_EVENT_TYPES,
     MAX_VALUE_BYTES,
     NativeFailurePackage,
+    NativeErrorRecord,
     OptionalFrozenJsonAt,
     PolicyFact,
     ResultConfiguration,
@@ -141,20 +142,28 @@ class _RunFacts:
 
     def __init__(self):
         self.unknown_counts: dict[str, int] = {}
+        self.thread_notifications: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
         self.dirty = False
 
     def note_unknown(self, label: object) -> None:
+        self._note_count(self.unknown_counts, label)
+
+    def note_thread_notification(self, label: object) -> None:
+        self._note_count(self.thread_notifications, label)
+
+    @staticmethod
+    def _note_count(counts: dict[str, int], label: object) -> None:
         name = label if isinstance(label, str) and re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label) else "unknown"
-        if name not in self.unknown_counts and len(self.unknown_counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
+        if name not in counts and len(counts) >= MAX_UNKNOWN_EVENT_TYPES - 1:
             # The public result carries at most MAX_UNKNOWN_EVENT_TYPES distinct
             # types; the reserved residual name holds one of those slots, so
             # beyond MAX-1 real types further distinct types merge into it and
             # the total stays exact, with no occurrence silently dropped. The
             # observer's live mapping reads the same bounded dict.
             name = _UNLISTED_UNKNOWN_TYPES
-        self.unknown_counts[name] = self.unknown_counts.get(name, 0) + 1
+        counts[name] = counts.get(name, 0) + 1
 
     def note_marker(self) -> None:
         self.markers += 1
@@ -164,6 +173,8 @@ class _RunFacts:
                 "toolMarkerFrames": self.markers,
                 "unknownEvents": {"countsByType": dict(self.unknown_counts),
                                   "total": sum(self.unknown_counts.values())},
+                "threadNotifications": {"countsByType": dict(self.thread_notifications),
+                                        "total": sum(self.thread_notifications.values())},
                 "deniedInteractions": len(self.denied)}
 
 
@@ -202,7 +213,10 @@ class _Classifier:
                                         or method.startswith("rawResponseItem/")):
             return self._tool_shaped(method, params)
         if method not in _KNOWN_METHODS:
-            facts.note_unknown(method if isinstance(method, str) else "unknown-method")
+            if isinstance(params, dict) and isinstance(params.get("threadId"), str) and _event_turn(params) is None:
+                facts.note_thread_notification(method)
+            else:
+                facts.note_unknown(method if isinstance(method, str) else "unknown-method")
             return True
         if method in ("item/started", "item/updated", "item/completed"):
             return self._item(params)
@@ -311,6 +325,7 @@ class _RunState:
     usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
     quota: dict | None = None
     quota_failure: dict | None = None
+    native_error: dict | None = None
     capture: dict | None = None
     native_turn_facts: dict | None = None
     #: The review thread/start receipt as the native side actually answered it,
@@ -405,7 +420,7 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
         policy = (tomllib.loads(read_only_config(request.cwd)) if mode == "review"
                   else {"web_search": "disabled", "approval_policy": "never"})
         for key, value in _config_overrides(policy).items():
-            command.extend(("-c", key + "=" + json.dumps(value)))
+            command.extend(("-c", key + "=" + value))
     return _Preparation(command=command, environment=environment, native_root=native_root,
                         invocation_root=invocation_root,
                         stderr_path=invocation_root / _NATIVE_STDERR_FILE,
@@ -648,14 +663,18 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     return thread_id
 
 
-def _config_overrides(config: dict, prefix: str = "") -> dict:
-    overrides = {}
-    for key, value in config.items():
-        name = prefix + (key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key))
-        if isinstance(value, dict):
-            overrides.update(_config_overrides(value, name + "."))
-        else:
-            overrides[name] = value
+def _toml_value(value) -> str:
+    if isinstance(value, dict):
+        return "{ " + ", ".join(json.dumps(key, ensure_ascii=False) + " = " + _toml_value(item)
+                                for key, item in value.items()) + " }"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _config_overrides(config: dict) -> dict[str, str]:
+    """Filesystem paths stay inside whole permission-profile table values."""
+    overrides = {key: _toml_value(value) for key, value in config.items() if key != "permissions"}
+    for name, profile in config.get("permissions", {}).items():
+        overrides["permissions." + name] = _toml_value(profile)
     return overrides
 
 
@@ -802,12 +821,15 @@ class _FastProtocol:
     observer, never raised here.
     """
 
-    def __init__(self, thread_id: str, turn_id: str, state: dict, evidence: TurnEvidence):
+    def __init__(self, thread_id: str, turn_id: str, state: dict, evidence: TurnEvidence,
+                 run_state: _RunState):
         self.thread_id, self.turn_id, self.state = thread_id, turn_id, state
         self.evidence = evidence
+        self.run_state = run_state
 
     def __call__(self, message: dict) -> None:
         method = message.get("method")
+        label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
         params = message.get("params")
         if method in ("account/rateLimits/updated", "remoteControl/status/changed", "deprecationNotice"):
             return
@@ -816,36 +838,39 @@ class _FastProtocol:
             if thread.get("id") == self.thread_id:
                 return
         if not isinstance(params, dict) or params.get("threadId") != self.thread_id:
-            raise CodexProtocolError("invalid-native-result", "Unbound native event in no-tool stream")
+            raise CodexProtocolError("invalid-native-result", f"Unbound native event in no-tool stream ({label})")
+        event_turn = _event_turn(params)
+        if event_turn is not None and event_turn != self.turn_id:
+            raise CodexProtocolError("invalid-native-result", f"Foreign native turn in no-tool stream ({label})")
+        _capture_native_error(self.run_state, message, self.thread_id, self.turn_id)
         if method == "error":
             if params.get("willRetry") is True:
                 return
-            raise CodexProtocolError("native-turn-failed", "Native no-tool turn reported an error")
+            raise CodexProtocolError("native-turn-failed", f"Native no-tool turn reported an error ({label})")
+        if event_turn is None:
+            return
         if method == "thread/tokenUsage/updated":
             self.evidence.observe(message)
             return
         if method in ("thread/status/changed", "thread/settings/updated", "warning"):
             return
-        turn = params.get("turn") if isinstance(params, dict) else None
-        event_turn = turn.get("id") if isinstance(turn, dict) else params.get("turnId")
-        if event_turn != self.turn_id:
-            raise CodexProtocolError("invalid-native-result", "Foreign native turn in no-tool stream")
+        turn = params.get("turn")
         if method in ("turn/started", "turn/completed"):
             self.evidence.observe(message)
         if method == "turn/started":
             if self.state["started"]:
-                raise CodexProtocolError("invalid-native-result", "Duplicate native turn start")
+                raise CodexProtocolError("invalid-native-result", f"Duplicate native turn start ({label})")
             self.state["started"] = True
         elif method in ("item/started", "item/updated", "item/completed"):
             item = params.get("item") if isinstance(params, dict) else None
             if method == "item/completed" and isinstance(item, dict) \
                     and item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
                 if self.state["final"] is not None:
-                    raise CodexProtocolError("invalid-native-result", "Multiple final answers")
+                    raise CodexProtocolError("invalid-native-result", f"Multiple final answers ({label})")
                 self.state["final"] = item
         elif method == "turn/completed":
             if self.state["completed"] is not None:
-                raise CodexProtocolError("invalid-native-result", "Duplicate native turn completion")
+                raise CodexProtocolError("invalid-native-result", f"Duplicate native turn completion ({label})")
             self.state["completed"] = turn
 
 
@@ -1076,6 +1101,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     evidence = TurnEvidence(thread_id, turn_id)
 
     def carrier(message: dict) -> None:
+        _capture_native_error(state, message, thread_id, turn_id)
         observed = evidence.observe(message)
         if observed:
             activity.write(evidence, observed[0], observed[1])
@@ -1098,7 +1124,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
         state.checkpoint = _checkpoint(request, evidence)
         state.event_count = evidence.event_seq
         state.token_usage = attempt_token_usage(evidence)
-    state.quota = _observe_quota(connection, evidence)
     state.quota = _observe_quota(connection, evidence)
     failure_code = turn_failure_code(native_turn)
     if failure_code is not None:
@@ -1166,7 +1191,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         evidence = TurnEvidence(thread_id, turn_id)
         state.usage_rounds.append(evidence)
         if mode == "fast":
-            chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence))
+            chain.bind(_FastProtocol(thread_id, turn_id, fast_state, evidence, state))
         else:
 
             def carrier(message: dict, _evidence=evidence, _turn_id=turn_id, _round=round_index) -> None:
@@ -1176,6 +1201,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                     return
                 if state.capture is not None:
                     _capture_frame(state.capture, message)
+                _capture_native_error(state, message, thread_id, _turn_id)
                 observed = _evidence.observe(message)
                 if observed:
                     activity.write(_evidence, observed[0], observed[1], model_turns_base=_round,
@@ -1213,6 +1239,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
 
 def _fast_final_checks(fast_state: dict) -> str:
     final = fast_state["final"]
+    if (fast_state["completed"] or {}).get("status") in ("failed", "interrupted"):
+        raise CodexProtocolError("native-turn-failed", "Native no-tool turn did not complete (turn/completed)")
     if (not fast_state["started"] or (fast_state["completed"] or {}).get("status") != "completed"
             or not isinstance(final, dict) or not isinstance(final.get("text"), str)
             or not isinstance(final.get("id"), str)):
@@ -1342,12 +1370,61 @@ _tool_evidence_package = shape_guard(ToolEvidencePackage)
 _json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
 _usage_package = shape_guard(UsagePackage)
 _quota_package = shape_guard(NativeFailurePackage)
+_native_error_package = shape_guard(NativeErrorRecord)
 _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
 
 
 def _bounded(value: str | None, limit: int) -> str | None:
     return value if value is not None and len(value.encode()) <= limit else None
+
+
+def _truncate_utf8(value: str, limit: int) -> str:
+    return value.encode()[:limit].decode("utf-8", errors="ignore")
+
+
+def _event_turn(params: dict):
+    turn = params.get("turn")
+    if isinstance(turn, dict) and turn.get("id") is not None:
+        return turn["id"]
+    return params.get("turnId")
+
+
+def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_id: str) -> None:
+    """Retain only bound native error fields, separate from quota attribution."""
+    params = message.get("params")
+    if not isinstance(params, dict) or params.get("threadId") != thread_id:
+        return
+    event_turn = _event_turn(params)
+    if event_turn is not None and event_turn != turn_id:
+        return
+    method = message.get("method")
+    if method == "turn/completed" and event_turn == turn_id:
+        error = (params.get("turn") or {}).get("error")
+    elif method == "error" and params.get("willRetry") is not True:
+        error = params.get("error")
+    else:
+        return
+    if not isinstance(error, dict):
+        return
+    retained = {}
+    for key in ("message", "additionalDetails"):
+        value = error.get(key)
+        if isinstance(value, str):
+            retained[key] = _truncate_utf8(value, 4096)
+            if retained[key] != value:
+                retained[key + "Truncated"] = True
+    info = error.get("codexErrorInfo")
+    if isinstance(info, (str, dict)):
+        if len(canonical_json(info).encode()) <= 2048:
+            retained["codexErrorInfo"] = info
+        else:
+            retained["codexErrorInfoTruncated"] = True
+    if retained:
+        state.native_error = {"source": "codex/app-server-turn-error", "method": method,
+                              "nativeThreadId": thread_id, "error": retained}
+        if event_turn == turn_id:
+            state.native_error["nativeTurnId"] = turn_id
 
 
 def _checked_configuration(request: RunRequest, state: _RunState, mode: str) -> ResultConfiguration:
@@ -1443,6 +1520,9 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
                state.review_receipt)
     if state.checkpoint is not None:
         retain("native-checkpoint", invocation_root / "native-checkpoint.json", state.checkpoint)
+    if facts.thread_notifications:
+        retain("thread-notifications", invocation_root / "thread-notifications.json",
+               {"countsByType": facts.thread_notifications, "total": sum(facts.thread_notifications.values())})
     return tuple(refs)
 
 
@@ -1505,6 +1585,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         activity=_activity_package(activity.last_payload),
         usage=_usage_package(state.token_usage),
         native_failure=_quota_package(state.quota_failure),
+        native_error=_native_error_package(state.native_error),
         last_assistant_message=_message_package(_last_assistant_message(state.checkpoint)),
         continuation=_continuation_facts(state, mode),
         stop_evidence=StopEvidence(
@@ -1690,6 +1771,11 @@ def native_evidence(result: RunResult) -> dict:
     absent, never filled with a placeholder.
     """
     projection: dict = {}
+    if result.native_error is not None:
+        projection["nativeFailure"] = result.native_error.value
+    notifications = _read_evidence_ref(result, "thread-notifications")
+    if notifications is not None:
+        projection["threadNotifications"] = notifications
     receipt = _read_evidence_ref(result, "review-thread-receipt")
     if isinstance(receipt, dict):
         projection["nativePolicy"] = receipt

@@ -21,7 +21,7 @@ D 类四处删除：`_initialize` 的 ChatGPT-only 与固定 openai 条件、`_c
 | `auth.json` 链接；私有 `config.toml`、`models_cache.json` 读取与 `no-tool-models.json` 写入 | 删除 | 私有主目录及配置挑选 |
 | 关闭 apps、plugins、hooks、skills、用户指令、快照、browser、multi-agent、memories 等配置键 | 删除 | 无权替用户挑选其 harness 配置 |
 | `web_search=disabled`、`approval_policy=never` | 审阅/无工具通过原生 `-c` 保留 | 表达当前联网与审批权限，不写用户文件 |
-| 审阅的 `default_permissions=buddy-router` 与该 profile 的 filesystem/network map | 通过原生 `-c` 保留 | 当前只读/禁网权限表达；路径键使用 TOML 引号，不限制其他用户配置层 |
+| 审阅的 `default_permissions=buddy-router` 与该 profile 的 filesystem/network map | 通过原生 `-c` 保留 | 当前只读/禁网权限表达；整张 profile 是 TOML 内联表值，路径不进入点号键；不限制其他用户配置层 |
 | `initialize` 的 clientInfo；审阅/无工具 `experimentalApi` | 保留 | 原生连接身份及已有公开实验接口接线 |
 | `account/read(refreshToken=false)`；`config/read`；`model/list` 的分页/隐藏项参数 | 保留 | 无模型的原生事实读取；配置来自 app-server，不直接读取用户文件 |
 | Worker `thread/start`、`thread/resume` 的 cwd/model/modelProvider、serviceName、approvalPolicy、sandbox | 保留，modelProvider 用请求配置 | 绑定获配检出与请求配置、表达暂行权限；原生供应方回执单独记 checked 值，不因与 openai 不同拒绝 |
@@ -76,7 +76,7 @@ apiKey 登录的发现状态可确认，其他未知登录类型作为 unknown �
 
 ## 三项顺带修改
 
-Codex 的 NativeSchemaWorker 使用 `outcome_schema(suggested_profile=True)`，与 Claude 和 MCP schema 接受同一可空 `suggestedProfileId`；同步更新 Codex schema 固定摘要测试，其余三家的格式与提示词不变。
+Codex 的 NativeSchemaWorker 使用 `outcome_schema(suggested_profile=True, require_suggested_profile=True)`，suggestedProfileId 必填但可为空，满足 Codex 的严格结构化输出规则；其他 harness 仍沿用各自的可选字段契约。同步更新 Codex schema 固定摘要与递归严格对象测试，Worker 角色资源不改。
 
 原生提供 `thread/tokenUsage/updated`，原来的 fast carrier 将它忽略；现在由已有 TurnEvidence/attempt_token_usage 收集该回合增量，在多轮格式纠正时相加、排除累计历史和重复观察，并在某轮缺失时标为 partial。没有用量保持 None，EOF 排干阶段的新用量也纳入；fast 角色结果把通用 usage 包投影为规范化 tokenUsage。官方文档描述此原生事件，具体 last/total 算法沿用仓库已有的 Worker 实现；没有付费检查当前真实 Codex。
 
@@ -105,3 +105,79 @@ Host 的真实验收还应核对：用户第三方供应方可用，MCP/skill/�
 同时用指定解释器执行 `-m unittest buddy.harnesses.codex.test_codex buddy.harnesses.codex.test_no_tool_codex buddy.runtime.test_worker_sessions`，51 项、42.864 秒，未通过（42 个失败、16 个错误，含 subTest）；控制器无法建立 C-Two live endpoint，因而没有有效原生结果帧或确认停止，后续断言失败。没有改成 skip 或用模拟停止来掩盖它。Host 需重跑这三个文件，具体不可运行范围为 test_codex 的控制器生命周期用例、test_no_tool_codex.NoToolCodexTests 全类、test_worker_sessions.WorkerSessionTests.test_codex_list_accepts_actual_stopped_adapter_fixture；它们的三个原始测试缺陷已在相应测试与输出归属处修正，用量生产契约没有增加 totalTokens。
 
 此前 Host 在第一回合候选上报告前端 78 个文件、1119 项通过，完整 Python 216 个文件里 213 个通过，上述三个文件未过；这是 Host 提供的验收事实，不是本回合的复跑。
+
+## 第三回合：真实接口暴露的四处修正
+
+Host 在 `82638e50` 上报告完整 Python 3661 项、216 个文件与前端全量均通过，并用真实 codex-cli 0.162.1 经运行模块试了 Worker、快速与审阅三条路径；进程读用户自己的 Codex 目录和 skill，私有原生目录没有写入，Worker 会话写入用户会话库、快速路径没有会话文件，原生进程组确认消失。这些是 Host 提供的上一候选观察；审阅启动、Worker schema 和快速通知处理仍失败，所以不代表本次修正已经真实通过，本回合没有进行新的真实调用。
+
+### 权限参数：路径留在表值里
+
+根因是 `-c` 的键按点号拆分，不按 TOML 引号键解析；上一版把带点号的冻结路径放进键，即使加引号仍会拆坏。现在只传 `web_search`、`approval_policy`、`default_permissions` 等简单键和固定的 `permissions.buddy-router` 键，该 profile 的完整 filesystem/network 表作为一个 TOML 内联表值；动态路径从不出现在 `-c` 键里。只覆盖这一个运行所用的 profile，不替换其他用户权限 profile，不写配置文件。
+
+语法依据：[官方高级配置的单次覆盖](https://learn.chatgpt.com/docs/config-file/config-advanced#one-off-overrides-from-the-cli)规定 `--config/-c key=value`，值按 TOML 解析、点号用于嵌套键；本批将 TOML 表序列化为值的做法来自这条接口规则。具体形式是 `-c 'permissions.buddy-router={ "filesystem" = { ":root" = "deny", "<checkout>" = "read", ... }, "network" = { "enabled" = false } }'`，省略号仅为说明，执行时由源码生成完整表。字符串、引号、反斜线与 Unicode 都按 TOML 基本字符串规则编码；测试的冻结路径包含点号、空格和双引号。
+
+两份离线 app-server 夹具也修正为分别解析 CLI 键与 TOML 值，不再用 TOML 解析整条赋值去错误接受带引号的点号键；新增回归核对实际启动参数的键集合、内联表值及模拟 config/read 回读。
+
+### 严格 schema、失败事实与会话通知
+
+[官方结构化输出规则](https://developers.openai.com/api/docs/guides/structured-outputs#all-fields-must-be-required)要求对象的 properties 全部出现在 required，非必选内容用 null 表达，并关闭 additionalProperties。只有 Codex 选择 `require_suggested_profile=True`，将 suggestedProfileId 纳入 required，string/null 联合类型保留；Claude 的 schema 与摘要、ZCode/DSH 的 schema、Worker 角色资源都不变。递归回归遍历所有 object 节点而不是只检查 request，Codex 夹具的 assistance 请求也提供该字段的 null 值。
+
+原生错误事实使用已有 `RunResult.native_error`，不把 schema/HTTP 错误伪装成 `native_failure` 的额度归因；角色回执的 nativeFailure 与原生证据投影保留该事实。按 [App Server 的错误与完成事件](https://learn.chatgpt.com/docs/app-server#errors)读取本 thread/turn 的 turn/completed.error，或本 thread 的非重试 error 通知，只保留 message、additionalDetails 与 codexErrorInfo；文字分别最多 4096 UTF-8 字节，信息对象最多 2048 字节，截断/省略有标记，不保留无关字段。事实写明方法、原生会话，只有通知明确给出本回合标识时才附 nativeTurnId；显式外国回合不提供错误归因。Worker、审阅、快速三条路径均投影到同一原生错误字段，非额度错误仍不产生 quotaFailure；Worker 的重复额度读取同时减为一次。带错误的完成、HTTP 400 结构信息、非额度归因、中文加非 BMP 字符的安全截断都有回归。
+
+快速路径将“缺少回合标识”与“明确指向另一个回合”分开：同会话且没有回合标识的通知不会被当成外国回合，明确的外国 thread/turn 仍拒绝，FastProtocol 的拒绝消息附有方法名并限制字节数。未知的线程级通知在已有事实流中单独记为 threadNotifications，计数采用现有的类型上限与溢出桶，并以私有 thread-notifications 证据保存，避免原有 FastCorrection 将它们按 unknownEvents 拒绝；不保存通知的参数。工具事实、未知 turn-scoped 方法与其他 F 类规则不变，仍交批次 4；身份回归用已知方法单独测试，避免与尚未移除的未知回合事件规则混为一件事。
+
+核对同文件 Worker 与审阅：Worker carrier 委托 protocol.TurnEvidence.observe，它对缺少回合标识或外国标识返回 None，不会抛 Foreign native turn；审阅 carrier 允许缺少 params.turnId，最终也由 TurnEvidence 排除非本回合数据。它们没有同样的误拒绝，所以未增加归属拒绝；两者也能保留线程通知计数。新增快速回归验证同会话未知通知继续完成、明确外国身份拒绝且带方法名，以及超长多字节方法名的消息仍有界。
+
+### Host 无模型权限读回步骤
+
+在已获准读取用户 harness 配置的 Host 环境中，从候选源码根运行下面步骤，用 Host 选中的真实 codex 可执行文件及冻结检出替换两个占位参数；解释器与清环境规则同上。代码沿用本批的参数生成、环境白名单、连接与进程组收尾，只发送 initialize、initialized 通知及 config/read，不发送 account/read、model/list、thread/start 或 turn/start，也不创建任何私有 Codex 主目录；这是配置语法/回读检查，不是沙箱效果或真实回合的验收。本实现方没有运行这个真实 CLI 步骤。
+
+```sh
+PYTHONPATH=src:tests/python <provided-python> - '<codex-executable>' '<frozen-checkout>' <<'PY'
+import os
+import subprocess
+import sys
+import threading
+import time
+import tomllib
+from pathlib import Path
+from hey_my_buddy.buddy.harnesses.base import ProcessHandle
+from hey_my_buddy.buddy.harnesses.codex.config import read_only_config, policy_matches
+from hey_my_buddy.buddy.harnesses.codex.native_run import _config_overrides
+from hey_my_buddy.buddy.harnesses.codex.protocol import Connection
+from hey_my_buddy.buddy.harnesses.discovery import native_environment
+from hey_my_buddy.buddy.harnesses.native_support import halt_owned_group
+from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+
+cwd = str(Path(sys.argv[2]).resolve())
+expected = tomllib.loads(read_only_config(cwd))
+command = [sys.argv[1]]
+for key, value in _config_overrides(expected).items():
+    command.extend(('-c', key + '=' + value))
+process = owned_popen([*command, 'app-server', '--listen', 'stdio://'], cwd=cwd,
+                      env=native_environment(dict(os.environ), command=command),
+                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                      start_new_session=True, close_fds=True)
+handle = ProcessHandle(process, own_group=True, log_paths={})
+try:
+    connection = Connection(process, time.monotonic() + 15, threading.Event())
+    connection.call('initialize', {'clientInfo': {'name': 'hey_my_buddy', 'version': '0.30.0'}})
+    connection.send({'method': 'initialized', 'params': {}})
+    actual = connection.call('config/read', {'cwd': cwd, 'includeLayers': False})['config']
+    assert policy_matches(actual, expected)
+    profile = actual['permissions']['buddy-router']
+    filesystem = {key: value for key, value in profile['filesystem'].items() if value is not None}
+    assert filesystem == expected['permissions']['buddy-router']['filesystem']
+    assert profile['network']['enabled'] is False
+    print('Read-only filesystem/network, approval and search readback match')
+finally:
+    stopped, _ = halt_owned_group(process, handle, time.monotonic() + 5)
+    process.stdout.close()
+    assert stopped, 'Native process group stop is unconfirmed'
+    assert process.returncode == 0, f'Native app-server exit: {process.returncode}'
+PY
+```
+
+第三回合最终源码的可运行选择共 145 项，26.402 秒，`OK`；使用上述清环境命令与指定解释器，模块为 `buddy.harnesses.codex.test_native_run`、`buddy.harnesses.codex.test_codex_protocol`、`buddy.roles.test_schema_worker`、`buddy.roles.test_run_execution`、`buddy.roles.test_role_prompts`、`buddy.roles.test_registered_run_wiring.RegisteredDescriptionTests`、`buddy.roles.test_registered_run_wiring.NativeEvidenceProjectionTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexToolEventProjectionTests`。另外以 AST 解析确认上述 Host 脚本语法有效，RPC 调用只有 initialize 与 config/read；没有执行真实 CLI。`git diff --check` 通过。
+
+本回合未重复运行已确认受 C-Two 监听限制阻挡的 `buddy.harnesses.codex.test_codex` 控制器生命周期用例、`buddy.harnesses.codex.test_no_tool_codex.NoToolCodexTests`、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`；由 Host 在允许监听的环境复验，未增加 skip 或模拟停止。Host 在上一候选上的完整 Python 与前端通过是该候选的机械证据，不是第三回合源码的验收；真实配置读回、三种路径重跑与安装验收仍由 Host 在获得用户批准后完成。

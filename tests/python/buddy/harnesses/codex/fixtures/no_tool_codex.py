@@ -36,7 +36,11 @@ def main():
                 target[key] = value
     for index, argument in enumerate(sys.argv[:-1]):
         if argument == "-c":
-            merge(native_config, tomllib.loads(sys.argv[index + 1]))
+            key, _, literal = sys.argv[index + 1].partition("=")
+            patch = tomllib.loads("value = " + literal)["value"]
+            for segment in reversed(key.split(".")):
+                patch = {segment: patch}
+            merge(native_config, patch)
     for raw in sys.stdin:
         request = json.loads(raw)
         if "id" not in request:
@@ -85,7 +89,15 @@ def main():
                 send({'method':'thread/status/changed','params':{'threadId':'thread-1','status':{'type':'active'}}})
                 send({'method':'account/rateLimits/updated','params':{'rateLimits':{}}})
             send({"id": ident, "result": {"turn": {"id": turn_id}}})
+            if case in ("thread-notification", "foreign-turn", "foreign-thread"):
+                send({"method": "thread/status/changed" if case == "foreign-turn" else "thread/futureNotification", "params": {
+                    "threadId": "thread-foreign" if case == "foreign-thread" else "thread-1",
+                    **({"turnId": "turn-foreign"} if case == "foreign-turn" else {})}})
             event("turn/started", turn_id, turn={"id": turn_id})
+            if case == "native-failure":
+                event("turn/completed", turn_id, turn={"id": turn_id, "status": "failed", "items": [],
+                      "error": {"message": "Native request failed: invalid_json_schema", "codexErrorInfo": "badRequest"}})
+                continue
             if case == "hang":
                 time.sleep(60)
                 continue
