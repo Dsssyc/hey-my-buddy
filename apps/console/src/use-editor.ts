@@ -6,7 +6,7 @@ import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SA
 import type { AuthorityLatch } from "./console-session";
 import {
   changeCount as countChanges, configurationChanged as configurationDiffers,
-  draftDiffers, effectivePreferences, historyView, makeDraft, publication,
+  draftDiffers, historyView, makeDraft, publication,
   rebaseDraft, withHistory,
 } from "./draft";
 import type { HistoryEntries, UserPolicyPublication } from "./draft";
@@ -77,10 +77,10 @@ export function useEditor(
     const recorded = historyView(snapshot, currentHistory);
     if (!draft) return recorded;
     const edited = { ...recorded, profiles: draft.profiles,
-      familyPreferences: draft.familyPreferences, preferenceOverrides: draft.preferenceOverrides,
+      preferences: draft.preferences,
       familyAnnotations: draft.familyAnnotations, configuration: draft.configuration,
       modelConcurrency: draft.modelConcurrency };
-    return { ...edited, preferences: effectivePreferences(edited) };
+    return edited;
   }, [snapshot, draft, currentHistory]);
   const blocking = useMemo(() => baseline && draft ? blockingIssues(baseline, draft) : [], [baseline, draft]);
   const attention = useMemo(() => attentionIssues(view), [view]);

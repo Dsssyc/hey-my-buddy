@@ -67,8 +67,7 @@ function fixture() {
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: live,
     unavailableProfileCount: profiles.filter(p => !p.available).length,
- familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [],
- decisions: [],
+ familyAnnotations: [], preferences: [],  decisions: [],
 
     modelConcurrency: [],
     tasks: { pendingCount: 0 },
@@ -85,8 +84,7 @@ function fixture() {
       const slice = [...visible].sort((a, b) => a.profileId.localeCompare(b.profileId))
         .filter(p => p.profileId > after).slice(0, limit);
       const page: ProfilePage = {
-        profiles: slice, preferences: [], preferenceOverrides: [], familyPreferences: [],
-        familyAnnotations: [], modelConcurrency: [],
+        profiles: slice, preferences: [],         familyAnnotations: [], modelConcurrency: [],
         nextCursor: null,
       };
       return page;

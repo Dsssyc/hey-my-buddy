@@ -11,8 +11,7 @@ export type HarnessCandidate = {
  * One harness's recorded health. `ready` carries the chosen executable, its
  * version and where it came from; every other status carries the attempted
  * locations and a remedy. `manualPath` is the user's stored override (`null`
- * means automatic detection) and `revision` fences a concurrent change, so a
- * save is refused rather than overwriting a newer check.
+ * means automatic detection) and `revision` records its current generation.
  */
 export type HarnessHealth = {
   adapter: string;
@@ -147,24 +146,9 @@ export type Profile = {
   /** First recorded absence of a pending model, UTC ISO; absent otherwise. */
   pendingSince?: string | null;
 };
-/** A user preference mode; `none` exists only as an effort override. */
+/** A user's preference for one buddy; an absent row means no preference. */
 export type PreferenceMode = "prefer" | "pin" | "exclude";
-export type OverrideMode = PreferenceMode | "none";
-/**
- * Effective preference of one effort (schema 13 `effective_preferences` view):
- * the effort's override when it has one (a `none` override never appears
- * here), otherwise its family default. Read-only; the console never publishes it.
- */
-export type Preference = {
-  profileId: string;
-  mode: PreferenceMode;
-  reason: string;
-  source?: "override" | "family";
-};
-/** Family default preference, applied to every effort without an override. */
-export type FamilyPreference = ModelFamily & { mode: PreferenceMode; reason: string };
-/** One effort's override of its family default; `none` means explicitly no preference. */
-export type PreferenceOverride = { profileId: string; mode: OverrideMode; reason: string };
+export type Preference = { profileId: string; mode: PreferenceMode; reason: string };
 /** The family's human note. */
 export type FamilyAnnotation = ModelFamily & {
   text: string;
@@ -414,12 +398,8 @@ export type Snapshot = {
   configuration: Configuration | null;
   configurationError?: { code: string; message: string } | null;
   profiles: Profile[];
-  /** Effective preferences (read-only view); `source` names where each came from. */
+  /** Preferences for individual buddies. */
   preferences: Preference[];
-  /** Family default preferences, keyed by the exact adapter/provider/model tuple. */
-  familyPreferences: FamilyPreference[];
-  /** Per-effort overrides of the family default; `mode` may be `none`. */
-  preferenceOverrides: PreferenceOverride[];
   /** Family notes. */
   familyAnnotations: FamilyAnnotation[];
   /**
@@ -449,7 +429,7 @@ export type Snapshot = {
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
 export type Draft = Pick<
   Snapshot,
-  "profiles" | "familyPreferences" | "preferenceOverrides" | "familyAnnotations" | "configuration"
+  "profiles" | "preferences" | "familyAnnotations" | "configuration"
 > & {
   /**
    * User limit settings keyed by the exact family tuple. Occupancy (`active`)
@@ -464,11 +444,7 @@ export type ConsoleView = Omit<Snapshot, "modelConcurrency"> & {
 /** One page of retained profile identities, including unavailable history. */
 export type ProfilePage = {
   profiles: Profile[];
-  /** Effective preferences of the listed profiles. */
   preferences: Preference[];
-  /** Overrides and family rows for the listed profiles; absent reads as none. */
-  preferenceOverrides?: PreferenceOverride[];
-  familyPreferences?: FamilyPreference[];
   familyAnnotations?: FamilyAnnotation[];
   /** Concurrent-task entries for the families this page represents. */
   modelConcurrency: ModelConcurrencyEntry[];

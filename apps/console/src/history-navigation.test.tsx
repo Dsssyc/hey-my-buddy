@@ -1,10 +1,10 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Objectives } from "./Objectives";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
-import { objectiveTimelineFixture, OBSERVED_AT } from "./objective-fixtures";
+import { objectiveTimelineFixture } from "./objective-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { readFileSync } from "node:fs";
 
@@ -13,7 +13,7 @@ function snapshotFixture(): Snapshot {
     csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
 
     configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    profiles: [], preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+    profiles: [], preferences: [], familyAnnotations: [], decisions: [],
  modelConcurrency: [], tasks: { pendingCount: 0 },
     capabilities: {},
   };

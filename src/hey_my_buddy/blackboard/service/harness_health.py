@@ -153,14 +153,11 @@ class HarnessHealth:
         with self.board.db.read() as db:
             return [read_health(db, name) for name in HARNESSES]
 
-    def set_path(self, name, path, *, expected_revision=None):
+    def set_path(self, name, path):
         name = _name(name)
         if path is not None and (not isinstance(path, str) or len(path) > 4096 or not Path(path).expanduser().is_absolute()):
             raise BoardError('INVALID_ARGUMENT', 'path must be an absolute executable path, or null for automatic detection')
         with self.board.db.write() as db:
-            old = read_health(db, name)
-            if expected_revision is not None and expected_revision != old['revision']:
-                raise BoardError('REVISION_CONFLICT', 'Harness settings changed; reread before saving')
             db.execute("INSERT INTO harness_health(adapter,manual_path,revision) VALUES(?,?,1) ON CONFLICT(adapter) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
             from ..catalog.catalog import CATALOG_FACT_REASONS
             db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"

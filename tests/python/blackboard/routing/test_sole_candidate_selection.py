@@ -146,7 +146,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         [excluded] = decision["routingBasis"]["excludedProfiles"]
         self.assertEqual(excluded["profileId"], SECOND_PROFILE_ID)
         self.assertEqual(excluded["reason"], "excluded for this test")
-        self.assertEqual(excluded["source"], "override")
+        self.assertNotIn("source", excluded)
         self.assertEqual({key: excluded[key] for key in CONFIGURATION},
                          {key: SECOND_PROFILE[key] for key in CONFIGURATION})
         # A later preference change never rewrites the frozen basis.
@@ -180,9 +180,9 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         original = self.decision(board, request["decisionId"])
         self.assertEqual(original["reason"], SOLE_CANDIDATE_REASON)
         frozen = original["output"]["programSelection"]["preferences"]
-        self.assertEqual(frozen, [{"profileId": PROFILE_ID, "mode": "pin", "reason": "fixed by user", "source": "override"}])
+        self.assertEqual(frozen, [{"profileId": PROFILE_ID, "mode": "pin", "reason": "fixed by user"}])
         self.publish_user_patch(board, request_id="unpin", command_id="unpin",
-            preferenceChanges=[{"profileId": PROFILE_ID, "mode": "none"}])
+            preferenceChanges=[{"profileId": PROFILE_ID, "mode": None}])
         self.assertEqual(self.decision(board, request["decisionId"])["output"]["programSelection"]["preferences"], frozen)
 
 

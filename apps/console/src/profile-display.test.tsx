@@ -50,8 +50,6 @@ function catalogSnapshot(): Snapshot {
     },
     profiles: [flashOff, proMax],
     preferences: [],
-    familyPreferences: [],
-    preferenceOverrides: [],
 
     familyAnnotations: [],
 

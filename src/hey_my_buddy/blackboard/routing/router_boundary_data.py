@@ -332,8 +332,8 @@ def _candidate_problem(connection, candidate, request, run, now):
     capabilities = set(_json(published["capabilities_json"], []))
     if not set(request.get("requiredCapabilities") or []) <= capabilities:
         return "The frozen buddy no longer provides the required capabilities"
-    preference = connection.execute("SELECT mode FROM effective_preferences WHERE profile_id=?", (candidate["profileId"],)).fetchone()
-    pins = connection.execute("SELECT 1 FROM effective_preferences WHERE mode='pin' LIMIT 1").fetchone()
+    preference = connection.execute("SELECT mode FROM evaluation_preferences WHERE profile_id=?", (candidate["profileId"],)).fetchone()
+    pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone()
     if preference and preference[0] == "exclude" or pins and (not preference or preference[0] != "pin"):
         return "The frozen buddy no longer satisfies the published pins and exclusions"
     if not _cached_available(connection, candidate["adapter"]):

@@ -4,8 +4,7 @@ import {
   publication,
   setConcurrencyLimit,
   setFamilyAnnotation as setNote,
-  setFamilyPreference,
-  setPreferenceOverride as setPreference,
+  setPreference,
 } from "./draft";
 import {
   attentionIssues,
@@ -61,8 +60,6 @@ function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {})
     configuration: { routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     preferences: [],
-    familyPreferences: [],
-    preferenceOverrides: [],
 
     familyAnnotations: [],
     evidence: [],
@@ -176,7 +173,7 @@ describe("blocking new changes", () => {
   it("allows disabling an unavailable configuration and editing its family note", () => {
     const enabledRetired = { ...retired, enabled: true };
     const baseline = makeDraft(snapshot([worker, enabledRetired], {
-      preferenceOverrides: [{ profileId: retired.profileId, mode: "pin", reason: "以前固定" }],
+      preferences: [{ profileId: retired.profileId, mode: "pin", reason: "以前固定" }],
     }));
     let draft = {
       ...baseline,
@@ -204,14 +201,14 @@ describe("blocking new changes", () => {
     const pinned = setPreference(baseline, disabled.profileId, "pin");
     expect(blockingIssues(baseline, pinned)[0].message).toContain("停用状态");
     // An existing pin on a disabled configuration is attention, never a blocker.
-    const stale = { ...baseline, preferenceOverrides: [{ profileId: disabled.profileId, mode: "pin" as const, reason: "以前固定" }] };
+    const stale = { ...baseline, preferences: [{ profileId: disabled.profileId, mode: "pin" as const, reason: "以前固定" }] };
     expect(blockingIssues(stale, stale)).toEqual([]);
     expect(attentionIssues(stale)[0].message).toContain("停用状态");
   });
 
   it("allows a reason-only edit of an existing unavailable pin", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      preferenceOverrides: [{ profileId: retired.profileId, mode: "pin", reason: "旧依据" }],
+      preferences: [{ profileId: retired.profileId, mode: "pin", reason: "旧依据" }],
     }));
     // The mode does not transition into pin, so current legality is not required.
     const reasonOnly = setPreference(baseline, retired.profileId, "pin", "新依据");
@@ -224,22 +221,6 @@ describe("blocking new changes", () => {
     const soft = setPreference(baseline, retired.profileId, "prefer", "旧依据");
     expect(blockingIssues(soft, setPreference(soft, retired.profileId, "pin", "旧依据"))[0].message)
       .toContain("无法固定");
-  });
-
-  it("blocks a new family pin only when no effort it pins can be selected", () => {
-    const low = { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:low", effort: "low", enabled: false };
-    const baseline = makeDraft(snapshot([worker, low]));
-    // One enabled, available effort follows the family pin: legal.
-    expect(blockingIssues(baseline, setFamilyPreference(baseline, worker, "pin"))).toEqual([]);
-    // The only enabled effort overrides the pin away: nothing selectable is pinned.
-    const overridden = setPreference(baseline, worker.profileId, "none");
-    const issues = blockingIssues(overridden, setFamilyPreference(overridden, worker, "pin"));
-    expect(issues).toHaveLength(1);
-    expect(issues[0].message).toContain("请先启用推理强度再固定");
-    expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
-    // A reason-only edit of an existing family pin never needs current legality.
-    const pinned = setFamilyPreference(overridden, worker, "pin", "旧");
-    expect(blockingIssues(pinned, setFamilyPreference(pinned, worker, "pin", "新"))).toEqual([]);
   });
 
   it("allows published complete Router identities while runtime eligibility is temporarily missing", () => {
@@ -288,32 +269,16 @@ describe("stale settings needing attention", () => {
     ]);
   });
 
-  it("reports a stale override pin while leaving other patches untouched", () => {
+  it("reports a stale buddy pin while leaving other patches untouched", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      preferenceOverrides: [{ profileId: retired.profileId, mode: "pin", reason: "以前固定" }],
+      preferences: [{ profileId: retired.profileId, mode: "pin", reason: "以前固定" }],
     }));
     const issues = attentionIssues(baseline);
     expect(issues).toHaveLength(1);
     expect(issues[0].profileId).toBe(retired.profileId);
     expect(issues[0].message).toContain("固定选择");
-    expect(issues[0].message).toContain("跟随家族");
+    expect(issues[0].message).toContain("不设");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
-  });
-
-  it("reports a family pin only when none of its pinned efforts can be selected", () => {
-    const low = { ...worker, profileId: "dsh:deepseek-official:deepseek-flash:low", effort: "low", enabled: false };
-    const family = { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash" };
-    const healthy = makeDraft(snapshot([worker, low], { familyPreferences: [{ ...family, mode: "pin", reason: "" }] }));
-    // A disabled sibling of a working pin is normal, not a problem.
-    expect(attentionIssues(healthy)).toEqual([]);
-    const stale = makeDraft(snapshot([{ ...worker, enabled: false }, low], {
-      familyPreferences: [{ ...family, mode: "pin", reason: "" }],
-      configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
-    }));
-    const issues = attentionIssues(stale);
-    expect(issues).toHaveLength(1);
-    expect(issues[0].family).toBe(JSON.stringify(["dsh", "deepseek-official", "deepseek-flash"]));
-    expect(issues[0].message).toContain("固定推理强度不可用");
   });
 
   it("is silent when every recorded setting is still legal", () => {

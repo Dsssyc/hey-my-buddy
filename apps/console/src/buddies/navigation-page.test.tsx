@@ -89,8 +89,8 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
     configuration: { routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
- decisions: [],
+    preferences: [], familyAnnotations: [],
+    decisions: [],
     modelConcurrency: [
       { ...sonnet, limit: 2, active: 0 }, { ...sol, limit: 2, active: 0 },
       { ...flash, limit: 2, active: 0 }, { ...glm, limit: 2, active: 0 },
@@ -108,8 +108,7 @@ function fixture(routerProfileId: string | null = solMediumId, extra: Partial<Sn
       // Only the checked 显示不可用 asks for this page; the fixture keeps
       // every recorded row on one bounded page.
       return { profiles: state.profiles, familyAnnotations: state.familyAnnotations,
-        preferences: state.preferences, preferenceOverrides: state.preferenceOverrides,
-        familyPreferences: state.familyPreferences,
+        preferences: state.preferences,
         modelConcurrency: state.modelConcurrency, nextCursor: null };
     }
     throw new Error(`Unexpected command: ${operation}`);

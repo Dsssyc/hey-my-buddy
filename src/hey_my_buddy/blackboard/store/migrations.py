@@ -6,14 +6,13 @@ import sqlite3
 
 ROUTER_KEYS = ('router_profile_ids', 'router_default_mode', 'router_budget_preset',
                'router_retry_interval_seconds')
-SETTINGS_TABLES = ('evaluation_profiles', 'evaluation_preferences', 'family_preferences',
+SETTINGS_TABLES = ('evaluation_profiles', 'evaluation_preferences',
                    'family_annotations', 'model_concurrency', 'harness_health')
 SETTINGS_COLUMNS = {
     'evaluation_profiles': ('profile_id', 'label', 'adapter', 'provider', 'model', 'effort',
                             'available', 'enabled', 'capabilities_json', 'context_window',
                             'description', 'source', 'unavailable_reason'),
     'evaluation_preferences': ('profile_id', 'mode', 'reason'),
-    'family_preferences': ('adapter', 'provider', 'model', 'mode', 'reason'),
     'family_annotations': ('adapter', 'provider', 'model', 'text', 'updated_at'),
     'model_concurrency': ('adapter', 'provider', 'model', 'concurrency_limit', 'created_at', 'updated_at'),
     'harness_health': ('adapter', 'manual_path', 'revision', 'status', 'record_json',
@@ -24,6 +23,13 @@ SETTINGS_COLUMNS = {
 def read_settings(connection: sqlite3.Connection) -> dict:
     values = dict(connection.execute(
         'SELECT key,value FROM meta WHERE key IN (?,?,?,?)', ROUTER_KEYS))
+    tables = {name: [tuple(row) for row in connection.execute(
+        'SELECT ' + ','.join(SETTINGS_COLUMNS[name]) + ' FROM ' + name)]
+              for name in SETTINGS_TABLES if name != 'evaluation_preferences'}
+    # Read the upgrade base's composed policy once. A buddy override wins over
+    # its model service default, including an explicit absence of preference.
+    tables['evaluation_preferences'] = [tuple(row) for row in connection.execute(
+        'SELECT profile_id,mode,reason FROM effective_preferences ORDER BY profile_id')]
     return {
         'router': {
             'routerProfileIds': json.loads(values['router_profile_ids']),
@@ -31,9 +37,7 @@ def read_settings(connection: sqlite3.Connection) -> dict:
             'routingBudget': values['router_budget_preset'],
             'routerRetryIntervalSeconds': int(values['router_retry_interval_seconds']),
         },
-        'tables': {name: [tuple(row) for row in connection.execute(
-            'SELECT ' + ','.join(SETTINGS_COLUMNS[name]) + ' FROM ' + name)]
-                   for name in SETTINGS_TABLES},
+        'tables': tables,
     }
 
 

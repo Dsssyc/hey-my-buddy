@@ -17,23 +17,14 @@ export const MAX_QUERY_TERMS = 8;
 /** Typing settles before a server search runs; the view never polls. */
 export const FILTER_DEBOUNCE_MS = 300;
 
-function count(value: unknown): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0
-    ? value
-    : Number.NaN;
-}
-
 /** Rejects an incomplete envelope instead of rendering invented profile facts. */
 export function parseProfilePage(value: unknown): ProfilePage {
   const page = value as ProfilePage | null;
-  // The family rows and overrides are optional on a page (absent reads as
-  // none), but a present value must be a list.
+  // Family annotations are optional on a page, but a present value must be a list.
   const optionalList = (value: unknown) => value === undefined || Array.isArray(value);
   const valid = !!page
     && Array.isArray(page.profiles)
     && Array.isArray(page.preferences)
-    && optionalList(page.preferenceOverrides)
-    && optionalList(page.familyPreferences)
     && optionalList(page.familyAnnotations)
     && Array.isArray(page.modelConcurrency)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
@@ -83,8 +74,6 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
   return {
     profiles: addMissing(previous.profiles, next.profiles),
     preferences: addMissing(previous.preferences, next.preferences),
-    preferenceOverrides: addMissing(previous.preferenceOverrides ?? [], next.preferenceOverrides ?? []),
-    familyPreferences: addMissingFamilies(previous.familyPreferences ?? [], next.familyPreferences ?? []),
     familyAnnotations: addMissingFamilies(previous.familyAnnotations ?? [], next.familyAnnotations ?? []),
     modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
     nextCursor: next.nextCursor,
@@ -108,8 +97,6 @@ export function historySourceKey(snapshot: Snapshot): string {
     eventCursor: snapshot.eventCursor,
     profiles: snapshot.profiles.map(({ profileId, available, enabled }) => [profileId, available, enabled]),
     preferences: snapshot.preferences,
-    preferenceOverrides: snapshot.preferenceOverrides,
-    familyPreferences: snapshot.familyPreferences,
     familyAnnotations: snapshot.familyAnnotations,
     modelConcurrency: snapshot.modelConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
     configuration: snapshot.configuration,

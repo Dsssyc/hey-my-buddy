@@ -156,7 +156,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         status, headers, body = browser.get("/api/console")
         self.assertEqual(status, 200)
         snapshot = json.loads(body)
-        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "familyPreferences", "preferenceOverrides", "preferences", "decisions", "tasks", "capabilities"]))
+        self.assertEqual(sorted(snapshot), sorted(["consoleSession", "consoleAccess", "harnesses", "csrfToken", "eventCursor", "configuration", "configurationError", "profiles", "modelConcurrency", "routingHealth", "unavailableProfileCount", "familyAnnotations", "preferences", "decisions", "tasks", "capabilities"]))
         self.assertIsNone(snapshot['configurationError'])
         self.assertEqual(snapshot["routingHealth"], board.call("health", {})["routingHealth"])
         self.assertEqual(snapshot["routingHealth"]["sampleCount"], 0)
@@ -307,9 +307,9 @@ class ConsoleSecurityTests(ConsoleTestCase):
             },
         )
         run_id = submitted["task"]["runId"]
-        stated, browser = self.open_console(board)
+        _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        refreshed = board.call("model_catalog_refresh", {"requestId": "cat"})
+        board.call("model_catalog_refresh", {"requestId": "cat"})
         profile = next(p for p in board.call("console_snapshot", {})["profiles"] if p["profileId"] == PROFILE_ID)
         family = {key: profile[key] for key in ("adapter", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
@@ -606,7 +606,7 @@ class ConsoleAssetTests(ConsoleTestCase):
     def test_assets_are_served_with_headers_and_traversal_is_refused(self):
         board = self.board()
         (self.directory / "outside.txt").write_text("not an asset")
-        stated, browser = self.open_console(board, assets=True)
+        _, browser = self.open_console(board, assets=True)
         status, headers, body = browser.get("/")
         self.assertEqual(status, 200)
         self.assertIn("Buddy console fixture", body.decode())

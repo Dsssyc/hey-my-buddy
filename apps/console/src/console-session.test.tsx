@@ -77,7 +77,7 @@ function fixture(options: {
     unavailableProfileCount: 1,
 
     familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], decisions: [],
+    preferences: [], decisions: [],
     modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
@@ -107,7 +107,7 @@ function fixture(options: {
       return structuredClone(value);
     }
     if (operation === "model_profiles") {
-      return { profiles: [], familyAnnotations: [], preferences: [], preferenceOverrides: [], familyPreferences: [], modelConcurrency: [], nextCursor: null };
+      return { profiles: [], familyAnnotations: [], preferences: [], modelConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
@@ -179,7 +179,7 @@ function envelope(consoleSession: unknown, include = true) {
     configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
 
-    profiles: [], familyAnnotations: [], preferences: [], familyPreferences: [], preferenceOverrides: [], modelConcurrency: [], tasks: { pendingCount: 0 },
+    profiles: [], familyAnnotations: [], preferences: [], modelConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };

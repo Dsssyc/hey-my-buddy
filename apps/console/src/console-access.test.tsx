@@ -19,22 +19,22 @@ function setup(access: ConsoleAccess = local, unavailable = false) {
   return { command, refresh, user: userEvent.setup() };
 }
 
-it("enables login using the shown revision and refreshes the rotated authority", async () => {
+it("enables login and refreshes the rotated authority", async () => {
   const { command, refresh, user } = setup();
   expect(screen.getByRole("switch", { name: "需要登录" })).toHaveProperty("checked", false);
   await user.click(screen.getByRole("switch", { name: "需要登录" }));
-  expect(command).toHaveBeenCalledWith("console_access_set", { requireLogin: true, expectedRevision: 0 }, "fixture-csrf");
+  expect(command).toHaveBeenCalledWith("console_access_set", { requireLogin: true }, "fixture-csrf");
   await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
   expect(screen.getByRole("switch", { name: "需要登录" })).toHaveProperty("checked", true);
   expect(screen.getByRole("button", { name: "退出当前登录" })).toBeTruthy();
 });
 
-it("refuses a stale switch response, reloads and shows the conflict", async () => {
+it("reports a failed switch and keeps the recorded setting", async () => {
   const { command, refresh, user } = setup();
-  command.mockRejectedValue(new ApiError("REVISION_CONFLICT", "conflict"));
+  command.mockRejectedValue(new ApiError("NETWORK", "无法连接本地黑板。已有任务仍由后台管理。"));
   await user.click(screen.getByRole("switch"));
-  expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("记录已更新"));
-  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("无法连接本地黑板"));
+  expect(refresh).not.toHaveBeenCalled();
   expect(screen.getByRole("switch")).toHaveProperty("checked", false);
 });
 

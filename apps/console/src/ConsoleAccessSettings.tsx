@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { ApiError, errorText, parseConsoleAccess } from "./api";
+import { errorText, parseConsoleAccess } from "./api";
 import type { ConsoleAccess } from "./types";
 import { Help } from './ui';
 
@@ -27,7 +27,6 @@ export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavail
       await refresh();
     } catch (failure) {
       setError(errorText(failure));
-      if (failure instanceof ApiError && failure.code === "REVISION_CONFLICT") await refresh();
     } finally { setBusy(false); }
   }
   const disabled = unavailable || busy || loggedOut || !current;
@@ -36,7 +35,7 @@ export function ConsoleAccessSettings({ api, csrfToken, access, refresh, unavail
       <Help label="本机访问说明">默认无需登录；开启后用 buddy console 取得 10 分钟入口，关闭会撤销全部登录。</Help></div>
     {current ? <>
       <label className="check-field"><input type="checkbox" role="switch" checked={current.requireLogin} disabled={disabled}
-        onChange={event => void run("console_access_set", { requireLogin: event.target.checked, expectedRevision: current.revision },
+        onChange={event => void run("console_access_set", { requireLogin: event.target.checked },
           event.target.checked ? "已开启登录，当前窗口已登录。" : "已关闭登录，原有登录均已撤销。")}/><span>需要登录</span></label>
       {current.requireLogin && <ul className="access-sessions" aria-label="控制台登录">
         {current.sessions.map(session => <li key={session.id}>

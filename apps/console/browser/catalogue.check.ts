@@ -99,6 +99,9 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
         const drawer = page.getByRole("region", { name: CODEX, exact: true });
         const strip = drawer.getByRole("group", { name: /^(推理强度|Reasoning effort)$/ });
         const panel = drawer.locator("[data-slot=buddy-panel]");
+        await expect(drawer.getByRole("radiogroup", { name: /^(默认偏好|Default preference)$/ })).toHaveCount(0);
+        await expect(panel.getByRole("radiogroup", { name: /的偏好$|^Preference of / })).toHaveCount(1);
+        await expect(panel.getByRole("radio", { name: locale === "zh-CN" ? "不设" : "None" })).toBeVisible();
         await expectWholeAndApart(drawer, drawer.locator(":scope > div > div"));
         await expectWholeAndApart(strip, strip.getByRole("button"));
         await expectWholeAndApart(panel, panel.locator("input, [role=radiogroup], [role=switch]"));

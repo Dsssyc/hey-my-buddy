@@ -197,7 +197,7 @@ SELECT
           ORDER BY reservation.rowid LIMIT 1),
         json_extract(root_task.spec_json, '$.cwd'),
         json_extract(t.spec_json, '$.cwd')
-    ) END AS recorded_project_id,
+    ) END AS project_id,
     COALESCE(
         (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath') FROM workflow_artifacts artifact
           WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
@@ -238,10 +238,7 @@ LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r
 """
 
 #: The relation wrapped as a table expression: ``SELECT * FROM (task_history) AS resolved``.
-TASK_HISTORY_SQL = f"""SELECT resolved.*,
-       resolved.recorded_project_id AS project_id,
-       NULL AS project_identity_reason
-  FROM ({RELATION_SQL}) AS resolved"""
+TASK_HISTORY_SQL = f"SELECT * FROM ({RELATION_SQL}) AS resolved"
 
 
 def _complete_configuration(value: Any) -> dict | None:
@@ -301,9 +298,6 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         },
         "configuration": configuration,
     }
-    reason = row["project_identity_reason"]
-    if isinstance(reason, str) and reason:
-        result["project"]["identityReason"] = reason
     return result
 
 

@@ -22,8 +22,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("bounded retained model history", () => {
   it("invalidates retained history when an event changes outside the bounded snapshot", () => {
-    const visible = { eventCursor: 12, profiles: [], preferences: [], preferenceOverrides: [],
-      familyPreferences: [], familyAnnotations: [], modelConcurrency: [], configuration: null } as unknown as Snapshot;
+    const visible = { eventCursor: 12, profiles: [], preferences: [], familyAnnotations: [], modelConcurrency: [], configuration: null } as unknown as Snapshot;
     expect(historySourceKey({ ...visible, eventCursor: 13 })).not.toBe(historySourceKey(visible));
   });
   it("bounds query terms and length", () => {
@@ -78,8 +77,7 @@ describe("bounded retained model history", () => {
     let note = "older note";
     const { api, command } = fakeApi(() => ({ ...page(["retired"]),
       familyAnnotations: [{ ...family, text: note, updatedAt: null }] }));
-    const visible = { eventCursor: 8, profiles: [], preferences: [], preferenceOverrides: [],
-      familyPreferences: [], familyAnnotations: [], modelConcurrency: [], configuration: null } as unknown as Snapshot;
+    const visible = { eventCursor: 8, profiles: [], preferences: [], familyAnnotations: [], modelConcurrency: [], configuration: null } as unknown as Snapshot;
     const { result, rerender } = renderHook(({ snapshot }) => useProfileHistory(api, "csrf", historySourceKey(snapshot),
       { query: "", adapter: "", enabled: true }), { initialProps: { snapshot: visible } });
     act(() => result.current.open());
@@ -93,7 +91,7 @@ describe("bounded retained model history", () => {
 
   it("does not render an old retained page during the cursor-change render", () => {
     const visible = { eventCursor: 8, csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null },
-      profiles: [], preferences: [], preferenceOverrides: [], familyPreferences: [], familyAnnotations: [],
+      profiles: [], preferences: [], familyAnnotations: [],
       modelConcurrency: [], configuration: null, decisions: [], tasks: { pendingCount: 0 }, capabilities: {} } as Snapshot;
     const { api } = fakeApi(() => page([]));
     const { result, rerender } = renderHook(({ snapshot }) => useEditor(api, snapshot, async () => snapshot, true, ""),

@@ -133,8 +133,7 @@ def attach_objective(connection, presentation: dict, *, spec: dict, host_id: str
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown objectiveId")
         if row["project_id"] != project_id or row["source_host_id"] != host_id:
-            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host",
-                             identityReason=None)
+            raise BoardError("CONFLICT", "The objective belongs to another source project or submitting Host")
         return identifier
     if "objective" not in presentation:
         return None

@@ -9,7 +9,6 @@ the publication transaction are exercised for real without a model call.
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import time
 import unittest
@@ -242,13 +241,13 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(pinned_decision["output"]["code"], "router-out-of-bounds")
         self.assertEqual(sorted(profile["profileId"] for profile in pinned_decision["input"]["profiles"]),
                          sorted([SECOND_PROFILE_ID, THIRD_PROFILE_ID]))
-        # The Router input carries the effective preferences with their source.
+        # The Router input carries the stored buddy preferences.
         self.assertEqual(pinned_decision["input"]["preferences"],
                          sorted([
                              {"profileId": SECOND_PROFILE_ID, "mode": "pin",
-                              "reason": "only these two", "source": "override"},
+                              "reason": "only these two"},
                              {"profileId": THIRD_PROFILE_ID, "mode": "pin",
-                              "reason": "only these two", "source": "override"},
+                              "reason": "only these two"},
                          ], key=lambda entry: entry["profileId"]))
 
     def test_requested_capabilities_filter_the_candidate_set(self):
@@ -326,7 +325,6 @@ class SelectionRequestTests(DecisionTestCase):
                 else:
                     request = board.call("selection_request", {"requestId": f"freeze-{name}",
                                          "task": "bounded selection", **constraints})
-                frozen = self.decision(board, request["decisionId"])["input"]
                 client = board.client()
                 worker = f"w-freeze-{name}"
                 client.register_worker(worker, adapter="decision", capabilities=["decision"])
@@ -528,7 +526,8 @@ class DecisionFailureTests(DecisionTestCase):
 
     def test_alternative_without_model_notes_completes_and_is_audited(self):
         board = self.board()
-        self.seed(board, preferences=[{"profileId": PROFILE_ID, "mode": "prefer", "reason": "prefer flash"}])
+        self.seed(board, profiles=(PROFILE, SECOND_PROFILE, THIRD_PROFILE),
+                  preferences=[{"profileId": THIRD_PROFILE_ID, "mode": "prefer", "reason": "prefer high"}])
         self.use_helper(profile_id=SECOND_PROFILE_ID, evidence="none")
         request = board.call("selection_request", {
             "requestId": "pick-alternative", "task": "choose for this task"})
@@ -536,6 +535,10 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         self.assertEqual(decision["profileId"], SECOND_PROFILE_ID)
+        self.assertEqual([entry["profileId"] for entry in decision["input"]["profiles"]],
+                         [PROFILE_ID, THIRD_PROFILE_ID, SECOND_PROFILE_ID])
+        self.assertEqual(decision["input"]["policyFacts"]["userPreferredProfileIds"],
+                         [THIRD_PROFILE_ID])
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
-import { concurrencyEntryFor, familyKey, MODEL_CONCURRENCY_DEFAULT } from "../console-data";
+import { concurrencyEntryFor, MODEL_CONCURRENCY_DEFAULT } from "../console-data";
 import { familyAnnotationText } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, Snapshot } from "../types";
@@ -17,10 +17,7 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
   const { t } = useTranslation("buddies");
   const member = row.family.profiles[0];
   const enabled = row.chips.filter(chip => chip.profile.enabled);
-  const preference = data.familyPreferences.find(entry => familyKey(entry) === row.key);
-  const published = recorded.familyPreferences.find(entry => familyKey(entry) === row.key);
   const changed = row.chips.some(chip => chip.unsaved)
-    || preference?.mode !== published?.mode || (preference?.reason ?? "") !== (published?.reason ?? "")
     || familyAnnotationText(data, member) !== familyAnnotationText(recorded, member)
     || !Object.is(row.limit, concurrencyEntryFor(recorded.modelConcurrency, member)?.limit ?? MODEL_CONCURRENCY_DEFAULT);
   const occupancy = row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit });

@@ -334,7 +334,7 @@ CREATE INDEX IF NOT EXISTS evaluation_profiles_adapter_idx ON evaluation_profile
     """
 CREATE TABLE IF NOT EXISTS evaluation_preferences (
     profile_id        TEXT PRIMARY KEY REFERENCES evaluation_profiles(profile_id) ON DELETE RESTRICT,
-    mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude','none')),
+    mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
     reason            TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, profile_id);
@@ -408,18 +408,6 @@ CREATE TABLE IF NOT EXISTS model_concurrency (
     PRIMARY KEY (adapter, provider, model)
 );
 """,
-    # User-owned family defaults (schema 13). ``evaluation_preferences`` holds the
-    # per-effort overrides, where ``none`` explicitly clears a family default.
-    """
-CREATE TABLE IF NOT EXISTS family_preferences (
-    adapter           TEXT NOT NULL,
-    provider          TEXT NOT NULL,
-    model             TEXT NOT NULL,
-    mode              TEXT NOT NULL CHECK (mode IN ('prefer','pin','exclude')),
-    reason            TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (adapter, provider, model)
-);
-""",
     # Program-owned model facts snapshots (ADR-021 decision 12), one durable dated
     # snapshot per model family extracted from the public models.dev catalog. Facts
     # belong to the model, never to a buddy, and are never user-editable. A
@@ -442,19 +430,6 @@ CREATE TABLE IF NOT EXISTS model_facts (
     reason           TEXT,
     PRIMARY KEY (adapter, provider, model)
 );
-""",
-    # The one reading of preference policy: an override wins, ``none`` clears, and
-    # otherwise the family default applies. Every consumer reads this view.
-    """
-CREATE VIEW IF NOT EXISTS effective_preferences AS
-SELECT p.profile_id AS profile_id,
-       COALESCE(o.mode, f.mode) AS mode,
-       CASE WHEN o.profile_id IS NOT NULL THEN o.reason ELSE f.reason END AS reason,
-       CASE WHEN o.profile_id IS NOT NULL THEN 'override' ELSE 'family' END AS source
-FROM evaluation_profiles p
-LEFT JOIN evaluation_preferences o ON o.profile_id = p.profile_id
-LEFT JOIN family_preferences f ON f.adapter = p.adapter AND f.provider = p.provider AND f.model = p.model
-WHERE (o.profile_id IS NOT NULL AND o.mode != 'none') OR (o.profile_id IS NULL AND f.mode IS NOT NULL);
 """,
 )
 

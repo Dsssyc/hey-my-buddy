@@ -76,13 +76,14 @@ class HarnessServiceTests(BoardTestCase):
             self.assertTrue(self.call('workflow_submit', adapter='codex')['admitted'])
             refresh.assert_called_once_with('codex', force=True)
 
-    def test_manual_path_requires_current_revision(self):
+    def test_manual_path_write_uses_latest_value(self):
         missing = {'adapter': 'codex', 'status': 'missing', 'reasonCode': 'not-found'}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'adapter': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
-            saved = self.call('harness_set', adapter='codex', path='/custom/codex', expectedRevision=0)
+            saved = self.call('harness_set', adapter='codex', path='/custom/codex')
+            latest = self.call('harness_set', adapter='codex', path='/other/codex')
         self.assertEqual(saved['harness']['manualPath'], '/custom/codex')
-        refused = self.call('harness_set', adapter='codex', path='/other/codex', expectedRevision=0)
-        self.assertEqual(refused['error']['code'], 'REVISION_CONFLICT')
+        self.assertEqual(latest['harness']['manualPath'], '/other/codex')
+        self.assertEqual(self.call('harness_set', adapter='codex', path='/third/codex', expectedRevision=0)['error']['code'], 'INVALID_ARGUMENT')
 
     def test_router_catalog_eligibility_does_not_require_a_version_certificate(self):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog

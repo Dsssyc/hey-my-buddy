@@ -11,11 +11,10 @@ from console.test_console import Browser, ConsoleTestCase, PROFILE_ID, http_call
 class ConsoleAccessTests(ConsoleTestCase):
     require_login = False
 
-    def change(self, browser, required, revision=None):
+    def change(self, browser, required):
         snapshot = browser.bootstrap()
         return browser.command("console_access_set", {
             "requireLogin": required,
-            "expectedRevision": snapshot["consoleAccess"]["revision"] if revision is None else revision,
         }, csrf=snapshot["csrfToken"])
 
     def test_default_fixed_url_and_writes_need_no_cookie(self):
@@ -45,7 +44,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         board = self.board()
         _, browser = self.open_console(board, assets=True)
         csrf = browser.bootstrap()["csrfToken"]
-        body = {"operation": "console_access_set", "params": {"requireLogin": True, "expectedRevision": 0}}
+        body = {"operation": "console_access_set", "params": {"requireLogin": True}}
         for headers in ({"Host": "localhost:" + str(browser.port)}, {"Host": "evil.test"},
                         {"Origin": "http://evil.test"}, {"Origin": "null"},
                         {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"}):
@@ -81,8 +80,8 @@ class ConsoleAccessTests(ConsoleTestCase):
         expired = board.console.start()
         now[0] += ENTRY_SECONDS
         self.assertEqual(second.call("GET", urlsplit(expired["url"]).path)[0], 410)
-        self.assertEqual(self.change(browser, False, revision=0)[0], 409)
-        self.assertTrue(board.console.require_login)
+        self.assertEqual(self.change(browser, False)[0], 200)
+        self.assertFalse(board.console.require_login)
 
     def test_disable_revokes_old_sessions_and_entries_across_restart(self):
         board = self.board()
@@ -159,8 +158,8 @@ class ConsoleAccessTests(ConsoleTestCase):
         board = self.board()
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
-        for params in ({}, {"requireLogin": "true", "expectedRevision": 0},
-                       {"requireLogin": True, "expectedRevision": True},
-                       {"requireLogin": True, "expectedRevision": 0, "consoleAuthority": {}}):
+        for params in ({}, {"requireLogin": "true"},
+                       {"requireLogin": True, "expectedRevision": 0},
+                       {"requireLogin": True, "consoleAuthority": {}}):
             self.assertEqual(browser.command("console_access_set", params, csrf=csrf)[0], 400)
         self.assertEqual(browser.command("console_logout", {}, csrf=csrf)[0], 409)

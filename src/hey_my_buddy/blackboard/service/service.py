@@ -512,14 +512,11 @@ class BoardService(_BaseResource):
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'path', 'expectedRevision'}, 'harness.set')
+            schemas.reject_unknown(params, {'adapter', 'path'}, 'harness.set')
             name = schemas.required_string(params, 'adapter', max_length=32)
             if 'path' not in params:
                 raise BoardError('INVALID_ARGUMENT', 'path is required; use null to restore automatic detection')
-            revision = params.get('expectedRevision')
-            if revision is not None and (type(revision) is not int or revision < 0):
-                raise BoardError('INVALID_ARGUMENT', 'expectedRevision must be a nonnegative integer')
-            return {'harness': self.harnesses.set_path(name, params['path'], expected_revision=revision)}
+            return {'harness': self.harnesses.set_path(name, params['path'])}
         return self._guard('harness.set', request_json, handler)
 
     def accounts(self, request_json: str) -> str:

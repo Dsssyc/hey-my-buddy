@@ -1013,7 +1013,6 @@ class WorkflowCoordinator:
                 "PREPARATION_CONFLICT", "This checkout still has a reservation whose recorded identity is unproven; resolve that ownership before claiming it",
                 checkoutId=checkout_id, holderTaskId=unproven["holder_task_id"],
                 recordedCheckoutId=unproven["checkout_id"],
-                identityReason=None,
             )
         held = connection.execute(
             "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY rowid",

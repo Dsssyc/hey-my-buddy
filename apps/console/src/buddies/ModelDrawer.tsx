@@ -11,11 +11,10 @@ import {
   MODEL_CONCURRENCY_MAX,
   MODEL_CONCURRENCY_MIN,
   concurrencyEntryFor,
-  familyKey,
 } from "../console-data";
-import { familyAnnotationText, setConcurrencyLimit, setFamilyAnnotation, setFamilyPreference, setPreferenceOverride } from "../draft";
+import { familyAnnotationText, setConcurrencyLimit, setFamilyAnnotation, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
-import type { ConsoleView, OverrideMode, PreferenceMode, Snapshot } from "../types";
+import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
@@ -36,27 +35,27 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
   const editing = editor.editing;
   const id = useId();
   const { profile, effort } = chip;
-  const override = data.preferenceOverrides.find(entry => entry.profileId === profile.profileId);
-  const published = recorded.preferenceOverrides.find(entry => entry.profileId === profile.profileId);
-  const baselineMode = (editor.baseline ?? recorded).preferenceOverrides.find(entry => entry.profileId === profile.profileId)?.mode;
+  const preference = data.preferences.find(entry => entry.profileId === profile.profileId);
+  const published = recorded.preferences.find(entry => entry.profileId === profile.profileId);
+  const baselineMode = (editor.baseline ?? recorded).preferences.find(entry => entry.profileId === profile.profileId)?.mode;
   const pinLocked = baselineMode !== "pin" && (!profile.available || !profile.enabled);
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   // A retired buddy can be switched off, but cannot be switched on again.
   const canToggle = editing && (profile.available || profile.enabled);
   const enableLock = editingLock ?? (!canToggle ? t("pane.locked.retired") : undefined);
   const enableUnsaved = recorded.profiles.find(entry => entry.profileId === profile.profileId)?.enabled !== profile.enabled;
-  const preferenceUnsaved = override?.mode !== published?.mode;
-  const reasonUnsaved = (override?.reason ?? "") !== (published?.reason ?? "");
+  const preferenceUnsaved = preference?.mode !== published?.mode;
+  const reasonUnsaved = (preference?.reason ?? "") !== (published?.reason ?? "");
   const unavailableReason = reasonTexts(profile.unavailableReason?.trim() ? [profile.unavailableReason.trim()] : [], t).join(" · ");
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <span className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
     </span>;
 
-  function setOverride(value: string) {
+  function setBuddyPreference(value: string) {
     if (!editing || value === "pin" && pinLocked) return;
-    const mode = value === "follow" ? "" : value as OverrideMode;
-    editor.update(draft => setPreferenceOverride(draft, profile.profileId, mode, mode ? override?.reason ?? "" : ""));
+    const mode = value as PreferenceMode | "";
+    editor.update(draft => setPreference(draft, profile.profileId, mode, mode ? preference?.reason ?? "" : ""));
   }
 
   return <div id={buddyRowId(profile.profileId)} role="group" aria-label={effort} tabIndex={-1} data-slot="buddy-panel"
@@ -78,10 +77,9 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2.5 max-[600px]:justify-between">
         {name(t("pane.preference"), preferenceUnsaved, { id: `${id}-preference` })}
-        <Segmented value={override?.mode ?? "follow"} aria-label={t("pane.override", { effort })} onValueChange={setOverride}
+        <Segmented value={preference?.mode ?? ""} aria-label={t("pane.buddyPreference", { effort })} onValueChange={setBuddyPreference}
           className="flex-wrap bg-card max-[600px]:max-w-full">
-          <Hint text={editingLock}><SegmentedItem value="follow" aria-disabled={!editing || undefined} className={choice}>{t("pane.follow")}</SegmentedItem></Hint>
-          <Hint text={editingLock}><SegmentedItem value="none" aria-disabled={!editing || undefined} className={choice}>{t("preference.none")}</SegmentedItem></Hint>
+          <Hint text={editingLock}><SegmentedItem value="" aria-disabled={!editing || undefined} className={choice}>{t("preference.unset")}</SegmentedItem></Hint>
           {MODES.map(mode => <Hint key={mode} text={editingLock ?? (mode === "pin" && pinLocked ? t("pane.locked.pinBuddy") : t(`preferenceHint.${mode}`))}>
             <SegmentedItem value={mode} aria-disabled={!editing || mode === "pin" && pinLocked || undefined} className={choice}>{t(`preference.${mode}`)}</SegmentedItem>
           </Hint>)}
@@ -89,12 +87,12 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
       </div>
       <div className="flex min-w-40 flex-1 items-center gap-2.5 max-[600px]:min-w-0">
         {name(t("pane.reason"), reasonUnsaved, { htmlFor: `${id}-reason` })}
-        <Hint text={editingLock ?? (!override ? t("pane.reasonFollow") : undefined)}>
+        <Hint text={editingLock ?? (!preference ? t("pane.reasonNone") : undefined)}>
           <Input id={`${id}-reason`} className="h-8 min-w-0 flex-1 bg-card text-sm shadow-none" maxLength={500}
-            aria-label={t("pane.overrideReason", { effort })} value={override?.reason ?? ""} readOnly={!editing || !override}
-            aria-disabled={!editing || !override || undefined}
+            aria-label={t("pane.buddyReason", { effort })} value={preference?.reason ?? ""} readOnly={!editing || !preference}
+            aria-disabled={!editing || !preference || undefined}
             onChange={event => {
-              if (editing && override) editor.update(draft => setPreferenceOverride(draft, profile.profileId, override.mode, event.target.value));
+              if (editing && preference) editor.update(draft => setPreference(draft, profile.profileId, preference.mode, event.target.value));
             }} />
         </Hint>
       </div>
@@ -113,11 +111,6 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const { family, key } = row;
   const member = family.profiles[0];
   const selected = row.chips.find(chip => chip.profile.profileId === selectedProfileId)!;
-  const preference = data.familyPreferences.find(entry => familyKey(entry) === key);
-  const published = recorded.familyPreferences.find(entry => familyKey(entry) === key);
-  const baselineMode = editor.baseline?.familyPreferences.find(entry => familyKey(entry) === key)?.mode ?? published?.mode;
-  const pinLocked = baselineMode !== "pin" && !family.profiles.some(profile => profile.available && profile.enabled);
-  const preferenceUnsaved = preference?.mode !== published?.mode || (preference?.reason ?? "") !== (published?.reason ?? "");
   const note = familyAnnotationText(data, member);
   const publishedLimit = concurrencyEntryFor(recorded.modelConcurrency, member)?.limit ?? MODEL_CONCURRENCY_DEFAULT;
   const limitInvalid = !Number.isInteger(row.limit) || row.limit < MODEL_CONCURRENCY_MIN || row.limit > MODEL_CONCURRENCY_MAX;
@@ -146,26 +139,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
             {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
           </span></Hint>
         </div>
-        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
-          <div className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-2">
-            {name(t("pane.defaultPreference"), preferenceUnsaved, { id: `${id}-default` })}
-            <Segmented aria-labelledby={`${id}-default`} value={preference?.mode ?? "none"} className="bg-card"
-              onValueChange={value => {
-                if (!editing || value === "pin" && pinLocked) return;
-                const mode = value === "none" ? "" : value as PreferenceMode;
-                editor.update(draft => setFamilyPreference(draft, member, mode, mode ? preference?.reason ?? "" : ""));
-              }}>
-              <Hint text={editingLock}><SegmentedItem value="none" aria-disabled={!editing || undefined} className={choice}>{t("preference.none")}</SegmentedItem></Hint>
-              {MODES.map(mode => <Hint key={mode} text={editingLock ?? (mode === "pin" && pinLocked ? t("pane.locked.pinModel") : t(`preferenceHint.${mode}`))}>
-                <SegmentedItem value={mode} aria-disabled={!editing || mode === "pin" && pinLocked || undefined} className={choice}>{t(`preference.${mode}`)}</SegmentedItem>
-              </Hint>)}
-            </Segmented>
-            {preference && <Hint text={editingLock}><Input aria-label={t("pane.defaultReason")} className="h-8 w-full bg-card text-sm shadow-none"
-              placeholder={t("pane.reason")} maxLength={500} value={preference.reason} readOnly={!editing} aria-disabled={!editing || undefined}
-              onChange={event => {
-                if (editing) editor.update(draft => setFamilyPreference(draft, member, preference.mode, event.target.value));
-              }} /></Hint>}
-          </div>
+        <div className="grid flex-1 grid-cols-[max-content_minmax(0,1fr)] grid-rows-[auto_minmax(64px,1fr)] items-center gap-x-3 gap-y-2.5">
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
             <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2.5 text-sm tabular-nums shadow-none"

@@ -55,7 +55,7 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 
     configuration: { routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile],
-    preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [], decisions: [],
+    preferences: [], familyAnnotations: [], decisions: [],
 
     modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },
@@ -70,7 +70,7 @@ export type FixtureOptions = {
   /** The session cannot write. */
   readOnly?: boolean;
   failFirstCheck?: boolean;
-  conflictOnce?: boolean;
+  failFirstSet?: boolean;
   /** Answers for any other command, by operation. */
   replies?: Record<string, Reply>;
 };
@@ -80,7 +80,7 @@ export function fixture(options: FixtureOptions = {}) {
   if (options.readOnly) state = { ...state, consoleSession: { id: "expired", canWrite: false, reason: null } };
   const calls: { operation: string; params: Record<string, any> }[] = [];
   let checksToFail = options.failFirstCheck ? 1 : 0;
-  let setsToConflict = options.conflictOnce ? 1 : 0;
+  let setsToFail = options.failFirstSet ? 1 : 0;
   /** One cheap check: a selected harness becomes found with a fresh reading. */
   function checked(adapter?: string): HarnessHealth[] {
     return state.harnesses.map(row => adapter === undefined || row.adapter === adapter
@@ -103,12 +103,9 @@ export function fixture(options: FixtureOptions = {}) {
     }
     if (operation === "harness_set") {
       const adapter = params.adapter as string;
-      if (setsToConflict > 0) {
-        // Another writer advanced the record while this save was in flight.
-        setsToConflict -= 1;
-        state = { ...state, harnesses: state.harnesses.map(row =>
-          row.adapter === adapter ? { ...row, revision: row.revision + 3 } : row) };
-        throw new ApiError("REVISION_CONFLICT", "Harness settings changed; reread before saving");
+      if (setsToFail > 0) {
+        setsToFail -= 1;
+        throw new ApiError("NETWORK", "无法连接本地黑板。已有任务仍由后台管理。");
       }
       const path = params.path as string | null;
       state = { ...state, harnesses: state.harnesses.map(row => row.adapter !== adapter ? row : path
@@ -136,8 +133,8 @@ export function fixture(options: FixtureOptions = {}) {
         adapter === undefined ? { refresh: true } : { refresh: true, adapter }, csrfToken) as { harnesses: HarnessHealth[] };
       return reply.harnesses;
     }),
-    harnessSet: vi.fn(async (adapter: string, path: string | null, expectedRevision: number, csrfToken: string) =>
-      (await command("harness_set", { adapter, path, expectedRevision }, csrfToken) as { harness: HarnessHealth }).harness),
+    harnessSet: vi.fn(async (adapter: string, path: string | null, csrfToken: string) =>
+      (await command("harness_set", { adapter, path }, csrfToken) as { harness: HarnessHealth }).harness),
   } as unknown as ConsoleApi;
   return { api, snapshotMock, command, calls, state: () => state };
 }

@@ -609,8 +609,6 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !validConfigurationState(data) ||
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.preferences) ||
-        !Array.isArray(data.familyPreferences) ||
-        !Array.isArray(data.preferenceOverrides) ||
         !Array.isArray(data.familyAnnotations) ||
         !Array.isArray(data.modelConcurrency) ||
         !data.tasks ||
@@ -791,18 +789,16 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     },
     /**
      * `harness_set` (ADR-017 §15): stores one manual absolute path, or `null`
-     * to restore automatic detection. `expectedRevision` fences the write
-     * against a concurrent check; a conflict is reported, never overwritten.
+     * to restore automatic detection.
      */
     async harnessSet(
       adapter: string,
       path: string | null,
-      expectedRevision: number,
       csrfToken: string,
     ): Promise<HarnessHealth> {
       const reply = await command<unknown>(
         "harness_set",
-        { adapter, path, expectedRevision },
+        { adapter, path },
         csrfToken,
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);

@@ -235,14 +235,6 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(result['status'], 'unknown')
         self.assertEqual(self.refreshed, [])
 
-    def test_manual_path_compare_and_swap_does_not_invoke_shell(self):
-        from hey_my_buddy.errors import BoardError
-        self.health.set_path('codex', '/native/new', expected_revision=0)
-        with self.assertRaises(BoardError) as error:
-            self.health.set_path('codex', '/native/stale', expected_revision=0)
-        self.assertEqual(error.exception.code, 'REVISION_CONFLICT')
-        self.assertEqual(self.health.get('codex')['manualPath'], '/native/new')
-
 
 def _stamp(seconds_ago: int) -> str:
     moment = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)

@@ -152,7 +152,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             self.assertEqual(preflight.call_count, 1)
             self.assertEqual(json.loads(body), expected)
             etag = headers["etag"]
-            status, replay_headers, replay_body = browser.get(
+            status, _, replay_body = browser.get(
                 "/api/backup-preflight", headers={"If-None-Match": etag}
             )
             self.assertEqual(status, 304)
@@ -172,7 +172,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.finish_turn(board, first, disposition="assistance")
         # A second root still queued does not count.
         self.submit(board, request_id="pending-running", cwd=str(self.workdir("pending-running")))
-        status, _headers, body = self.open(board).get("/api/console")
+        _, _headers, body = self.open(board).get("/api/console")
         self.assertEqual(json.loads(body)["tasks"], {"pendingCount": 1})
         view = board.call("workflow_get", {"runId": root["runId"]})
         self.assertTrue(view["awaitingHost"])
@@ -364,7 +364,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(json.loads(body)["configuration"]["routerRetryIntervalSeconds"], 997)
         self.assertNotEqual(_headers["etag"], console_headers["etag"])
         projections = board.console.read_cache.calls["tasks"]["projections"]
-        status, _headers, replay = browser.get(
+        status, _headers, _ = browser.get(
             "/api/tasks?limit=5", headers={"If-None-Match": tasks_headers["etag"]}
         )
         self.assertEqual(
@@ -576,7 +576,7 @@ class ConsoleReadSessionIsolationTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(status, 200)
         csrf = json.loads(body)["csrfToken"]
         status, _headers, _body = browser.command(
-            "console_access_set", {"requireLogin": False, "expectedRevision": 0}, csrf=csrf
+            "console_access_set", {"requireLogin": False}, csrf=csrf
         )
         self.assertEqual(status, 200, _body[:300])
         # Login-free mode reads through the local session; the access revision
