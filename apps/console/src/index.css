@@ -180,7 +180,7 @@
   color: var(--ink);
   box-shadow: 0 14px 40px rgb(0 0 0 / 30%);
   outline: none;
-  clip-path: inset(0 calc(var(--goal-right) * (1 - var(--goal-progress))) calc((100% - 2px) * (1 - var(--goal-progress))) calc(var(--goal-left) * (1 - var(--goal-progress))) round var(--radius-overlay));
+  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--goal-progress))) 0 round var(--radius-overlay));
   transform: translateY(calc(var(--goal-start-y) * (1 - var(--goal-progress))));
 }
 .goal-card::after {

@@ -55,6 +55,16 @@ for (const scene of [
   await page.screenshot({ path: `${captures}/${name}-mid.png` });
   const middle = await card.evaluate(element => ({ progress: Number(getComputedStyle(element).getPropertyValue("--goal-progress")), clip: getComputedStyle(element).clipPath }));
   expect(middle.progress).toBeGreaterThan(0); expect(middle.progress).toBeLessThan(1);
+  // Only the bottom of the full-width sheet is revealed; the green line alone expands sideways.
+  const insets = middle.clip.slice("inset(".length, -1).split(" round ")[0]!.match(/calc\([^)]*\)|[^\s]+/g)!;
+  expect(insets[1], "the sheet's right edge is never clipped").toBe("0px");
+  expect(insets[3] ?? insets[1], "the sheet's left edge is never clipped").toBe("0px");
+  expect(await card.evaluate(element => {
+    const paragraph = element.querySelector('[data-slot="macro-goal-body"] p')!;
+    const range = document.createRange(); range.setStart(paragraph.firstChild!, 0); range.setEnd(paragraph.firstChild!, 1);
+    const glyph = range.getBoundingClientRect();
+    return paragraph.contains(document.elementFromPoint(glyph.x + glyph.width / 2, glyph.y + glyph.height / 2));
+  }), "the first character of the goal remains visible mid-animation").toBe(true);
   await card.evaluate(element => { for (const animation of element.getAnimations()) animation.finish(); });
   await page.screenshot({ path: `${captures}/${name}-open.png` });
   expect(await header.boundingBox()).toEqual(before);
