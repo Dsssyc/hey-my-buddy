@@ -11,12 +11,26 @@ const expected = {
   "created-desc": [A, standalone, B, C],
   "created-asc": [C, B, standalone, A],
 } as const;
+type Mode = keyof typeof expected;
+type Summary = { macroTaskId: string; createdAt: string | null; lastActivityAt: string | null };
+
+function alphaGroup(page: Page) {
+  return page.locator('[data-slot=macro-list] [data-slot=macro-group]')
+    .filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
+}
 
 async function rows(page: Page) {
-  return page.locator('[data-slot=macro-list] [data-slot=macro-group]')
-    .filter({ has: page.locator(`[data-macro-task-id="${A}"]`) })
-    .locator("[data-macro-task-id]")
+  return alphaGroup(page).locator("[data-macro-task-id]")
     .evaluateAll(nodes => nodes.map(node => node.getAttribute("data-macro-task-id")));
+}
+
+/** The time each row shows: its stamp and the screen-reader name telling which time it is. */
+async function times(page: Page) {
+  return alphaGroup(page).locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node => {
+    const time = node.querySelector("time");
+    return [node.getAttribute("data-macro-task-id"), time?.getAttribute("datetime") ?? null,
+            time?.querySelector(".sr-only")?.textContent ?? null];
+  }));
 }
 
 for (const [locale, by, direction, basisLabels, directionLabels] of [
@@ -54,8 +68,9 @@ for (const [locale, by, direction, basisLabels, directionLabels] of [
         expect(box.foreground).not.toBe(box.background);
       }
       await page.screenshot({ path: testInfo.outputPath(`macro-sort-${locale}-${theme}.png`) });
+      const seen: Partial<Record<Mode, Record<string, Summary>>> = {};
 
-      async function choose(select: typeof basis, value: string, mode: keyof typeof expected) {
+      async function choose(select: typeof basis, value: string, mode: Mode) {
         const read = page.waitForResponse(response => {
           const url = new URL(response.url());
           return url.pathname === "/api/macro-tasks" && url.searchParams.get("sort") === mode;
@@ -65,9 +80,21 @@ for (const [locale, by, direction, basisLabels, directionLabels] of [
         expect(response.ok()).toBe(true);
         const data = await response.json();
         expect(data.macroTasks.map((item: { macroTaskId: string }) => item.macroTaskId)).toEqual(expected[mode]);
+        seen[mode] = Object.fromEntries(data.macroTasks.map((item: Summary): [string, Summary] => [item.macroTaskId, item]));
         if (mode === "activity-desc") await expect(page).not.toHaveURL(/sort=/);
         else await expect(page).toHaveURL(new RegExp(`[?&]sort=${mode}$`));
-        await expect.poll(() => rows(page)).toEqual(expected[mode].filter(id => id === A || id === C));
+        await expectShown(mode);
+      }
+
+      /** Every row shows the time the sort is by: its stamp, and a reader-only name of which time it is. */
+      async function expectShown(mode: Mode) {
+        const created = mode.startsWith("created");
+        const label = basisLabels[created ? 1 : 0];
+        const visible = expected[mode].filter(id => id === A || id === C);
+        await expect.poll(() => times(page)).toEqual(visible.map(id => {
+          const summary = seen[mode]![id]!;
+          return [id, created ? summary.createdAt : summary.lastActivityAt, label];
+        }));
       }
 
       await choose(basis, "created", "created-desc");
@@ -76,6 +103,7 @@ for (const [locale, by, direction, basisLabels, directionLabels] of [
       await expect(basis).toHaveValue("created");
       await expect(order).toHaveValue("asc");
       await expect.poll(() => rows(page)).toEqual([C, A]);
+      await expectShown("created-asc");
       await choose(basis, "activity", "activity-asc");
       await choose(order, "desc", "activity-desc");
       await expect(page).not.toHaveURL(/sort=/);
@@ -83,10 +111,12 @@ for (const [locale, by, direction, basisLabels, directionLabels] of [
       await expect(basis).toHaveValue("activity");
       await expect(order).toHaveValue("asc");
       await expect.poll(() => rows(page)).toEqual([C, A]);
+      await expectShown("activity-asc");
       await page.goForward();
       await expect(basis).toHaveValue("activity");
       await expect(order).toHaveValue("desc");
       await expect.poll(() => rows(page)).toEqual([A, C]);
+      await expectShown("activity-desc");
     });
   });
 }
