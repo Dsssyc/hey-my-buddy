@@ -1,6 +1,6 @@
 # 0.18.0 源码：共享 skill、Buddy 配置与 schema 13
 
-本记录覆盖 2026-09-28 在 `socu/shared-skill` 与其后续分支上完成、并快进合并到 `socu/buddy-core` 的源码工作，以及同日以 Claude Code 作为 Host 试用 buddy 的观察。安装另见 [installed-0.18.0.md](installed-0.18.0.md)。
+本记录覆盖 2026-09-28 在 `socu/shared-skill` 与其后续分支上完成、并快进合并到 `socu/buddy-core` 的源码工作，以及同日以 Claude Code 作为 Host 试用 buddy 的观察。安装另见 [0.18.0.md](installs/0.18.0.md)。
 
 ## 范围
 

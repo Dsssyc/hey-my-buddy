@@ -2,7 +2,7 @@
 
 ## 状态
 
-方向已接受：开发者于 2026-09-28 确认只读路由、Router 角色，以及只检查路由边界。0.17.0 源码候选已实现 Python 侧：prompt v9、冻结合法候选、边界校验、program policyCheck、三档预算和冻结输入校验，并删除旧 DSH 决策路径（`decision_execution`、`start_decision`、Node 决策模块、`BUDDY_DECISION_HELPER` 与 `dsh.decision` 资源），不保留兼容层。所有原生只读结构化能力仍未验证，因此路由请求会打开 Host 边界而不是调用模型，候选当时尚未安装（此后随 0.18.0 于 2026-09-28 安装，[安装记录](../acceptance/installed-0.18.0.md)）；每次真实原生探针仍需单独批准。契约/发布为 0.17.0，schema 仍为 12。当前行为以 [decision.md](../reference/decision.md) 和 [workflow.md](../reference/workflow.md#buddy-and-routing) 为准，源码实现与验证边界见 [0.17.0 源码记录](../acceptance/router-read-only-routing-0.17.0.md)。术语见 [CONTEXT.md](../../CONTEXT.md)，角色划分延续 [ADR-013](013-buddy-roles-and-blackboard-terminology.md)。
+方向已接受：开发者于 2026-09-28 确认只读路由、Router 角色，以及只检查路由边界。0.17.0 源码候选已实现 Python 侧：prompt v9、冻结合法候选、边界校验、program policyCheck、三档预算和冻结输入校验，并删除旧 DSH 决策路径（`decision_execution`、`start_decision`、Node 决策模块、`BUDDY_DECISION_HELPER` 与 `dsh.decision` 资源），不保留兼容层。所有原生只读结构化能力仍未验证，因此路由请求会打开 Host 边界而不是调用模型，候选当时尚未安装（此后随 0.18.0 于 2026-09-28 安装，[安装记录](../acceptance/installs/0.18.0.md)）；每次真实原生探针仍需单独批准。契约/发布为 0.17.0，schema 仍为 12。当前行为以 [decision.md](../reference/decision.md) 和 [workflow.md](../reference/workflow.md#buddy-and-routing) 为准，源码实现与验证边界见 [0.17.0 源码记录](../acceptance/router-read-only-routing-0.17.0.md)。术语见 [CONTEXT.md](../../CONTEXT.md)，角色划分延续 [ADR-013](013-buddy-roles-and-blackboard-terminology.md)。
 
 ## 背景
 

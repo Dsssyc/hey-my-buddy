@@ -1,6 +1,6 @@
 # Codex 监控子代理与续做修复验收
 
-2026-09-29，从 `socu/buddy-core` 的 `9fcea9a860368d544ab2303c9f5db5e5f3c373bf` 新建分支 `socu/codex-monitor-subagent`，worktree 为 `~/.codex/worktrees/codex-monitor-subagent/hey-my-buddy`。本次保留 contract 0.19.0/schema 14，不做数据迁移；基线中尚未安装的 `USER` 环境修正随本分支保留。日常运行时仍为[已安装的 0.19.0](installed-0.19.0.md)，本次没有安装、升级、重启日常服务，也没有修改用户配置或发布。
+2026-09-29，从 `socu/buddy-core` 的 `9fcea9a860368d544ab2303c9f5db5e5f3c373bf` 新建分支 `socu/codex-monitor-subagent`，worktree 为 `~/.codex/worktrees/codex-monitor-subagent/hey-my-buddy`。本次保留 contract 0.19.0/schema 14，不做数据迁移；基线中尚未安装的 `USER` 环境修正随本分支保留。日常运行时仍为[已安装的 0.19.0](installs/0.19.0.md)，本次没有安装、升级、重启日常服务，也没有修改用户配置或发布。
 
 ## 实现
 

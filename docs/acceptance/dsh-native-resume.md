@@ -4,7 +4,7 @@
 
 Host 公共接线登记：独立诊断证明旧 DSH 回合上报 storageOwner=buddy-attempt 时，在候选能力开启后仍被共同判定选为 native-session，随后只能在原生模块因缺少 goal binding 失败。为满足升级后的重建规则，沿用既有 native_home_changed 判断，将原 Codex 的 buddy-goal 归属条件同时用于 DSH；仍用 private-native-home-required 原因，没有新增选择器、CLI 或 schema，其他三个 harness 的判断条件不变。该公共文件不在 R2/R3 写入范围，由 Host 整合；R3 将补新目录的正向事实与旧目录的重建断言，并去掉永久固定能力 false 的测试。原基线诊断失败与各交付初版结论均留存。
 
-2026-10-08，Codex Host；hostId沿用codex-adr025。输入socu/buddy-core的fbfa8eac，包含已验收的ADR-025第五步、ADR-027，包/契约0.29.0、schema15。实施分支socu/dsh-native-resume，检出为~/.codex/worktrees/dsh-native-resume/hey-my-buddy，不推送。先读[第五步Host验收](adr025-step5-host-review.md)，按其中已经确认的缺口处理第一部分，再实施DSH续接；第一部分不设单独外部验收停点。最终提交后停下，等Claude Code Host验收。
+2026-10-08，Codex Host；hostId沿用codex-adr025。输入socu/buddy-core的fbfa8eac，包含已验收的ADR-025第五步、ADR-027，包/契约0.29.0、schema15。实施分支socu/dsh-native-resume，检出为~/.codex/worktrees/dsh-native-resume/hey-my-buddy，不推送。先读[第五步Host验收](adr025/step5-host-review.md)，按其中已经确认的缺口处理第一部分，再实施DSH续接；第一部分不设单独外部验收停点。最终提交后停下，等Claude Code Host验收。
 
 ## 范围与已有机制
 

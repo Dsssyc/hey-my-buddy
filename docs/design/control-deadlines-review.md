@@ -92,7 +92,7 @@ DSH CLI 在普通 Worker 下的协议请求现在用无穷的执行期限（`src
 
 ### C1 新增一处没有登记的两侧引用
 
-`src/hey_my_buddy/buddy/roles/router.py:12` 新增 `from ...blackboard.tasks import workspace`（buddy 引 blackboard），`docs/acceptance/adr025-step5-cross-imports.tsv` 里没有这一行（该表也没有测试强制）。它只为在 `router.py:71`、`:145` 设 `git_deadline`。`router_input.py:11` 已经登记引用了 `workspace`，把期限作为参数交给 `router_input.prepare` / `verify`、由 `router_input` 自己进入 `git_deadline`，就不需要这条新引用。若保留，至少要登记；按 ADR-025 第 12 条，两侧都要的东西应放在 `protocol/` 或根包，而一个只有 Router 用的 Git 期限上下文放在 blackboard 的 `workspace` 里本身也值得再想。
+`src/hey_my_buddy/buddy/roles/router.py:12` 新增 `from ...blackboard.tasks import workspace`（buddy 引 blackboard），`docs/acceptance/adr025/step5-cross-imports.tsv` 里没有这一行（该表也没有测试强制）。它只为在 `router.py:71`、`:145` 设 `git_deadline`。`router_input.py:11` 已经登记引用了 `workspace`，把期限作为参数交给 `router_input.prepare` / `verify`、由 `router_input` 自己进入 `git_deadline`，就不需要这条新引用。若保留，至少要登记；按 ADR-025 第 12 条，两侧都要的东西应放在 `protocol/` 或根包，而一个只有 Router 用的 Git 期限上下文放在 blackboard 的 `workspace` 里本身也值得再想。
 
 ### C2 只为测试保留的可选参数与 None 分支
 

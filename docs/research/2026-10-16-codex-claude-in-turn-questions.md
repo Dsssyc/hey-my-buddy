@@ -2,7 +2,7 @@
 
 ## 问题
 
-DSH 与 ZCode 的问询走合作式的检查点：Host 的问题排在队里，等 Worker 自己调用 `hey_my_buddy_checkpoint` 才送到，答复经 `hey_my_buddy_answer_inquiry` 回来。Codex 与 Claude Code 还没有问询（[执行计划](../design/adr031-execution-plan.md)“落在这块底座上的待办”里的 31–32，要求先证原生的路径）。要弄清两件事：原生一侧有没有把一条输入送进正在跑的那个回合的办法；答复能不能可靠地对上这个回合与这个问题。
+DSH 与 ZCode 的问询走合作式的检查点：Host 的问题排在队里，等 Worker 自己调用 `hey_my_buddy_checkpoint` 才送到，答复经 `hey_my_buddy_answer_inquiry` 回来。Codex 与 Claude Code 还没有问询（[执行计划](../design/adr031/execution-plan.md)“落在这块底座上的待办”里的 31–32，要求先证原生的路径）。要弄清两件事：原生一侧有没有把一条输入送进正在跑的那个回合的办法；答复能不能可靠地对上这个回合与这个问题。
 
 ## 看了什么
 

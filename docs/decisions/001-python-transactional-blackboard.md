@@ -4,7 +4,7 @@
 
 Status: Accepted for implementation; acceptance evidence is required before release. Date: 2026-09-19
 
-> **Historical record.** This ADR preserves the design requirements that led to the 0.4.0 implementation. It is not a description of current behavior, and its implementation and migration instructions are historical — do not repeat the migration. Implemented behavior is documented in [architecture.md](../reference/architecture.md); the acceptance evidence is [python-blackboard-0.4.0.md](../acceptance/python-blackboard-0.4.0.md).
+> **Historical record.** This ADR preserves the design requirements that led to the 0.4.0 implementation. It is not a description of current behavior, and its implementation and migration instructions are historical — do not repeat the migration. Implemented behavior is documented in [architecture.md](../reference/architecture.md); the acceptance evidence is [python-blackboard-0.4.0.md](../acceptance/adr001/python-blackboard-0.4.0.md).
 
 ## Purpose
 

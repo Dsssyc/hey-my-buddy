@@ -4,7 +4,7 @@
 
 已接受：开发者于 2026-09-28 批准 ADR-012 提案中"单一全局 CLI 加单一 skill 取代按 Host 维护的插件"的方向，并确定了本文的三项选择。0.18.0 源码实现本决定，日常安装需另行授权。开发者于 2026-10-13 定下 skill 改名为 `hey-my-buddy`、命令同名，随 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L14 实施；在那之前仍叫 `buddy`。本决定取代 [ADR-007](007-neutral-core-and-single-current-contract.md) 中"只通过插件分发 skill、只有插件内的 `bin/buddy` 一个启动器"的规定；ADR-007 的其他内容不变。
 
-后续扩展（实施边界，见文末）：[ADR-017](017-local-installation-and-harness-discovery.md) 于同日接受，扩展了本文的安装入口、启动器、版本切换与 harness 发现。当前源码候选为 0.19.0/contract 0.19.0/schema 14，日常已安装版本为 [0.18.0/contract 0.18.0/schema 13](../acceptance/installed-0.18.0.md)；安装入口、启动器与发现以 ADR-017 和现行参考文档为准，本文以下原文保留 0.18.0 时的决定记录。
+后续扩展（实施边界，见文末）：[ADR-017](017-local-installation-and-harness-discovery.md) 于同日接受，扩展了本文的安装入口、启动器、版本切换与 harness 发现。当前源码候选为 0.19.0/contract 0.19.0/schema 14，日常已安装版本为 [0.18.0/contract 0.18.0/schema 13](../acceptance/installs/0.18.0.md)；安装入口、启动器与发现以 ADR-017 和现行参考文档为准，本文以下原文保留 0.18.0 时的决定记录。
 
 ## 背景
 

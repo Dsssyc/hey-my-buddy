@@ -78,7 +78,7 @@ Buddy capabilities use `routing:fast` for the no-tool capability, while `decisio
 
 The 0.19.0 source declares Codex read-only structured routing verified on macOS, after native probes with codex-cli 0.157.0 and GPT-6 Sol high established frozen-root reads, denied out-of-root reads and writes, denied networking, unchanged input and confirmed shutdown. Each call checks the effective private permission configuration and native acknowledgement before model input.
 
-Historical approved fast-routing probes and their limits remain in [0.20.0 acceptance](../acceptance/routing-modes-0.20.0.md). Current source eligibility, fixture checks and daily installation are separate facts. Codex/Claude review retains the existing native sandbox path without a paid certificate; DSH/ZCode review is unavailable until the separately designed Worker-carrier path is implemented and accepted.
+Historical approved fast-routing probes and their limits remain in [0.20.0 acceptance](../acceptance/adr018/routing-modes-0.20.0.md). Current source eligibility, fixture checks and daily installation are separate facts. Codex/Claude review retains the existing native sandbox path without a paid certificate; DSH/ZCode review is unavailable until the separately designed Worker-carrier path is implemented and accepted.
 
 ## Relation to routing
 

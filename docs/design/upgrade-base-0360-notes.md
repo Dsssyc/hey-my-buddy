@@ -1,6 +1,6 @@
 # 升级基点移到 0.36.0
 
-2026-10-15，本次修改基于 `202f4df2`。新的升级基点是 `6b385e53bf24e462b7c1534efcd77698b2c4729a`，版本 0.36.0，schema 20；依据是开发者的日常安装已经用掉 schema 19 → 20 的升级，见[安装记录](../acceptance/install-0.36.0.md)。当前产品版本、协议版本、schema 版本及 schema 20 的 DDL 均未改动。
+2026-10-15，本次修改基于 `202f4df2`。新的升级基点是 `6b385e53bf24e462b7c1534efcd77698b2c4729a`，版本 0.36.0，schema 20；依据是开发者的日常安装已经用掉 schema 19 → 20 的升级，见[安装记录](../acceptance/installs/0.36.0.md)。当前产品版本、协议版本、schema 版本及 schema 20 的 DDL 均未改动。
 
 生成命令为 `<prepared-python> packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/upgrade-base-0360 --output-dir tests/fixtures/upgrade-base`；`<prepared-python>` 代表 Host 指定的既有解释器，生成时也用它提供依赖，没有安装依赖或改写其环境。生成器通过 `git archive` 读取基点，在私有目录里从基点源码运行进程内的命名操作；没有启动服务、harness 或模型，没有读取账户。原始生成材料保留在被忽略的 `tmp/upgrade-base-0360/`。
 
