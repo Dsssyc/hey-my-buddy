@@ -1,33 +1,31 @@
 # 等 Host 的微任务与升级
 
-本记录对应基线 `7e6a8191`（0.34.0，schema 18）。当前交付是范围内的部分实现和接口阻塞证据，尚未完成这个微任务的全部升级验证，也不构成 Host 验收或安装事实。
+本变更基于 `7e6a8191`（0.34.0，schema 18）。修改升级空闲查询和启动器的重试提示，保留存储形式、schema 和各命令已有的身份契约。以下记录源码检查与私有测试结果，Host 验收和日常安装另行处理。
 
 ## 空闲判断
 
-`install/upgrade.py::idle_snapshot` 从全量任务中保留会自己推进的工作作为阻挡项：运行中、取消中、待对账的任务，以及排队中的普通执行、路由、辅助工作和续接工作。只有关联受管运行处在 `awaiting-host`，且没有 `recorded` 或 `queued` 续接的排队任务可以放行。辅助任务和路由任务仍各自参加全量检查，不能借父任务的 Host 边界被放行。所有执行另行检查 `execution_state` 和 `shutdown_confirmed`；任一执行没有结束或停止未确认，都以 `unresolvedAttempts` 阻挡。该判断不读取易变的 `queue_reason` 作为许可，也不取消任务。
+`install/upgrade.py::idle_snapshot` 从全量任务中保留会自己推进的工作作为阻挡项：运行中、取消中、待对账的任务，以及排队中的普通执行、路由、辅助工作和续接工作。只有关联受管运行处在 `awaiting-host`，且没有 `recorded` 或 `queued` 续接的排队任务可以放行。辅助任务和路由任务各自参加全量检查。所有执行另行检查 `execution_state` 和 `shutdown_confirmed`；任一执行没有结束或停止未确认，都以 `unresolvedAttempts` 阻挡。判断依据持久运行与续接事实，忽略易变的 `queue_reason`，不取消任务。
 
-`UPGRADE_NOT_IDLE` 保留既有 `active`（runId、state）和 `unresolvedAttempts` 结构，列出实际阻挡项。只修改查询，不改数据库形式、schema 版本、版本号或分支。
+`UPGRADE_NOT_IDLE` 保留既有 `active`（runId、state）和 `unresolvedAttempts` 结构，列出实际阻挡项。`test_upgrade_waiting_host.py` 覆盖 assistance、attention 边界放行，可认领的排队工作、运行中的执行、排队续接、Host 边界仍有 recorded 续接、停止未确认拒绝，并比较数据库快照以确认没有取消或改写。`test_upgrade_migration.py` 保留排队、运行中和停止未确认的路由拒绝断言。
 
-## Host 命令与回执
+## Host 命令与升级交接
 
-第一项：现有 `blackboard/service/service.py::_guard` 在 `upgrade.json` 存在时，在业务处理器之前以 `UPGRADE_IN_PROGRESS` 拒绝这九项 Host 操作；没有写下任务、请求、事件或回执。启动器也先检查该标记；本次把启动器错误消息补成明确要求升级验证或恢复结束后，使用相同命令和身份重试。新测试覆盖九项入口拒绝、数据库快照不变及启动器重试提示，但尚未走真实切换后的九项重发。
+升级期间的拒绝由现有 `blackboard/service/service.py::_guard` 统一执行：`upgrade.json` 存在时，九个 Host 入口在业务处理器之前返回 `UPGRADE_IN_PROGRESS`，消息要求验证结束后重试。启动器先检查同一标记，本次补充其错误消息，明确使用相同命令和身份重试。九项入口测试使用各自的参数形状，并在每次拒绝后比较数据库快照，确认任务、请求、事件和回执没有被写下。
 
-发现了冻结要求的接口阻塞：任务要求这九项在升级后都用同一个 `commandId` 重发成功，而 `workflow.accept` 和 `workflow.conclude` 的 `reject_unknown` 明确不接受 `commandId`（`blackboard/tasks/workflow.py::accept`、`conclude`）；`inquire` 的入口只接受 `inquiryId` 等字段（`blackboard/tasks/inquiry.py::observe`）；`workflow.submit` 的字段集合也没有 `commandId`（`protocol/schemas.py::WORKFLOW_SUBMIT_FIELDS`）。测试确认这四项在没有升级锁时，带 `commandId` 得到 `INVALID_ARGUMENT`，数据库仍不变。它们原本各有身份：accept 绑定运行和输出制品；conclude 根据运行、目标运行、note 和执行身份派生回执键；inquire 使用 inquiryId 和同一问题；submit 使用 requestId、同一输入及 submissionToken。没有自行把原生身份解释成冻结要求里的 commandId，也没有越界修改这些接口。
+重发沿用原生身份：decide、continue、takeover、cancel、scope-amend 使用 commandId；submit 使用 requestId、同一输入和 submissionToken；inquire 使用 inquiryId 和同一问题；accept 绑定运行和输出制品；conclude 使用运行、目标运行、说明和执行身份派生的回执键。没有新增字段。真实升级测试在写入 preflight 标记后，以同一个 cancel commandId 和同一个 submit requestId/submissionToken 发请求，确认拒绝和数据库不变；升级完成后重发成功，再次重发恢复原回执或原运行，提交记录只有一份。
 
-第二项：现有 `commands` 表保留命令输入指纹及响应，升级的备份、恢复与数据指纹验证包含该表。大部分回执重放仍要求有效的当前 Host 权限；takeover 专门以原代控制能力验证其回执，并要求该回执颁发的代仍为当前代。已读源码，尚未补齐真实升级前丢回应、升级后重发的测试；不能据此声称本项完成。
+升级前生效而回应丢失的代表场景使用 scope-amend：真实 RPC 已提交范围修订，将返回值仅留作测试对照；升级后带相同 commandId、原预期 revision 和原参数重发，得到原响应（duplicate 为 true）。数据库只有一个该 commandId 的回执、一条范围修订事件，以及初始范围加修订后的两个范围版本。重复请求没有再次生效。现有 commands 表、输入指纹与回执查询足以处理这个场景，无须新增安装层重放机制。
 
-第三项：现有升级在 detach 后取得 daemon 与 board owner 锁，然后再检查空闲、备份和验证保留值；备份也保留 controls 等声明的持久文件，检出目录不属于被替换的运行时。新测试确认 assistance、attention 停止后可通过空闲检查，未确认停止仍被拒绝，并通过现有受管任务夹具验证这些边界不可被 Worker 继续认领。尚未在真实切换中断言等待请求、控制文件和真实 Git 检出占用保留，亦未验证切换后 decide、continue。
+Host 边界保留测试使用真实 Git worktree 和真实控制文件。升级前有两个已确认停止、处在 awaiting-host 的受管微任务，主任务的求助请求仍未结；升级成功且保留值指纹验证通过。升级后主任务状态、完整 activeRequest 视图、revision、ownerGeneration 都与升级前相同，控制文件字节和 0600 权限不变，读取出的控制能力相同，检出仍存在且 HEAD 不变，workspace_reservations 各行也相同。随后用保存的控制能力执行 decide，再执行 continue，确认请求正常解决并排入一个续接。
 
-第四项：现有 `cli/blocking.py::_wait_until_terminal` 只读同一个运行；服务拒绝或断连后尝试重读同一 runId，失败则返回 `unavailable`、错误码和同一运行的 recovery 信息。服务升级锁也挡住这些读取，因此可能明确退出等候。已读源码，尚未补真实升级跨越 await 的测试，不声明其运行验证通过。
+跨升级 await 的现状是明确退出并保留恢复身份。测试在执行仍活动时启动真实 await，观察服务的 wait_capacity.admitted 为 1，证明服务已接纳等待；执行随后以 assistance 停在 Host 边界。测试延迟交付真实等待回应，直到升级的 preflight 标记已写入，再让 await 读取同一运行。后续读取被升级锁拒绝，await 返回 unavailable、UPGRADE_IN_PROGRESS 和同一 runId 的 recovery 信息，其中明确给出重新 await 的动作。没有无声挂住，也没有提交、续接或取消任务。
 
-命令在标记写入之前进入服务的窗口由现有升级协调器处理：写标记后再查空闲，detach 取得所有权锁后又查空闲，随后才备份。提前进入的命令若产生待执行工作，升级拒绝；若已提交静态事实，其记录应随最终快照备份。这个窗口没有被当作已证实的丢命令缺陷，也没有新增安装调用层补丁。
+标记写入前已进入处理器的命令仍由现有协调流程交接：写标记后重新检查空闲，detach 取得 daemon 和 board owner 锁后又检查，随后才备份。已提交的持久事实纳入最终快照；产生可执行工作的命令使升级被拒绝。这个窗口的源码检查没有发现需要在安装调用处新增补丁的丢命令根因。
 
-## 验证与尚未守住的边角
+## 验证边界
 
-新增 `tests/python/install/test_upgrade_waiting_host.py` 使用现有受管流程夹具；执行回执和工作区模块有明确替身，没有运行真实模型或原生 harness。测试覆盖 assistance、attention 空闲，普通排队和运行中的任务、排队续接、Host 边界仍有 recorded 续接、未确认停止拒绝，拒绝不取消或改写数据库，九项入口的升级拒绝，以及上述四项 commandId 参数阻塞。既有 `test_upgrade_migration.py` 继续覆盖排队和运行中的旧路由、停止未确认的路由拒绝。
+`test_upgrade_host_cutover.py` 准备两个不同内容身份的私有运行时，使用各自的真实解释器和服务进程，实际走 probe、journal、detach、所有权锁交接、备份及验证、start、保留值校验和 active-runtime 发布。运行时准备使用 stdlib venv（不带 pip）并复制指定检查解释器已有的依赖及包元数据；runtime.materialize 被替换为返回已准备的私有运行时，避免安装依赖。原生发现复用现有离线 catalog 服务夹具，自动 WorkerPool 启动和补位关闭，并断言夹具转换的入口存在。受管执行使用合成的、通过正式 provenance 验证的停止回执；Git、服务 RPC、数据库、控制文件和升级流程均使用真实实现。
 
-测试仅经授权解释器执行检查命令：`env <清除继承的运行时、Worker、凭据与虚拟环境变量> PYTHONPATH=src <authorized-python> -m hey_my_buddy.cli.checks tests/python/install/test_upgrade_waiting_host.py tests/python/install/test_upgrade.py tests/python/install/test_upgrade_service.py tests/python/install/test_upgrade_migration.py`。检查命令为测试文件创建私有状态、运行时和主目录，未运行完整检查，未安装依赖或切换日常服务。首轮退出 1：新增测试误用了取消字段名，且错误详情新增字段破坏了旧断言；已改为实际的 `cancel_requested_at` 并保留原错误详情结构。
+最终检查只运行五个文件：`test_upgrade_host_cutover.py`、`test_upgrade_waiting_host.py`、`test_upgrade.py`、`test_upgrade_service.py`、`test_upgrade_migration.py`。命令为 `env <清除继承的运行时、Worker、凭据与虚拟环境变量> PYTHONPATH=src <authorized-python> -m hey_my_buddy.cli.checks <上述五个 tests/python/install 文件>`。全部 46 项测试通过，0 项跳过，检查退出 0，私有根目录已移除；`git diff --check` 通过。
 
-最终检查：上述四个测试文件全部通过，共 46 项测试，0 项跳过，检查命令退出 0，私有根目录已移除。`git diff --check` 通过。这个结果验证的是已运行测试的边界，不包含新增的真实升级跨越场景。
-
-需要 Host 明确四个接口的原生身份是否满足本任务的重发要求；若必须提供外部 commandId，则需要扩大源码写入范围到对应工作流、inquiry 和协议字段验证，并由 Host 明确完整的身份契约。真实升级成功、升级前丢回应的重放、切换后控制/请求/检出占用保留及跨升级 await 尚未补齐。因为接口要求的根因在写入范围之外，本轮停止推进这些依赖该决定的工作。
+真实交接测试覆盖同一 contract 0.34.0、schema 18 的两个运行时内容代；既有迁移文件另行验证 schema 17 的备份、迁移和恢复。验证在本机 macOS 的私有环境中完成，自动 supervisor 的运行与退休、实际原生模型执行、Windows、断电恢复和日常安装不属于这份测试证据。回执重放仍遵守当前 Host 控制权限和 owner fencing；takeover 的原代能力重放规则沿用既有实现。

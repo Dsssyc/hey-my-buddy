@@ -1,7 +1,7 @@
-"""Host boundary admission and the frozen commandId requirement's scope blocker."""
+"""Host boundary admission and the shared upgrade entry fence."""
 from unittest import mock
 
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.tasks.test_workflow import CONFIGURATION, WorkflowTestCase
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import launcher, upgrade
@@ -94,31 +94,33 @@ class WaitingHostUpgradeTests(WorkflowTestCase):
         self.assertEqual(self.snapshot(board), before)
 
     def test_all_host_commands_are_fenced_without_recording_anything(self):
-        board, run, _view = self.boundary()
+        board, run, view = self.boundary()
         upgrade.write_journal(board.directory / "upgrade.json", {})
         before = self.snapshot(board)
-        for operation in ("workflow_decide", "workflow_continue", "workflow_accept", "workflow_conclude",
-                          "workflow_takeover", "workflow_cancel", "workflow_scope_amend", "inquiry_observe",
-                          "workflow_submit"):
+        controlled = {"runId": run["runId"], **self.control(view)}
+        command = {**controlled, "commandId": "same-command"}
+        calls = (
+            ("workflow_decide", {**command, "requestId": view["activeRequest"]["requestId"],
+                                 "expectedRevision": view["revision"], "decision": "approve"}),
+            ("workflow_continue", {**command, "expectedRevision": view["revision"],
+                                   "input": "continue", "helperPolicy": "keep"}),
+            ("workflow_accept", {**controlled, "artifactId": "fixture-output", "note": "reviewed", "notRequired": "fixture"}),
+            ("workflow_conclude", {**controlled, "note": "reviewed"}),
+            ("workflow_takeover", {**command, "expectedOwnerGeneration": 1, "newHostId": "host-2"}),
+            ("workflow_cancel", command),
+            ("workflow_scope_amend", {**command, "expectedRevision": view["revision"],
+                                      "expectedScopeVersion": 1, "writeScope": ["src"], "reason": "reviewed"}),
+            ("inquiry_observe", {"runId": run["runId"], "inquiryId": "same-inquiry", "question": "status?"}),
+            ("workflow_submit", {**CONFIGURATION, "requestId": "same-submission", "submissionToken": "t" * 32,
+                                  "hostId": "host-1", "task": "fixture", "cwd": str(self.workdir()),
+                                  "executionWorkspace": {"kind": "existing", "access": "write"}}),
+        )
+        for operation, params in calls:
             with self.subTest(operation=operation):
                 with self.assertRaises(BoardError) as caught:
-                    board.call(operation, {"runId": run["runId"], "commandId": "same-command"})
+                    board.call(operation, params)
                 self.assertEqual(caught.exception.code, "UPGRADE_IN_PROGRESS")
                 self.assertIn("retry", str(caught.exception))
-                self.assertEqual(self.snapshot(board), before)
-
-    def test_four_public_operations_do_not_accept_the_required_command_id(self):
-        # This characterizes a scope blocker, not successful upgrade replay.
-        # Their native identities differ; changing these validators is outside
-        # this micro task's install-only source write scope.
-        board, run, _view = self.boundary()
-        for operation in ("workflow_accept", "workflow_conclude", "inquiry_observe", "workflow_submit"):
-            with self.subTest(operation=operation):
-                before = self.snapshot(board)
-                with self.assertRaises(BoardError) as caught:
-                    board.call(operation, {"runId": run["runId"], "commandId": "same-command"})
-                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("commandId", str(caught.exception))
                 self.assertEqual(self.snapshot(board), before)
 
     def test_launcher_fence_explains_retry(self):
