@@ -1,11 +1,11 @@
-"""Model-family admission constants and managed worker-pool identity.
+"""Model-service admission constants and managed worker-pool identity.
 
-Two facts must stay identical in the store and the daemon: how a model family and
+Two facts must stay identical in the store and the daemon: how a model service and
 its limits are derived, and the stable IDs of the daemon's generic pool. Both live
 here so there is exactly one scheduler, one naming rule and no second job engine.
 
 ADR-011 removed the separate business/decision lanes: routing and execution share
-one machine-wide ceiling and the same per-family counters. A model family is the
+one machine-wide ceiling and the same per-model-service counters. A model service is the
 exact adapter/provider/model tuple; effort variants share one limit.
 
 Pool *ownership* is deliberately not inferred from these names: the daemon records
@@ -30,15 +30,15 @@ TOTAL_CONCURRENCY_DEFAULT = 8
 TOTAL_CONCURRENCY_MIN = 1
 TOTAL_CONCURRENCY_MAX = 32
 
-#: Per-family concurrent-attempt limit bounds. Families without an explicit user
-#: setting use the default; effort never widens or narrows the family.
+#: Per-model-service concurrent-attempt limit bounds. Model services without an explicit user
+#: setting use the default; effort never widens or narrows the model service.
 MODEL_LIMIT_DEFAULT = 2
 MODEL_LIMIT_MIN = 1
 MODEL_LIMIT_MAX = 32
 
 #: Queue-reason names. ``capacity`` keeps the historical name for the machine-wide
-#: ceiling so existing clients and receipts keep their meaning; a full model family
-#: is explicit so an operator can tell which family limit is holding the work.
+#: ceiling so existing clients and receipts keep their meaning; a full model service
+#: is explicit so an operator can tell which model service limit is holding the work.
 REASON_TOTAL_CAPACITY = "capacity"
 REASON_MODEL_CAPACITY = "model-capacity"
 
@@ -53,14 +53,14 @@ def clamp_total(value: int) -> int:
 
 
 def clamp_model_limit(value: int) -> int:
-    """A per-family limit as a bounded integer."""
+    """A per-model-service limit as a bounded integer."""
     return max(MODEL_LIMIT_MIN, min(int(value), MODEL_LIMIT_MAX))
 
 
-def model_family(spec: dict) -> tuple[str, str, str] | None:
-    """The model family a specification will consume, or ``None`` when it has none.
+def model_service(spec: dict) -> tuple[str, str, str] | None:
+    """The model service a specification will consume, or ``None`` when it has none.
 
-    The family is the exact adapter/provider/model tuple. Partial configurations and
+    The model service is the exact adapter/provider/model tuple. Partial configurations and
     model-less work (``command``/``external``, an unresolved governed run) return
     ``None``: they are admitted against the machine-wide ceiling only. A governed
     run's effective specification already merges the resolved execution

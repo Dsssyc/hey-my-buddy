@@ -6,7 +6,7 @@ the complete actor-free packet — even with no usable Router — and each item 
 its own immutable internal task. Pre-claim preparation advances a model-前
 unavailable item after recording its real preflight no-answer, queues behind
 retries and capacity, and a
-claim freezes the actual family, tool policy and Router binding onto the
+claim freezes the actual model service, tool policy and Router binding onto the
 attempt inside one transaction. Old dispatch documents, hashes and receipts are
 never rewritten by a later dispatch of the same request.
 """
@@ -278,9 +278,9 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
 
 
 
-    def test_family_capacity_only_queues_without_a_bypass_task(self):
+    def test_model_service_capacity_only_queues_without_a_bypass_task(self):
         result = self.request()
-        # Two active attempts on an unrelated family fill the machine-wide
+        # Two active attempts on an unrelated model service fill the machine-wide
         # ceiling (max_concurrent=2): the dispatch only queues behind it.
         with self.board_.store.db.write() as db:
             for index in (1, 2):
@@ -363,15 +363,11 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
 
 
 class ClaimTests(RouterDispatchTestCase):
-    def test_claim_freezes_the_actual_family_policy_and_binding(self):
+    def test_claim_freezes_the_actual_model_service_policy_and_binding(self):
         result = self.request()
         committed = self.claim("ok")
         self.assertIsNotNone(committed["claim"])
         attempt = committed["claim"]["attempt"]
-        # The attempt carries the dispatched Router's exact family tuple.
-        family = attempt["modelFamily"]
-        self.assertEqual((family["adapter"], family["provider"], family["model"]),
-                         ("dsh", "fixture", "alpha"))
         document = committed["claim"]["decisionInput"]
         self.assertEqual(document["routerProfileId"], A)
         self.assertEqual(document["routerIndex"], 0)
@@ -395,7 +391,7 @@ class ClaimTests(RouterDispatchTestCase):
                              (result["decisionId"],)).fetchone()
         self.assertEqual(row["input_sha256"], self.dispatch_of(result["runId"])["inputSha256"])
 
-    def test_selector_family_reads_the_current_dispatch(self):
+    def test_selector_model_service_reads_the_current_dispatch(self):
         result = self.request()
         with self.board_.store.db.write() as db:
             db.execute("UPDATE evaluation_profiles SET enabled=0 WHERE profile_id=?", (A,))
@@ -408,8 +404,8 @@ class ClaimTests(RouterDispatchTestCase):
             spec = json.loads(db.execute("SELECT spec_json FROM tasks t JOIN decision_requests r"
                                          " ON r.task_id=t.task_id WHERE r.decision_id=?",
                                          (result["decisionId"],)).fetchone()[0])
-            family = self.board_.store.decisions.selector_family(db, spec)
-        self.assertEqual(family, ("dsh", "fixture", "bravo"))
+            model_service = self.board_.store.decisions.selector_model_service(db, spec)
+        self.assertEqual(model_service, ("dsh", "fixture", "bravo"))
 
 
 class WorkflowWiringTests(RouterDispatchTestCase):

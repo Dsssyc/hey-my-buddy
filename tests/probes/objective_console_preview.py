@@ -845,7 +845,6 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "workerId": "synthetic-worker-1", "workerIdentity": "synthetic preview worker (fixture)",
         "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or configuration["adapter"],
         "executionState": item["state"], "ownership": "owned",
-        "modelFamily": {key: configuration[key] for key in ("adapter", "provider", "model")},
         "runtimeIdentity": None, "leaseExpiresAt": None, "leaseSeconds": 900, "logPaths": {},
         "resultAvailable": item["result"] is not None, "shutdownConfirmed": item["shutdownConfirmed"],
         "cancelRequested": cancelled, "cancelRequestedAt": entry["updatedAt"] if cancelled else None,
@@ -1258,7 +1257,7 @@ def profile_views() -> list[dict]:
 
 def policy_views() -> dict:
     """Synthetic user policy: three buddy preferences and one model note."""
-    def family(cfg: dict) -> dict:
+    def model_service(cfg: dict) -> dict:
         return {key: cfg[key] for key in ("adapter", "provider", "model")}
 
     def profile_id(cfg: dict) -> str:
@@ -1269,7 +1268,7 @@ def policy_views() -> dict:
                    {"profileId": profile_id(CFG_CODEX), "mode": "pin", "reason": ""}]
     return {
         "preferences": sorted(preferences, key=lambda entry: entry["profileId"]),
-        "familyAnnotations": [{**family(CFG_CODEX), "text": "synthetic preview family note",
+        "modelServiceNotes": [{**model_service(CFG_CODEX), "text": "synthetic preview family note",
                                "updatedAt": "2026-09-26T00:00:00Z"}],
     }
 
@@ -1410,7 +1409,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                                                   "toolCalls": 24, "bytesRead": 524288}},
         "configurationError": None,
         "profiles": profiles,
-        "modelConcurrency": concurrency_rows(),
+        "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(),
         "unavailableProfileCount": sum(1 for profile in profiles if not profile["available"]),
         **policy_views(), "decisions": [],
@@ -1553,7 +1552,7 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
     elif operation == "model_profiles":
         profiles = profile_views()
         result = {"profiles": profiles, **policy_views(),
-                  "modelConcurrency": concurrency_rows(), "nextCursor": None}
+                  "modelServiceConcurrency": concurrency_rows(), "nextCursor": None}
     if scenario == "error":
         # Validate first, then simulate the read failure: a missing or unknown
         # identifier still answers 400/404 instead of being masked by the 503.

@@ -11,8 +11,8 @@ import { catalogue, effortCell, levelSwitch, listed, modelButton, note, pane, se
 const dsh = (model: string) => `dsh / deepseek-official / ${model}`;
 const GLM = "zcode / bigmodel-api / GLM-5.3";
 
-// The installed catalog contains four DSH families with four efforts each and
-// two ZCode families with three each. Only the four recorded choices are enabled.
+// The installed catalog contains four DSH model services with four efforts each and
+// two ZCode model services with three each. Only the four recorded choices are enabled.
 function catalog(): Profile[] {
   const enabled = new Set(["dsh:deepseek-flash:off", "dsh:deepseek-flash:max", "zcode:GLM-5.3:high", "zcode:GLM-5.3-Flash:max"]);
   return [
@@ -52,8 +52,8 @@ function fixture(records: Task[] = []) {
 
     configuration: { routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
-    preferences: [], familyAnnotations: [], decisions: [],
-    modelConcurrency: [],
+    preferences: [], modelServiceNotes: [], decisions: [],
+    modelServiceConcurrency: [],
     tasks: { pendingCount },
     capabilities: { selection: false } };
 

@@ -32,11 +32,11 @@ const initial = (): Snapshot => ({
   ],
 
   preferences: [],
-      familyAnnotations: [],
+      modelServiceNotes: [],
 
   decisions: [],
 
-  modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
+  modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { pendingCount: 0 },
   capabilities: { selection: false },
 });

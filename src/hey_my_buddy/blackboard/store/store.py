@@ -95,7 +95,7 @@ class BoardStore:
         self.db = Database(self.directory)
         #: The one machine-wide concurrent-attempt ceiling (BUDDY_MAX_CONCURRENT).
         #: Routing/selection attempts and business attempts share it and the same
-        #: per-model-family counters; there is no separate decision lane.
+        #: per-model-service counters; there is no separate decision lane.
         self.max_concurrent = scheduling.clamp_total(max_concurrent)
         self.lease_seconds = max(15, min(int(lease_seconds), 3600))
         self.wait_capacity = max(1, int(wait_capacity))
@@ -378,13 +378,6 @@ class BoardStore:
             "adapter": row["adapter"],
             "executionState": row["execution_state"],
             "ownership": row["ownership"],
-            # The model family frozen onto this attempt at claim time (observation
-            # only), or null for model-less work.
-            "modelFamily": (
-                {"adapter": row["model_adapter"], "provider": row["model_provider"], "model": row["model_model"]}
-                if row["model_model"] is not None
-                else None
-            ),
             "runtimeIdentity": row["runtime_identity"],
             "leaseExpiresAt": row["lease_expires_at"],
             "leaseSeconds": row["lease_seconds"],
@@ -548,22 +541,22 @@ class BoardStore:
         " OR (result_json IS NOT NULL AND shutdown_confirmed = 0)"
     )
 
-    #: One bounded candidate scan. Tasks of families that are already at their
+    #: One bounded candidate scan. Tasks of model services that are already at their
     #: concurrent-attempt limit are filtered out *before* this LIMIT, so a deep
-    #: full-family backlog cannot occupy the whole bounded window and hide unrelated
+    #: full-model-service backlog cannot occupy the whole bounded window and hide unrelated
     #: runnable work.
     CLAIM_CANDIDATE_LIMIT = 50
 
-    #: The queued-task model family as one SQL expression. It mirrors
-    #: :func:`scheduling.model_family` over the task's effective specification: a
+    #: The queued-task model service as one SQL expression. It mirrors
+    #: :func:`scheduling.model_service` over the task's effective specification: a
     #: governed run's resolved execution configuration wins over the immutable
     #: original request, and tasks without a complete adapter/provider/model triple
-    #: have no family.
-    _QUEUED_FAMILY_PROVIDER = (
+    #: have no model service.
+    _QUEUED_MODEL_SERVICE_PROVIDER = (
         "COALESCE(json_extract(r.execution_configuration_json,'$.provider'),"
         " json_extract(t.spec_json,'$.provider'))"
     )
-    _QUEUED_FAMILY_MODEL = (
+    _QUEUED_MODEL_SERVICE_MODEL = (
         "COALESCE(json_extract(r.execution_configuration_json,'$.model'),"
         " json_extract(t.spec_json,'$.model'))"
     )
@@ -574,10 +567,10 @@ class BoardStore:
         return int(row["total"])
 
     def _model_active_counts(self, connection: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
-        """Unresolved attempts per frozen model family.
+        """Unresolved attempts per frozen model service.
 
-        The count uses the family frozen onto each attempt at claim time, so an
-        uncertain attempt or an unconfirmed result keeps its family slot exactly
+        The count uses the model service frozen onto each attempt at claim time, so an
+        uncertain attempt or an unconfirmed result keeps its model service slot exactly
         like its machine-wide slot.
         """
         rows = connection.execute(
@@ -591,55 +584,55 @@ class BoardStore:
         }
 
     def model_limits(self, connection: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
-        """Explicit per-family limits from the user-owned ``model_concurrency`` table."""
-        rows = connection.execute("SELECT adapter, provider, model, concurrency_limit FROM model_concurrency").fetchall()
+        """Explicit per-model-service limits from the user-owned ``model_service_concurrency`` table."""
+        rows = connection.execute("SELECT adapter, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
         return {
             (row["adapter"], row["provider"], row["model"]): scheduling.clamp_model_limit(row["concurrency_limit"])
             for row in rows
         }
 
     def _effective_model_limit(
-        self, connection: sqlite3.Connection, family: tuple[str, str, str], *, limits: dict | None = None
+        self, connection: sqlite3.Connection, model_service: tuple[str, str, str], *, limits: dict | None = None
     ) -> int:
         if limits is None:
             limits = self.model_limits(connection)
-        return limits.get(family, scheduling.MODEL_LIMIT_DEFAULT)
+        return limits.get(model_service, scheduling.MODEL_LIMIT_DEFAULT)
 
     def model_capacity_rows(
-        self, connection: sqlite3.Connection, families: Iterable[tuple[str, str, str]] | None = None
+        self, connection: sqlite3.Connection, model_services: Iterable[tuple[str, str, str]] | None = None
     ) -> list[dict]:
         """Observation rows ``{adapter, provider, model, limit, active}`` for capacity views.
 
-        ``families`` restricts the rows to the families represented in one response
+        ``model services`` restricts the rows to the model services represented in one response
         (a console snapshot page or a model-profile page). Without it, the rows cover
-        every family relevant to capacity right now: explicit settings, families of
-        unresolved attempts and families of queued work.
+        every model service relevant to capacity right now: explicit settings, model services of
+        unresolved attempts and model services of queued work.
         """
         limits = self.model_limits(connection)
         active = self._model_active_counts(connection)
-        if families is None:
-            families = set(limits) | set(active) | set(self._queued_families(connection))
+        if model_services is None:
+            model_services = set(limits) | set(active) | set(self._queued_model_services(connection))
         rows = []
-        for family in sorted(set(families)):
-            adapter, provider, model = family
+        for model_service in sorted(set(model_services)):
+            adapter, provider, model = model_service
             rows.append(
                 {
                     "adapter": adapter,
                     "provider": provider,
                     "model": model,
-                    "limit": limits.get(family, scheduling.MODEL_LIMIT_DEFAULT),
-                    "active": active.get(family, 0),
+                    "limit": limits.get(model_service, scheduling.MODEL_LIMIT_DEFAULT),
+                    "active": active.get(model_service, 0),
                 }
             )
         return rows
 
-    def _queued_families(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
+    def _queued_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
         rows = connection.execute(
             "SELECT DISTINCT t.adapter AS adapter,"
-            f" {self._QUEUED_FAMILY_PROVIDER} AS provider, {self._QUEUED_FAMILY_MODEL} AS model"
+            f" {self._QUEUED_MODEL_SERVICE_PROVIDER} AS provider, {self._QUEUED_MODEL_SERVICE_MODEL} AS model"
             " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id = t.task_id WHERE t.state='queued'"
         ).fetchall()
-        families = {
+        model_services = {
             (row["adapter"], row["provider"], row["model"])
             for row in rows
             if row["provider"] and row["model"] and row["adapter"] in schemas.CODING_ADAPTERS
@@ -647,27 +640,27 @@ class BoardStore:
         for row in connection.execute("SELECT r.input_json FROM decision_requests r JOIN tasks t ON t.task_id=r.task_id WHERE t.state='queued'"):
             profile = (json.loads(row["input_json"]) if row["input_json"] else {}).get("profile") or {}
             if all(profile.get(key) for key in ("adapter", "provider", "model")):
-                families.add(tuple(profile[key] for key in ("adapter", "provider", "model")))
-        return families
+                model_services.add(tuple(profile[key] for key in ("adapter", "provider", "model")))
+        return model_services
 
-    def _full_families(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
-        """Families whose unresolved attempts already hold their effective limit."""
+    def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
+        """Model services whose unresolved attempts already hold their effective limit."""
         active = self._model_active_counts(connection)
         if not active:
             return set()
         limits = self.model_limits(connection)
         return {
-            family
-            for family, count in active.items()
-            if count >= limits.get(family, scheduling.MODEL_LIMIT_DEFAULT)
+            model_service
+            for model_service, count in active.items()
+            if count >= limits.get(model_service, scheduling.MODEL_LIMIT_DEFAULT)
         }
 
     def capacity_report(self) -> dict:
-        """The machine-wide ceiling and the per-family observation rows.
+        """The machine-wide ceiling and the per-model-service observation rows.
 
         ``totalLimit`` is the aggregate execution limit the daemon must reserve
         worker slots for; it is deliberately separate from the WAIT admission counts.
-        ``models`` observes the families relevant to pending work, active attempts
+        ``models`` observes the model services relevant to pending work, active attempts
         and explicit settings; ``active`` is observation only.
         """
         with self.db.read() as connection:
@@ -709,17 +702,17 @@ class BoardStore:
         """Why this specification cannot start right now, or ``None`` when it can.
 
         The machine-wide ceiling is checked first, then the specification's own model
-        family, so the queue reason names the limit that is actually full. Workspace
+        model service, so the queue reason names the limit that is actually full. Workspace
         and exclusive-resource admission applies to all work unchanged.
         """
         if (self.directory / 'upgrade.json').exists():
             raise BoardError('UPGRADE_IN_PROGRESS', 'Admission is fenced until the coordinated upgrade finishes')
         if self._total_active(connection) >= self.max_concurrent:
             return scheduling.REASON_TOTAL_CAPACITY
-        family = scheduling.model_family(spec)
-        if family is not None:
+        model_service = scheduling.model_service(spec)
+        if model_service is not None:
             active = self._model_active_counts(connection)
-            if active.get(family, 0) >= self._effective_model_limit(connection, family):
+            if active.get(model_service, 0) >= self._effective_model_limit(connection, model_service):
                 return scheduling.REASON_MODEL_CAPACITY
         resources = {"cwd": [spec["cwd"]], "exclusive": list(spec.get("exclusiveResources", []))}
         for claim in self._held_claims(connection):
@@ -731,56 +724,56 @@ class BoardStore:
                 return "exclusive-resource"
         return None
 
-    def _family_admission_blocker(self, connection: sqlite3.Connection, family: tuple[str, str, str]) -> str | None:
-        """The capacity blocker for one already-resolved family (no spec needed).
+    def _model_service_admission_blocker(self, connection: sqlite3.Connection, model_service: tuple[str, str, str]) -> str | None:
+        """The capacity blocker for one already-resolved model service (no spec needed).
 
-        Used where the family is resolved inside the claim transaction itself — the
+        Used where the model service is resolved inside the claim transaction itself — the
         fixed decision profile of a routing task — so its quota is checked *before*
         the claim commits and before any selection reader is admitted.
         """
         if self._total_active(connection) >= self.max_concurrent:
             return scheduling.REASON_TOTAL_CAPACITY
         active = self._model_active_counts(connection)
-        if active.get(family, 0) >= self._effective_model_limit(connection, family):
+        if active.get(model_service, 0) >= self._effective_model_limit(connection, model_service):
             return scheduling.REASON_MODEL_CAPACITY
         return None
 
     def _claim_candidates(
         self, connection: sqlite3.Connection
     ) -> tuple[list[sqlite3.Row], set[tuple[str, str, str]]]:
-        """Bounded queued candidates in arrival order, skipping full model families.
+        """Bounded queued candidates in arrival order, skipping full model services.
 
-        Tasks of a family already at its concurrent-attempt limit are excluded by the
+        Tasks of a model service already at its concurrent-attempt limit are excluded by the
         SQL predicate *before* the candidate LIMIT, so >100 queued tasks blocked on
-        one family cannot hide a runnable task of another family behind the bounded
+        one model service cannot hide a runnable task of another model service behind the bounded
         window. Routing tasks are scanned through their own bounded window: a
-        decision task's family is the mutable fixed selector resolved at claim time,
+        decision task's model service is the mutable fixed selector resolved at claim time,
         so it cannot be pre-filtered, and a backlog of routing work blocked on the
-        selector's family must not hide runnable business work either. The full
-        families are returned so an empty claim can name the limit that is holding
+        selector's model service must not hide runnable business work either. The full
+        model services are returned so an empty claim can name the limit that is holding
         work instead of pretending the board is idle.
         """
-        full = self._full_families(connection)
-        family_clauses = []
-        family_values: list[object] = []
+        full = self._full_model_services(connection)
+        model_service_clauses = []
+        model_service_values: list[object] = []
         for adapter, provider, model in sorted(full):
-            # Null-safe on purpose: a task without a complete family triple
+            # Null-safe on purpose: a task without a complete model service triple
             # (command/external work, an unresolved run, a routing task) is never
             # excluded — SQL's NOT over a NULL conjunction would otherwise drop it.
-            family_clauses.append(
-                f"({self._QUEUED_FAMILY_PROVIDER} IS NULL OR {self._QUEUED_FAMILY_MODEL} IS NULL"
-                f" OR NOT (t.adapter=? AND {self._QUEUED_FAMILY_PROVIDER}=? AND {self._QUEUED_FAMILY_MODEL}=?))"
+            model_service_clauses.append(
+                f"({self._QUEUED_MODEL_SERVICE_PROVIDER} IS NULL OR {self._QUEUED_MODEL_SERVICE_MODEL} IS NULL"
+                f" OR NOT (t.adapter=? AND {self._QUEUED_MODEL_SERVICE_PROVIDER}=? AND {self._QUEUED_MODEL_SERVICE_MODEL}=?))"
             )
-            family_values.extend((adapter, provider, model))
+            model_service_values.extend((adapter, provider, model))
         rows: list[sqlite3.Row] = []
         for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
             rows.extend(
                 connection.execute(
                     "SELECT t.* FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
                     f" WHERE t.state='queued' AND {class_predicate}"
-                    + ((" AND " + " AND ".join(family_clauses)) if family_clauses else "")
+                    + ((" AND " + " AND ".join(model_service_clauses)) if model_service_clauses else "")
                     + " ORDER BY t.created_at, t.task_id LIMIT ?",
-                    (scheduling.DECISION_ADAPTER, *family_values, self.CLAIM_CANDIDATE_LIMIT),
+                    (scheduling.DECISION_ADAPTER, *model_service_values, self.CLAIM_CANDIDATE_LIMIT),
                 ).fetchall()
             )
         rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
@@ -1577,13 +1570,13 @@ class BoardStore:
                 )
             capabilities = set(json.loads(worker["capabilities"]))
             adapter = worker["adapter"]
-            full_families: set[tuple[str, str, str]] = set()
+            full_model_services: set[tuple[str, str, str]] = set()
             if explicit_task:
                 candidates = [
                     connection.execute("SELECT * FROM tasks WHERE task_id=?", (explicit_task,)).fetchone()
                 ]
                 # An explicit target is examined by ``_admission_blocker`` and the
-                # decision family check below; no candidate pre-filter applies to it.
+                # decision model service check below; no candidate pre-filter applies to it.
             elif restrict_to is not None:
                 # The coverage retry's own admission boundary: only the run whose
                 # repository the retry pass just collected may start here. If that
@@ -1593,12 +1586,12 @@ class BoardStore:
                     connection.execute("SELECT * FROM tasks WHERE task_id=?", (restrict_to,)).fetchone()
                 ]
             else:
-                candidates, full_families = self._claim_candidates(connection)
+                candidates, full_model_services = self._claim_candidates(connection)
             chosen: sqlite3.Row | None = None
             chosen_generation = 0
             chosen_attempt_id: str | None = None
             chosen_input: dict | None = None
-            chosen_family: tuple[str, str, str] | None = None
+            chosen_model_service: tuple[str, str, str] | None = None
             blocker = "no-queued-work"
             for task in candidates:
                 if task is None:
@@ -1643,10 +1636,10 @@ class BoardStore:
                 ).fetchone()
                 attempt_id = str(uuid.uuid4())
                 generation = int(generation_row["generation"]) + 1
-                # Pre-claim Router preparation runs before the selector family and
+                # Pre-claim Router preparation runs before the selector model service and
                 # its capacity check: a superseded, circumstances-changed or
                 # before-model-unavailable dispatch is settled or advanced here, so
-                # the family below only ever freezes the current dispatch's tuple.
+                # the model service below only ever freezes the current dispatch's tuple.
                 # A returned reason keeps the task queued (or records its honest
                 # closure) and this claim moves on to the next candidate.
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
@@ -1662,22 +1655,22 @@ class BoardStore:
                                 (preclaim, self.now(), task["task_id"]),
                             )
                         continue
-                # The model family this attempt is frozen to. A routing task has no
-                # family of its own in its specification: the current dispatch's
+                # The model service this attempt is frozen to. A routing task has no
+                # model service of its own in its specification: the current dispatch's
                 # Router resolves one here, its quota is checked before the claim
                 # commits, and the same tuple is frozen onto the attempt. Business
-                # work uses the effective specification's family, which a governed
+                # work uses the effective specification's model service, which a governed
                 # run has already resolved and validated.
-                family = scheduling.model_family(effective_spec)
+                model_service = scheduling.model_service(effective_spec)
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
-                    family = self.decisions.selector_family(connection, spec)
-                    if family is not None:
-                        family_reason = self._family_admission_blocker(connection, family)
-                        if family_reason is not None:
-                            blocker = family_reason
+                    model_service = self.decisions.selector_model_service(connection, spec)
+                    if model_service is not None:
+                        model_service_reason = self._model_service_admission_blocker(connection, model_service)
+                        if model_service_reason is not None:
+                            blocker = model_service_reason
                             connection.execute(
                                 "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                                (family_reason, self.now(), task["task_id"]),
+                                (model_service_reason, self.now(), task["task_id"]),
                             )
                             continue
                 # A decision task is admitted *here*, inside the same transaction that
@@ -1707,7 +1700,7 @@ class BoardStore:
                 chosen_generation = generation
                 chosen_attempt_id = attempt_id
                 chosen_input = claim_input
-                chosen_family = family
+                chosen_model_service = model_service
                 break
             if chosen is None:
                 if not candidates:
@@ -1715,7 +1708,7 @@ class BoardStore:
                     # instead of reporting that the board is idle.
                     if self._total_active(connection) >= self.max_concurrent:
                         blocker = scheduling.REASON_TOTAL_CAPACITY
-                    elif full_families:
+                    elif full_model_services:
                         blocker = scheduling.REASON_MODEL_CAPACITY
                     else:
                         blocker = "no-queued-work"
@@ -1780,10 +1773,10 @@ class BoardStore:
                     "starting",
                     "owned",
                     chosen["adapter"],
-                    # Frozen family identity: written by this claim transaction and
+                    # Frozen model service identity: written by this claim transaction and
                     # never updated afterwards, so historical and shutdown-uncertain
-                    # attempts cannot change which family slot they occupy.
-                    *(chosen_family if chosen_family is not None else (None, None, None)),
+                    # attempts cannot change which model service slot they occupy.
+                    *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
                     now,
                     now,
                     now,

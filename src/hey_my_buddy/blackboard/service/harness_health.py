@@ -238,7 +238,7 @@ class HarnessHealth:
                 elif old['status'] != 'ready':
                     # ADR-027: health availability and adopted catalog facts are
                     # separate. Recovering health restores the model availability
-                    # of the retained confirmed catalog (and of families still
+                    # of the retained confirmed catalog (and of model services still
                     # awaiting disappearance confirmation); confirmed absences,
                     # retired efforts and native unavailable declarations are
                     # catalog facts and stay untouched.

@@ -3,7 +3,7 @@
 BUDDY_MAX_CONCURRENT (default 8, range 1–32) sizes both the store's admission
 ceiling and the managed supervisor pool. The separate BUDDY_MAX_DECISIONS setting
 and its reserved lane are gone: routing and execution share one ceiling and the
-same per-family counters.
+same per-model-service counters.
 """
 from __future__ import annotations
 

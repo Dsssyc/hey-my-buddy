@@ -3,8 +3,8 @@
 from support import BoardTestCase
 from hey_my_buddy.errors import BoardError
 
-#: ``live`` and ``retired`` are each their own model family in this fixture.
-LIVE_FAMILY = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live'}
+#: ``live`` and ``retired`` are each their own model service in this fixture.
+LIVE_MODEL_SERVICE = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live'}
 
 
 class UserPolicyTests(BoardTestCase):
@@ -35,18 +35,18 @@ class UserPolicyTests(BoardTestCase):
 
     def test_host_cannot_publish_user_policy_or_replay_console_command(self):
         params = self.publication_params()
-        payload = self.payload(params, familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'human opinion'}])
+        payload = self.payload(params, modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'human opinion'}])
         self.assert_denied('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['published'])
         self.assert_denied('user_policy_publish', payload)
 
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()
-        payload = self.payload(grant, profileSettings=[{'profileId': 'retired', 'enabled': False}], familyAnnotationChanges=[{**LIVE_FAMILY, 'text': 'prefer local evidence'}])
+        payload = self.payload(grant, profileSettings=[{'profileId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])
         self.user('user_policy_publish', payload)
         self.assertTrue(self.user('user_policy_publish', payload)['duplicate'])
         snapshot = self.board_.call('console_snapshot', {})
-        self.assertEqual(snapshot['familyAnnotations'][0]['text'], 'prefer local evidence')
+        self.assertEqual(snapshot['modelServiceNotes'][0]['text'], 'prefer local evidence')
         self.assertEqual(snapshot['configuration']['routerProfileIds'], ['retired'])
         self.assertEqual(snapshot['preferences'][0]['mode'], 'pin')
         self.assertFalse(next(p for p in snapshot['profiles'] if p['profileId'] == 'retired')['enabled'])
@@ -64,28 +64,28 @@ class UserPolicyTests(BoardTestCase):
         for changes in [
             {'profileSettings': [{'profileId': 'live', 'enabled': False}, {'profileId': 'retired', 'enabled': True}]},
             {'profileSettings': [{'profileId': 'retired', 'enabled': False, 'available': True}]},
-            {'familyAnnotationChanges': [{**LIVE_FAMILY, 'text': 'x'}, {**LIVE_FAMILY, 'text': 'y'}]},
+            {'modelServiceNoteChanges': [{**LIVE_MODEL_SERVICE, 'text': 'x'}, {**LIVE_MODEL_SERVICE, 'text': 'y'}]},
         ]:
             with self.assertRaises(BoardError):
                 self.user('user_policy_publish', self.payload(grant, **changes))
         snapshot = self.board_.call('console_snapshot', {})
         self.assertNotIn('tableRevision', snapshot)
-        self.assertEqual(snapshot['familyAnnotations'], [])
+        self.assertEqual(snapshot['modelServiceNotes'], [])
         self.assertTrue(next(p for p in snapshot['profiles'] if p['profileId'] == 'live')['enabled'])
 
 
-    def test_model_concurrency_is_a_console_only_human_patch(self):
+    def test_model_service_concurrency_is_a_console_only_human_patch(self):
         grant = self.publication_params()
         patch = [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3}]
-        # The authenticated console writer may set family limits...
-        result = self.user('user_policy_publish', self.payload(grant, modelConcurrency=patch))
-        self.assertEqual(result['counts']['modelConcurrency'], 1)
+        # The authenticated console writer may set model service limits...
+        result = self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
+        self.assertEqual(result['counts']['modelServiceConcurrency'], 1)
         with self.board_.store.db.read() as db:
-            stored = db.execute('SELECT concurrency_limit FROM model_concurrency').fetchall()
+            stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchall()
         self.assertEqual([row['concurrency_limit'] for row in stored], [3])
-        self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelConcurrency=patch))
+        self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelServiceConcurrency=patch))
 
-    def test_model_concurrency_rejects_derived_fields_and_bad_limits(self):
+    def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
         grant = self.publication_params()
         for patch in (
             [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3, 'active': 1}],
@@ -96,7 +96,7 @@ class UserPolicyTests(BoardTestCase):
              {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 4}],
         ):
             with self.assertRaises(BoardError) as caught:
-                self.user('user_policy_publish', self.payload(grant, modelConcurrency=patch))
+                self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_concurrency').fetchone()['count'], 0)
+            self.assertEqual(db.execute('SELECT COUNT(*) AS count FROM model_service_concurrency').fetchone()['count'], 0)

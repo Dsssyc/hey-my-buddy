@@ -7,12 +7,12 @@ import { Segmented, SegmentedItem } from "@/components/ui/segmented";
 import { StateMark, UnsavedMark } from "@/components/ui/state-mark";
 import { Switch } from "@/components/ui/switch";
 import {
-  MODEL_CONCURRENCY_DEFAULT,
-  MODEL_CONCURRENCY_MAX,
-  MODEL_CONCURRENCY_MIN,
+  MODEL_SERVICE_CONCURRENCY_DEFAULT,
+  MODEL_SERVICE_CONCURRENCY_MAX,
+  MODEL_SERVICE_CONCURRENCY_MIN,
   concurrencyEntryFor,
 } from "../console-data";
-import { familyAnnotationText, setConcurrencyLimit, setFamilyAnnotation, setPreference } from "../draft";
+import { modelServiceNoteText, setConcurrencyLimit, setModelServiceNote, setPreference } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
@@ -108,14 +108,14 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
   const id = useId();
-  const { family, key } = row;
-  const member = family.profiles[0];
+  const { modelService, key } = row;
+  const member = modelService.profiles[0];
   const selected = row.chips.find(chip => chip.profile.profileId === selectedProfileId)!;
-  const note = familyAnnotationText(data, member);
-  const publishedLimit = concurrencyEntryFor(recorded.modelConcurrency, member)?.limit ?? MODEL_CONCURRENCY_DEFAULT;
-  const limitInvalid = !Number.isInteger(row.limit) || row.limit < MODEL_CONCURRENCY_MIN || row.limit > MODEL_CONCURRENCY_MAX;
-  const profileIds = new Set(family.profiles.map(profile => profile.profileId));
-  const mine = (issue: { family?: string; profileId: string }) => issue.family === key || (!issue.family && profileIds.has(issue.profileId));
+  const note = modelServiceNoteText(data, member);
+  const publishedLimit = concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
+  const limitInvalid = !Number.isInteger(row.limit) || row.limit < MODEL_SERVICE_CONCURRENCY_MIN || row.limit > MODEL_SERVICE_CONCURRENCY_MAX;
+  const profileIds = new Set(modelService.profiles.map(profile => profile.profileId));
+  const mine = (issue: { modelService?: string; profileId: string }) => issue.modelService === key || (!issue.modelService && profileIds.has(issue.profileId));
   const blocking = editor.blocking.filter(mine);
   const attention = editor.attention.filter(issue => !issue.router && mine(issue));
   const state = !row.available ? "unavailable" : row.pending ? "pending" : "available";
@@ -126,7 +126,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
       <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
     </div>;
 
-  return <section role="region" aria-label={modelIdentity(family)} data-slot="model-drawer"
+  return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
     className="border-t border-l-2 border-t-line border-l-live bg-sunk p-4 min-[900px]:pl-14">
     {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
     {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
@@ -143,7 +143,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
           {name(t("pane.concurrency"), !Object.is(row.limit, publishedLimit), { htmlFor: `${id}-limit` })}
           <div className="flex min-w-0 flex-wrap items-center gap-2.5">
             <Hint text={editingLock}><Input id={`${id}-limit`} type="number" inputMode="numeric" className="h-8 w-16 bg-card px-2.5 text-sm tabular-nums shadow-none"
-              min={MODEL_CONCURRENCY_MIN} max={MODEL_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
+              min={MODEL_SERVICE_CONCURRENCY_MIN} max={MODEL_SERVICE_CONCURRENCY_MAX} step={1} value={Number.isNaN(row.limit) ? "" : row.limit}
               readOnly={!editing} aria-disabled={!editing || undefined} aria-label={t("pane.concurrencyLimit")}
               aria-invalid={limitInvalid || undefined} aria-describedby={`${id}-occupancy`} onChange={event => {
                 if (!editing) return;
@@ -153,14 +153,14 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
               }} /></Hint>
             <span id={`${id}-occupancy`} className="text-xs text-ink3 tabular-nums">
               {row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}
-              {limitInvalid && <span className="ml-2 text-fail">{t("pane.range", { min: MODEL_CONCURRENCY_MIN, max: MODEL_CONCURRENCY_MAX })}</span>}
+              {limitInvalid && <span className="ml-2 text-fail">{t("pane.range", { min: MODEL_SERVICE_CONCURRENCY_MIN, max: MODEL_SERVICE_CONCURRENCY_MAX })}</span>}
             </span>
           </div>
-          <div className="self-start pt-1.5">{name(t("pane.note"), note !== familyAnnotationText(recorded, member), { htmlFor: `${id}-note` })}</div>
+          <div className="self-start pt-1.5">{name(t("pane.note"), note !== modelServiceNoteText(recorded, member), { htmlFor: `${id}-note` })}</div>
           <Hint text={editingLock}><textarea id={`${id}-note`} rows={3} maxLength={4000} value={note}
             readOnly={!editing} aria-disabled={!editing || undefined} className={cn(field, "h-full min-h-16 w-full resize-y self-stretch py-1.5")}
             onChange={event => {
-              if (editing) editor.update(draft => setFamilyAnnotation(draft, member, event.target.value));
+              if (editing) editor.update(draft => setModelServiceNote(draft, member, event.target.value));
             }} /></Hint>
         </div>
       </div>

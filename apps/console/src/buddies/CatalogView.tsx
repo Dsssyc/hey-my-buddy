@@ -9,7 +9,7 @@ import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import type { ConsoleApi } from "../api";
 import { errorText } from "../api";
 import { harnessName } from "../buddy-display";
-import { familyKey, modelFamilies } from "../console-data";
+import { modelServiceKey, modelServices } from "../console-data";
 import { historyView } from "../draft";
 import type { Snapshot } from "../types";
 import type { Editor } from "../use-editor";
@@ -59,8 +59,8 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const listed = listedModels(data.profiles, { query, enabledOnly, showUnavailable });
-  const listedKeys = new Set(listed.map(family => family.key));
-  const blocks = harnessBlocks({ listed: modelFamilies(data.profiles), data, recorded, harnesses: actions.rows, folded, fresh })
+  const listedKeys = new Set(listed.map(modelService => modelService.key));
+  const blocks = harnessBlocks({ listed: modelServices(data.profiles), data, recorded, harnesses: actions.rows, folded, fresh })
     .map(block => ({ ...block, modelCount: block.models.length, models: block.models.filter(row => listedKeys.has(row.key)) }));
   const healthBlocks = actions.rows.filter(health => !data.profiles.some(profile => profile.adapter === health.adapter))
     .map(health => ({ adapter: health.adapter, name: harnessName(health.adapter), state: health.status === "ready" ? null : health.status,
@@ -100,12 +100,12 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       setFocusRequest(previous => ({ id: `account-summary-${location.target}`, n: (previous?.n ?? 0) + 1 }));
       setQuery(""); setEnabledOnlyForView(false);
     } else {
-      const target = data.profiles.find(profile => location.targetKind === "model" ? familyKey(profile) === location.target : profile.profileId === location.target);
+      const target = data.profiles.find(profile => location.targetKind === "model" ? modelServiceKey(profile) === location.target : profile.profileId === location.target);
       if (!target) return;
-      const family = modelFamilies(data.profiles).find(row => row.key === familyKey(target))!;
-      const first = family.profiles.find(profile => profile.enabled) ?? family.profiles[0];
+      const modelService = modelServices(data.profiles).find(row => row.key === modelServiceKey(target))!;
+      const first = modelService.profiles.find(profile => profile.enabled) ?? modelService.profiles[0];
       const profileId = location.targetKind === "model" ? first.profileId : target.profileId;
-      setSelected(familyKey(target)); setChosen(previous => ({ ...previous, [familyKey(target)]: profileId }));
+      setSelected(modelServiceKey(target)); setChosen(previous => ({ ...previous, [modelServiceKey(target)]: profileId }));
       setQuery(""); setEnabledOnlyForView(false);
       if (!target.available) setShowUnavailableForView(true);
       setFolded(previous => ({ ...previous, [target.adapter]: false }));
@@ -124,7 +124,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     setSelected(opening ? row.key : null);
     if (opening) {
       // Opening a model pins its harness open: switching its last buddy off must not fold it away.
-      setFolded(previous => ({ ...previous, [row.family.adapter]: false }));
+      setFolded(previous => ({ ...previous, [row.modelService.adapter]: false }));
       const first = row.chips.find(chip => chip.profile.enabled) ?? row.chips[0];
       setChosen(previous => ({ ...previous, [row.key]: first.profile.profileId }));
     }
@@ -160,7 +160,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       if (next) {
         const added = next.profiles.filter(profile => !snapshot.profiles.some(known => known.profileId === profile.profileId));
         editor.rebase(next);
-        setFresh(previous => new Set([...previous, ...added.map(familyKey)]));
+        setFresh(previous => new Set([...previous, ...added.map(modelServiceKey)]));
         setNote(added.length ? t("models.discovered", { n: added.length }) : t("models.discoveredNone"));
       }
     } catch (failure) { setError(errorText(failure)); }

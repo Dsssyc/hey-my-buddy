@@ -146,7 +146,7 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertEqual("SERVICE_UNAVAILABLE", outcomes[path]["code"])
         self.assertTrue(outcomes["error/console.json"]["accepted"])
 
-        # The current Router-list and family-note snapshot shape the parser requires.
+        # The current Router-list and model-service-note snapshot shape the parser requires.
         raw_snapshot = json.loads((fixtures / "normal/console.json").read_text(encoding="utf-8"))
         self.assertFalse(set(raw_snapshot) & {"gate", "cards", "evidence", "pendingEvidence", "sampleCounts"})
         self.assertFalse(set(raw_snapshot["capabilities"]) & {

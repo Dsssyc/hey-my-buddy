@@ -1,7 +1,7 @@
-"""Scheduling constants: model families, shared limits and pool identity.
+"""Scheduling constants: model services, shared limits and pool identity.
 
 ADR-011 removed the separate business/decision lanes. These unit tests pin the
-family rule (exact adapter/provider/model tuple, no effort dimension), the shared
+model service rule (exact adapter/provider/model tuple, no effort dimension), the shared
 limit bounds and the stable managed-pool IDs that the daemon records.
 """
 from __future__ import annotations
@@ -13,20 +13,20 @@ from support import BoardTestCase  # noqa: F401 - ensures the source tree is imp
 from hey_my_buddy.blackboard.tasks import scheduling
 
 
-class ModelFamilyTests(unittest.TestCase):
-    def test_family_is_the_exact_adapter_provider_model_tuple(self):
+class ModelServiceTests(unittest.TestCase):
+    def test_model_service_is_the_exact_adapter_provider_model_tuple(self):
         spec = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
         self.assertEqual(
-            scheduling.model_family(spec),
+            scheduling.model_service(spec),
             ("dsh", "deepseek-official", "deepseek-flash"),
         )
 
-    def test_effort_never_widens_or_narrows_the_family(self):
+    def test_effort_never_widens_or_narrows_the_model_service(self):
         base = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
-        families = {scheduling.model_family({**base, "effort": effort}) for effort in ("off", "low", "high", "max")}
-        self.assertEqual(families, {("dsh", "deepseek-official", "deepseek-flash")})
+        model_services = {scheduling.model_service({**base, "effort": effort}) for effort in ("off", "low", "high", "max")}
+        self.assertEqual(model_services, {("dsh", "deepseek-official", "deepseek-flash")})
 
-    def test_partial_configurations_and_model_less_work_have_no_family(self):
+    def test_partial_configurations_and_model_less_work_have_no_model_service(self):
         for spec in (
             {"adapter": "command", "cwd": "/tmp", "argv": ["/bin/true"]},
             {"adapter": "external", "cwd": "/tmp"},
@@ -40,11 +40,11 @@ class ModelFamilyTests(unittest.TestCase):
             None,
             ["not", "a", "spec"],
         ):
-            self.assertIsNone(scheduling.model_family(spec), spec)
+            self.assertIsNone(scheduling.model_service(spec), spec)
 
-    def test_non_string_family_fields_are_not_a_family(self):
-        self.assertIsNone(scheduling.model_family({"adapter": "dsh", "provider": 1, "model": "m"}))
-        self.assertIsNone(scheduling.model_family({"adapter": "dsh", "provider": "p", "model": ""}))
+    def test_non_string_model_service_fields_are_not_a_model_service(self):
+        self.assertIsNone(scheduling.model_service({"adapter": "dsh", "provider": 1, "model": "m"}))
+        self.assertIsNone(scheduling.model_service({"adapter": "dsh", "provider": "p", "model": ""}))
 
 
 class LimitBoundsTests(unittest.TestCase):

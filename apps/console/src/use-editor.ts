@@ -78,8 +78,8 @@ export function useEditor(
     if (!draft) return recorded;
     const edited = { ...recorded, profiles: draft.profiles,
       preferences: draft.preferences,
-      familyAnnotations: draft.familyAnnotations, configuration: draft.configuration,
-      modelConcurrency: draft.modelConcurrency };
+      modelServiceNotes: draft.modelServiceNotes, configuration: draft.configuration,
+      modelServiceConcurrency: draft.modelServiceConcurrency };
     return edited;
   }, [snapshot, draft, currentHistory]);
   const blocking = useMemo(() => baseline && draft ? blockingIssues(baseline, draft) : [], [baseline, draft]);

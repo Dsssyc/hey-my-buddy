@@ -55,9 +55,9 @@ export function snapshot(rows: HarnessHealth[] = harnesses()): HarnessSnapshot {
 
     configuration: { routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile],
-    preferences: [], familyAnnotations: [], decisions: [],
+    preferences: [], modelServiceNotes: [], decisions: [],
 
-    modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
+    modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
     harnesses: rows,

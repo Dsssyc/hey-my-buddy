@@ -3,8 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
-import { concurrencyEntryFor, MODEL_CONCURRENCY_DEFAULT } from "../console-data";
-import { familyAnnotationText } from "../draft";
+import { concurrencyEntryFor, MODEL_SERVICE_CONCURRENCY_DEFAULT } from "../console-data";
+import { modelServiceNoteText } from "../draft";
 import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, Snapshot } from "../types";
 import { modelIdentity, reasonTexts } from "./models";
@@ -15,16 +15,16 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
   row: ModelRow; harnessState: string | null; data: ConsoleView; recorded: Snapshot; expanded: boolean; onSelect: () => void;
 }) {
   const { t } = useTranslation("buddies");
-  const member = row.family.profiles[0];
+  const member = row.modelService.profiles[0];
   const enabled = row.chips.filter(chip => chip.profile.enabled);
   const changed = row.chips.some(chip => chip.unsaved)
-    || familyAnnotationText(data, member) !== familyAnnotationText(recorded, member)
-    || !Object.is(row.limit, concurrencyEntryFor(recorded.modelConcurrency, member)?.limit ?? MODEL_CONCURRENCY_DEFAULT);
+    || modelServiceNoteText(data, member) !== modelServiceNoteText(recorded, member)
+    || !Object.is(row.limit, concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT);
   const occupancy = row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit });
   // The open row keeps its tint under the pointer: hover only deepens it.
   return <div data-slot="model-row" className={cn("border-t border-l-2 border-l-transparent transition-colors duration-150 motion-reduce:transition-none", expanded && "border-l-live bg-live-wash")}>
     <CollapsibleTrigger asChild>
-      <button type="button" aria-label={modelIdentity(row.family)} onClick={onSelect}
+      <button type="button" aria-label={modelIdentity(row.modelService)} onClick={onSelect}
         className="grid min-h-10 w-full grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-sunk aria-expanded:hover:bg-live/15 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none sm:grid-cols-[16px_20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
         <Disclosure open={expanded} />
         <span className={cn("mx-auto size-2 rounded-full", enabled.length > 0 && "bg-live")} aria-hidden="true" />

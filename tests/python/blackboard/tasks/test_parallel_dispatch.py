@@ -4,10 +4,10 @@ The service keeps exactly one queue and one worker pool. These tests pin the
 production rules of the priority slice:
 
 * command work overlaps up to ``BUDDY_MAX_CONCURRENT`` and the next task queues;
-* routing decisions consume the same total ceiling and their fixed model family's
-  limit, while model-free command work has no family limit;
-* a full family is filtered out before the bounded candidate LIMIT, so more than one
-  hundred blocked rows cannot hide a runnable task from another family;
+* routing decisions consume the same total ceiling and their fixed model service's
+  limit, while model-free command work has no model service limit;
+* a full model service is filtered out before the bounded candidate LIMIT, so more than one
+  hundred blocked rows cannot hide a runnable task from another model service;
 * workspace and exclusive-resource admission and the ``UNRESOLVED_SQL`` slot rule
   continue to apply;
 * a fresh private daemon starts the real managed pool, a restart keeps the same
@@ -61,7 +61,7 @@ PROFILE = {
     "description": "fixture decision model",
     "source": "manual",
 }
-PROFILE_FAMILY = {"adapter": PROFILE["adapter"], "provider": PROFILE["provider"], "model": PROFILE["model"]}
+PROFILE_MODEL_SERVICE = {"adapter": PROFILE["adapter"], "provider": PROFILE["provider"], "model": PROFILE["model"]}
 
 NONCE = "n" * 32
 #: The adapters one generic worker can honestly serve. The real pool advertises the
@@ -136,7 +136,7 @@ class CapacityTestCase(BoardTestCase):
             "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
         }
         if model_limit is not None:
-            params["modelConcurrency"] = [{**PROFILE_FAMILY, "limit": model_limit}]
+            params["modelServiceConcurrency"] = [{**PROFILE_MODEL_SERVICE, "limit": model_limit}]
         return board.console_call("user_policy_publish", params)
 
     def selection(self, board, request_id: str) -> dict:
@@ -477,8 +477,8 @@ class TotalCapacityTests(CapacityTestCase):
         self.assertEqual(refused["reason"], "exclusive-resource")
 
 
-class ModelFamilyFairnessTests(CapacityTestCase):
-    """A full model family cannot hide other eligible work."""
+class ModelServiceFairnessTests(CapacityTestCase):
+    """A full model service cannot hide other eligible work."""
 
     def test_decision_waits_for_total_capacity_then_completes(self):
         board = self.board(max_concurrent=2)
@@ -508,11 +508,11 @@ class ModelFamilyFairnessTests(CapacityTestCase):
         self.assertEqual(decision["profileId"], PROFILE_ID)
         capacity = board.store.capacity_report()
         self.assertEqual(capacity["totalActive"], 1)
-        self.assertIn({**PROFILE_FAMILY, "limit": 2, "active": 0}, capacity["models"])
+        self.assertIn({**PROFILE_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
         self.assertEqual(self.status(board, first["runId"]), "failed")
         self.assertEqual(self.status(board, second["runId"]), "running")
 
-    def test_model_free_command_progresses_while_decision_family_is_full(self):
+    def test_model_free_command_progresses_while_decision_model_service_is_full(self):
         board = self.board(max_concurrent=3)
         self.seed_evaluation(board, model_limit=1)
         first = self.selection(board, "pick-hold")
@@ -532,7 +532,7 @@ class ModelFamilyFairnessTests(CapacityTestCase):
         self.assertEqual(refused["reason"], "model-capacity")
         self.assertEqual(self.queue_reason(board, second["runId"]), "model-capacity")
 
-    def test_more_than_hundred_full_family_rows_cannot_hide_other_work(self):
+    def test_more_than_hundred_full_model_service_rows_cannot_hide_other_work(self):
         board = self.board(max_concurrent=3)
         self.seed_evaluation(board, model_limit=1)
         held = self.selection(board, "decision-hold")
@@ -542,7 +542,7 @@ class ModelFamilyFairnessTests(CapacityTestCase):
         for index in range(120):
             queued = self.selection(board, f"decision-blocked-{index}")
             blocked_run_id = queued["runId"]
-        refused = self.claim(board, "w-blocked", request_id="full-family", run_id=blocked_run_id)
+        refused = self.claim(board, "w-blocked", request_id="full-model-service", run_id=blocked_run_id)
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "model-capacity")
         business = self.business_task(board, "runnable-business", self.workdir("runnable"))
@@ -554,9 +554,9 @@ class ModelFamilyFairnessTests(CapacityTestCase):
 
 
 class UncertainCapacityTests(CapacityTestCase):
-    """An uncertain attempt keeps its total and model family capacity."""
+    """An uncertain attempt keeps its total and model service capacity."""
 
-    def test_uncertain_attempts_keep_their_total_and_family_slots(self):
+    def test_uncertain_attempts_keep_their_total_and_model_service_slots(self):
         board = self.board(max_concurrent=2)
         self.seed_evaluation(board, model_limit=1)
         selection_one = self.selection(board, "uncertain-pick-1")
@@ -581,7 +581,7 @@ class UncertainCapacityTests(CapacityTestCase):
         self.assertEqual(capacity["totalActive"], 2)
         self.assertEqual(capacity["models"][0]["active"], 1)
 
-        # Release the unspawned command attempt. The selector's uncertain family
+        # Release the unspawned command attempt. The selector's uncertain model service
         # claim must still hold its own quota even though a total slot is free.
         held = board.call("task_get", {"runId": business_one["runId"]})["task"]
         board.client().release("w-biz", held["selectedAttemptId"], held["attemptGeneration"], NONCE, "test release")
@@ -981,7 +981,7 @@ class DaemonPoolTests(CapacityTestCase):
                 "profileSettings": [{"profileId": PROFILE_ID, "enabled": True},
                                     {"profileId": "dsh:deepseek-official:deepseek-v4-pro:off", "enabled": True}],
                 "configuration": {"defaultRoutingMode": "review", "routerProfileIds": [PROFILE_ID]},
-                "modelConcurrency": [{**PROFILE_FAMILY, "limit": 2}],
+                "modelServiceConcurrency": [{**PROFILE_MODEL_SERVICE, "limit": 2}],
             }, csrf=csrf)
             self.assertEqual(status, 200, body)
             selection = client.call("selection_request", {"requestId": "pool-pick", "task": "pick while busy"})
@@ -998,7 +998,7 @@ class DaemonPoolTests(CapacityTestCase):
             capacity = client.health()["capacity"]
             self.assertEqual(capacity["totalLimit"], 3)
             self.assertEqual(capacity["totalActive"], 2)
-            self.assertIn({**PROFILE_FAMILY, "limit": 2, "active": 0}, capacity["models"])
+            self.assertIn({**PROFILE_MODEL_SERVICE, "limit": 2, "active": 0}, capacity["models"])
             self.release_gate("decision-1")
             self.release_gate("decision-2")
 

@@ -124,12 +124,12 @@ def _parse_time(value: Any) -> datetime | None:
         return None
 
 
-def _family_key(provider: str, model: str) -> str:
+def _model_service_key(provider: str, model: str) -> str:
     return provider + "\x1f" + model
 
 
 def _pending_map(db, adapter: str) -> dict:
-    return {_family_key(row["provider"], row["model"]):
+    return {_model_service_key(row["provider"], row["model"]):
             {"since": row["since"], "efforts": json.loads(row["efforts_json"])}
             for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE adapter=?",
                                   (adapter,))}
@@ -144,15 +144,15 @@ def _write_pending_map(db, adapter: str, pending: dict) -> None:
                     for key, value in pending.items()])
 
 
-def pending_families(db) -> dict[tuple[str, str, str], str]:
-    """Pending model families and their first absence, scoped to the harness."""
+def pending_model_services(db) -> dict[tuple[str, str, str], str]:
+    """Pending model services and their first absence, scoped to the harness."""
     return {(row["adapter"], row["provider"], row["model"]): row["since"]
             for row in db.execute("SELECT adapter,provider,model,since FROM catalog_pending")}
 
 
 def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
     """The legal efforts frozen at first absence, or None when not pending."""
-    value = _pending_map(db, adapter).get(_family_key(provider, model))
+    value = _pending_map(db, adapter).get(_model_service_key(provider, model))
     return value["efforts"] if value is not None else None
 
 
@@ -185,8 +185,8 @@ def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, s
     return identities
 
 
-def families_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
-    """Model families a retained confirmed catalog still lists as available."""
+def model_services_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
+    """Model services a retained confirmed catalog still lists as available."""
     return {(provider, model) for provider, model, _effort in identities_from_payload(payload_json, adapter)}
 
 
@@ -198,7 +198,7 @@ def restore_retained_availability(db, adapter: str) -> int:
     are never evidence that a native configuration disappeared. A row returns
     only when the retained confirmed catalog still lists its exact
     adapter/provider/model/effort identity, or when it is one of the last legal
-    efforts recorded for a family still awaiting disappearance confirmation. A
+    efforts recorded for a model service still awaiting disappearance confirmation. A
     confirmed absence, a retired effort and a native unavailable declaration are
     catalog facts and are never restored here.
     """
@@ -218,9 +218,9 @@ def restore_retained_availability(db, adapter: str) -> int:
             (adapter,)).fetchall():
         if profile["available"] or profile["unavailable_reason"] in CATALOG_FACT_REASONS:
             continue
-        family = (profile["provider"], profile["model"])
-        identity = (*family, profile["effort"])
-        legal_pending = pending_efforts.get(family)
+        model_service = (profile["provider"], profile["model"])
+        identity = (*model_service, profile["effort"])
+        legal_pending = pending_efforts.get(model_service)
         if identity in identities or (legal_pending is not None and profile["effort"] in legal_pending):
             db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
                        (profile["profile_id"],))

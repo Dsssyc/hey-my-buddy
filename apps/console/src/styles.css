@@ -703,9 +703,9 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .harness-manual-field { display: grid; gap: 4px; }
 .harness-manual-field input { max-width: 34em; font-size: 12px; }
 
-/* The family list: harness groups with no enabled effort start folded. */
+/* The model service list: harness groups with no enabled effort start folded. */
 
-/* The family detail: a label column and a value column. */
+/* The model service detail: a label column and a value column. */
 
 /* Effort tags: switch + name + preference glyph + Router mark + menu. The
    effective preference sets colour, glyph and border style together. */

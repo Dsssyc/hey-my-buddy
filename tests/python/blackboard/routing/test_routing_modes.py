@@ -83,7 +83,7 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(resolution.problem['code'], 'router-not-configured')
         self.assertTrue(resolution.problem['reason'].startswith('Router 不可用：'))
 
-    def test_claim_rechecks_review_without_charging_another_family(self):
+    def test_claim_rechecks_review_without_charging_another_model_service(self):
         board = self.board()
         self.seed(board)
         result = board.call('selection_request', {'requestId': 'later-ineligible', 'task': 'choose'})

@@ -20,9 +20,9 @@ const sol = { adapter: "codex", provider: "openai", model: "gpt-6-sol" };
 const SONNET = "claude / anthropic / claude-sonnet-5";
 const SOL = "codex / openai / gpt-6-sol";
 
-function profile(family: typeof sonnet, effort: string, extra: Partial<Profile> = {}): Profile {
+function profile(modelService: typeof sonnet, effort: string, extra: Partial<Profile> = {}): Profile {
   return {
-    profileId: `${family.adapter}:${family.provider}:${family.model}:${effort}`, label: `${family.model} · ${effort}`, ...family, effort,
+    profileId: `${modelService.adapter}:${modelService.provider}:${modelService.model}:${effort}`, label: `${modelService.model} · ${effort}`, ...modelService, effort,
     available: true, enabled: false, capabilities: [], contextWindow: null, description: "", source: "catalog:fixture", ...extra,
   };
 }
@@ -33,8 +33,8 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
 
     configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [profile(sonnet, "medium", { enabled: true }), profile(sonnet, "high"), profile(sol, "medium"), profile(sol, "low")],
-    preferences: [], familyAnnotations: [], decisions: [],
- modelConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
+    preferences: [], modelServiceNotes: [], decisions: [],
+ modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
       { adapter: "claude", status: "ready", available: true, revision: 1, manualPath: null },
@@ -70,8 +70,8 @@ function open(f: ReturnType<typeof fixture>) {
 
 /** One page of retained rows, as `model_profiles` returns it. */
 function page(profiles: Profile[], _state: Snapshot) {
-  return { profiles, preferences: [], familyAnnotations: [],
- modelConcurrency: [], nextCursor: null };
+  return { profiles, preferences: [], modelServiceNotes: [],
+ modelServiceConcurrency: [], nextCursor: null };
 }
 
 afterEach(() => {
@@ -83,7 +83,7 @@ afterEach(() => {
 
 describe("an empty catalogue", () => {
   it("says that there are no models yet and how to find some, and opens no drawer", async () => {
-    const f = fixture(snapshot({ profiles: [], modelConcurrency: [] }));
+    const f = fixture(snapshot({ profiles: [], modelServiceConcurrency: [] }));
     open(f);
     await listed(0, 0);
     expect(screen.getByText("还没有模型")).toBeTruthy();

@@ -609,8 +609,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !validConfigurationState(data) ||
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.preferences) ||
-        !Array.isArray(data.familyAnnotations) ||
-        !Array.isArray(data.modelConcurrency) ||
+        !Array.isArray(data.modelServiceNotes) ||
+        !Array.isArray(data.modelServiceConcurrency) ||
         !data.tasks ||
         !Number.isSafeInteger(data.tasks.pendingCount) ||
         data.tasks.pendingCount < 0 ||

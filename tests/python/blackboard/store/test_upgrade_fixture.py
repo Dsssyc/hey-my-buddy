@@ -179,23 +179,23 @@ class UpgradeFixtureTests(unittest.TestCase):
         # Mutate only this restored schema-18 board. Its view is the independent
         # baseline for the new board's per-buddy policy, including disabled and
         # unavailable members and the old explicit absence override.
-        family = tuple(old.execute(
+        model_service = tuple(old.execute(
             'SELECT adapter,provider,model FROM evaluation_profiles ORDER BY profile_id LIMIT 1'
         ).fetchone())
         for effort in ('low', 'max'):
-            profile_id = ':'.join((*family, effort))
+            profile_id = ':'.join((*model_service, effort))
             old.execute(
                 'INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,'
                 'available,enabled,capabilities_json,created_revision,updated_revision)'
                 ' VALUES(?,?,?,?,?,?,1,1,?,1,1)',
-                (profile_id, f'fixture · {effort}', *family, effort, json.dumps(['execution:codex'])))
+                (profile_id, f'fixture · {effort}', *model_service, effort, json.dumps(['execution:codex'])))
         profile_ids = [row[0] for row in old.execute(
             'SELECT profile_id FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? ORDER BY profile_id',
-            family)]
+            model_service)]
         old.execute('DELETE FROM evaluation_preferences')
         old.execute('DELETE FROM family_preferences')
         old.execute('INSERT INTO family_preferences(adapter,provider,model,mode,reason,updated_revision) VALUES(?,?,?,?,?,1)',
-                    (*family, 'prefer', 'model service reason'))
+                    (*model_service, 'prefer', 'model service reason'))
         old.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason,updated_revision) VALUES(?,?,?,1)',
                     (profile_ids[0], 'exclude', 'buddy reason'))
         old.execute('INSERT INTO evaluation_preferences(profile_id,mode,reason,updated_revision) VALUES(?,?,?,1)',

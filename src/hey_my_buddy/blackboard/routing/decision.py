@@ -139,11 +139,11 @@ class DecisionCoordinator:
         with bound(records):
             return DecisionAdapter().available()
 
-    def selector_family(self, connection: sqlite3.Connection, spec: dict | None = None) -> tuple[str, str, str] | None:
-        """The model family the current dispatch will actually consume.
+    def selector_model_service(self, connection: sqlite3.Connection, spec: dict | None = None) -> tuple[str, str, str] | None:
+        """The model service the current dispatch will actually consume.
 
         Read from the decision's current immutable dispatch — never a fresh
-        resolve — so the store can quota-check the family this request is frozen
+        resolve — so the store can quota-check the model service this request is frozen
         to *before* the claim commits and before the dispatch is claimed.
         """
         descriptor = decision_spec(spec or {})
@@ -336,8 +336,8 @@ class DecisionCoordinator:
         return {
             "profiles": [self._profile_input(row) for row in profiles],
             "preferences": preferences,
-            # User notes are kept per model family; the family key is on every profile.
-            "annotations": user_policy.family_annotations(connection, profile_ids),
+            # User notes are kept per model service; the model service key is on every profile.
+            "annotations": user_policy.model_service_notes(connection, profile_ids),
         }
 
     def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, profile_row: sqlite3.Row | None, table: dict, task_text: str | None, preserve_oversized: bool = False) -> tuple[dict | None, str | None]:
@@ -827,7 +827,7 @@ class DecisionCoordinator:
         return task_id
 
     def prepare_router_claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, now: str) -> str | None:
-        """Pre-claim preparation inside the claim transaction, before family capacity.
+        """Pre-claim preparation inside the claim transaction, before model service capacity.
 
         Verifies the task is this request's current dispatch inside its frozen
         snapshot. Changed circumstances close the old queued task at an honest

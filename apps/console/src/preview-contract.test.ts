@@ -253,7 +253,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(snapshots).toHaveLength(1);
     expect(workflows.length).toBeGreaterThanOrEqual(3);
 
-    // A preview snapshot must carry the single Router and the family note
+    // A preview snapshot must carry the single Router and the model service note
     // schema the current console requires (the original schema-13 defect).
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({

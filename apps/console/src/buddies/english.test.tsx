@@ -79,7 +79,7 @@ function world(canWrite = true) {
     routers: [profiles[0].profileId], canWrite,
     routingHealth: health({ consecutiveFailures: 2, failureCount: 3, abstentionCount: 1, boundsRejectedCount: 1,
       recentFailures: [{ decisionId: "decision-1", runId: "run-1", at: AT, code: "routing-bounds-rejected" }] }),
-    extra: { profiles, modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableProfileCount: 3 },
+    extra: { profiles, modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }], harnesses, unavailableProfileCount: 3 },
   }));
 }
 

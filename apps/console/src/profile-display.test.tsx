@@ -51,11 +51,11 @@ function catalogSnapshot(): Snapshot {
     profiles: [flashOff, proMax],
     preferences: [],
 
-    familyAnnotations: [],
+    modelServiceNotes: [],
 
     decisions: [],
 
-    modelConcurrency: [],
+    modelServiceConcurrency: [],
     tasks: { pendingCount: 0 },
     capabilities: { selection: false },
   };

@@ -3,7 +3,7 @@ import {
   makeDraft,
   publication,
   setConcurrencyLimit,
-  setFamilyAnnotation as setNote,
+  setModelServiceNote as setNote,
   setPreference,
 } from "./draft";
 import {
@@ -61,11 +61,11 @@ function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {})
     profiles,
     preferences: [],
 
-    familyAnnotations: [],
+    modelServiceNotes: [],
     evidence: [],
     decisions: [],
 
-    modelConcurrency: [],
+    modelServiceConcurrency: [],
     tasks: { runs: [], total: 0 },
     capabilities: {},
     ...extra,
@@ -170,7 +170,7 @@ describe("blocking new changes", () => {
     expect(issues[0].message).toContain("无法启用");
   });
 
-  it("allows disabling an unavailable configuration and editing its family note", () => {
+  it("allows disabling an unavailable configuration and editing its model service note", () => {
     const enabledRetired = { ...retired, enabled: true };
     const baseline = makeDraft(snapshot([worker, enabledRetired], {
       preferences: [{ profileId: retired.profileId, mode: "pin", reason: "以前固定" }],
@@ -183,7 +183,7 @@ describe("blocking new changes", () => {
     expect(blockingIssues(baseline, draft)).toEqual([]);
     const patch = publication(baseline, draft, "c");
     expect(patch.profileSettings).toEqual([{ profileId: retired.profileId, enabled: false }]);
-    expect(patch.familyAnnotationChanges).toEqual([
+    expect(patch.modelServiceNoteChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "retired-model", text: "保留经验" },
     ]);
   });
@@ -264,7 +264,7 @@ describe("stale settings needing attention", () => {
     expect(blockingIssues(baseline, withNote)).toEqual([]);
     const patch = publication(baseline, withNote, "c");
     expect(patch).not.toHaveProperty("configuration");
-    expect(patch.familyAnnotationChanges).toEqual([
+    expect(patch.modelServiceNoteChanges).toEqual([
       { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "只改备注" },
     ]);
   });
@@ -323,7 +323,7 @@ describe("model concurrency limits", () => {
     for (const limit of [0, 33, 2.5]) {
       const invalid = {
         ...baseline,
-        modelConcurrency: [{ adapter: worker.adapter, provider: worker.provider, model: worker.model, limit }],
+        modelServiceConcurrency: [{ adapter: worker.adapter, provider: worker.provider, model: worker.model, limit }],
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
@@ -331,12 +331,12 @@ describe("model concurrency limits", () => {
       expect(issues[0].profileId).toBe(worker.profileId);
     }
     // A limit edit never depends on availability: the retired configuration's
-    // family setting stays publishable within the range.
+    // model service setting stays publishable within the range.
     const retiredBase = makeDraft(snapshot([worker, retired]));
     const raised = setConcurrencyLimit(retiredBase, retired, 32);
     expect(blockingIssues(retiredBase, raised)).toEqual([]);
     const patch = publication(retiredBase, raised, "c");
-    expect(patch.modelConcurrency).toEqual([
+    expect(patch.modelServiceConcurrency).toEqual([
       { adapter: retired.adapter, provider: retired.provider, model: retired.model, limit: 32 },
     ]);
   });

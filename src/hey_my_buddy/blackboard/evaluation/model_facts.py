@@ -4,7 +4,7 @@ Facts such as price, billing unit, context length, release date and machine-read
 capabilities belong to the model, never to a buddy, and are program-owned: the Router
 never writes them. This module fetches one public machine-readable snapshot, resolves
 the explicit provider/model identity mapping, and stores a dated snapshot per model
-family in the ``model_facts`` table.
+service in the ``model_facts`` table.
 
 The fetch is triggered only by a user action — enabling a model through the console,
 and later the model profile plane building a profile — and never on a schedule: there
@@ -33,7 +33,7 @@ SOURCE_URL = "https://models.dev/api.json"
 SOURCE_FILE_ENV = "BUDDY_MODEL_FACTS_FILE"
 FETCH_TIMEOUT_SECONDS = 10
 MAX_SOURCE_BYTES = 32 * 1024 * 1024
-MAX_FAMILIES = 200
+MAX_MODEL_SERVICES = 200
 MAX_PROVIDERS = 512
 #: The live catalog holds 8,339 models (2026-10-01); the bound stays well above it.
 #: A payload beyond the bounds is an explicit failure — the previous snapshot is
@@ -79,11 +79,11 @@ UNKNOWN_NEVER = "never-fetched"
 
 def _identity(value, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > 256:
-        raise BoardError("INVALID_ARGUMENT", f"model facts family {field} must be a nonempty string of at most 256 characters")
+        raise BoardError("INVALID_ARGUMENT", f"model facts model service {field} must be a nonempty string of at most 256 characters")
     return value.strip()
 
 
-def normalize_family(value: str) -> str:
+def normalize_model_service(value: str) -> str:
     """The comparable form of one provider or model label: case and punctuation aside."""
     return "".join(character for character in value.strip().lower() if character.isalnum())
 
@@ -270,7 +270,7 @@ def extract_facts(entry: dict, *, plan_provider: bool = False) -> dict:
 
 
 def resolve_identity(index: dict[str, dict[str, dict]], provider: str, model: str) -> tuple[str | None, str | None]:
-    """Map one ``(provider, model)`` family label onto the snapshot's own identity.
+    """Map one ``(provider, model)`` model service label onto the snapshot's own identity.
 
     The mapping is explicit and auditable: a listed provider alias wins, then exact
     and normalized equality against the published provider ids; the model resolves by
@@ -285,48 +285,48 @@ def resolve_identity(index: dict[str, dict[str, dict]], provider: str, model: st
         if provider in index:
             provider_id = provider
         else:
-            wanted = normalize_family(provider)
-            matches = [name for name in index if normalize_family(name) == wanted]
+            wanted = normalize_model_service(provider)
+            matches = [name for name in index if normalize_model_service(name) == wanted]
             provider_id = matches[0] if len(matches) == 1 else None
     if provider_id is None or provider_id not in index:
         return None, None
     models = index[provider_id]
     if model in models:
         return provider_id, model
-    wanted = normalize_family(model.removeprefix("models/"))
-    matches = [name for name in models if normalize_family(name.removeprefix("models/")) == wanted]
+    wanted = normalize_model_service(model.removeprefix("models/"))
+    matches = [name for name in models if normalize_model_service(name.removeprefix("models/")) == wanted]
     return provider_id, matches[0] if len(matches) == 1 else None
 
 
-def _families(families) -> list[tuple[str, str, str]]:
+def _model_services(model_services) -> list[tuple[str, str, str]]:
     validated: list[tuple[str, str, str]] = []
-    for family in families:
-        if not isinstance(family, (tuple, list)) or len(family) != 3:
-            raise BoardError("INVALID_ARGUMENT", "A model facts family is an (adapter, provider, model) triple")
-        adapter, provider, model = (_identity(item, "member") for item in family)
+    for model_service in model_services:
+        if not isinstance(model_service, (tuple, list)) or len(model_service) != 3:
+            raise BoardError("INVALID_ARGUMENT", "A model facts model service is an (adapter, provider, model) triple")
+        adapter, provider, model = (_identity(item, "member") for item in model_service)
         triple = (adapter, provider, model)
         if triple not in validated:
             validated.append(triple)
-    if len(validated) > MAX_FAMILIES:
-        raise BoardError("INVALID_ARGUMENT", f"A model facts refresh accepts at most {MAX_FAMILIES} families")
+    if len(validated) > MAX_MODEL_SERVICES:
+        raise BoardError("INVALID_ARGUMENT", f"A model facts refresh accepts at most {MAX_MODEL_SERVICES} model services")
     return validated
 
 
-def refresh_families(board, families, *, now: str | None = None, source=None) -> dict:
-    """Refresh the durable facts snapshot of the given model families.
+def refresh_model_services(board, model_services, *, now: str | None = None, source=None) -> dict:
+    """Refresh the durable facts snapshot of the given model services.
 
     This is the one refresh function for both trigger planes: the console's user
     enablement path calls it here, and the model profile plane (ADR-021 L11) calls
-    the same function when it builds a profile. One source read covers every family
-    in the call. When the fetch or parse fails, nothing is written, so every family
-    keeps its previous snapshot; when the fetch succeeds, a family without a
+    the same function when it builds a profile. One source read covers every model service
+    in the call. When the fetch or parse fails, nothing is written, so every model service
+    keeps its previous snapshot; when the fetch succeeds, a model service without a
     resolvable models.dev entry records ``unknown`` with the reason and date.
 
     Returns a bounded outcome; a failure is reported, never raised, so a caller that
     is already inside a committed business operation cannot be broken by the network.
     """
-    validated = _families(families)
-    retained = [list(family) for family in validated]
+    validated = _model_services(model_services)
+    retained = [list(model_service) for model_service in validated]
     if not validated:
         return {"ok": True, "fetchedAt": None, "source": None, "refreshed": [], "unknown": [], "retained": []}
     try:
@@ -337,8 +337,8 @@ def refresh_families(board, families, *, now: str | None = None, source=None) ->
     fetched_at = now or utc_now()
     payload_sha256 = hashlib.sha256(raw).hexdigest()
     rows, refreshed, unknown = [], [], []
-    for family in validated:
-        adapter, provider, model = family
+    for model_service in validated:
+        adapter, provider, model = model_service
         provider_id, model_id = resolve_identity(index, provider, model)
         if provider_id is None:
             status, facts, identity_view, reason = "unknown", {}, {}, UNKNOWN_IDENTITY
@@ -354,9 +354,9 @@ def refresh_families(board, families, *, now: str | None = None, source=None) ->
             else:
                 status, reason = "unknown", UNKNOWN_INVALID
         if status == "current":
-            refreshed.append(list(family))
+            refreshed.append(list(model_service))
         else:
-            unknown.append({"family": list(family), "reason": reason})
+            unknown.append({"modelService": list(model_service), "reason": reason})
         rows.append((adapter, provider, model, status, canonical_json(facts), canonical_json(identity_view),
                      origin, payload_sha256, fetched_at, reason))
     with board.db.write() as connection:
@@ -372,28 +372,28 @@ def refresh_families(board, families, *, now: str | None = None, source=None) ->
             "refreshed": refreshed, "unknown": unknown, "retained": []}
 
 
-def family_facts(board, families) -> dict[tuple[str, str, str], dict]:
-    """The stored snapshot view for these families; a family with no row is unknown.
+def model_service_facts(board, model_services) -> dict[tuple[str, str, str], dict]:
+    """The stored snapshot view for these model services; a model service with no row is unknown.
 
     This is the read side every consumer shares: a ``current`` view carries the facts
     with their source and fetch date, and every other case — never fetched, fetch
     failed, or the source had no entry — reads as ``unknown`` with its reason, so a
     display never has to invent a fact.
     """
-    validated = _families(families)
+    validated = _model_services(model_services)
     views: dict[tuple[str, str, str], dict] = {}
     with board.db.read() as connection:
-        for family in validated:
-            adapter, provider, model = family
+        for model_service in validated:
+            adapter, provider, model = model_service
             row = connection.execute(
-                "SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", family
+                "SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", model_service
             ).fetchone()
             if row is None:
-                views[family] = {"adapter": adapter, "provider": provider, "model": model, "status": "unknown",
+                views[model_service] = {"adapter": adapter, "provider": provider, "model": model, "status": "unknown",
                                  "facts": None, "identity": None, "source": None, "fetchedAt": None,
                                  "reason": UNKNOWN_NEVER}
                 continue
-            views[family] = {
+            views[model_service] = {
                 "adapter": adapter,
                 "provider": provider,
                 "model": model,

@@ -15,7 +15,7 @@ const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /登录已失效/;
 const saveRefusal = /登录已失效/;
 
-/** Two families and three execution configurations, all available. */
+/** Two model services and three execution configurations, all available. */
 function catalog(): Profile[] {
   const entries = [
     { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off", enabled: true },
@@ -76,9 +76,9 @@ function fixture(options: {
     profiles,
     unavailableProfileCount: 1,
 
-    familyAnnotations: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
+    modelServiceNotes: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
     preferences: [], decisions: [],
-    modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
+    modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
@@ -107,7 +107,7 @@ function fixture(options: {
       return structuredClone(value);
     }
     if (operation === "model_profiles") {
-      return { profiles: [], familyAnnotations: [], preferences: [], modelConcurrency: [], nextCursor: null };
+      return { profiles: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
       return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
@@ -179,7 +179,7 @@ function envelope(consoleSession: unknown, include = true) {
     configuration: { routerProfileIds: [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "fast", routingBudget: "standard" },
 
-    profiles: [], familyAnnotations: [], preferences: [], modelConcurrency: [], tasks: { pendingCount: 0 },
+    profiles: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], tasks: { pendingCount: 0 },
     csrfToken: "csrf", eventCursor: 0,
     ...(include ? { consoleSession } : {}),
   };

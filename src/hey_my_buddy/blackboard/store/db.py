@@ -106,10 +106,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     ownership           TEXT NOT NULL DEFAULT 'owned' CHECK (ownership IN ('owned','uncertain')),
     runtime_identity    TEXT,
     adapter             TEXT NOT NULL,
-    -- Frozen model-family identity (adapter/provider/model, no effort dimension).
+    -- Frozen model-service identity (adapter/provider/model, no effort dimension).
     -- Written once by the claim transaction that resolved it and never updated
     -- afterwards, so a historical or shutdown-uncertain attempt can never change
-    -- which family's concurrency slot it occupies. NULL for model-less work
+    -- which model service's concurrency slot it occupies. NULL for model-less work
     -- (command/external) which counts only against the machine-wide ceiling.
     model_adapter       TEXT,
     model_provider      TEXT,
@@ -137,7 +137,7 @@ CREATE INDEX IF NOT EXISTS attempts_task_idx ON attempts(task_id, generation);
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
     WHERE execution_state IN ('starting','executing','finalizing','uncertain');
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
-CREATE INDEX IF NOT EXISTS attempts_model_family_idx
+CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_adapter, model_provider, model_model) WHERE model_model IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS workers (
@@ -293,7 +293,7 @@ CREATE TABLE IF NOT EXISTS catalog_current (
 );
 """,
     """
-CREATE TABLE IF NOT EXISTS family_annotations (
+CREATE TABLE IF NOT EXISTS model_service_notes (
     adapter    TEXT NOT NULL,
     provider   TEXT NOT NULL,
     model      TEXT NOT NULL,
@@ -391,14 +391,14 @@ CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_
 CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     ON evaluation_decisions(created_at, decision_id);
 """,
-    # User-owned per-family concurrent-attempt limits (ADR-011). A family is the
+    # User-owned per-model-service concurrent-attempt limits (ADR-011). A model service is the
     # exact adapter/provider/model tuple; effort variants share one row. The row
     # is independent of ``evaluation_profiles`` availability on purpose: a setting
-    # survives discovery marking a model unavailable, and a family without a row
+    # survives discovery marking a model unavailable, and a model service without a row
     # uses the code-owned default. Only the authenticated console writer patch in
     # ``user_policy.py`` ever writes here.
     """
-CREATE TABLE IF NOT EXISTS model_concurrency (
+CREATE TABLE IF NOT EXISTS model_service_concurrency (
     adapter           TEXT NOT NULL,
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
@@ -409,11 +409,11 @@ CREATE TABLE IF NOT EXISTS model_concurrency (
 );
 """,
     # Program-owned model facts snapshots (ADR-021 decision 12), one durable dated
-    # snapshot per model family extracted from the public models.dev catalog. Facts
+    # snapshot per model service extracted from the public models.dev catalog. Facts
     # belong to the model, never to a buddy, and are never user-editable. A
     # ``current`` row carries the extracted facts with their exact source, payload
     # hash and fetch date; an ``unknown`` row records a completed fetch with no
-    # resolvable entry for this family. A failed fetch writes nothing, so the
+    # resolvable entry for this model service. A failed fetch writes nothing, so the
     # previous snapshot is retained untouched. Recorded by the schema-17 upgrade base; the explicit idle upgrade
     # remains owned by the upgrade module.
     """
