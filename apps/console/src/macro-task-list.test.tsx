@@ -15,6 +15,21 @@ const props = (): MacroTaskListProps => ({
 });
 afterEach(cleanup);
 describe("macro task list", () => {
+  it("collapses every project and the standalone group and never toggles them open", async () => {
+    const user = userEvent.setup(); render(<MacroTaskList {...props()}/>);
+    await user.click(screen.getByRole("button", { name: /独立微任务/ }));
+    const groups = [...document.querySelectorAll('[data-slot="macro-group-heading"]')];
+    expect(groups.every(group => group.getAttribute("aria-expanded") === "true")).toBe(true);
+    const collapse = screen.getByRole("button", { name: "全部折叠" });
+    expect(collapse.getAttribute("aria-description")).toBe("全部折叠");
+    await user.click(collapse);
+    expect(groups.every(group => group.getAttribute("aria-expanded") === "false")).toBe(true);
+    expect(document.querySelectorAll("[data-macro-task-id]")).toHaveLength(0);
+    await user.click(collapse);
+    expect(groups.every(group => group.getAttribute("aria-expanded") === "false")).toBe(true);
+    await user.click(groups[0]);
+    expect(groups[0].getAttribute("aria-expanded")).toBe("true");
+  });
   it("groups by project with loaded counts and puts collapsed standalone micro tasks last", async () => {
     const p = props(); render(<MacroTaskList {...p}/>);
     const groups = [...document.querySelectorAll('[data-slot="macro-group-heading"]')];

@@ -6,6 +6,7 @@ import { ScanLine } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
 import { Hint } from "../components/hint";
+import { Button } from "../components/ui/button";
 
 /** The axis surface is also its discoverable zoom control. */
 export const ZoomRuler = forwardRef<HTMLDivElement, {
@@ -60,10 +61,10 @@ export const ZoomRuler = forwardRef<HTMLDivElement, {
     }}>
     {children}
     {!atMinimum && <div className="pointer-events-none absolute inset-0 z-50">
-      <div className="sticky left-0 flex h-full items-start justify-end pr-2 pt-0.5" style={{ width: viewportWidth }}>
-        <Hint text={t("zoomFit")}><button type="button" data-slot="zoom-fit" aria-label={t("zoomFit")}
-          className="pointer-events-auto inline-flex size-5 items-center justify-center border border-line2 bg-card text-ink outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => onChange(0)}><ScanLine size={12} aria-hidden="true"/></button></Hint>
+      <div className="sticky left-0 flex h-full items-start justify-end pr-2" style={{ width: viewportWidth }}>
+        <Hint text={t("zoomFit")}><Button type="button" variant="ghost" size="icon-sm" data-slot="zoom-fit" aria-label={t("zoomFit")}
+          className="pointer-events-auto"
+          onClick={() => onChange(0)}><ScanLine aria-hidden="true"/></Button></Hint>
       </div>
     </div>}
   </div></TooltipPrimitive.Trigger>

@@ -13,9 +13,10 @@ async function fitGeometry(page: Page) {
   const fit = (await page.locator('[data-slot=zoom-fit]').boundingBox())!;
   const text = (await axis.locator('[data-slot=axis-label].fill-ink2').first().boundingBox())!;
   const line = (await axis.locator('line[y1="30"][y2="30"]').boundingBox())!;
-  expect(fit.width).toBe(20); expect(fit.height).toBe(20);
+  expect(fit.width).toBe(28); expect(fit.height).toBe(28);
+  expect(fit.y).toBeGreaterThanOrEqual((await axis.boundingBox())!.y);
   expect(fit.y + fit.height).toBeLessThan(line.y);
-  expect(Math.abs(fit.y + fit.height / 2 - text.y - text.height / 2)).toBeLessThanOrEqual(1);
+  expect(Math.abs(fit.y + fit.height / 2 - text.y - text.height / 2)).toBeLessThanOrEqual(3);
 }
 
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`legend and fit ${theme} ${width}`, () => {

@@ -100,10 +100,9 @@ async function assertListGeometry(page: Page, width: number) {
   const search = list.locator("[data-slot=macro-search]");
   expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
   expect((await search.boundingBox())!.height).toBeGreaterThanOrEqual(32);
-  const controls = await list.locator("[data-slot=macro-list-heading], [data-slot=macro-sort], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
+  const controls = await list.locator("[data-slot=macro-list-toolbar], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
   expect(controls[0]!.bottom).toBeLessThanOrEqual(controls[1]!.top + 1);
   expect(controls[1]!.bottom).toBeLessThanOrEqual(controls[2]!.top + 1);
-  expect(controls[2]!.bottom).toBeLessThanOrEqual(controls[3]!.top + 1);
   const metrics = await list.evaluate(node => {
     const measure = (selector: string) => {
       const item = node.querySelector<HTMLElement>(selector)!;

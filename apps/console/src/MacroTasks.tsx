@@ -4,6 +4,7 @@ import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { Ellipsis } from "lucide-react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
@@ -227,7 +228,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       {stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" tabIndex={0} className={cn("text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-foreground state-breathe" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>}
       {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><Button variant="outline" size="sm" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</Button></Hint>}
       {stopState?.phase === "refused" && <Button variant="outline" size="sm" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</Button>}
-      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><Hint text={t("more")}><PopoverTrigger asChild><Button ref={menuButtonRef} data-slot="macro-menu-button" variant="outline" size="icon" aria-label={t("more")}>⋯</Button></PopoverTrigger></Hint>
+      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><Hint text={t("more")}><PopoverTrigger asChild><Button ref={menuButtonRef} data-slot="macro-menu-button" variant="ghost" size="icon-sm" aria-label={t("more")}><Ellipsis aria-hidden="true"/></Button></PopoverTrigger></Hint>
         <PopoverContent align="end" className="w-48 rounded-none p-1" onCloseAutoFocus={event => { if (deletionOpening.current) { event.preventDefault(); deletionOpening.current = false; } }}>
           <Hint text={reason}><Button data-slot="macro-stop-action" variant="ghost" className="w-full justify-start" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</Button></Hint>
           <div className="my-1 border-t"/>

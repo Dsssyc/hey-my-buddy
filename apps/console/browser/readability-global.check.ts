@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { contrastOf, open, test } from "./preview";
+import { contrastOf, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const stoppingMacro = "macro-22222222-2222-4222-8222-222222222222";
@@ -38,19 +38,27 @@ test.describe("shared readability", () => {
     expect(await fold.evaluate(node => getComputedStyle(node).cursor)).toBe("pointer");
     const chevron = fold.locator("[data-slot=disclosure]");
     const text = await page.locator("body").evaluate(node => getComputedStyle(node).color);
-    expect(await chevron.evaluate(node => getComputedStyle(node).color)).toBe(text);
+    await expect(fold).toHaveAttribute("data-variant", "ghost");
+    await expect(fold).toHaveAttribute("data-size", "icon-sm");
+    expect(await chevron.evaluate(node => getComputedStyle(node).color)).not.toBe(text);
+    await expect(chevron).toHaveCSS("width", "16px");
+    await expect(chevron).toHaveAttribute("stroke-width", "2");
+    const resting = await fold.evaluate(node => getComputedStyle(node).backgroundColor);
     await fold.hover();
-    await expect(fold).toHaveCSS("background-color", "rgb(52, 56, 61)");
+    await settle(page);
+    const hovered = await fold.evaluate(node => getComputedStyle(node).backgroundColor);
+    expect(hovered).not.toBe(resting);
+    await expect(chevron).toHaveCSS("color", text);
     await page.mouse.move(0, 0);
     await page.keyboard.press("Tab");
     await fold.focus();
     await expect(page.locator("[data-slot=tooltip-content]")).toBeVisible();
-    expect(await fold.evaluate(node => getComputedStyle(node).outlineStyle)).toBe("solid");
-    await expect(fold).toHaveCSS("outline-color", "rgb(196, 200, 206)");
+    expect(await fold.evaluate(node => node.matches(":focus-visible"))).toBe(true);
+    expect(await fold.evaluate(node => getComputedStyle(node).boxShadow)).toContain("inset");
     await fold.click();
     await expect(chevron).toHaveAttribute("data-state", "closed");
     await fold.hover();
-    await expect(fold).toHaveCSS("background-color", "rgb(18, 19, 21)");
+    await expect(fold).toHaveCSS("background-color", hovered);
     await fold.click();
 
     const model = page.locator("[data-slot=model-row]").first();

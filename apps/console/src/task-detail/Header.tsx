@@ -14,7 +14,7 @@ import type { TaskView, Workflow } from "./types";
 
 export function DetailBack({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation("taskDetail");
-  return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true" strokeWidth={1.5}/></Button></Hint>;
+  return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button></Hint>;
 }
 
 export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
@@ -88,8 +88,8 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
           <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
-            <Button variant="outline" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>
-              <RefreshCw data-slot="detail-refresh-icon" strokeWidth={1.5} aria-hidden="true"
+            <Button variant="ghost" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>
+              <RefreshCw data-slot="detail-refresh-icon" aria-hidden="true"
                 className={cn(turning && "detail-refresh-turn", busy && "motion-reduce:opacity-50")}
                 onAnimationIteration={() => { if (!busy) setTurning(false); }} />
             </Button>

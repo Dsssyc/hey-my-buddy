@@ -68,20 +68,25 @@ describe("the step strip along the top of a micro task's detail", () => {
     const total = counter().textContent!.match(/^步骤 1 \/ (\d+)$/)?.[1];
     expect(Number(total)).toBeGreaterThan(1);
     expect(counter().className).toContain("tabular-nums");
-    expect(previous().getAttribute("data-variant")).toBe("outline");
-    expect(next().getAttribute("data-variant")).toBe("outline");
+    expect(previous().getAttribute("data-variant")).toBe("ghost");
+    expect(next().getAttribute("data-variant")).toBe("ghost");
     expect(previous().getAttribute("data-size")).toBe("icon-sm");
-    expect(previous().disabled).toBe(true);
-    expect(next().disabled).toBe(false);
+    expect(previous().getAttribute("aria-disabled")).toBe("true");
+    expect(next().hasAttribute("aria-disabled")).toBe(false);
+    await f.user.click(previous());
+    previous().focus(); await f.user.keyboard("{Enter} ");
+    expect(counter().textContent).toBe(`步骤 1 / ${total}`);
     await f.user.click(next());
     expect(pane().textContent).toContain("路由");
     expect(counter().textContent).toBe(`步骤 2 / ${total}`);
-    expect(previous().disabled).toBe(false);
+    expect(previous().hasAttribute("aria-disabled")).toBe(false);
     await f.user.click(previous());
     expect(pane().textContent).toContain("实现微任务详情");
-    expect(previous().disabled).toBe(true);
+    expect(previous().getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(strip().querySelector('[data-key="acceptance-wait"]')!);
-    expect(next().disabled).toBe(true);
+    expect(next().getAttribute("aria-disabled")).toBe("true");
+    await f.user.click(next());
+    expect(next().getAttribute("aria-disabled")).toBe("true");
   });
 
   it("offers a delivered micro task's open acceptance as its own slice at the end of the record", async () => {

@@ -34,8 +34,8 @@ function CollapsibleContent({
 function Disclosure({ open, className }: { open: boolean; className?: string }) {
   return (
     <ChevronRightIcon data-slot="disclosure" data-state={open ? "open" : "closed"}
-      size={16} strokeWidth={1.5} aria-hidden="true"
-      className={cn("shrink-0 text-foreground transition-transform duration-200 motion-reduce:transition-none", open && "rotate-90", className)} />
+      size={16} aria-hidden="true"
+      className={cn("shrink-0 transition-transform duration-200 motion-reduce:transition-none", open && "rotate-90", className)} />
   )
 }
 
