@@ -22,7 +22,7 @@ describe("macro task list", () => {
     const p = props();
     p.rows = [{ ...p.rows[0], project: { id: "c-two", label: "c-two", path: null }, title: "检查项目名称", titleSource: "macro-task" }];
     render(<MacroTaskList {...p}/>);
-    const group = screen.getByRole("button", { name: "c-two 1" });
+    const group = screen.getByRole("button", { name: /^c-two/ });
     const entry = screen.getByRole("button", { name: /检查项目名称/ });
     for (const [button, text] of [[group, "c-two"], [entry, "检查项目名称"]] as const) {
       const label = within(button).getByText(text);

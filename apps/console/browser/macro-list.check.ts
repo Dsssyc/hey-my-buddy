@@ -281,7 +281,10 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
         const entry = list.locator(`[data-macro-task-id="${id}"] [data-slot=macro-entry]`);
         for (const [button, text] of [[group, project], [entry, title]] as const) {
           const label = button.getByText(text, { exact: true });
-          expect(await label.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
+          const geometry = await label.evaluate(node => ({
+            clipped: node.scrollWidth > node.clientWidth, width: node.clientWidth, contentWidth: node.scrollWidth,
+          }));
+          expect(geometry.clipped, `${text}: ${JSON.stringify(geometry)}`).toBe(clipped);
           await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient/ : "none");
           if (clipped) await expect(button).toHaveAttribute("aria-description", text);
           else await expect(button).not.toHaveAttribute("aria-description");
@@ -300,6 +303,8 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
         await group.click();
         await expect(group).toHaveAttribute("aria-expanded", "true");
       }
+      const viewport = list.locator("[data-slot=scroll-area-viewport]");
+      expect(await viewport.evaluate(node => node.scrollWidth - node.clientWidth), "project names stay within the scroll viewport").toBeLessThanOrEqual(1);
       await expectNoSidewaysScroll(page);
     });
   });
