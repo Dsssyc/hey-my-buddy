@@ -1,18 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createApi } from "./api";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { useConsole } from "./use-console";
 import { useEditor } from "./use-editor";
 import { useTheme } from "./theme";
-import {
-  READ_ONLY_ACTION_REFUSAL,
-  READ_ONLY_BANNER,
-  READ_ONLY_DRAFT_NOTE,
-  READ_ONLY_SAVE_REFUSAL,
-  UNRESOLVED_HANDOFF_NOTE,
-  createAuthorityLatch,
-} from "./console-session";
+import { UNRESOLVED_SAVE_NOTE } from "./console-session";
+import { createAuthorityLatch } from "./console-session";
 import { Objectives } from "./Objectives";
 import { Models } from "./Models";
 import { Settings } from "./Settings";
@@ -51,9 +45,9 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const editSwitch = useRef<HTMLButtonElement>(null);
   const exitWasOpen = useRef(false);
   // One latch for the mounted page: the polling snapshot's own descriptor
-  // decides write authority, a definite board refusal latches the loss for this
-  // session (an older writable snapshot cannot restore it), and a failed
-  // authenticated poll pauses writes without claiming a new-window takeover.
+  // decides write authority, and a definite board refusal (an expired or
+  // invalid login) latches the loss for this session. This is the security
+  // bottom line only — it never surfaces as a user-visible handoff state.
   const authority = useRef(createAuthorityLatch()).current;
   const sessionWritable = authority.writable(snapshot);
   const writesAvailable = !connectionError && sessionWritable;
@@ -61,11 +55,14 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const unavailableReason = connectionError
     ? "与本地黑板的连接已中断：保存已停用，草稿仍保留在本页。"
     : !sessionWritable
-      ? READ_ONLY_SAVE_REFUSAL
+      ? "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。草稿保留在本页。"
       : snapshot.capabilities.evaluationWriteGate === false
         ? "当前会话没有评价表写入资格：保存已停用。"
         : "";
   const editor = useEditor(api, snapshot, refresh, mutationsAvailable, unavailableReason, authority);
+  // P1.2: the edit switch belongs to the two settings tabs only; the records
+  // page renders neither the switch nor any edit/read-only state text.
+  const settingsTab = tab === "models" || tab === "settings";
   function select(key: Tab) {
     setTab(key);
     setVisited(previous => previous.has(key) ? previous : new Set([...previous, key]));
@@ -85,16 +82,21 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   }, [editor.exitPrompt]);
   const pending = new Set(snapshot.tasks.runs.filter(t => t.workflow?.awaitingHost)
     .map(t => t.delegation?.rootRunId || t.runId)).size;
-  const saveLabel = editor.confirming ? "确认保存结果" : "保存更改";
+  const saveLabel = editor.confirming ? "重试同一保存" : "保存更改";
   const draftCount = editor.changedProfiles.length
     ? ` · ${editor.changedProfiles.length} 个配置`
     : editor.configurationDirty ? " · 决策模型配置" : "";
   const saveRefusal = editor.saveBlockedReason
-    || (editor.waiting ? "正在等待编辑资格；可先取消等待。" : "");
+    || (editor.waiting ? "正在等待其他保存完成；可先取消等待。" : "");
   function requestExit() {
     if (editor.mode || editor.busy) void editor.requestExit();
     else editor.enter();
   }
+  // P1.2: the internal table revision lives only in the connection tooltip.
+  const connectionTitle = connectionError
+    ? "与本地黑板的连接已中断；关闭页面不影响后台任务"
+    : `评价表版本 V${snapshot.tableRevision} · 关闭页面不影响后台任务`;
+  const conflictTitle = editor.conflict ? `V${editor.conflict.basedOn} → V${editor.conflict.latest}` : undefined;
   return <div className="app-shell">
     <a className="skip-link" href="#main" inert={editor.exitPrompt || undefined} onClick={event => {
       event.preventDefault(); document.getElementById("main")?.focus();
@@ -109,27 +111,25 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         </a>)}
       </nav>
       <div className="header-status">
-        <span className="connection" title="关闭页面不影响后台任务">{connectionError ? "连接中断" : "已连接"}</span>
-        {!sessionWritable && <Badge tone="amber">只读会话</Badge>}
+        <span className="connection" title={connectionTitle}>{connectionError ? "连接中断" : "已连接"}</span>
         {snapshot.gate.phase !== "open" && <Badge tone="amber">{gateStateText(snapshot)}</Badge>}
-        <span className="small muted">V{snapshot.tableRevision}</span>
-        <div className="edit-cluster">
+        {settingsTab && <div className="edit-cluster">
           <button ref={editSwitch} type="button" role="switch" aria-checked={editor.mode} className="button small-button edit-switch"
             aria-disabled={editor.busy || (!sessionWritable && !editor.mode) || undefined} onClick={requestExit}
             title={editor.busy ? "保存进行中；结果未确认前不会丢弃草稿"
-              : !sessionWritable && !editor.mode ? READ_ONLY_ACTION_REFUSAL
-                : editor.mode ? "退出编辑模式" : "开启本地草稿，不占用编辑资格"}>
+              : !sessionWritable && !editor.mode ? "登录已失效；重新登录后可编辑"
+                : editor.mode ? "退出编辑设置" : "开启本地草稿，不占用编辑资格"}>
             <span className="switch-track" aria-hidden="true"><span className="switch-thumb" /></span>
-            <span className="switch-label">编辑模式</span>
+            <span className="switch-label">编辑设置</span>
           </button>
-          <span className={"edit-state" + (editor.mode ? editor.dirty ? " unsaved" : " active" : "")} role="status">
-            {editor.mode ? editor.dirty ? `编辑中 · 未保存${draftCount}` : "编辑中" : "只读"}
-          </span>
+          {editor.mode && <span className={"edit-state" + (editor.dirty ? " unsaved" : " active")} role="status">
+            {editor.dirty ? `编辑中 · 未保存${draftCount}` : "编辑中"}
+          </span>}
           {editor.mode && <button type="button" className="button primary small-button" aria-disabled={!mutationsAvailable || editor.busy}
             aria-describedby={saveRefusal ? "editor-save-reason" : undefined}
-            onClick={() => void editor.save()}>{editor.busy ? (editor.waiting ? "等待编辑资格…" : "正在保存…") : saveLabel}</button>}
+            onClick={() => void editor.save()}>{editor.busy ? (editor.waiting ? "等待其他保存完成…" : "正在保存…") : saveLabel}</button>}
           {editor.mode && editor.waiting && <button type="button" className="button small-button" onClick={editor.cancelSave}>取消等待</button>}
-        </div>
+        </div>}
         <button type="button" role="switch" aria-checked={theme.theme === "dark"} className="icon-button theme-switch"
           aria-label="深色主题" title={theme.theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} onClick={theme.toggle}>
           <Icon name={theme.theme === "dark" ? "moon" : "sun"} />
@@ -139,15 +139,9 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     </header>
     <main id="main" className="main-content" tabIndex={-1} inert={editor.exitPrompt || undefined}>
       <h1 className="sr-only">{tabs[tab]}</h1>
-      {!sessionWritable && <div className="banner readonly-banner" role="status" data-console-session="read-only">
-        <strong>此页面已由新窗口接管写权限</strong>
-        <span>{READ_ONLY_BANNER}</span>
-        {editor.mode && editor.dirty && <span>{READ_ONLY_DRAFT_NOTE}</span>}
-        {editor.uncertain && <span>{UNRESOLVED_HANDOFF_NOTE}</span>}
-      </div>}
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
       {editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
-        <span>共享评价表已发布 V{editor.conflict.latest}，你的草稿基于 V{editor.conflict.basedOn}。草稿仍保留：重新加载会采用最新发布版本，放弃修改会丢弃本页草稿。</span>
+        <span title={conflictTitle}>设置已在别处更新，你的草稿仍保留。</span>
         {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
           {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
         </ul>}
@@ -156,8 +150,15 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         <button type="button" className="button small-button danger" aria-disabled={editor.busy}
           onClick={() => void editor.discard()}>放弃修改</button>
       </div>}
+      {editor.confirming && editor.uncertain && <div className="banner conflict-banner" role="status">
+        <span>{UNRESOLVED_SAVE_NOTE}</span>
+        <button type="button" className="button small-button" aria-disabled={editor.busy}
+          onClick={() => void editor.save()}>重试同一保存</button>
+        <button type="button" className="button small-button" aria-disabled={editor.busy}
+          onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
+      </div>}
       {editor.blocked && <p className="banner guard-banner" role="status">{editor.blocked}</p>}
-      {editor.error && <p className="banner error-banner" role="alert">{editor.error}</p>}
+      {editor.error && !editor.confirming && <p className="banner error-banner" role="alert">{editor.error}</p>}
       {editor.notice && <p className="publication-notice" role="status">{editor.notice}</p>}
       {saveRefusal && <p id="editor-save-reason" className="sr-only">{saveRefusal}</p>}
       {/* Stable positions preserve page selections, drafts and scroll offsets.
@@ -167,7 +168,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         {key === "tasks" ? <Objectives snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
           authority={authority} writesAvailable={writesAvailable} /> :
           key === "models" ? <Models snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
-            <Settings snapshot={snapshot} editor={editor} />}
+            <Settings snapshot={snapshot} editor={editor} api={api} connectionError={connectionError} />}
       </section>)}
     </main>
     {editor.exitPrompt && <ExitDialog onKeep={editor.keepEditing} onSave={() => void editor.saveAndExit()} onDiscard={() => void editor.discard()} />}

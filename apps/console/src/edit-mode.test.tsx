@@ -143,10 +143,10 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    const editSwitch = screen.getByRole("switch", { name: "编辑模式" });
+    const editSwitch = screen.getByRole("switch", { name: "编辑设置" });
     expect(editSwitch.getAttribute("aria-checked")).toBe("false");
     await user.click(editSwitch);
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("编辑中")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
@@ -162,7 +162,7 @@ describe("edit mode and the write lease", () => {
     expect(f.published[0].annotationChanges).toEqual([{ profileId: flashOff, text: "本地草稿，未发布" }]);
     expect(f.published[0]).not.toHaveProperty("profiles");
     expect(f.published[0]).not.toHaveProperty("cards");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
   });
 
@@ -170,14 +170,14 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     expect(await screen.findByLabelText("我的意见")).toBeTruthy();
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByLabelText("我的意见")).toBeNull();
-    expect(screen.getByText("开启右上角“编辑模式”后可以写下或清除人工意见；已发布的评价内容始终只读。")).toBeTruthy();
+    expect(screen.getByText("开启右上角“编辑设置”后可以写下或清除人工意见；已发布的评价内容始终只读。")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -185,7 +185,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("没有需要保存的用户修改。");
     expect(f.command).not.toHaveBeenCalled();
@@ -196,7 +196,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -212,7 +212,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"] }, { queuedForever: true });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "排队中的草稿");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -222,7 +222,7 @@ describe("edit mode and the write lease", () => {
     await waitFor(() => expect(f.operations).toContain("evaluation_write_abort"), { timeout: 4000 });
     await screen.findByText("已取消等待，编辑资格已释放；草稿保持不变。");
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见排队中的草稿");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
     expect(f.operations).not.toContain("user_policy_publish");
   });
 
@@ -230,7 +230,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "等待后发布");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -243,7 +243,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["drift"], renew: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -260,15 +260,15 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ publish: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "结果不明");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    await screen.findByText(/尚未确认保存结果/);
+    await screen.findByText(/保存结果未确认/);
     // The draft and its staged payload survive an edit freeze until confirmed.
     expect(screen.getAllByText("原人工意见结果不明").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/编辑中 · 未保存/).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: "确认保存结果" }));
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
     expect(f.published).toHaveLength(2);
     expect(f.published[1]).toEqual(f.published[0]);
@@ -279,7 +279,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ publish: ["conflict"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     const summary = await screen.findByLabelText("我的意见");
     await user.clear(summary);
@@ -287,14 +287,14 @@ describe("edit mode and the write lease", () => {
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     const banner = (await screen.findAllByRole("alert")).find(node => node.className.includes("conflict-banner"))!;
     expect(banner).toBeTruthy();
-    expect(within(banner).getByText(/共享评价表已发布 V3/)).toBeTruthy();
+    expect(within(banner).getByText(/设置已在别处更新/)).toBeTruthy();
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "基于 V2 的草稿");
     expect(f.operations).toContain("evaluation_write_abort");
     // Deliberate reload adopts the latest publication and keeps editing.
     await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
     await screen.findByText("已加载评价表 V3。请核对后重新保存。");
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "他人发布的人工意见 V3");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
     await user.type(screen.getByLabelText("我的意见"), "（复核）");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
@@ -305,29 +305,29 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "未保存的补充");
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     const dialog = await screen.findByRole("dialog", { name: "有未保存的修改" });
     await user.click(within(dialog).getByRole("button", { name: "继续编辑" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见未保存的补充");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: "放弃修改" }));
     await screen.findByText("已放弃未发布的修改。");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByLabelText("我的意见")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "保存并退出");
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: "保存并退出" }));
     await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("keeps drafts editable offline while save refuses and explains why", async () => {
@@ -335,7 +335,7 @@ describe("edit mode and the write lease", () => {
     f.setSnapshot({ ...f.snapshot(), capabilities: { evaluationWriteGate: false } });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "离线草稿");
     const save = screen.getByRole("button", { name: "保存更改" });
@@ -351,7 +351,7 @@ describe("edit mode and the write lease", () => {
     f.setSnapshot({ ...f.snapshot(), capabilities: { evaluationWriteGate: false } });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     const save = screen.getByRole("button", { name: "保存更改" });
     save.focus();
     expect(document.activeElement).toBe(save);
@@ -382,7 +382,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({}, { discoveryAnnotation: "他人发现期间发布" });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "，我的草稿");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
@@ -396,7 +396,7 @@ describe("edit mode and the write lease", () => {
     expect(f.published).toHaveLength(0);
     // Saving B under V3 is refused without an explicit conflict resolution.
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // Deliberate reload is the explicit resolution: it adopts the other value.
@@ -409,7 +409,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "，未保存");
     // Another writer published V3; the 3s poll (here the refresh button) only
@@ -420,11 +420,11 @@ describe("edit mode and the write lease", () => {
     const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
     expect(banner).toBeTruthy();
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见，未保存");
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
     expect(f.published).toHaveLength(0);
     // No save of the stale draft under V3 without an explicit resolution.
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // Discard is the deliberate resolution; nothing was published implicitly.
@@ -437,7 +437,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "，保留的意见");
     await user.click(screen.getByRole("button", { name: "发现模型" }));
@@ -460,7 +460,7 @@ describe("edit mode and the write lease", () => {
       createdAt: "2026-09-22T00:00:00Z" }] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "证据" }));
     const section = await screen.findByRole("region", { name: "评价证据（只读）" });
     expect(within(section).getByText("单次观察")).toBeTruthy();
@@ -502,7 +502,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     await user.click(await screen.findByLabelText("允许后续选择使用此配置"));
     await screen.findByText("启用状态未保存；发布前正在运行的任务仍按原配置执行。");
@@ -567,10 +567,11 @@ describe("edit mode and the write lease", () => {
     // An open gate is normal, so no "评价表可读" badge is needed.
     expect(screen.queryByText("评价表可读")).toBeNull();
     expect(screen.queryByText("独占编辑中")).toBeNull();
-    const editSwitch = screen.getByRole("switch", { name: "编辑模式" });
+    const editSwitch = screen.getByRole("switch", { name: "编辑设置" });
     expect(editSwitch.querySelector(".switch-track .switch-thumb")).toBeTruthy();
     expect(editSwitch.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText("只读")).toBeTruthy();
+    // No edit/read-only state text renders while the switch is off (P1.2).
+    expect(screen.queryByText("只读")).toBeNull();
     expect(screen.queryByText("草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。")).toBeNull();
     await user.click(editSwitch);
     expect(editSwitch.getAttribute("aria-checked")).toBe("true");
@@ -599,7 +600,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openModels(f.api, user);
-    const editSwitch = screen.getByRole("switch", { name: "编辑模式" });
+    const editSwitch = screen.getByRole("switch", { name: "编辑设置" });
     await user.click(editSwitch);
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "未保存的补充");
@@ -632,13 +633,13 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "未确认的编辑资格");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
     await screen.findByText(/尚未确认编辑资格请求的结果/);
     expect(f.operations).toEqual(["evaluation_write_begin"]);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: "放弃修改" }));
     await screen.findByText("已放弃未发布的修改。");
     const begins = f.command.mock.calls.filter(([op]) => op === "evaluation_write_begin");
@@ -647,14 +648,14 @@ describe("edit mode and the write lease", () => {
     expect(begins[1][1]).toEqual(begins[0][1]);
     expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin", "evaluation_write_abort"]);
     expect(f.aborted[0]).toMatchObject({ writerId: "writer", generation: 1 });
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("keeps an unresolved begin for a later retry when the exit reply is also lost", async () => {
     const f = fixture({ begin: ["network", "network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     const summary = await screen.findByLabelText("我的意见");
     await user.type(summary, "补充");
@@ -665,13 +666,13 @@ describe("edit mode and the write lease", () => {
     await user.clear(restored);
     await user.type(restored, "原人工意见");
     expect(screen.queryByText(/编辑中 · 未保存/)).toBeNull();
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await screen.findByText(/退出前未能确认编辑资格已释放/);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
     expect(f.operations).toEqual(["evaluation_write_begin", "evaluation_write_begin"]);
     // The request identity survives the exit, so the next save resolves it.
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "再次编辑");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -686,7 +687,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"], abort: ["network"] }, { queuedForever: true });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "排队后取消");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -709,7 +710,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"], abort: ["forbidden"] }, { queuedForever: true });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "被拒绝的释放");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -725,7 +726,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"], abort: ["network"] }, { queuedForever: true });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "过期后继续");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -751,7 +752,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["queued"] }, { queuedForever: true });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "排队");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -772,7 +773,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["conflict"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "首次冲突");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
@@ -789,7 +790,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ publish: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "结果不明");
     vi.useFakeTimers();
@@ -797,10 +798,10 @@ describe("edit mode and the write lease", () => {
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
       });
-      for (let i = 0; i < 50 && !screen.queryByText(/尚未确认保存结果/); i++) {
+      for (let i = 0; i < 50 && !screen.queryByText(/保存结果未确认/); i++) {
         await act(async () => { await Promise.resolve(); });
       }
-      expect(screen.getByText(/尚未确认保存结果/)).toBeTruthy();
+      expect(screen.getByText(/保存结果未确认/)).toBeTruthy();
       const renews = () => f.operations.filter(op => op === "evaluation_write_renew").length;
       const seen = renews();
       await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
@@ -814,7 +815,7 @@ describe("edit mode and the write lease", () => {
     const f = fixture({ begin: ["network"] });
     const user = userEvent.setup();
     await openModels(f.api, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "补充");
     await user.click(screen.getByRole("button", { name: "保存更改" }));

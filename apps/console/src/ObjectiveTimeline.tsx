@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
 import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-timeline-layout";
-import { scaleTimeline } from "./objective-timeline-scale";
-import type { SpanOutcome, TimelineItem } from "./objective-display";
+import { fitPixelsPerMinute, MAX_PIXELS_PER_MINUTE, scaleTimeline } from "./objective-timeline-scale";
+import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./objective-display";
 import {
-  buildChronology, clockSeconds, clockTime, configurationLabel, displayTitle, durationShort, eventVocab, outcomeLabel,
-  paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem, eventItem, toMs, configurationPalette,
+  buildChronology, clockSeconds, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
+  eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
+  eventItem, toMs, configurationPalette, acceptanceWaitText,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
-import { ObjectiveOverview } from "./ObjectiveOverview";
+import { DelegationStrip, ObjectiveOverview } from "./ObjectiveOverview";
 import { TimelineInspector } from "./TimelineInspector";
 import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import type { InspectorSelection } from "./inspector-card";
@@ -19,9 +20,14 @@ const MARKER_MERGE_PX = 14;
 /** Nominal track width before measurement (and in tests without layout). */
 const FALLBACK_VIEWPORT_PX = 800;
 const FALLBACK_LABEL_PX = 240;
+/** The inspector drawer's default and keyboard-adjusted geometry (P2.1). */
+const DRAWER_DEFAULT_PX = 168;
+const DRAWER_MIN_PX = 44;
+const DRAWER_STEP_PX = 16;
+const ZOOM_STEP = 1.5;
 
 type SpanFacts = { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome };
-type MarkerCluster = MarkerClusterView & { lines: string[]; head: string };
+type MarkerCluster = MarkerClusterView & { head: string };
 
 export type ObjectiveTimelineProps = {
   summary: ObjectiveSummary | null;
@@ -39,6 +45,8 @@ export type ObjectiveTimelineProps = {
   selection: InspectorSelection | null;
   /** Objective-level actions rendered in the overview header (停止目标, U4). */
   headerActions?: ReactNode;
+  /** Snapshot profiles for friendly configuration names (0.16 0.3). */
+  profiles?: readonly FriendlyProfile[] | null;
   expandedGapIds: ReadonlySet<string>;
   onToggleGap: (gapId: string) => void;
   onSetExpanded: (gapIds: Set<string>) => void;
@@ -51,15 +59,51 @@ export type ObjectiveTimelineProps = {
   onBackToList: () => void;
 };
 
+/** The horizontal separator resizing the inspector drawer (P2.1). */
+function InspectorSeparator({ min, max, value, onChange, onReset }: {
+  min: number; max: number; value: number;
+  onChange: (value: number) => void;
+  onReset: () => void;
+}) {
+  const dragging = useRef(false);
+  const container = () => document.querySelector<HTMLElement>(".timeline-view");
+  const move = (clientY: number) => {
+    const rect = container()?.getBoundingClientRect();
+    if (!rect) return;
+    onChange(Math.round(Math.max(min, Math.min(max, rect.bottom - clientY))));
+  };
+  const step = (event: { key: string }) => {
+    if (event.key === "ArrowUp") return Math.min(value + DRAWER_STEP_PX, max);
+    if (event.key === "ArrowDown") return Math.max(value - DRAWER_STEP_PX, min);
+    return null;
+  };
+  return <div className="dock-divider horizontal inspector-separator" role="separator"
+    aria-orientation="horizontal" aria-label="调整检查器高度"
+    aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
+    tabIndex={0}
+    onKeyDown={event => {
+      if (event.key === "Home") { event.preventDefault(); onChange(min); return; }
+      if (event.key === "End") { event.preventDefault(); onChange(max); return; }
+      if (event.key === "Enter") { event.preventDefault(); onReset(); return; }
+      const next = step(event);
+      if (next !== null) { event.preventDefault(); onChange(next); }
+    }}
+    onDoubleClick={onReset}
+    onPointerDown={event => { dragging.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
+    onPointerMove={event => { if (dragging.current) move(event.clientY); }}
+    onPointerUp={() => { dragging.current = false; }}
+    onLostPointerCapture={() => { dragging.current = false; }} />;
+}
+
 /**
- * Right pane, layer one: the read-only work-objective timeline. Occupancy,
- * folding and instants come from the frozen layout module; scaleTimeline maps
- * that normalized axis onto actual pixels (fixed 64px breaks, 1.6px/min
- * minimum) from the measured scroll viewport. This component renders recorded
- * facts only, keeps focus/expanded/selection state across refreshes, and stays
- * mounted while a delegation detail is open. Single clicks only select the
- * pinned inspector; Enter, double-click and the explicit 打开 controls open
- * details (0.15 C1–C3).
+ * Right pane, layer one: the read-only work-objective timeline. The vertical
+ * structure follows 0.16 P2.1 — a bounded header, a collapsible delegation
+ * band, the toolbar, the timeline as the only row-scroll area (min 200px), a
+ * keyboard/pointer separator and the inspector as an always-visible bottom
+ * drawer. Occupancy and folding stay in the frozen layout module; the default
+ * scale fits observed activity (适应窗口) and +/−/0 zoom by ×1.5 steps anchored
+ * on the selection or viewport centre. Single clicks only select the pinned
+ * inspector; Enter, double-click and the explicit 打开 controls open details.
  */
 export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection, active = true } = props;
@@ -77,6 +121,53 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const savedScroll = useRef<{ top: number; left: number } | null>(null);
   const wasHidden = useRef(false);
 
+  // Compact form at viewport heights of 800px or less; the narrow layout is
+  // always compact (P2.1/P2.2).
+  const [compactViewport, setCompactViewport] = useState(false);
+  const [narrowViewport, setNarrowViewport] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const heightQuery = window.matchMedia("(max-height: 800px)");
+    const widthQuery = window.matchMedia("(max-width: 760px)");
+    const update = () => { setCompactViewport(heightQuery.matches); setNarrowViewport(widthQuery.matches); };
+    update();
+    // Older engines expose the legacy addListener API; guarded for tests.
+    if (typeof heightQuery.addEventListener === "function") {
+      heightQuery.addEventListener("change", update);
+      widthQuery.addEventListener("change", update);
+      return () => { heightQuery.removeEventListener("change", update); widthQuery.removeEventListener("change", update); };
+    }
+    return;
+  }, []);
+
+  // The delegation band (P2.1): default follows the viewport height, and the
+  // user's toggle then applies to every objective for this page session.
+  const [cardsCollapsed, setCardsCollapsed] = useState<boolean | null>(null);
+  const cardsActuallyCollapsed = cardsCollapsed ?? (compactViewport || narrowViewport);
+
+  // The Host event row is collapsible and defaults collapsed; the choice is
+  // remembered per objective for this page session (P1.7).
+  const [hostEventsOpenByObjective, setHostEventsOpenByObjective] = useState<Map<string, boolean>>(() => new Map());
+
+  // The inspector drawer height (P2.1): page-session persistent.
+  const [drawerHeight, setDrawerHeight] = useState<number | null>(null);
+  const [drawerCollapsed, setDrawerCollapsed] = useState(false);
+  const columnHeight = useRef<number | null>(null);
+  useEffect(() => {
+    const element = rootRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => { columnHeight.current = element.clientHeight; });
+    observer.observe(element);
+    columnHeight.current = element.clientHeight;
+    return () => observer.disconnect();
+  }, []);
+  const drawerMax = Math.max(DRAWER_MIN_PX, Math.round((columnHeight.current ?? 400) * 0.45));
+  const drawerValue = drawerCollapsed ? DRAWER_MIN_PX : Math.max(DRAWER_MIN_PX, Math.min(drawerHeight ?? DRAWER_DEFAULT_PX, drawerMax));
+
+  // Zoom (P2.3): null means 适应窗口; a number is an absolute px/minute.
+  const [zoom, setZoom] = useState<number | null>(null);
+  const zoomAnchor = useRef<{ timeMs: number; screenX: number } | null>(null);
+
   const observedAtMs = toMs(timeline?.observedAt);
   const layout = useMemo(
     () => timeline ? createTimelineLayout(timeline, props.expandedGapIds) : null,
@@ -86,32 +177,55 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
 
   // Measure the scroll viewport (not the expanding track) once the async
   // canvas exists; zero hidden widths are ignored so saved geometry survives.
+  const labelWidthPx = () => {
+    const element = scrollRef.current;
+    if (!element) return FALLBACK_LABEL_PX;
+    const parsed = Number.parseFloat(getComputedStyle(element).getPropertyValue("--label-w"));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : FALLBACK_LABEL_PX;
+  };
   useEffect(() => {
     const element = scrollRef.current;
     if (!element || canvasKey === null) return;
-    const labelWidth = () => {
-      const parsed = Number.parseFloat(getComputedStyle(element).getPropertyValue("--label-w"));
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : FALLBACK_LABEL_PX;
-    };
     const update = () => {
       const width = element.clientWidth;
       // Track viewport floor 380 (design §1): with the label column the
       // timeline content stays ≥560 and scrolls horizontally below that.
-      if (width > 0) setViewport(Math.max(380, Math.round(width - labelWidth())));
+      if (width > 0) setViewport(Math.max(380, Math.round(width - labelWidthPx())));
     };
     update();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [canvasKey]);
+  }, [canvasKey, asList]);
 
-  // Pixels are a pure function of the measured viewport, so content sizing can
-  // never feed back into the measurement.
-  const scaled = useMemo(
-    () => layout ? scaleTimeline(layout, viewport ?? FALLBACK_VIEWPORT_PX) : null,
-    [layout, viewport],
+  const effectiveViewport = viewport ?? FALLBACK_VIEWPORT_PX;
+  const fitPpm = useMemo(
+    () => layout ? fitPixelsPerMinute(layout, effectiveViewport) : Number.POSITIVE_INFINITY,
+    [layout, effectiveViewport],
   );
+  // Pixels are a pure function of the measured viewport, so content sizing can
+  // never feed back into the measurement. Fit is clamped by MAX; a manual zoom
+  // is clamped to [fit, MAX].
+  const clampedZoom = zoom === null ? null : Math.max(0, Math.min(zoom, Math.max(fitPpm, MAX_PIXELS_PER_MINUTE)));
+  const scaled = useMemo(
+    () => layout ? scaleTimeline(layout, effectiveViewport, clampedZoom ?? undefined) : null,
+    [layout, effectiveViewport, clampedZoom],
+  );
+  const currentPpm = clampedZoom ?? fitPpm;
+
+  // Keep the anchor time at its screen position across a zoom change.
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const anchor = zoomAnchor.current;
+    zoomAnchor.current = null;
+    if (!element || !anchor || !scaled || !layout || layout.startMs === null) return;
+    const percent = scaled.position(anchor.timeMs);
+    if (percent === null) return;
+    const labelW = labelWidthPx();
+    const trackX = percent / 100 * scaled.widthPx;
+    element.scrollLeft = Math.max(0, Math.round(labelW + trackX - anchor.screenX));
+  }, [scaled, layout]);
 
   const spansByRun = useMemo(() => {
     const map = new Map<string, TimelineSpan[]>();
@@ -134,8 +248,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       slots = new Map<string, number>();
       paletteCache.current.set(canvasKey, slots);
     }
-    return configurationPalette(spansByRun, slots);
-  }, [spansByRun, canvasKey]);
+    return configurationPalette(spansByRun, slots, props.profiles);
+  }, [spansByRun, canvasKey, props.profiles]);
+  const namer = useMemo(() => configurationNamer(props.profiles), [props.profiles]);
 
   const factsBySpan = useMemo(() => {
     const map = new Map<string, SpanFacts>();
@@ -183,17 +298,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       if (group && entry.xPx - group[group.length - 1]!.xPx < MARKER_MERGE_PX) group.push(entry);
       else groups.push([entry]);
     }
-    return groups.map(group => {
-      const items = group.map(entry => eventItem(entry.event, rowsById));
-      return {
-        key: `events:${group[0]!.event.seq}`,
-        x: group[0]!.x,
-        events: group.map(entry => entry.event),
-        items,
-        lines: items.map(item => `${item.head}，${item.parts.join("，")}`),
-        head: group.length > 1 ? `Host 事件（${group.length} 条）` : items[0]!.head,
-      };
-    });
+    return groups.map(group => ({
+      key: `events:${group[0]!.event.seq}`,
+      x: group[0]!.x,
+      events: group.map(entry => entry.event),
+      items: group.map(entry => eventItem(entry.event, rowsById)),
+      head: eventClusterLabel(group.map(entry => entry.event)),
+    }));
   }, [timeline, scaled, rowsById]);
 
   // A refresh that changes an open popover's membership closes it with a
@@ -282,8 +393,75 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     return `${item.head}，${item.parts.join("，")}`;
   }
 
+  /** The screen-x of a time instant inside the scroll viewport, or null when off-canvas. */
+  function screenXAt(timeMs: number): number | null {
+    const element = scrollRef.current;
+    if (!element || !scaled) return null;
+    const percent = scaled.position(timeMs);
+    if (percent === null) return null;
+    return labelWidthPx() + percent / 100 * scaled.widthPx - element.scrollLeft;
+  }
+
+  /** A zoom step keeps the anchor time (selection in view, else viewport centre) at its screen position. */
+  function changeZoom(next: number | null) {
+    const element = scrollRef.current;
+    if (element && scaled && layout && layout.startMs !== null && layout.endMs !== null && !asList) {
+      let anchorTime: number | null = null;
+      let anchorScreenX: number | null = null;
+      const selectedTime = selection?.type === "item"
+        ? itemsByKey.get(selection.key)?.atMs ?? null
+        : null;
+      if (selectedTime !== null) {
+        const x = screenXAt(selectedTime);
+        if (x !== null && x >= 0 && x <= element.clientWidth) {
+          anchorTime = selectedTime;
+          anchorScreenX = x;
+        }
+      }
+      if (anchorTime === null || anchorScreenX === null) {
+        // The time at the viewport centre, found by bisection over the
+        // monotonic position mapping (fold bands included).
+        const centreX = element.scrollLeft + element.clientWidth / 2 - labelWidthPx();
+        const percent = Math.max(0, Math.min(100, centreX / scaled.widthPx * 100));
+        let lo = layout.startMs, hi = layout.endMs;
+        for (let i = 0; i < 44; i += 1) {
+          const mid = (lo + hi) / 2;
+          const at = scaled.position(mid) ?? 0;
+          if (at < percent) lo = mid; else hi = mid;
+        }
+        anchorTime = (lo + hi) / 2;
+        anchorScreenX = element.clientWidth / 2;
+      }
+      zoomAnchor.current = { timeMs: anchorTime, screenX: anchorScreenX };
+    }
+    setZoom(next === null ? null : Math.max(0, next));
+  }
+
+  function zoomIn() {
+    if (!Number.isFinite(currentPpm) || currentPpm >= MAX_PIXELS_PER_MINUTE) return;
+    changeZoom(Math.min(currentPpm * ZOOM_STEP, MAX_PIXELS_PER_MINUTE));
+  }
+  function zoomOut() {
+    if (zoom === null) return; // already 适应窗口
+    const next = currentPpm / ZOOM_STEP;
+    if (next <= fitPpm * 1.001) { changeZoom(null); return; }
+    changeZoom(next);
+  }
+  const zoomAtMax = Number.isFinite(currentPpm) && currentPpm >= MAX_PIXELS_PER_MINUTE - 1e-9;
+  const zoomAtFit = zoom === null || (Number.isFinite(fitPpm) && currentPpm <= fitPpm * 1.001);
+
   function onCanvasKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
+    if (target.closest("input, textarea, select")) return;
+    // Keyboard zoom (P2.3): + / - / 0 while focus is inside the timeline grid;
+    // no modifier so the browser's own zoom is untouched.
+    if (!asList && (event.key === "+" || event.key === "=" || event.key === "-" || event.key === "0")) {
+      event.preventDefault();
+      if (event.key === "+" || event.key === "=") zoomIn();
+      else if (event.key === "-") zoomOut();
+      else changeZoom(null);
+      return;
+    }
     const item = target.closest<HTMLElement>(".tl-item");
     const grid = gridRef.current;
     if (!item || !grid || !grid.contains(item)) return;
@@ -462,7 +640,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         <span className="sp-text">{widthPxSpan >= 110 ? `等待 Host · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : widthPxSpan >= 64 ? "等待 Host" : widthPxSpan >= 34 ? "等待" : ""}</span>
       </button>;
     }
-    const shortModel = span.configuration?.model || span.configuration?.provider || "";
+    // The bar label uses the friendly name (0.16 0.3); the raw identity stays
+    // in the aria label and tooltip.
+    const shortModel = namer(span.configuration).text;
     const label = widthPxSpan >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
       : widthPxSpan >= 72 ? `第${span.turnIndex ?? "?"}轮` : widthPxSpan >= 30 ? String(span.turnIndex ?? "·") : "";
@@ -486,6 +666,11 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       <span className="sp-text">{label}</span>{endMark}
     </button>;
   }
+
+  const hostEventsTrackId = canvasKey ? `host-events-track-${canvasKey}` : "host-events-track";
+  const hostEventsOpen = canvasKey !== null && (hostEventsOpenByObjective.get(canvasKey) ?? false) === true;
+
+  const refreshAt = timeline?.observedAt ?? props.summary?.lastActivityAt;
 
   const body = loading && !timeline
     ? <div className="tl-body">
@@ -521,25 +706,33 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                   {nowVisible && nowLeft !== null && <span className="now-chip">现在 {clockTime(observedAtMs!)}</span>}
                 </div>
               </div>
-              <div className="tl-row markers" data-nav="">
-                <div className="tl-label"><span>Host 事件</span>
+              <div className={"tl-row markers" + (hostEventsOpen ? "" : " collapsed")} data-nav="">
+                <button type="button" className="tl-label markers-toggle"
+                  aria-expanded={hostEventsOpen} aria-controls={hostEventsTrackId}
+                  onClick={() => setHostEventsOpenByObjective(previous =>
+                    new Map(previous).set(canvasKey ?? "", !hostEventsOpen))}>
+                  <span>{hostEventsOpen ? "▾" : "▸"} Host 事件{timeline.events.length ? `（${timeline.events.length}）` : ""}</span>
                   {missingEvents > 0 && <span className="trunc-chip">‹ {missingEvents} 条事件未返回</span>}
-                  {clusterNotice && <span className="trunc-chip">{clusterNotice}</span>}</div>
-                <div className="tl-track">
+                  {clusterNotice && <span className="trunc-chip">{clusterNotice}</span>}
+                </button>
+                {hostEventsOpen && <div className="tl-track" id={hostEventsTrackId}>
                   {clusters.map(cluster => {
                     const single = cluster.items.length === 1 ? cluster.items[0]! : null;
-                    const vocab = single ? eventVocab(single ? cluster.events[0]!.kind : "") : null;
+                    const glyph = eventClusterGlyph(cluster.events);
                     const isOpen = openCluster === cluster.key;
                     const clusterSelected = cluster.items.some(item => item.key === selectedEventKeys);
                     const classes = ["tl-item", "mk", cluster.items.length > 1 ? "cluster" : cluster.events[0]!.kind];
                     if (clusterSelected) classes.push("selected");
                     if (isOpen) classes.push("open");
+                    const sentence = single
+                      ? eventSentence(cluster.events[0]!, rowsById.get(cluster.events[0]!.runId) ?? null)
+                      : null;
                     return <button key={cluster.key} type="button" className={classes.join(" ")} style={{ left: `clamp(9px, ${cluster.x}%, calc(100% - 9px))` }}
                       data-key={cluster.key} data-cluster-key={cluster.key} data-x={cluster.x} tabIndex={focusKey === cluster.key ? 0 : -1}
                       aria-expanded={cluster.items.length > 1 ? isOpen || undefined : undefined}
                       aria-controls={cluster.items.length > 1 && isOpen ? `popover-${cluster.key}` : undefined}
-                      aria-label={cluster.items.length > 1 ? `Host 事件 ${cluster.items.length} 条，按 Enter 列出` : cluster.lines.join("；")}
-                      title={cluster.lines.join("；")}
+                      aria-label={single ? sentence ?? cluster.head : cluster.head}
+                      title={single ? sentence ?? cluster.head : cluster.head}
                       onFocus={() => setFocusKey(cluster.key)}
                       onMouseEnter={() => setHoverKey(cluster.key)}
                       onMouseLeave={() => setHoverKey(current => (current === cluster.key ? null : current))}
@@ -555,7 +748,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       onDoubleClick={() => {
                         if (single) props.onOpenItem(single);
                       }}>
-                      {cluster.items.length > 1 ? cluster.items.length : vocab?.glyph}
+                      <span aria-hidden="true">{glyph.glyph}</span>
+                      {glyph.count > 0 && <sup className="mk-count" aria-hidden="true">{glyph.count}</sup>}
                     </button>;
                   })}
                   {!hidden && active && openClusterView && openClusterView.items.length > 1 && <MarkerPopover
@@ -564,7 +758,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     onSelect={item => { setFocusKey(item.key); props.onSelectItem(item); }}
                     onOpen={item => { setFocusKey(item.key); props.onOpenItem(item); requestClusterClose(false); }}
                     requestClose={requestClusterClose} />}
-                </div>
+                </div>}
               </div>
               {timeline.rows.map(row => {
                 const state = rowStateInfo(row);
@@ -582,6 +776,23 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                 const runSelected = selectedRunId === row.runId;
                 const runOpened = openedRunId === row.runId;
                 const settleSelected = selection?.type === "item" && selection.key === settle?.key;
+                // The acceptance-wait dashed line (P1.8): only from a recorded,
+                // confirmed execution end to the flag, never an invented time.
+                const ownSpans = spansByRun.get(row.runId) ?? [];
+                const waitText = settle ? acceptanceWaitText(row, ownSpans) : null;
+                let waitLine: { from: number; to: number } | null = null;
+                if (settle && settleLeft !== null && waitText !== null) {
+                  const executions = ownSpans
+                    .filter(span => span.kind === "execution")
+                    .map(span => ({ span, endMs: toMs(span.endAt) }))
+                    .filter((entry): entry is { span: TimelineSpan; endMs: number } => entry.endMs !== null)
+                    .sort((left, right) => left.endMs - right.endMs);
+                  const last = executions[executions.length - 1];
+                  if (last && settle.atMs !== null && last.endMs <= settle.atMs) {
+                    const from = scaled.position(last.endMs);
+                    if (from !== null && settleLeft >= from) waitLine = { from, to: settleLeft };
+                  }
+                }
                 return <div key={row.runId} className={"tl-row" + (runSelected ? " run-selected" : "")} data-nav="">
                   <button type="button"
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
@@ -600,10 +811,12 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       <span className="lbl-name">{title.text}</span>
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub">{title.fromTask ? "取自任务首行 · " : ""}{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{configurationLabel(row.configuration)}</span>
+                    <span className="lbl-sub" title={namer(row.configuration).title}>{title.fromTask ? "取自任务首行 · " : ""}{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.configuration).text}</span>
                     {unplaced > 0 && <span className="trunc-chip" title="这些片段的时间缺失或颠倒，未在时间轴上放置">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">
+                    {waitLine && <span className="accept-wait-line" style={{ left: `${waitLine.from}%`, width: `${Math.max(waitLine.to - waitLine.from, 0)}%` }}
+                      aria-hidden="true" title={waitText ?? undefined} />}
                     {(spansByRun.get(row.runId) ?? []).map(span => renderSpan(row, span))}
                     {settle && settleLeft !== null && <button type="button"
                       className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
@@ -626,29 +839,21 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
             openedKey={openedKey}
             onSelectItem={item => { setFocusKey(item.key); props.onSelectItem(item); }}
             onOpenItem={item => { setFocusKey(item.key); props.onOpenItem(item); }} />
-          <TimelineInspector selection={selection}
-            previewItem={activeItem}
-            previewClusterHead={activeCluster ? activeCluster.head : null}
-            timeline={timeline} itemsByKey={itemsByKey}
-            truncatedEvents={!!timeline.truncated.events}
-            onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}
-            onUnpin={props.onClearSelection} />
         </div>
         : null;
 
   return <div className="timeline-view" ref={rootRef} hidden={hidden}>
     <ObjectiveOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
-      selectedRunId={selectedRunId} onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun}
+      compact={compactViewport || narrowViewport} hidden={hidden}
       onBackToList={props.onBackToList} headerActions={props.headerActions} />
+    {timeline && <DelegationStrip timeline={timeline} selectedRunId={selectedRunId}
+      collapsed={cardsActuallyCollapsed}
+      onToggleCollapsed={() => setCardsCollapsed(!cardsActuallyCollapsed)}
+      onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun} />}
     <div className="tl-toolbar">
-      <div className="legend hierarchy-legend" aria-label="层级图例"
-        title="工作目标归档一组受治理的委派；委派是一次 Host 授权的执行；协助任务由委派派生；回合是委派内的每次执行片段。">
-        <span className="legend-title">层级</span>
-        <span className="legend-item">工作目标 ▸ 委派 ▸ 协助任务 ▸ 回合</span>
-      </div>
       <div className="legend" aria-label="执行配置图例">
         <span className="legend-title">执行配置</span>
-        {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item">
+        {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item" title={entry.rawTitle ?? entry.label}>
           <span className={"swatch" + (entry.striped ? " striped" : "")} style={{ "--c": `var(--cfg-${entry.color})` } as CSSProperties} />{entry.label}
         </span>) : <span className="legend-item">—</span>}
       </div>
@@ -669,10 +874,21 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
           onClick={() => props.onSetExpanded(new Set())}>折叠空闲</button>}
         <button ref={listToggleRef} type="button" className="button small-button list-toggle" aria-pressed={asList}
           onClick={() => setAsList(current => !current)}>以列表查看</button>
-        <span className={"refresh-state" + (stale ? " stale" : "")}>
+        {!asList && <div className="tl-zoom" role="group" aria-label="时间轴缩放">
+          <button type="button" className="button small-button" aria-label="缩小" disabled={zoomAtFit}
+            title={zoomAtFit ? "已是适应窗口的最小刻度" : "缩小时间轴（键盘 -）"} onClick={zoomOut}>−</button>
+          <button type="button" className="button small-button" aria-label="放大" disabled={zoomAtMax}
+            title={zoomAtMax ? "已达最大刻度" : "放大时间轴（键盘 +）"} onClick={zoomIn}>+</button>
+          <button type="button" className="button small-button" aria-pressed={zoomAtFit}
+            title="缩放到有活动的时间段（键盘 0）" onClick={() => changeZoom(null)}>适应窗口</button>
+        </div>}
+        <span className={"refresh-state" + (stale ? " stale" : "")}
+          title={stale && timeline
+            ? `最近一次读取失败；显示的是 ${clockSeconds(timeline.observedAt)} 的数据`
+            : `每 3 秒读取一次，不调用模型 · 数据截至 ${clockSeconds(refreshAt)}`}>
           {stale && timeline
-            ? `显示的是 ${clockSeconds(timeline.observedAt)} 的数据 · 最近一次读取失败`
-            : `每 3 秒只读刷新 · 截至 ${clockSeconds(timeline?.observedAt ?? props.summary?.lastActivityAt)}`}
+            ? `读取失败 · 显示 ${clockTime(timeline.observedAt)} 的数据`
+            : `自动刷新 · ${clockTime(refreshAt)}`}
         </span>
         {stale && <button type="button" className="button small-button" onClick={props.onRetry}>重试读取</button>}
       </div>
@@ -681,5 +897,25 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       时间轴读取有边界：{truncation.join("；")}。可调整筛选或打开单个委派查看其完整记录。
     </div>}
     {body}
+    <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
+      onChange={value => { setDrawerCollapsed(false); setDrawerHeight(value); }}
+      onReset={() => { setDrawerCollapsed(false); setDrawerHeight(null); }} />
+    <div className={"inspector-dock" + (drawerCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
+      <div className="inspector-dock-head">
+        <span className="inspector-dock-title">检查器</span>
+        <button type="button" className="button small-button"
+          aria-expanded={!drawerCollapsed}
+          onClick={() => setDrawerCollapsed(current => !current)}>{drawerCollapsed ? "展开" : "收起"}</button>
+      </div>
+      {!drawerCollapsed && <div className="inspector-dock-body">
+        <TimelineInspector selection={selection}
+          previewItem={activeItem}
+          previewClusterHead={activeCluster ? activeCluster.head : null}
+          timeline={timeline} itemsByKey={itemsByKey} profiles={props.profiles}
+          truncatedEvents={!!timeline?.truncated.events}
+          onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}
+          onUnpin={props.onClearSelection} />
+      </div>}
+    </div>
   </div>;
 }

@@ -17,7 +17,7 @@ import {
 } from "./console-data";
 import { DetailTabs } from "./DetailTabs";
 import { EvaluationHistory } from "./EvaluationHistory";
-import { READ_ONLY_DRAFT_NOTE } from "./console-session";
+
 
 const sections = [["overview", "概览"], ["assessment", "评价与意见"], ["preferences", "偏好与启用"], ["evidence", "证据"]] as const;
 const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。";
@@ -141,7 +141,7 @@ export function ModelDetail({
           {decisionProfileId === profile.profileId ? " · 已设为决策模型" : ""}
           {editor.configurationDirty && decisionProfileId === profile.profileId ? " · 未保存" : ""}</p>
         {editor.mode && <p className="small muted">{draftFrozen
-          ? READ_ONLY_DRAFT_NOTE
+          ? "登录已失效：草稿仍保留在本页，重新登录后可继续编辑。"
           : "草稿只在本页保存；发布前不会影响正在运行的任务；发现模型由程序发布目录事实。"}</p>}
       </header>
       <DetailTabs id="model-detail" label="模型详情栏目" value={section} items={sections} onChange={onSection} />
@@ -156,7 +156,7 @@ export function ModelDetail({
             <h3>{cardHeading}</h3><p className="read-text">{card.summary || "暂无评价，等待实际经验。"}</p>
             <p className="small muted">{cardOriginText(card)}</p>
             <div className="reading-grid"><Reading title="适用工作" values={card.strengths} /><Reading title="适用限制" values={card.limitations} /><Reading title="未解决问题" values={card.risks} /></div>
-            <h3>我的意见</h3><p className="read-text">{opinion || "尚未记录；开启编辑模式后可以留下单独的人工意见。"}</p>
+            <h3>我的意见</h3><p className="read-text">{opinion || "尚未记录；开启编辑设置后可以留下单独的人工意见。"}</p>
             <dl className="facts"><dt>上下文</dt><dd>{profile.contextWindow ? profile.contextWindow.toLocaleString() + " tokens" : "未知"}</dd>
               <dt>验证样本</dt><dd>{samples} 个</dd>
               <dt>用户偏好</dt><dd>{preference ? ({ prefer: "优先考虑", pin: "固定选择", exclude: "排除" })[preference.mode] : "无额外偏好"}</dd>
@@ -179,11 +179,11 @@ export function ModelDetail({
                   onChange={e => editor.setDraft(d => d ? setAnnotation(d, profile.profileId, e.target.value) : d)}
                   placeholder="单独记录你的使用感受与适用条件；留空表示清除" /></label>
               <p className="small muted">{draftFrozen
-                ? READ_ONLY_DRAFT_NOTE
+                ? "登录已失效：草稿仍保留在本页，重新登录后可继续编辑。"
                 : "人工意见单独存储并保留来源，不覆盖已发布的评价、证据或样本计数。发布只提交发生变化的意见。"}</p>
             </> : <section className="annotation-readonly"><h3>我的意见</h3>
               <p className="read-text">{opinion || "尚未记录人工意见。"}</p>
-              <p className="small muted">开启右上角“编辑模式”后可以写下或清除人工意见；已发布的评价内容始终只读。</p></section>}
+              <p className="small muted">开启右上角“编辑设置”后可以写下或清除人工意见；已发布的评价内容始终只读。</p></section>}
           </>}
           {panel === "preferences" && (draftShown ? <>
             <label className="field"><span>用户偏好</span><select value={preference?.mode || ""} disabled={!editing}
@@ -208,11 +208,11 @@ export function ModelDetail({
               <dt>启用状态</dt><dd>{profile.enabled ? "允许后续选择使用此配置" : "已停用"}</dd>
               <dt>并发任务上限</dt><dd>{recordedLimit ?? `${MODEL_CONCURRENCY_DEFAULT}（默认）`}{occupancy !== null ? ` · 当前占用 ${occupancy}` : ""}</dd></dl>
             <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；当前占用是只读观察，调低上限不会中断正在运行的任务。计数不包含 Harness 内部子代理、重试或其他应用的 API 请求。</p>
-            <p className="small muted">开启右上角“编辑模式”后可以修改偏好与启用状态；发布不会改变运行中任务的配置。</p>
+            <p className="small muted">开启右上角“编辑设置”后可以修改偏好与启用状态；发布不会改变运行中任务的配置。</p>
           </>)}
           {panel === "evidence" && <section className="evidence-readonly" aria-label="评价证据（只读）">
             <h3>依据与观察</h3>
-            <p className="small muted">证据与样本计数始终只读，不受编辑模式影响。反馈请交给配置了 hey-my-buddy skill 的 Harness，由其保留来源并纳入整理。</p>
+            <p className="small muted">证据与样本计数始终只读，不受编辑设置影响。反馈请交给配置了 hey-my-buddy skill 的 Harness，由其保留来源并纳入整理。</p>
             {evidence.length ? <ul className="evidence-list">{evidence.map(e => <li className="evidence-item" key={e.evidenceId}>
               <p>{e.summary}</p><span className="small muted">{e.source} · {formatDate(e.createdAt)}{e.project ? " · " + e.project : ""}</span>
               {!!e.conditions.length && <p className="small">条件：{e.conditions.join("；")}</p>}

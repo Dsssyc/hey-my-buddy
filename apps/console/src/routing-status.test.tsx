@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Settings } from "./Settings";
 import type { Editor } from "./use-editor";
 import type { Snapshot } from "./types";
+import { createApi } from "./api";
 
 const editor = {
   editing: false, configurationDirty: false, sessionWritable: true, mode: null, draft: null,
   setDraft: vi.fn(),
 } as unknown as Editor;
+const api = createApi("/test", vi.fn() as unknown as typeof fetch);
 
 function snapshot(routingHealth: Snapshot["routingHealth"]): Snapshot {
   return {
@@ -24,7 +26,7 @@ afterEach(() => cleanup());
 
 describe("settings routing status (R4)", () => {
   it("says the summary is unavailable when the snapshot carries no routingHealth", () => {
-    render(<Settings snapshot={snapshot(undefined)} editor={editor} />);
+    render(<Settings snapshot={snapshot(undefined)} editor={editor} api={api} />);
     const status = screen.getByLabelText("路由状态");
     expect(status.textContent).toContain("路由摘要暂不可用");
     // Missing data is never rendered as a zero-failure claim.
@@ -36,7 +38,7 @@ describe("settings routing status (R4)", () => {
       windowSize: 20, sampleCount: 0, failureCount: 0, consecutiveFailures: 0,
       abstentionCount: 0, cancelledCount: 0, staleCount: 0,
       lastSuccessAt: null, lastSuccessDecisionId: null, recentFailures: [],
-    })} editor={editor} />);
+    })} editor={editor} api={api} />);
     const status = screen.getByLabelText("路由状态");
     expect(status.textContent).toContain("窗口内暂无已记录样本（窗口上限 20 次）");
     expect(status.textContent).not.toContain("失败 0 次");
@@ -52,7 +54,7 @@ describe("settings routing status (R4)", () => {
         { decisionId: "dec-47", runId: null, at: "2026-09-27T09:12:00Z", code: "needs-host" },
         { decisionId: "dec-46", runId: "run-b", at: "2026-09-27T08:44:00Z", code: "timeout" },
       ],
-    })} editor={editor} />);
+    })} editor={editor} api={api} />);
     const status = screen.getByLabelText("路由状态");
     expect(status.textContent).toContain("最近 18 次中失败 4 次（窗口上限 20 次）");
     expect(status.textContent).toContain("连续失败 2 次");
@@ -76,7 +78,7 @@ describe("settings routing status (R4)", () => {
       windowSize: 20, sampleCount: 5, failureCount: 1, consecutiveFailures: 1,
       abstentionCount: 0, cancelledCount: 0, staleCount: 0,
       lastSuccessAt: "2026-09-27T07:00:00Z", lastSuccessDecisionId: null, recentFailures: [],
-    })} editor={editor} />);
+    })} editor={editor} api={api} />);
     expect(view.container.querySelector(".routing-status")).toBeTruthy();
     expect(screen.getByLabelText("路由状态").textContent).toContain("最近 5 次中失败 1 次");
   });

@@ -81,7 +81,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
   const list = <section className="panel list-panel" aria-label="委派列表">
     <div className="panel-toolbar"><h2>委派记录</h2><button className="button small-button" disabled={history.loading} onClick={() => history.reset()}>刷新记录</button></div>
     <div className="list-filters">
-      <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "待决定"], ["review", "待验收"]] as const).map(([key, label]) =>
+      <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
       <label className="search"><span className="sr-only">搜索委派</span><input value={query} maxLength={200} onChange={e => setQuery(e.target.value)} placeholder="目标、项目、委派方或 ID" /></label>
       <div className="filter-pair"><label><span className="sr-only">项目筛选</span><select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">全部项目</option>
@@ -109,7 +109,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
           return <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
-            <strong className="task-title">{excerpt(taskTitle(rowTask), 100)}</strong>
+            <strong className="task-title">{excerpt(taskTitle(rowTask).text, 100)}</strong>
             <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
             {row.delegation?.kind !== "goal" && <span className="small muted">{row.delegation?.kind === "helper" ? "协助任务" : row.delegation?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>

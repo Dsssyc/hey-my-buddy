@@ -198,7 +198,7 @@ describe("decision profile selector", () => {
     ]);
     expect(screen.getByText("deepseek-official / max")).toBeTruthy();
 
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await waitFor(() =>
       expect(screen.getByLabelText("决策模型配置")).toHaveProperty(
         "disabled",

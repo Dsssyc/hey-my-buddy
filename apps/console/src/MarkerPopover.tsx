@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { TimelineEvent, TimelineRow } from "./objective-types";
 import type { TimelineItem } from "./objective-display";
-import { clockTime, eventVocab } from "./objective-display";
+import { clockTime, eventSentence, eventVocab } from "./objective-display";
 
 export type MarkerClusterView = {
   key: string;
@@ -116,21 +116,22 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
         const vocab = eventVocab(event.kind);
         const row = rowsById.get(event.runId);
         const selected = selectedEventKey === item.key;
+        // P1.7: one natural-language sentence per event, the recorded summary
+        // as a second weak line.
+        const sentence = eventSentence(event, row ?? null);
         return <div key={item.key}
           className={"marker-popover-row" + (selected ? " selected" : "")}>
           <button type="button" className="marker-popover-main" data-row-index={index}
-            title={`${item.head} · ${row?.title ?? event.runId}${event.actor ? ` · ${event.actor}` : ""}`}
-            aria-label={`${item.head}，${row?.title ?? `委派 ${event.runId}`}，${clockTime(event.at)}${event.actor ? `，actor ${event.actor}` : ""}`}
+            title={event.actor ? `${sentence} · ${event.actor}` : sentence}
+            aria-label={`${sentence}${event.actor ? `，actor ${event.actor}` : ""}`}
             onClick={() => onSelect(item)}
             onDoubleClick={() => onOpen(item)}
             onKeyDown={keyboard => onKeyDown(keyboard, item)}>
             <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
             <time>{clockTime(event.at)}</time>
-            <span className="marker-popover-title">
-              {row?.kind === "helper" ? <span aria-hidden="true" className="muted">↳ </span> : null}
-              Host {event.label || vocab.label} · {row?.title ?? `委派 ${event.runId}`}
-            </span>
+            <span className="marker-popover-title">{sentence}</span>
             {event.actor && <span className="muted">{event.actor}</span>}
+            {event.summary && <span className="marker-popover-summary muted">{event.summary}</span>}
           </button>
           <button type="button" className="button small-button" aria-label={`打开 ${item.head}`}
             onClick={() => onOpen(item)}>打开</button>

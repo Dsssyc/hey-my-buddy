@@ -129,7 +129,9 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     for (const name of REMOVED_CONTROLS) {
       if (screen.queryByRole("button", { name })) throw new Error(`removed button "${name}" is still rendered`);
     }
-    expect(screen.getByText(/委派详情只读/)).toBeTruthy();
+    // The single read-only hint lives in the detail header (TaskDetails), not
+    // repeated inside the workflow panel.
+    expect(screen.queryByText(/只读 · 操作由 Host 在 CLI 完成/)).toBeNull();
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });
 

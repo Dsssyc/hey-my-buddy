@@ -209,7 +209,7 @@ describe("unavailable configurations", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     // It is currently enabled, so the user may turn it off.
     const toggle = await screen.findByLabelText("允许后续选择使用此配置");
@@ -232,7 +232,7 @@ describe("unavailable configurations", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     await user.click(await screen.findByLabelText("允许后续选择使用此配置"));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
@@ -265,7 +265,7 @@ describe("unavailable configurations", () => {
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await screen.findByText(/固定选择指向 .*需要处理，但不影响保存其他修改/);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     // The existing pin stays a reachable, selectable value; only its reason changes.
     const pinOption = within(screen.getByLabelText("用户偏好")).getByRole("option", { name: "固定选择" });
@@ -288,7 +288,7 @@ describe("unavailable configurations", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     await user.click(await screen.findByLabelText("允许后续选择使用此配置"));
     await user.click(screen.getByRole("button", { name: "发现模型" }));
@@ -301,7 +301,7 @@ describe("unavailable configurations", () => {
     expect(screen.getByLabelText("允许后续选择使用此配置")).toHaveProperty("checked", false);
     // No save of the disable under V3 while the conflict is unresolved.
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // The revision-bound history reload supplies the fresh V3 row; the pending
@@ -321,7 +321,7 @@ describe("unavailable configurations", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     const select = screen.getByLabelText("用户偏好");
     expect(select).toHaveProperty("value", "pin");
@@ -374,7 +374,7 @@ describe("stale settings and unrelated saves", () => {
     await screen.findByText(/需要处理，但不影响保存其他修改/);
     // The selector is disabled while read-only; entering edit mode never takes a grant.
     expect(select).toHaveProperty("disabled", true);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await waitFor(() => expect(screen.getByLabelText("决策模型配置")).toHaveProperty("disabled", false));
     expect(f.command).not.toHaveBeenCalled();
 
@@ -397,7 +397,7 @@ describe("stale settings and unrelated saves", () => {
     render(<App suppliedApi={f.api} />);
     await openRetired(f, user);
     await screen.findByText(/固定选择指向 .*需要处理，但不影响保存其他修改/);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(screen.getByLabelText("我的意见"), "，补充说明");
     await user.click(screen.getByRole("button", { name: "保存更改" }));

@@ -132,8 +132,10 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     await openSpan(f, "s-r2-e1");
     const locator = document.querySelector(".locator") as HTMLElement;
     expect(within(locator).getByRole("button", { name: "‹ 返回时间轴" })).toBeTruthy();
-    expect(within(locator).getByText(/工作目标时间轴：设计、接口与实现 › /)).toBeTruthy();
-    expect(within(locator).getByText(/来自时间轴：第 1 轮 · 执行片段/)).toBeTruthy();
+    // T4: the breadcrumb splits into two separately truncated crumbs.
+    expect(within(locator).getAllByText("工作目标时间轴：设计、接口与实现").length).toBeGreaterThan(0);
+    // T4: the span fact states only the round and time, never the title.
+    expect(within(locator).getByText(/来自时间轴：第 1 轮 /)).toBeTruthy();
     // The timeline stays mounted (hidden) while the detail is open.
     expect(document.querySelector(".tl-grid")).toBeTruthy();
     expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(true);
@@ -174,7 +176,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // The next list read returns an empty page (a refresh or filter gap); the
     // timeline's own summary keeps the detail alive.
     (f.api.objectives as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ objectives: [], total: 0, nextCursor: null, cursor: 41, changed: false });
-    await f.user.click(screen.getByRole("button", { name: "刷新记录" }));
+    await f.user.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(2));
     expect(document.querySelector(".run-view")).toBeTruthy();
     expect(document.querySelector(".locator")).toBeTruthy();
@@ -217,7 +219,7 @@ describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
     // The objective-level stop is the only write; a read-only session cannot use it.
     const stop = screen.getByRole("button", { name: "停止目标" });
     expect(stop).toHaveProperty("disabled", true);
-    expect(stop.getAttribute("title")).toContain("只读");
+    expect(stop.getAttribute("title")).toContain("登录已失效");
     await openSpan(f, "s-r1-q");
     await screen.findByRole("heading", { name: "执行记录" });
     expect(f.api.command).not.toHaveBeenCalled();
@@ -255,8 +257,9 @@ describe("objective-level stop (0.15.1 U4)", () => {
     const dialog = await screen.findByRole("dialog", { name: "停止工作目标" });
     // The confirmation names the objective and the honest scope.
     expect(dialog.textContent).toContain("工作目标时间轴：设计、接口与实现");
-    expect(dialog.textContent).toContain("5 个委派中已验收 2 个保留");
-    expect(dialog.textContent).toContain("不受当前筛选或截断影响");
+    // 0.16 P1.3: the new confirmation copy names the unaccepted scope.
+    expect(dialog.textContent).toContain("尚未验收的 3 个委派及其协助任务");
+    expect(dialog.textContent).toContain("已验收的 2 个保留");
     expect(f.api.command).not.toHaveBeenCalled();
     // Cancel submits nothing.
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
@@ -412,7 +415,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
     // Navigate to the second objective and stop it while the first is pending.
     await f.user.click(screen.getByRole("button", { name: "‹ 工作目标列表" }));
     await f.user.click(screen.getByRole("button", { name: /另一个进行中的目标/ }));
-    await screen.findByText("0 / 2 个委派已验收");
+    await screen.findByText(/0 \/ 2 个委派已验收/);
     await f.user.click(screen.getByRole("button", { name: "停止目标" }));
     await f.user.click(within(await screen.findByRole("dialog", { name: "停止工作目标" })).getByRole("button", { name: "确认停止目标" }));
     await waitFor(() => expect(stopCalls(f).length).toBe(2));
@@ -571,7 +574,7 @@ describe("objective detail docking (0.15.1 U1)", () => {
       return node;
     });
     // The unarchived delegation is folded by default; expand it inside the drawer.
-    await f.user.click(within(drawerAgain).getByRole("button", { name: /未归档委派（已加载 1）/ }));
+    await f.user.click(within(drawerAgain).getByRole("button", { name: /历史独立委派（1）/ }));
     await f.user.click(within(drawerAgain).getAllByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })[0]!);
     await waitFor(() => expect(document.querySelector(".run-view")).toBeNull());
     await waitFor(() => expect(document.querySelector(".workspace-grid.list-rail")).toBeNull());

@@ -59,13 +59,20 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
     }).catch(reason => { if (current) setError(errorText(reason)); });
     return () => { current = false; };
   }, [api, target.runId, attempt]);
-  const crumbs = remote ? `${objectiveTitle} › ${rowTitleFor?.(remote.runId) ?? taskTitle(remote)}` : `${objectiveTitle} › ${target.runId}`;
+  const crumbs = remote
+    ? { objective: objectiveTitle, delegation: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text }
+    : { objective: objectiveTitle, delegation: target.runId };
+  const crumbsTitle = `${crumbs.objective} › ${crumbs.delegation}`;
   return <div className="run-view">
     <div className="locator">
       <button type="button" className="button small-button"
         onClick={onBack}>{mode === "dock" ? "× 关闭详情" : "‹ 返回时间轴"}</button>
-      <span className="crumbs" title={crumbs}>{crumbs}</span>
-      {target.locator && <span className="from">来自时间轴：{target.locator}</span>}
+      <span className="crumbs" title={crumbsTitle}>
+        <span className="crumb">{crumbs.objective}</span>
+        <span className="crumb-sep" aria-hidden="true">›</span>
+        <span className="crumb">{crumbs.delegation}</span>
+      </span>
+      {target.locator && <span className="from" title={`来自时间轴：${target.locator}`}>来自时间轴：{target.locator}</span>}
     </div>
     {remote
       ? <TaskDetails key={remote.runId} task={remote} snapshot={snapshot} api={api} refresh={refresh}

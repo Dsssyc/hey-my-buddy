@@ -84,6 +84,49 @@ export function eventVocab(kind: string): { label: string; glyph: string } {
   return EVENT_VOCAB[kind] ?? { label: kind, glyph: "•" };
 }
 
+/**
+ * One natural-language Host-event sentence (0.16 P1.7): “13:20 Host 派发「{委派}」”.
+ * A decide marker keeps both verbs unless its raw event kind names one side.
+ */
+export function eventSentence(event: TimelineEvent, row: TimelineRow | null): string {
+  const title = row ? displayTitle(row.titleSource, row.title).text : `委派 ${event.runId}`;
+  const time = clockTime(event.at);
+  const raw = (event.eventKind ?? "").toLowerCase();
+  switch (event.kind) {
+    case "dispatch": return `${time} Host 派发「${title}」`;
+    case "decide":
+      if (raw.includes("approved")) return `${time} Host 批准了「${title}」的请求`;
+      if (raw.includes("declined")) return `${time} Host 拒绝了「${title}」的请求`;
+      return `${time} Host 批准 / 拒绝了「${title}」的请求`;
+    case "continue": return `${time} Host 让「${title}」继续`;
+    case "integrate": return `${time} Host 整合了「${title}」的产出`;
+    case "accept": return `${time} Host 验收通过「${title}」`;
+    case "reject": return `${time} Host 对「${title}」提出验收问题`;
+    case "cancel": return `${time} Host 取消了「${title}」`;
+    case "takeover": return `${time} Host 接管了「${title}」`;
+    default: return `${time} Host ${event.label || eventVocab(event.kind).label}「${title}」`;
+  }
+}
+
+/** Cluster summary: “Host 事件 n 条：派发 2、验收 1，按 Enter 列出”. */
+export function eventClusterLabel(events: readonly TimelineEvent[]): string {
+  const byKind = new Map<string, number>();
+  for (const event of events) byKind.set(event.kind, (byKind.get(event.kind) ?? 0) + 1);
+  const parts = [...byKind.entries()].map(([kind, count]) =>
+    count > 1 ? `${eventVocab(kind).label} ${count}` : eventVocab(kind).label);
+  return `Host 事件 ${events.length} 条：${parts.join("、")}，按 Enter 列出`;
+}
+
+/** The marker chip of one cluster: the shared glyph with a small count, or ≡ for mixed kinds. */
+export function eventClusterGlyph(events: readonly TimelineEvent[]): { glyph: string; count: number } {
+  const first = events[0]?.kind ?? "";
+  const sameKind = events.every(event => event.kind === first);
+  return {
+    glyph: events.length > 1 && !sameKind ? "≡" : eventVocab(first).glyph,
+    count: events.length > 1 ? events.length : 0,
+  };
+}
+
 const EVENT_SECTION: Record<string, SectionId> = {
   dispatch: "overview", decide: "assistance", continue: "execution", integrate: "artifacts",
   accept: "artifacts", reject: "artifacts", cancel: "overview", takeover: "overview",
@@ -95,8 +138,26 @@ export function eventSection(kind: string): SectionId {
 
 /** Timeline categories are disjoint and already priority-ordered by the service. */
 export const CATEGORY_LABEL: Record<ObjectiveCategory, string> = {
-  host: "待决定", active: "进行中", review: "待验收", ended: "已结束",
+  host: "等待 Host", active: "进行中", review: "等待验收", ended: "已结束",
 };
+
+/**
+ * The one objective state word (0.16 0.2): 已完成 is derived only from the
+ * recorded acceptance counts — never from a Worker's own summary — and every
+ * other ended group keeps the plain 已结束 next to its acceptance progress.
+ */
+export function objectiveStateLabel(summary: ObjectiveSummary): string {
+  if (summary.state === "ended"
+    && summary.counts.roots > 0 && summary.counts.accepted === summary.counts.roots) {
+    return "已完成";
+  }
+  return CATEGORY_LABEL[summary.state];
+}
+
+/** The header progress sentence: “{状态} · x / y 个委派已验收”. */
+export function objectiveProgressText(summary: ObjectiveSummary): string {
+  return `${objectiveStateLabel(summary)} · ${summary.counts.accepted} / ${summary.counts.roots} 个委派已验收`;
+}
 
 export function categoryTone(category: ObjectiveCategory): "green" | "amber" | "neutral" {
   return category === "host" ? "amber" : category === "active" ? "green" : "neutral";
@@ -105,8 +166,8 @@ export function categoryTone(category: ObjectiveCategory): "green" | "amber" | "
 /** Fixed-order count chips; zero entries are omitted by the caller. */
 export const COUNT_ORDER: readonly { key: keyof ObjectiveSummary["counts"]; glyph: string; label: string }[] = [
   { key: "active", glyph: "●", label: "进行中" },
-  { key: "host", glyph: "◆", label: "待决定" },
-  { key: "review", glyph: "✓", label: "待验收" },
+  { key: "host", glyph: "◆", label: "等待 Host" },
+  { key: "review", glyph: "✓", label: "等待验收" },
   { key: "ended", glyph: "■", label: "已结束" },
 ];
 
@@ -177,21 +238,86 @@ export function displayTitle(titleSource: string, title: string): TitleLine {
   return { text, clipped: text !== title, fromTask };
 }
 
-/* ---- configuration identity and colour assignment ---- */
+/* ---- configuration identity, naming and colour assignment ---- */
 
 export function configurationKey(config: TimelineConfiguration | null | undefined): string | null {
   if (!config) return null;
   return JSON.stringify([config.adapter ?? "", config.provider ?? "", config.model ?? ""]);
 }
 
-export function configurationLabel(config: TimelineConfiguration | null | undefined): string {
-  if (!config) return "配置未记录";
-  const head = config.adapter || config.provider || "未记录适配器";
-  const model = config.model || config.provider || "未记录模型";
-  return `${head} / ${model}`;
+/** Product names for known native model ids (0.16 0.3); unknown ids stay as is. */
+const KNOWN_MODEL_NAMES: Record<string, string> = {
+  "claude-opus-5-5": "Claude Opus 5.5",
+  "claude-sonnet-5": "Claude Sonnet 5",
+  "glm-5.3": "GLM-5.3",
+};
+
+/** A snapshot profile reduced to the fields friendly naming needs. */
+export type FriendlyProfile = { adapter: string; provider: string; model: string; label?: string; effort?: string };
+
+/**
+ * Builds the friendly-name resolver: a snapshot profile whose adapter,
+ * provider and model all match wins with its profileName; then the fixed
+ * known-id map; then the raw model id. Colour assignment keeps using
+ * configurationKey, so renaming never changes an assigned colour.
+ */
+export function configurationNamer(profiles?: readonly FriendlyProfile[] | null): (config: TimelineConfiguration | null | undefined) => { text: string; title: string } {
+  const byTuple = new Map<string, FriendlyProfile>();
+  for (const profile of profiles ?? []) {
+    const key = JSON.stringify([profile.adapter ?? "", profile.provider ?? "", profile.model ?? ""]);
+    if (!byTuple.has(key)) byTuple.set(key, profile);
+  }
+  return (config) => {
+    if (!config) return { text: "配置未记录", title: "配置未记录" };
+    const raw = [config.adapter, config.provider, config.model, config.effort]
+      .map(part => (part ?? "").trim()).filter(Boolean).join(" / ");
+    const matched = byTuple.get(JSON.stringify([config.adapter ?? "", config.provider ?? "", config.model ?? ""]));
+    const name = matched
+      ? profileDisplayName(matched)
+      : KNOWN_MODEL_NAMES[(config.model ?? "").trim()] ?? (config.model ?? "").trim();
+    const effort = effortDisplay(config.effort);
+    const text = name && effort ? `${name} · ${effort}` : name || effort || "配置未记录";
+    return { text, title: raw || text };
+  };
 }
 
-export type ConfigurationStyle = { key: string; label: string; color: number; striped: boolean };
+/** profileName() behaviour for a snapshot profile (label minus its effort tail). */
+function profileDisplayName(profile: FriendlyProfile): string {
+  const label = (profile.label ?? "").trim();
+  const effort = (profile.effort ?? "").trim();
+  if (label && effort) {
+    const suffix = ` · ${effort}`;
+    if (label.endsWith(suffix)) {
+      const stripped = label.slice(0, -suffix.length).trim();
+      if (stripped) return stripped;
+    }
+  }
+  return label || profile.model;
+}
+
+/** effortText() behaviour without importing the profile module. */
+function effortDisplay(effort: string | null | undefined): string {
+  const value = (effort ?? "").trim();
+  return value === "off" ? "非思考" : value;
+}
+
+const defaultNamer = configurationNamer(null);
+
+/**
+ * One consistent “友好名 · effort” form for the legend, row subtitles, the
+ * inspector and details; the raw adapter/provider/model/effort belongs in the
+ * tooltip (0.16 0.3).
+ */
+export function configurationLabel(config: TimelineConfiguration | null | undefined, profiles?: readonly FriendlyProfile[] | null): string {
+  return (profiles ? configurationNamer(profiles) : defaultNamer)(config).text;
+}
+
+/** The raw identity line for tooltips. */
+export function configurationRawLabel(config: TimelineConfiguration | null | undefined): string {
+  return defaultNamer(config).title;
+}
+
+export type ConfigurationStyle = { key: string; label: string; rawTitle: string; color: number; striped: boolean };
 
 /**
  * Stable execution-configuration colours. `assignments` maps a configuration
@@ -204,9 +330,11 @@ export type ConfigurationStyle = { key: string; label: string; color: number; st
 export function configurationPalette(
   spansByRun: Map<string, TimelineSpan[]>,
   assignments?: Map<string, number>,
+  profiles?: readonly FriendlyProfile[] | null,
 ): ConfigurationStyle[] {
   const slots = assignments ?? new Map<string, number>();
   const byKey = new Map<string, ConfigurationStyle>();
+  const namer = configurationNamer(profiles);
   for (const spans of spansByRun.values()) {
     for (const span of spans) {
       if (span.kind !== "execution") continue;
@@ -214,7 +342,8 @@ export function configurationPalette(
       if (key === null || byKey.has(key)) continue;
       if (!slots.has(key)) slots.set(key, slots.size);
       const slot = slots.get(key)!;
-      byKey.set(key, { key, label: configurationLabel(span.configuration), color: slot % 6 + 1, striped: slot >= 6 });
+      const named = namer(span.configuration);
+      byKey.set(key, { key, label: named.text, rawTitle: named.title, color: slot % 6 + 1, striped: slot >= 6 });
     }
   }
   return [...byKey.values()].sort((left, right) => (slots.get(left.key) ?? 0) - (slots.get(right.key) ?? 0));
@@ -352,11 +481,18 @@ export function spanFacts(
   parts.push(outcomeLabel(span, outcome));
   if (typeof span.error === "string" && span.error.trim()) parts.push(span.error.trim());
   const targetRun = span.kind === "routing" && span.decisionTaskId ? span.decisionTaskId : row.runId;
-  const endText = endMs === null ? "结束时间缺失" : clockTime(endMs);
-  const locatorBase = startMs === null ? head : `${head} ${clockTime(startMs)}–${endText}`;
-  const locator = span.kind === "execution" && span.turnIndex != null
-    ? `第 ${span.turnIndex} 轮 · 执行片段 ${startMs === null ? "?" : clockTime(startMs)}–${endText} · ${configurationLabel(span.configuration)}`
-    : locatorBase;
+  // The detail locator states only the recorded fact — round and time — never
+  // the delegation title, which the detail already shows once (0.16 T4).
+  const roundPrefix = span.turnIndex != null ? `第 ${span.turnIndex} 轮` : spanHead(span.kind);
+  const timeFact = startMs === null ? "时间未记录"
+    : endMs === null ? `${clockTime(startMs)} 起 · 结束时间缺失`
+      : `${clockTime(startMs)}–${clockTime(endMs)}`;
+  const locator = span.kind === "host"
+    ? (startMs === null ? "等待 Host · 时间未记录"
+      : endMs === null ? `等待 Host ${clockTime(startMs)} 起` : `等待 Host ${clockTime(startMs)}–${clockTime(endMs)}`)
+    : span.kind === "queue"
+      ? (startMs === null ? "排队 · 时间未记录" : endMs === null ? `排队 ${clockTime(startMs)} 起` : `排队 ${clockTime(startMs)}–${clockTime(endMs)}`)
+      : `${roundPrefix} ${timeFact}`;
   return {
     item: {
       key: `span:${span.spanId}`,
@@ -385,9 +521,39 @@ export function rowLabelItem(row: TimelineRow): TimelineItem {
     section: "overview",
     head: "委派",
     parts: [title.text, `${hierarchy}${state.label}`, `标题来源：${TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource}`],
-    locator: `委派 · ${title.text}`,
+    locator: "",
     atMs: null,
   };
+}
+
+/**
+ * The measured acceptance wait (0.16 P1.8): from the row's last execution
+ * span's recorded end to its acceptance marker. Null whenever any condition
+ * fails — no flag, no recorded end, an unconfirmed stop, or an end after the
+ * acceptance — because the wait must never be invented.
+ */
+export function acceptanceWaitMs(row: TimelineRow, spans: readonly TimelineSpan[]): number | null {
+  if (!row.acceptedAt) return null;
+  const atMs = toMs(row.acceptedAt);
+  if (atMs === null) return null;
+  const executions = spans
+    .filter(span => span.kind === "execution")
+    .map(span => ({ span, endMs: toMs(span.endAt) }))
+    .filter((entry): entry is { span: TimelineSpan; endMs: number } => entry.endMs !== null)
+    .sort((left, right) => left.endMs - right.endMs);
+  const last = executions[executions.length - 1];
+  if (!last) return null;
+  if (spanOutcome(last.span) === "unknown") return null;
+  return last.endMs <= atMs ? atMs - last.endMs : null;
+}
+
+/** The acceptance-wait sentence shared by the dashed line and the inspector. */
+export function acceptanceWaitText(row: TimelineRow, spans: readonly TimelineSpan[]): string | null {
+  const wait = acceptanceWaitMs(row, spans);
+  if (wait === null) return null;
+  return row.acceptanceVerdict === "rejected"
+    ? `等待验收结论 ${durationText(wait) ?? ""}`.trim()
+    : `等待验收 ${durationText(wait) ?? ""}`.trim();
 }
 
 export function settleItem(row: TimelineRow): TimelineItem | null {
@@ -398,9 +564,9 @@ export function settleItem(row: TimelineRow): TimelineItem | null {
     key: `settle:${row.runId}`,
     runId: row.runId,
     section: "artifacts",
-    head: "结算",
+    head: rejected ? "验收问题" : "已验收",
     parts: [rejected ? "验收问题" : "已验收", row.title, dayClock(row.acceptedAt)],
-    locator: `结算 ${rejected ? "验收问题" : "已验收"} · ${clockTime(row.acceptedAt)}`,
+    locator: `${rejected ? "验收问题" : "已验收"} · ${clockTime(row.acceptedAt)}`,
     atMs: at,
   };
 }

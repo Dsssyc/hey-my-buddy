@@ -1,10 +1,11 @@
 import type { RoutingHealth, Snapshot } from "./types";
+import type { ConsoleApi } from "./api";
 import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
 import { dayClock } from "./objective-display";
 import { effortText, profileTitle, profileTitleOr } from "./profile-display";
 import { decisionAttention, decisionCandidates, hasDecisionCapability } from "./policy";
-import { READ_ONLY_DRAFT_NOTE } from "./console-session";
+import { StoragePanel } from "./StoragePanel";
 
 /**
  * Read-only routing status (0.15 R4): the snapshot's bounded selection-health
@@ -49,9 +50,13 @@ function RoutingStatus({ health }: { health: RoutingHealth | undefined }) {
 export function Settings({
   snapshot,
   editor,
+  api,
+  connectionError = "",
 }: {
   snapshot: Snapshot;
   editor: Editor;
+  api: ConsoleApi;
+  connectionError?: string;
 }) {
   const data = editor.draft || snapshot,
     editing = editor.editing;
@@ -164,7 +169,6 @@ export function Settings({
         {editor.mode && editor.configurationDirty && (
           <p className="small muted" role="status">
             草稿中的决策模型为 {draftName}，已发布的是 {publishedName}。保存并发布后才会生效；正在运行的任务继续使用原配置。
-            {!editor.sessionWritable && ` ${READ_ONLY_DRAFT_NOTE}`}
           </p>
         )}
         <div className="policy-note">
@@ -175,6 +179,7 @@ export function Settings({
         </div>
         <RoutingStatus health={snapshot.routingHealth} />
       </section>
+      <StoragePanel api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError} />
     </div>
   );
 }

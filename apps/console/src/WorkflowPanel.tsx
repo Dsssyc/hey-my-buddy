@@ -14,12 +14,10 @@ import { TaskActivityView } from "./task-activity";
 import { finalArtifact, finalIntegration, recordedIntegrations } from "./integration";
 import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
-import { DelegationThreeRows } from "./ObjectiveOverview";
+import { DelegationDetailRows } from "./ObjectiveOverview";
 
 const integrationLabel = (record: IntegrationRecord) =>
   record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
-
-const READ_ONLY_NOTE = "委派详情只读：提交、重试、验收、决定、接续、接管与取消由 Host 通过既有 CLI 流程完成。";
 
 /**
  * Governed delegation detail (0.15.1 U4): read-only facts over the recorded
@@ -70,7 +68,6 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   }
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
-    <p className="small muted" role="status">{READ_ONLY_NOTE}</p>
     {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button><span className="small muted">由 Host 处理</span></div>}
     <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
@@ -79,11 +76,10 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       <div id={tabsId + "-overview"} role="tabpanel" aria-labelledby={tabsId + "-overview-tab"} hidden={selectedSection !== "overview"}>
       <section className="detail-section">
         <h3>概览</h3>
-        {/* The fixed three-row block (design §4): the timeline's own row when
-            available, otherwise the recorded task/result facts of this read. */}
-        <DelegationThreeRows
-          title={overviewRow ? overviewRow.title : task.workflow?.resultSummary || task.task.trim().split("\n", 1)[0] || null}
-          titleSource={overviewRow ? overviewRow.titleSource : "task"}
+        {/* T4: the overview never repeats the detail heading's title; only the
+            task summary and the Worker's own result line remain. The timeline's
+            own row is authoritative when available. */}
+        <DelegationDetailRows
           taskSummary={overviewRow ? overviewRow.taskSummary : (task.task.replace(/\s+/g, " ").trim().slice(0, 120) || null)}
           resultSummary={overviewRow ? overviewRow.summary : (value.currentTurn?.summary || task.workflow?.resultSummary || null)} />
         {stopStatusNode}

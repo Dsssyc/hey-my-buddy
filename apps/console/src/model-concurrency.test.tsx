@@ -127,7 +127,7 @@ describe("model family concurrency", () => {
     expect(screen.getByText("2 · 当前占用 1")).toBeTruthy();
     expect(screen.queryByRole("spinbutton", { name: "并发任务上限" })).toBeNull();
     expect(screen.getByText(/并发上限由同一模型的所有思考档位与路由、执行共用/)).toBeTruthy();
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     expect(concurrencyInput()).toHaveProperty("value", "2");
     expect(screen.getByText("当前占用 1（只读）")).toBeTruthy();
     expect(screen.getByText(/保存后立即对后续任务生效/)).toBeTruthy();
@@ -139,7 +139,7 @@ describe("model family concurrency", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     const input = concurrencyInput();
     await user.clear(input);
     await user.type(input, "6");
@@ -164,7 +164,7 @@ describe("model family concurrency", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.clear(concurrencyInput());
     await user.type(concurrencyInput(), "6");
     await screen.findByText("并发上限未保存");
@@ -179,7 +179,7 @@ describe("model family concurrency", () => {
     const f = fixture();
     const user = userEvent.setup();
     await openFlashCard(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     const input = concurrencyInput();
     await user.clear(input);
     await user.type(input, "33");
@@ -209,7 +209,7 @@ describe("model family concurrency", () => {
     await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: /^retired-model/ }));
     await screen.findByRole("heading", { name: "retired-model" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
     const input = concurrencyInput();
     expect(input).toHaveProperty("value", "3");
@@ -228,7 +228,7 @@ describe("model family concurrency", () => {
     const f = fixture({ discoveryLimit: 4 });
     const user = userEvent.setup();
     await openFlashCard(f, user);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.clear(concurrencyInput());
     await user.type(concurrencyInput(), "6");
     await screen.findByText("并发上限未保存");
@@ -242,7 +242,7 @@ describe("model family concurrency", () => {
     expect(concurrencyInput()).toHaveProperty("value", "6");
     // Saving the stale draft under V3 is refused without an explicit resolution.
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/设置已在别处更新/)).length).toBeGreaterThan(0);
     expect(f.published).toHaveLength(0);
     expect(f.operations).not.toContain("evaluation_write_begin");
     // Deliberate reload adopts the other writer's published limit.

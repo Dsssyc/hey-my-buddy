@@ -115,7 +115,7 @@ describe("desktop console", () => {
     window.location.hash = "#models";
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
-    await user.click(await screen.findByRole("switch", { name: "编辑模式" }));
+    await user.click(await screen.findByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "off 人工意见");
@@ -144,7 +144,7 @@ describe("desktop console", () => {
     await user.click(screen.getByRole("tab", { name: "证据" }));
     expect(screen.queryByRole("textbox", { name: "补充观察" })).toBeNull();
     expect(screen.queryByLabelText("作为卡片依据")).toBeNull();
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(await screen.findByRole("button", { name: "放弃修改" }));
     await screen.findByText("已放弃未发布的修改。");
     expect(f.command).not.toHaveBeenCalled();
@@ -292,11 +292,11 @@ describe("desktop console", () => {
     await user.click(await screen.findByRole("button", { name: /目标 historical/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     await waitFor(() => expect(within(detail).getByRole("tab", { name: "产物与验收" }).getAttribute("aria-selected")).toBe("true"));
-    expect(within(detail).getByRole("heading", { name: "目标 historical" })).toBeTruthy();
+    expect(within(detail).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(detail).getByText("委派方：codex-source")).toBeTruthy();
     await user.type(screen.getByLabelText("搜索委派"), "无匹配记录");
     await screen.findByRole("heading", { name: "没有匹配的委派" });
-    expect(within(detail).getByRole("heading", { name: "目标 historical" })).toBeTruthy();
+    expect(within(detail).getByRole("heading", { name: /目标 historical/ })).toBeTruthy();
     expect(within(detail).getByText("委派方：codex-source")).toBeTruthy();
   });
 
@@ -308,8 +308,10 @@ describe("desktop console", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
-    expect(await screen.findByRole("button", { name: /第一项的现有结果/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /第二项的现有结果/ })).toBeTruthy();
+    // 0.16 T1: rows show the task intent, never the Worker summaries.
+    expect(await screen.findByRole("button", { name: /目标 first-summary/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /目标 second-summary/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /第一项的现有结果/ })).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
     expect(f.api.task).not.toHaveBeenCalled();
   });
@@ -333,14 +335,13 @@ describe("desktop console", () => {
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 older/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
-    // The bounded workflow_get refresh carries the newest concluded summary; the
-    // open detail heading and its list row adopt the same title.
-    expect(await within(detail).findByRole("heading", { name: "历史记录的最新结论结果" })).toBeTruthy();
-    const row = screen.getByRole("button", { name: /历史记录的最新结论结果/ });
-    expect(row.querySelector("strong.task-title")!.textContent).toBe("历史记录的最新结论结果");
-    // The raw task text keeps its detail access and tooltip.
-    expect(within(detail).getByRole("heading", { level: 2 }).getAttribute("title")).toBe(record.task);
-    // The three-row overview and the raw task text both carry the full words.
+    // 0.16 T1: the bounded refresh carries the newest concluded summary, but
+    // it never becomes the heading or the row title; it appears as a 结果 line.
+    expect(await within(detail).findByRole("heading", { name: /目标 older/ })).toBeTruthy();
+    const row = screen.getByRole("button", { name: /目标 older/ });
+    expect(row.querySelector("strong.task-title")!.textContent).toContain("目标 older");
+    expect(within(detail).getAllByText(/结果：历史记录的最新结论结果/).length).toBeGreaterThan(0);
+    // The raw task text keeps its detail access through the disclosure.
     expect((await within(detail).findAllByText(/不该成为标题/)).length).toBeGreaterThan(0);
   });
 });

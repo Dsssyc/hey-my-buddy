@@ -46,6 +46,11 @@ function Harness({ timeline, selectionSource }: {
 afterEach(() => cleanup());
 
 const item = (key: string) => document.querySelector(`[data-key="${key}"]`) as HTMLButtonElement | null;
+/** P1.7: the Host event row starts collapsed; tests expand it first. */
+async function expandHostEvents(user: ReturnType<typeof userEvent.setup>) {
+  const toggle = screen.getByRole("button", { name: /[▸▾] Host 事件/ });
+  if (toggle.getAttribute("aria-expanded") === "false") await user.click(toggle);
+}
 
 describe("objective timeline rendering", () => {
   it("shows receipt cancellation even with an error reason and no cancelled turn disposition", () => {
@@ -59,7 +64,7 @@ describe("objective timeline rendering", () => {
     expect(item("span:s-r5-e")!.className).not.toContain("failed");
   });
 
-  it("shows the vitals header, folded time statistics and the archival note", () => {
+  it("shows the vitals header, folded time statistics and the archival note", async () => {
     const timeline = objectiveTimelineFixture();
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const head = document.querySelector(".tl-head") as HTMLElement;
@@ -85,17 +90,23 @@ describe("objective timeline rendering", () => {
     expect(body.textContent).toMatch(/记录来源：项目 hey-my-buddy/);
     expect(body.textContent).toContain("来源 Host codex-desktop");
     expect(body.textContent).toContain("当前 Host codex-desktop");
-    // The hierarchy note carries the four levels with their explanations (§0/§3).
-    const hierarchy = head.querySelector(".hierarchy-line") as HTMLElement;
-    expect(hierarchy.textContent).toContain("工作目标 › 委派 › 协助任务 › 回合");
-    expect(hierarchy.querySelector(".hierarchy-help-body")!.textContent).toContain("不单独验收");
+    // T2: exactly one hierarchy entry — a "?" button in the vitals line; the
+    // breadcrumb-like text and the duplicate legend are gone.
+    expect(document.body.textContent).not.toContain("工作目标 › 委派 › 协助任务 › 回合");
+    const help = within(head).getByRole("button", { name: "层级说明" });
+    expect(help.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(help);
+    const popover = await screen.findByRole("dialog", { name: "层级说明" });
+    expect(popover.textContent).toContain("工作目标是一项议程；委派是交给 Buddy、单独验收的一项工作；协助任务是委派派生的子工作；回合是一次执行。");
+    fireEvent.click(help);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "层级说明" })).toBeNull());
   });
 
   it("labels a standalone root honestly and keeps its note distinct", () => {
     const timeline = objectiveTimelineFixture();
     timeline.objective = { ...timeline.objective, kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示" };
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
-    expect(screen.getByText("未归档委派")).toBeTruthy();
+    expect(screen.getByText("历史独立委派")).toBeTruthy();
   });
 
   it("renders every span kind and terminal state with non-colour markers", () => {
@@ -141,7 +152,9 @@ describe("objective timeline rendering", () => {
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const legend = screen.getByLabelText("执行配置图例");
     const items = [...legend.querySelectorAll(".legend-item")].map(node => node.textContent);
-    expect(items).toEqual(["claude / claude-opus-5-5", "codex / gpt-5-codex", "zcode / glm-5", "claude / claude-sonnet-5"]);
+    // 0.16 0.3: friendly names; unknown ids stay raw.
+    expect(items).toEqual(["Claude Opus 5.5 · high", "gpt-5-codex · max", "glm-5 · high", "Claude Sonnet 5 · low"]);
+    expect(screen.getAllByTitle("claude / anthropic / claude-opus-5-5 / high").length).toBeGreaterThan(0);
     const stateLegend = screen.getByLabelText("状态图例");
     expect(stateLegend.textContent).toContain("排队");
     expect(stateLegend.textContent).toContain("路由");
@@ -178,9 +191,9 @@ describe("objective timeline rendering", () => {
     expect(label.getAttribute("title")).not.toBe(LONG_TASK_LINE);
     // §5: the tooltip carries only the ~40-character line plus the pointer to detail.
     expect(label.getAttribute("title")).toBe(`${label.querySelector(".lbl-name")!.textContent}（完整任务见详情）`);
-    // The overview card annotates the same clipped 做什么 row.
+    // T3: the card title is the clipped line itself, with the note in the meta row.
     const single = container.querySelector(".delegation-card.single") as HTMLElement;
-    expect(single.textContent).toContain("做什么");
+    expect(single.textContent).not.toContain("做什么");
     expect(single.textContent).toContain("取自任务首行");
     expect(single.textContent).not.toContain(LONG_TASK_LINE);
   });
@@ -232,15 +245,18 @@ describe("objective timeline rendering", () => {
     const strip = container.querySelector(".delegation-strip") as HTMLElement;
     const cards = [...strip.querySelectorAll<HTMLElement>(".delegation-card")];
     expect(cards.length).toBe(5);
-    const rows = (card: HTMLElement) => [...card.querySelectorAll<HTMLElement>(".card-row")].map(row => row.textContent);
-    // U2: 做什么 / 目标摘要 / 结果摘要 — the Worker summary or 暂无结果.
-    expect(rows(cards[0]!)).toEqual([
-      "做什么设计工作目标时间轴视图与交互规范",
-      "目标摘要设计只读的工作目标时间轴视图、交互规范与验收标准。",
-      "结果摘要已完成时间轴视图与交互规范设计并交付审阅。（Worker 自述，非验收）",
-    ]);
+    // T3: bold two-line title, top-right status, one-line result with the
+    // Worker 自述 label, and no 做什么/目标摘要 labels.
+    const first = cards[0]!;
+    expect(first.querySelector(".delegation-card-title")!.textContent).toBe("设计工作目标时间轴视图与交互规范");
+    expect(first.querySelector(".delegation-card-state")!.textContent).toContain("已验收");
+    expect(first.textContent).toContain("结果：已完成时间轴视图与交互规范设计并交付审阅。");
+    expect(within(first).getByText("Worker 自述")).toBeTruthy();
+    expect(first.textContent).not.toContain("做什么");
+    expect(first.textContent).not.toContain("目标摘要");
     const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
-    expect(executing.textContent).toContain("结果摘要尚无 Worker 结论");
+    expect(executing.textContent).toContain("结果：暂无");
+    expect(within(executing).queryByText("Worker 自述")).toBeNull();
     expect(cards.at(-1)!.textContent).toContain("修正折叠区间展开后的键盘焦点顺序");
   });
 
@@ -253,17 +269,14 @@ describe("objective timeline rendering", () => {
     });
     timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", depth: 1, kind: "helper" };
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
-    expect(container.querySelector(".delegation-strip")).toBeNull();
+    // The single root keeps one expanded card inside the collapsible band.
+    expect(container.querySelectorAll(".delegation-strip .delegation-card:not(.single)")).toHaveLength(0);
     const single = container.querySelector(".delegation-card.single") as HTMLElement;
     expect(single).toBeTruthy();
-    // Host review 4: the single card carries only the status, the open action
-    // and the fixed three rows; the full fact set lives in detail/inspector.
-    expect(single.querySelectorAll(".card-row")).toHaveLength(3);
     expect(single.textContent).toContain("已验收");
     expect(within(single).getByRole("button", { name: "打开详情" })).toBeTruthy();
     expect(single.textContent).not.toContain("第 1 轮");
     expect(single.textContent).not.toContain("待决");
-    expect(single.textContent).not.toContain("协助任务 1 个");
   });
 
   it("shows skeleton, error and stale states without inventing data", async () => {
@@ -279,7 +292,7 @@ describe("objective timeline rendering", () => {
     const retry = vi.fn();
     const stale = objectiveTimelineFixture();
     const kept = render(<ObjectiveTimeline {...baseProps(stale, { error: "网络中断", stale: true, onRetry: retry })} />);
-    expect(kept.getByText(/显示的是 \d{2}:\d{2}:\d{2} 的数据/)).toBeTruthy();
+    expect(kept.getByText(/读取失败 · 显示 \d{2}:\d{2} 的数据/)).toBeTruthy();
     expect(kept.container.querySelector(".tl-grid")).toBeTruthy();
     await user.click(kept.getAllByRole("button", { name: "重试读取" })[0]!);
     expect(retry).toHaveBeenCalled();
@@ -356,15 +369,16 @@ describe("objective timeline rendering", () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => stubbedWidth });
     try {
       const timeline = objectiveTimelineFixture();
-      // First render is a skeleton: no canvas, no observer yet.
+      // First render is a skeleton: no canvas yet; only the root-height
+      // observer (for the inspector drawer bounds) exists.
       const view = render(<ObjectiveTimeline {...baseProps(null, { loading: true })} />);
-      expect(observers.length).toBe(0);
       expect(document.querySelector(".tl-grid")).toBeNull();
+      const before = observers.length;
       view.rerender(<ObjectiveTimeline {...baseProps(timeline)} />);
-      // The canvas mounts with the data; the observer attaches then.
+      // The canvas mounts with the data; the viewport observer attaches then.
       const grid = document.querySelector(".tl-grid") as HTMLElement;
-      expect(observers.length).toBeGreaterThanOrEqual(1);
-      expect(observers[0]!.observe).toHaveBeenCalled();
+      expect(observers.length).toBeGreaterThan(before);
+      const viewportObserver = observers[observers.length - 1]!;
       // 900px viewport minus the 240px fallback label column = 660px track.
       expect(grid.style.width).toBe("calc(var(--label-w) + 660px)");
       const band = document.querySelector(".fold-band") as HTMLElement;
@@ -372,7 +386,7 @@ describe("objective timeline rendering", () => {
       expect(bandPercent / 100 * 660).toBeCloseTo(64, 5);
       // A viewport resize remaps the same recorded facts without feedback.
       stubbedWidth = 1400;
-      act(() => { observers[0]!.callback([], observers[0]! as unknown as ResizeObserver); });
+      act(() => { viewportObserver.callback([], viewportObserver as unknown as ResizeObserver); });
       await waitFor(() => expect(grid.style.width).toBe("calc(var(--label-w) + 1160px)"));
       const remapped = Number.parseFloat((document.querySelector(".fold-band") as HTMLElement).style.width);
       expect(remapped / 100 * 1160).toBeCloseTo(64, 5);
@@ -396,17 +410,17 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(inspector.querySelector(".inspector-card")).toBeTruthy();
     expect(inspector.textContent).toContain("执行片段");
     expect(inspector.textContent).toContain("设计工作目标时间轴视图与交互规范");
-    expect(inspector.textContent).toContain("claude / claude-opus-5");
+    expect(inspector.textContent).toContain("Claude Opus 5.5 · high");
     // Hover and focus elsewhere only change the preview row, never the card.
     await user.hover(item("span:s-r3-e1")!);
     act(() => { item("span:s-r3-e1")!.focus(); });
     const after = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(after.textContent).toContain("设计工作目标时间轴视图与交互规范");
-    expect(after.textContent).toContain("claude / claude-opus-5");
-    expect(after.textContent).toContain("指向：");
+    expect(after.textContent).toContain("Claude Opus 5.5 · high");
+    expect(after.textContent).toContain("预览：");
     // A refresh with the same facts keeps the pinned card.
     view.rerender(<Harness timeline={objectiveTimelineFixture()} selectionSource={source} />);
-    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("claude / claude-opus-5");
+    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("Claude Opus 5.5 · high");
     view.unmount();
   });
 
@@ -447,11 +461,12 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const inspector = container.querySelector(".timeline-inspector")!;
+    // Nothing is pinned yet: the row shows one preview line and the hint.
     expect(inspector.textContent).toContain("执行片段");
     expect(inspector.textContent).toContain("单击选中 · Enter 或双击打开详情");
     const empty = objectiveTimelineFixture({ rows: [], spans: [], events: [], totals: { rows: 0, spans: 0, events: 0, allRows: 0 } });
     const second = render(<ObjectiveTimeline {...baseProps(empty)} />);
-    expect(second.container.querySelector(".timeline-inspector")!.textContent).toContain("单击选中查看记录");
+    expect(second.container.querySelector(".timeline-inspector")!.textContent).toContain("单击选中 · Enter 或双击打开详情");
   });
 
   it("Enter and double-click open details; selection follows the opened item", async () => {
@@ -482,16 +497,16 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(item("span:s-r2-w")!.className).toContain("run-member");
     expect(item("span:s-r2-e2")!.className).toContain("run-member");
     expect(item("span:s-r1-e")!.className).not.toContain("run-member");
+    // P1.6: the fixed six-field card for a whole delegation.
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
-    expect(inspector.textContent).toContain("任务");
+    expect(inspector.textContent).toContain("类型");
     expect(inspector.textContent).toContain("委派");
-    expect(inspector.textContent).toContain("轮次");
-    expect(inspector.textContent).toContain("第 1 轮");
-    expect(inspector.textContent).toContain("第 2 轮");
+    expect(inspector.textContent).toContain("回合");
+    expect(inspector.textContent).toContain("共 2 轮");
+    expect(inspector.textContent).toContain("配置");
+    expect(inspector.textContent).toContain("时间");
     expect(inspector.textContent).toContain("结果");
-    expect(inspector.textContent).toContain("验收");
-    expect(inspector.textContent).toContain("待决");
-    expect(inspector.textContent).toContain("无");
+    expect(inspector.textContent).toContain("已验收");
   });
 
   it("selects the focused item with Space and moves focus with arrows without changing the pin", () => {
@@ -519,9 +534,11 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const onSelectItem = vi.fn();
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
     void onSelectItem;
+    await expandHostEvents(user);
     const cluster = [...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
-    expect(cluster.textContent).toBe("2");
-    expect(cluster.getAttribute("aria-label")).toBe("Host 事件 2 条，按 Enter 列出");
+    // P1.7: mixed kinds render ≡ with a small count.
+    expect(cluster.textContent).toBe("≡2");
+    expect(cluster.getAttribute("aria-label")).toBe("Host 事件 2 条：决定、续接，按 Enter 列出");
     await user.click(cluster);
     const popover = document.querySelector(".marker-popover") as HTMLElement;
     expect(popover).toBeTruthy();
@@ -530,8 +547,8 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(source.get()).toBeNull();
     const rows = [...popover.querySelectorAll(".marker-popover-main")] as HTMLButtonElement[];
     expect(rows.length).toBe(2);
-    expect(rows[0]!.textContent).toContain("Host 决定");
-    expect(rows[0]!.textContent).toContain("实现 objectives 表、objective_list 与只读时间轴接口");
+    // P1.7: natural-language sentences name the delegation.
+    expect(rows[0]!.textContent).toMatch(/Host 批准 \/ 拒绝了「实现 objectives 表、objective_list 与只读时间轴接口」的请求/);
     // A single row click pins that event and the popover stays open.
     await user.click(rows[0]!);
     expect(source.get()).toEqual({ type: "item", key: "event:5" });
@@ -548,6 +565,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const source = { get: () => null };
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
+    await expandHostEvents(user);
     const cluster = [...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
     await user.click(cluster);
     const popover = document.querySelector(".marker-popover") as HTMLElement;
@@ -571,7 +589,9 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
   it.each([{ hidden: true }, { active: false }])("removes the portalled popover when its view is hidden or inactive: %j", async change => {
     const timeline = objectiveTimelineFixture();
     const view = render(<ObjectiveTimeline {...baseProps(timeline)} />);
-    await userEvent.setup().click(document.querySelector<HTMLButtonElement>(".mk.cluster")!);
+    const hiddenUser = userEvent.setup();
+    await expandHostEvents(hiddenUser);
+    await hiddenUser.click(document.querySelector<HTMLButtonElement>(".mk.cluster")!);
     expect(document.querySelector(".marker-popover")).toBeTruthy();
     view.rerender(<ObjectiveTimeline {...baseProps(timeline, change)} />);
     expect(document.querySelector(".marker-popover")).toBeNull();
@@ -596,12 +616,14 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const onOpenItem = vi.fn();
     render(<ObjectiveTimeline {...baseProps(timeline, { onOpenItem })} />);
+    await expandHostEvents(user);
     const cluster = [...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
     await user.click(cluster);
     const rows = [...document.querySelectorAll(".marker-popover-row")] as HTMLElement[];
     await user.click(within(rows[1]!).getByRole("button", { name: /打开 Host 事件/ }));
     expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ key: "event:6", section: "execution" }));
     // Reopen and press Enter on the first row to open that event directly.
+    await expandHostEvents(user);
     await user.click([...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!);
     fireEvent.keyDown(document.querySelectorAll(".marker-popover-main")[0]!, { key: "Enter" });
     expect(onOpenItem).toHaveBeenLastCalledWith(expect.objectContaining({ key: "event:5", section: "assistance" }));
@@ -612,6 +634,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const onSelectItem = vi.fn(), onOpenItem = vi.fn();
     render(<ObjectiveTimeline {...baseProps(timeline, { onSelectItem, onOpenItem })} />);
+    await expandHostEvents(user);
     const single = item("events:4")!;
     await user.click(single);
     expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ key: "event:4", runId: "r1", section: "artifacts" }));
@@ -625,6 +648,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const timeline = objectiveTimelineFixture();
     const source = { get: () => null };
     const view = render(<Harness timeline={timeline} selectionSource={source} />);
+    await expandHostEvents(user);
     const cluster = [...document.querySelectorAll<HTMLButtonElement>(".mk.cluster")][0]!;
     await user.click(cluster);
     expect(document.querySelector(".marker-popover")).toBeTruthy();
@@ -661,7 +685,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     const helperEntry = entries.find(node => node.textContent!.includes("补充 schema 升级离线副本的验证测试"))!;
     expect(helperEntry.textContent).toContain("↳ 协助 · ");
     const helperExecution = entries.find(node => node.getAttribute("data-key") === "span:s-r3-e1")!;
-    expect(helperExecution.textContent).toContain("zcode / glm-5");
+    expect(helperExecution.textContent).toContain("glm-5 · high");
     const failedEntry = entries.find(node => node.textContent!.includes("执行失败"))!;
     expect(failedEntry.textContent).toContain("✕");
     const uncertainEntry = entries.find(node => node.getAttribute("data-key") === "span:s-r6-e")!;

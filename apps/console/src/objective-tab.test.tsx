@@ -46,7 +46,7 @@ describe("委派记录 tab views", () => {
     const f = harness();
     await screen.findByRole("heading", { name: "选择一个工作目标" });
     expect(screen.getByRole("region", { name: "工作目标列表" })).toBeTruthy();
-    expect(screen.getByText(/查看各委派的排队、执行、等待 Host 与验收时间。只读，不调用模型。/)).toBeTruthy();
+    expect(screen.getByText(/从左侧选择一个工作目标。/)).toBeTruthy();
     await waitFor(() => expect(f.api.objectives).toHaveBeenCalledTimes(1));
     expect(f.api.tasks).not.toHaveBeenCalled();
   });

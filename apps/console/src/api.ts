@@ -2,7 +2,7 @@ import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
-import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
+import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 
 export class ApiError extends Error {
   constructor(
@@ -22,16 +22,16 @@ const messages: Record<string, string> = {
   WRITER_NOT_ACTIVE: "编辑权限已失效。草稿仍然保留，需要重新取得权限。",
   STALE_GENERATION: "操作资格已失效，未提交任何变更。请刷新并核对当前负责人。",
   SHUTDOWN_UNCONFIRMED: "尚未确认前一次执行已停止，暂时不能重试。",
-  CONSOLE_READ_ONLY: READ_ONLY_ACTION_REFUSAL,
-  CONSOLE_SESSION_EXPIRED: "控制台会话已过期或 Cookie 无效。请从 Buddy 重新打开控制台；草稿仍然保留，不会自动重新取得写权限。",
+  CONSOLE_READ_ONLY: LOGIN_EXPIRED_ACTION_REFUSAL,
+  CONSOLE_SESSION_EXPIRED: "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。",
   CONSOLE_ENTRY_EXPIRED: "控制台入口票据已过期或已被使用，请重新打开入口取得新链接。",
 };
 
 /**
- * Codes that prove the current browser session may no longer write. A callback
- * receiving one of these must not retry, renew or release anything: only the
- * bounded lease expires by itself, and a fresh CLI entry is the explicit way to
- * acquire write authority again.
+ * Codes that prove the current browser session can no longer write (an
+ * expired or invalid login). A callback receiving one of these must not
+ * retry, renew or release anything: only the bounded lease expires by itself,
+ * and a fresh `buddy console` login is the explicit way to restore authority.
  */
 export const READ_ONLY_REFUSAL_CODES = ["CONSOLE_READ_ONLY", "CONSOLE_SESSION_EXPIRED"] as const;
 
@@ -73,6 +73,76 @@ export function uncertainResponse(error: unknown): boolean {
 
 export function isAbortError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+/* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
+
+export type StorageCategory = {
+  id: string;
+  label: string;
+  bytes: number;
+  reclaimableBytes: number;
+  count: number;
+  eligibleCount: number;
+  reasons: string[];
+};
+export type StorageCandidate = {
+  id: string;
+  category: string;
+  path: string;
+  bytes: number;
+  eligible: boolean;
+  reasons: string[];
+};
+export type StorageOrphanProcess = {
+  pid: number;
+  kind: string;
+  stateDir: string | null;
+  runtimeDir: string | null;
+};
+export type StoragePlan = {
+  planId: string;
+  createdAt: string;
+  expiresAt: string;
+  categories: StorageCategory[];
+  candidates: StorageCandidate[];
+  orphanProcesses: StorageOrphanProcess[];
+};
+export type StorageApplyResult = {
+  planId: string;
+  removedBytes: number;
+  removed: number;
+  skipped: number;
+  /** Per-item skip reasons the server recorded, when it reports them. */
+  skippedDetails?: { id?: string; category?: string; path?: string; reason?: string }[];
+};
+
+/** Strict shape checks for the storage plan reply; anything malformed is refused. */
+function validStoragePlan(value: unknown): value is StoragePlan {
+  const plan = value as StoragePlan | null;
+  if (!plan || typeof plan !== "object") return false;
+  if (typeof plan.planId !== "string" || !plan.planId) return false;
+  if (typeof plan.createdAt !== "string" || typeof plan.expiresAt !== "string") return false;
+  if (!Array.isArray(plan.categories) || !Array.isArray(plan.candidates) || !Array.isArray(plan.orphanProcesses)) return false;
+  return plan.categories.every(category =>
+    !!category && typeof category === "object" && typeof category.id === "string"
+    && Number.isFinite(category.bytes) && Number.isFinite(category.reclaimableBytes)
+    && Number.isFinite(category.count) && Number.isFinite(category.eligibleCount)
+    && Array.isArray(category.reasons));
+}
+
+export function parseStoragePlan(value: unknown): StoragePlan {
+  if (!validStoragePlan(value)) {
+    throw new ApiError("INVALID_RESPONSE", "存储计划响应不完整，请检查服务版本。");
+  }
+  return value as StoragePlan;
+}
+
+export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
+  const result = value as StorageApplyResult | null;
+  return !!result && typeof result === "object" && typeof result.planId === "string"
+    && Number.isFinite(result.removedBytes) && Number.isFinite(result.removed)
+    && Number.isFinite(result.skipped);
 }
 
 /**
@@ -183,8 +253,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       return data;
     },
     /** Read-only work-objective list; available to superseded sessions, no lease or model call. */
-    async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {
-      const query = new URLSearchParams();
+    async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
@@ -225,6 +294,40 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       return data;
     },
+    /**
+     * `storage_plan` (0.16.0): a private, expiring reclamation plan. It scans
+     * disk, so the panel only ever calls it on an explicit 检查占用 click —
+     * never on page entry and never from the 3-second refresh.
+     */
+    async storagePlan(csrfToken: string): Promise<StoragePlan> {
+      return parseStoragePlan(await command("storage_plan", {}, csrfToken));
+    },
+    /**
+     * `storage_apply` (0.16.0): applies one exact confirmed plan. The command
+     * identity is the caller's; a lost reply keeps it so 重试同一请求 replays
+     * the same command instead of minting a second one.
+     */
+    async storageApply(planId: string, commandId: string, csrfToken: string): Promise<StorageApplyResult> {
+      const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
+      if (!validStorageApplyResult(result)) {
+        throw new ApiError("INVALID_RESPONSE", "清理结果响应不完整；结果未知，可重试同一请求。");
+      }
+      return result;
+    },
   };
+  async function command<T = unknown>(operation: string, params: unknown, csrfToken: string): Promise<T> {
+    const data = await request("/command", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Buddy-CSRF": csrfToken,
+      },
+      body: JSON.stringify({ operation, params }),
+    }) as { ok: boolean; result: T };
+    if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
+      throw new ApiError("INVALID_RESPONSE", "操作响应不完整，提交结果尚未确认。");
+    }
+    return data.result;
+  }
 }
 export type ConsoleApi = ReturnType<typeof createApi>;

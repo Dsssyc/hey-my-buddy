@@ -16,7 +16,8 @@ import { useObjectiveList } from "./use-objective-list";
 import { useObjectiveTimeline } from "./use-objective-timeline";
 import { stopStatus, stoppableSummary, useObjectiveStop } from "./objective-stop";
 import type { AuthorityLatch } from "./console-session";
-import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
+import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
+import { displayTitle } from "./objective-display";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
@@ -103,14 +104,16 @@ function StopDialog({ summary, onConfirm, onCancel }: {
   }, [onCancel]);
   const roots = summary.counts.roots;
   const helpers = summary.counts.helpers;
+  const unaccepted = roots - summary.counts.accepted;
+  const title = displayTitle(summary.titleSource, summary.title).text;
   const scope = summary.kind === "standalone"
-    ? "将请求取消这条未归档委派及其协助任务。"
-    : `将请求取消该目标当前全部未验收委派和协助任务（${roots} 个委派中已验收 ${summary.counts.accepted} 个保留${helpers ? `，另有 ${helpers} 个协助任务` : ""}）。`;
+    ? `将停止这条历史独立委派及其协助任务。`
+    : `将停止「${title}」中尚未验收的 ${unaccepted} 个委派及其协助任务；已验收的 ${summary.counts.accepted} 个保留。停止需要等到确认，期间显示“正在停止”。`;
   return <div className="dialog-backdrop">
     <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-objective-title" aria-describedby="stop-objective-body">
       <h2 id="stop-objective-title">停止工作目标</h2>
       <p id="stop-objective-body">
-        目标：{summary.title}。{scope}服务器按记录解析完整范围，不受当前筛选或截断影响；取消以真实停止证据为准，未确认停止时显示“正在停止”或“停止未确认”。
+        {scope}{helpers ? `（涉及 ${helpers} 个协助任务）` : ""}
       </p>
       <div className="actions">
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>
@@ -137,9 +140,8 @@ export function Objectives({ snapshot, api, refresh, active = true, authority, w
         <button type="button" aria-pressed={view === "objectives"} onClick={() => setView("objectives")}
           title="按工作目标归档浏览受治理的委派树">工作目标</button>
         <button type="button" aria-pressed={view === "records"} onClick={() => setView("records")}
-          title="未纳入工作目标的历史执行记录，包括命令与外部记录">全部执行记录</button>
+          title="命令与外部记录在这里">全部执行记录</button>
       </div>
-      <span className="small muted">工作目标只收录受治理委派；命令与外部记录保留在“全部执行记录”。</span>
     </div>
     <div className="history-view" hidden={view !== "objectives"}>
       <ObjectivesWorkspace snapshot={snapshot} api={api} refresh={refresh}
@@ -273,9 +275,10 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     setDetail({ runId: item.runId, section: item.section, locator: item.locator, key: item.key });
   }
   function openRun(runId: string) {
-    const row = timeline.timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
+    // Opening from a row/card carries no span fact: the detail shows no
+    // 来自时间轴 label then (0.16 T4).
     setSelection({ type: "run", runId });
-    setDetail({ runId, section: "overview", key: `row:${runId}`, locator: row ? `委派 · ${row.title}` : undefined });
+    setDetail({ runId, section: "overview", key: `row:${runId}` });
   }
   function backToTimeline() {
     setDetail(null);
@@ -339,7 +342,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     stopControl = <span className="stop-control">
       {showButton && <button type="button" className="button small-button danger"
         disabled={!stop.writable || stopping}
-        title={!stop.writable ? READ_ONLY_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收委派及协助任务（需确认）。"}
+        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收委派及协助任务（需确认）。"}
         onClick={() => stop.requestStop(selectedSummary)}>停止目标</button>}
       {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
         title={stopState.detail}>{stopState.label}</span>}
@@ -387,6 +390,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     openedRunId={detail?.runId ?? null}
     selection={selection}
     headerActions={stopControl}
+    profiles={snapshot.profiles}
     expandedGapIds={expanded}
     onToggleGap={toggleGap}
     onSetExpanded={setExpanded}
@@ -427,7 +431,7 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
       </div>
       : <div className="detail-placeholder">
         <h2>选择一个工作目标</h2>
-        <p>查看各委派的排队、执行、等待 Host 与验收时间。只读，不调用模型。</p>
+        <p>从左侧选择一个工作目标。</p>
       </div>}
   </aside>;
   return <>

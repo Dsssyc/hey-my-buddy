@@ -103,7 +103,7 @@ describe("console interactions", () => {
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
     expect(api.command).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "待验收" }));
+    await user.click(screen.getByRole("button", { name: "等待验收" }));
     expect(
       await screen.findByRole("heading", { name: "没有匹配的委派" }),
     ).toBeTruthy();
@@ -184,7 +184,7 @@ describe("console interactions", () => {
     expect(screen.queryByRole("checkbox", { name: "自动采纳常规整理结果" })).toBeNull();
     expect(screen.queryByText(/整理经验/)).toBeNull();
     // Turning the switch on only creates a local draft shared across pages.
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await user.click(await screen.findByRole("button", { name: /Flash 决策/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
@@ -195,7 +195,7 @@ describe("console interactions", () => {
     // The automatic assessment is program-owned and stays read-only in edit mode.
     expect(screen.queryByLabelText("当前评价")).toBeNull();
     expect(screen.getAllByText("待积累实际证据").length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(await screen.findByRole("button", { name: "放弃修改" }));
     expect(api.command).not.toHaveBeenCalled();
   });

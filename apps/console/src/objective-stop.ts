@@ -5,7 +5,7 @@ import type { Snapshot } from "./types";
 import type { ObjectiveStopResult, ObjectiveSummary, ObjectiveTimeline } from "./objective-types";
 import { errorOfStopReply } from "./objective-stop-reply";
 import type { AuthorityLatch } from "./console-session";
-import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
+import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 
 /**
  * Objective-level stop (0.15.1 U4): the only write this view still offers.
@@ -196,7 +196,7 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
       setEntries(previous => new Map(previous).set(objectiveId, {
         // Empty on purpose: this request was never dispatched, and the empty
         // identity is never reused once the writer returns.
-        commandId: "", phase: "refused", result: existing?.result ?? null, error: READ_ONLY_ACTION_REFUSAL,
+        commandId: "", phase: "refused", result: existing?.result ?? null, error: LOGIN_EXPIRED_ACTION_REFUSAL,
       }));
       return;
     }

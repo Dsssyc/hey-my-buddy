@@ -10,8 +10,8 @@ import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery, WriterGrant } 
 import type { Workflow } from "./workflow-types";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
-const actionRefusal = /新窗口已取得写权限，此页面为只读：这项操作不会提交/;
-const saveRefusal = /此页面为只读：保存已停用/;
+const actionRefusal = /登录已失效，这项操作不会提交/;
+const saveRefusal = /登录已失效，保存已暂停/;
 
 /** Two families and three execution configurations, all available. */
 function catalog(): Profile[] {
@@ -211,7 +211,7 @@ describe("console session descriptor validation", () => {
     const api = apiFor(envelope(undefined, false));
     render(<App suppliedApi={api} />);
     expect(await screen.findByRole("button", { name: "重新连接" })).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "编辑模式" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "编辑设置" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存更改" })).toBeNull();
   });
 
@@ -247,14 +247,15 @@ describe("console session descriptor validation", () => {
     expect(latch.writable(writer)).toBe(false);
   });
 
-  it("maps CONSOLE_READ_ONLY and CONSOLE_SESSION_EXPIRED to actionable copy", () => {
+  it("maps CONSOLE_READ_ONLY and CONSOLE_SESSION_EXPIRED to login-expired copy (0.16)", () => {
     const readOnly = errorText(new ApiError("CONSOLE_READ_ONLY", "server raw text"));
-    expect(readOnly).toContain("新窗口已取得写权限");
+    expect(readOnly).toContain("登录已失效");
     expect(readOnly).toContain("草稿");
     expect(readOnly).not.toContain("server raw text");
+    expect(readOnly).not.toContain("新窗口");
     const expired = errorText(new ApiError("CONSOLE_SESSION_EXPIRED", "server raw text"));
-    expect(expired).toContain("控制台会话已过期");
-    expect(expired).toContain("不会自动重新取得写权限");
+    expect(expired).toContain("登录已失效");
+    expect(expired).toContain("本页会自动恢复");
     expect(expired).not.toContain("server raw text");
     expect(isReadOnlyRefusal(new ApiError("CONSOLE_READ_ONLY", ""))).toBe(true);
     expect(isReadOnlyRefusal(new ApiError("CONSOLE_SESSION_EXPIRED", ""))).toBe(true);
@@ -263,15 +264,18 @@ describe("console session descriptor validation", () => {
   });
 });
 
-describe("superseded console session", () => {
-  it("keeps a dirty draft, stops publish and renew, and stays readable after handoff", async () => {
+describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
+  it("keeps a dirty draft local, stops publish and renew, and stays readable without any takeover copy", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
+    // No single-writer badge or banner exists anywhere (0.16 multi-window).
     expect(screen.queryByText("只读会话")).toBeNull();
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    expect(screen.queryByText(bannerNotice)).toBeNull();
+    expect(document.querySelector(".readonly-banner")).toBeNull();
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     const opinion = await screen.findByLabelText("我的意见");
@@ -279,22 +283,18 @@ describe("superseded console session", () => {
     await user.type(opinion, "未保存的本地草稿");
     expect(screen.getByText(/编辑中 · 未保存 · 1 个配置/)).toBeTruthy();
 
-    // A newer window redeemed its entry: the next authenticated poll says so.
+    // The cookie expires: the next authenticated poll reports a session that
+    // can no longer write. This is the security bottom line, not a handoff.
     f.setSession(false);
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-
-    const banner = await screen.findByText("此页面已由新窗口接管写权限");
-    expect(banner.closest(".readonly-banner")).not.toBeNull();
-    expect(screen.getByText(bannerNotice)).toBeTruthy();
-    expect(screen.getByText("只读会话")).toBeTruthy();
-    // Draft value survives, stays copyable, and is no longer editable.
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存更改" }).getAttribute("aria-disabled")).toBe("true"));
+    expect(screen.queryByText("只读会话")).toBeNull();
+    expect(screen.queryByText(bannerNotice)).toBeNull();
+    expect(document.querySelector(".readonly-banner")).toBeNull();
+    // Draft value survives and stays copyable.
     const retained = screen.getByLabelText("我的意见") as HTMLTextAreaElement;
     expect(retained.value).toBe("未保存的本地草稿");
-    expect(retained.readOnly).toBe(true);
     expect(retained.disabled).toBe(false);
-    expect((await screen.findAllByText(/只读会话：草稿仍然可见、可复制/)).length).toBeGreaterThan(0);
-    // The state switch still reports the unsaved draft instead of discarding it.
-    expect(screen.getByText(/编辑中 · 未保存 · 1 个配置/)).toBeTruthy();
     // Save is refused locally without a publish, a begin or a renew.
     const save = screen.getByRole("button", { name: "保存更改" });
     expect(save.getAttribute("aria-disabled")).toBe("true");
@@ -304,36 +304,34 @@ describe("superseded console session", () => {
     expect((await screen.findAllByText(saveRefusal)).length).toBeGreaterThan(0);
     expect(f.operations).toEqual([]);
     expect(f.published).toHaveLength(0);
-    // Navigation and filters keep working, and no control reacquires authority.
-    const controls = within(screen.getByText("此页面已由新窗口接管写权限").closest(".readonly-banner") as HTMLElement);
-    expect(controls.queryByRole("button")).toBeNull();
-    expect(controls.queryByRole("link")).toBeNull();
+    // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     expect(screen.getByRole("heading", { name: "选择一项委派" })).toBeTruthy();
     expect(f.operations).toEqual([]);
-    // Refreshing again never regains rights: only a fresh CLI entry can.
+    // Refreshing again never regains rights without a new login.
+    // The edit cluster only exists on the settings tabs (P1.2), so return there.
+    await user.click(screen.getByRole("link", { name: "模型卡片" }));
+    await screen.findByRole("heading", { name: "模型 2" });
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    expect(await screen.findByText(bannerNotice)).toBeTruthy();
-    expect(screen.getByText("只读会话")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "保存更改" }).getAttribute("aria-disabled")).toBe("true");
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存更改" }).getAttribute("aria-disabled")).toBe("true"));
     expect(f.operations).toEqual([]);
   });
 
-  it("refuses a new draft, discovery and task mutations once the session is read-only", async () => {
+  it("refuses a new draft, discovery and task mutations once the session is invalid", async () => {
     const record = goal("readonly-task", "只读普通任务", { workflow: undefined });
     const f = fixture({ readOnly: true, records: [record] });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    expect((await screen.findByText(bannerNotice))).toBeTruthy();
+    expect(screen.queryByText(bannerNotice)).toBeNull();
     // No new draft entry: the switch explains instead of opening one.
     const guardsBefore = document.querySelectorAll(".guard-banner").length;
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await waitFor(() => expect(document.querySelectorAll(".guard-banner").length).toBeGreaterThan(guardsBefore));
     expect(await screen.findByText(actionRefusal)).toBeTruthy();
-    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByLabelText("我的意见")).toBeNull();
     const discover = screen.getByRole("button", { name: "发现模型" });
     expect(discover.getAttribute("aria-disabled")).toBe("true");
@@ -344,13 +342,103 @@ describe("superseded console session", () => {
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
-    await screen.findByRole("heading", { name: "只读普通任务" });
-    // 0.15.1 U4: the browser exposes no task mutation at all, so a read-only
+    await screen.findByRole("heading", { name: /只读普通任务/ });
+    // 0.15.1 U4: the browser exposes no task mutation at all, so an invalid
     // session has nothing to refuse — the detail simply stays read-only.
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     // Discovery, drafting and task control never reached the board.
     expect(f.operations).toEqual([]);
+  });
+
+  it("keeps an unconfirmed publication after the login lapses and never replays it", async () => {
+    const f = fixture({ script: { publish: "network" } });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
+    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "结果不明");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    // The lost publish reply is staged for a deliberate retry with the same id.
+    expect(await screen.findByText(/保存结果未确认/)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
+    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
+    const commandId = f.published[0].commandId;
+
+    // The next poll reports the invalid login. The staged payload must not be
+    // replayed or unfrozen: its command ID and unknown-result status persist.
+    f.setSession(false);
+    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true"));
+    expect(screen.queryByText(bannerNotice)).toBeNull();
+    expect(await screen.findByText(/保存结果未确认：可能已经生效/)).toBeTruthy();
+    const retained = screen.getByLabelText("我的意见") as HTMLTextAreaElement;
+    expect(retained.value).toBe("原人工意见结果不明");
+    expect(retained.disabled).toBe(false);
+    // A local retry is blocked and nothing new is dispatched.
+    const operations = [...f.operations];
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
+    await new Promise(resolve => setTimeout(resolve, 900));
+    expect(f.operations).toEqual(operations);
+    expect(f.published).toHaveLength(1);
+    expect(f.published[0].commandId).toBe(commandId);
+  });
+
+  it("keeps an ambiguous publish unknown when its retry is refused before the next poll", async () => {
+    const f = fixture({ script: { publish: ["network", "read-only"] } });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
+    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "提交结果不明");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    expect(await screen.findByText(/保存结果未确认/)).toBeTruthy();
+    const commandId = f.published[0].commandId;
+
+    // The retry reaches the board before any poll reports the invalid login.
+    // The refusal proves only that this request was denied: the earlier same-ID
+    // attempt may still have committed.
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
+    expect((await screen.findAllByText(/保存结果未确认：可能已经生效/)).length).toBeGreaterThan(0);
+    expect(f.published).toHaveLength(2);
+    expect(f.published[1].commandId).toBe(commandId);
+    expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
+    // The snapshot still says canWrite: true, but the refusal latched this
+    // session: no takeover copy appears and a later retry is never sent.
+    expect(screen.queryByText(bannerNotice)).toBeNull();
+    const operations = [...f.operations];
+    await user.click(screen.getAllByRole("button", { name: "重试同一保存" })[0]!);
+    await new Promise(resolve => setTimeout(resolve, 900));
+    expect(f.operations).toEqual(operations);
+    expect(f.published).toHaveLength(2);
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见提交结果不明");
+  });
+
+  it("treats a first publish that is definitely refused as a resolved rejection", async () => {
+    const f = fixture({ script: { publish: "read-only" } });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 2" });
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
+    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "首次被拒");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    expect(await screen.findByText(actionRefusal)).toBeTruthy();
+    // No earlier attempt exists, so this is not an unknown result and the
+    // retained draft is not frozen behind a confirmation state.
+    expect(screen.queryByText(/保存结果未确认：可能已经生效/)).toBeNull();
+    expect(screen.getByRole("button", { name: "保存更改" })).toBeTruthy();
+    await new Promise(resolve => setTimeout(resolve, 900));
+    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
+    expect(f.published).toHaveLength(1);
   });
 
   it("preserves the draft when an in-flight save is refused with CONSOLE_READ_ONLY", async () => {
@@ -359,7 +447,7 @@ describe("superseded console session", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "被拒绝的保存");
@@ -378,7 +466,7 @@ describe("superseded console session", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "排队后被接管");
@@ -393,107 +481,13 @@ describe("superseded console session", () => {
     expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
   });
 
-  it("keeps an unconfirmed publication after handoff and never replays it", async () => {
-    const f = fixture({ script: { publish: "network" } });
-    const user = userEvent.setup();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
-    await user.type(await screen.findByLabelText("我的意见"), "结果不明");
-    await user.click(screen.getByRole("button", { name: "保存更改" }));
-    // The lost publish reply is staged for a deliberate confirmation.
-    expect(await screen.findByText(/尚未确认保存结果/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "确认保存结果" })).toBeTruthy();
-    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
-    const commandId = f.published[0].commandId;
-
-    // The next poll reports the handoff. The staged payload must not be replayed
-    // or unfrozen: its command ID and unknown-result status persist.
-    f.setSession(false);
-    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
-    await screen.findByText(bannerNotice);
-    expect(screen.getByText(/本页有结果未确认的提交/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "确认保存结果" })).toBeTruthy();
-    const retained = screen.getByLabelText("我的意见") as HTMLTextAreaElement;
-    expect(retained.value).toBe("原人工意见结果不明");
-    expect(retained.readOnly).toBe(true);
-    expect(retained.disabled).toBe(false);
-    // A local retry is blocked and nothing new is dispatched.
-    const operations = [...f.operations];
-    await user.click(screen.getByRole("button", { name: "确认保存结果" }));
-    expect((await screen.findAllByText(/此前提交的保存结果尚未确认/)).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "确认保存结果" })).toBeTruthy();
-    await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations).toEqual(operations);
-    expect(f.published).toHaveLength(1);
-    expect(f.published[0].commandId).toBe(commandId);
-  });
-
-  it("keeps an ambiguous publish unknown when its retry is refused before the next poll", async () => {
-    const f = fixture({ script: { publish: ["network", "read-only"] } });
-    const user = userEvent.setup();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
-    await user.type(await screen.findByLabelText("我的意见"), "提交结果不明");
-    await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect(await screen.findByText(/尚未确认保存结果/)).toBeTruthy();
-    const commandId = f.published[0].commandId;
-
-    // The retry reaches the board before any poll reports the handoff. The
-    // refusal proves only that this request was denied: the earlier same-ID
-    // attempt may still have committed.
-    await user.click(screen.getByRole("button", { name: "确认保存结果" }));
-    expect((await screen.findAllByText(/此前提交的保存结果尚未确认/)).length).toBeGreaterThan(0);
-    expect(f.published).toHaveLength(2);
-    expect(f.published[1].commandId).toBe(commandId);
-    expect(screen.getByRole("button", { name: "确认保存结果" })).toBeTruthy();
-    // The snapshot still says canWrite: true, but the refusal latched this
-    // session: the page reads as read-only and a later retry is never sent.
-    expect(await screen.findByText(bannerNotice)).toBeTruthy();
-    const operations = [...f.operations];
-    await user.click(screen.getByRole("button", { name: "确认保存结果" }));
-    await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations).toEqual(operations);
-    expect(f.published).toHaveLength(2);
-    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见提交结果不明");
-  });
-
-  it("treats a first publish that is definitely refused as a resolved rejection", async () => {
-    const f = fixture({ script: { publish: "read-only" } });
-    const user = userEvent.setup();
-    window.location.hash = "#models";
-    render(<App suppliedApi={f.api} />);
-    await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
-    await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
-    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
-    await user.type(await screen.findByLabelText("我的意见"), "首次被拒");
-    await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect(await screen.findByText(actionRefusal)).toBeTruthy();
-    // No earlier attempt exists, so this is not an unknown result and the
-    // retained draft is not frozen behind a confirmation state.
-    expect(screen.queryByText(/此前提交的保存结果尚未确认/)).toBeNull();
-    expect(screen.getByRole("button", { name: "保存更改" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "确认保存结果" })).toBeNull();
-    await new Promise(resolve => setTimeout(resolve, 900));
-    expect(f.operations).toEqual(["evaluation_write_begin", "user_policy_publish"]);
-    expect(f.published).toHaveLength(1);
-  });
-
-  it("stops a queued wait on a polled read-only snapshot without sending another renew", async () => {
+  it("stops a queued wait on a polled invalid snapshot without sending another renew", async () => {
     const f = fixture({ script: { begin: "queued" }, queuedForever: true });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "排队后只读");
@@ -504,19 +498,19 @@ describe("superseded console session", () => {
         await act(async () => { await Promise.resolve(); });
       }
       expect(screen.getByRole("button", { name: "取消等待" })).toBeTruthy();
-      // The authenticated poll reports the handoff before the first queue poll.
+      // The authenticated poll reports the invalid login before the first queue poll.
       f.setSession(false);
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "刷新工作台" })); });
-      for (let i = 0; i < 50 && !screen.queryByText(bannerNotice); i++) {
+      for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
         await act(async () => { await Promise.resolve(); });
       }
-      expect(screen.getByText(bannerNotice)).toBeTruthy();
       await act(async () => { await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 2); });
       // A polled canWrite:false stops the wait without any server refusal, renew
-      // or release attempt, and the draft stays.
+      // or release attempt, and the draft stays. No takeover copy appears.
       expect(f.operations).not.toContain("evaluation_write_renew");
       expect(f.operations).not.toContain("evaluation_write_abort");
       expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
+      expect(screen.queryByText(bannerNotice)).toBeNull();
       expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见排队后只读");
     } finally {
       vi.useRealTimers();
@@ -551,10 +545,10 @@ describe("superseded console session", () => {
     await screen.findByRole("button", { name: /普通待执行任务/ });
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
-    await screen.findByRole("heading", { name: "普通待执行任务" });
+    await screen.findByRole("heading", { name: /普通待执行任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
-    await screen.findByRole("heading", { name: "可重试任务" });
+    await screen.findByRole("heading", { name: /可重试任务/ });
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /待协助目标/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
@@ -581,7 +575,7 @@ describe("superseded console session", () => {
     expect(within(writerDetail).queryByRole("group", { name: "用户决定" })).toBeNull();
     expect(within(writerDetail).queryByRole("group", { name: "手工接续" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
-    await screen.findByRole("heading", { name: "可重试任务" });
+    await screen.findByRole("heading", { name: /可重试任务/ });
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
   });
@@ -630,7 +624,7 @@ describe("superseded console session", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "断线草稿");
@@ -639,7 +633,7 @@ describe("superseded console session", () => {
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
-    await screen.findByRole("heading", { name: "断线可取消任务" });
+    await screen.findByRole("heading", { name: /断线可取消任务/ });
     // The browser never offered task control in the first place (0.15.1 U4).
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /断线待协助目标/ }));
@@ -667,7 +661,7 @@ describe("superseded console session", () => {
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
-    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("switch", { name: "编辑设置" }));
     await user.click(screen.getByRole("button", { name: /^deepseek-flash/ }));
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "断线草稿");

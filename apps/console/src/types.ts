@@ -109,9 +109,12 @@ export type Task = {
     ownerGeneration: number;
     revision: number;
     requestSummary?: string;
+    /** Host-authored explicit delegation title; null or absent means fallback. */
+    title?: string | null;
     /**
      * Read-only newest concluded own turn outcome summary (ADR-012 X title
      * fallback); null or absent means no usable result yet, never a guess.
+     * Never a title under the 0.16 presentation contract.
      */
     resultSummary?: string | null;
   };

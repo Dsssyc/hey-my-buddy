@@ -1,5 +1,8 @@
 import type { Task } from "./types";
 
+/** Where a delegation title came from; the Worker result summary is never one. */
+export type TitleSource = "title" | "task" | "none";
+
 export function excerpt(text: string, limit = 120): string {
   let result = "", count = 0;
   for (const character of text.trim()) {
@@ -14,16 +17,29 @@ function normalizeDisplay(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
+  title: "Host 标题",
+  task: "取自任务首行",
+  none: "未命名委派",
+};
+export const UNTITLED_DELEGATION = "未命名委派";
+/** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
+const TASK_LINE_CHARS = 40;
+
 /**
- * ADR-012 X title fallback for delegation rows and headings: the run's own
- * newest concluded result summary wins, then the first task line, then an
- * explicit unnamed marker. A request, helper or route summary is never read
- * here, and the raw task text stays available in the detail view.
+ * The one delegation title rule (0.16 0.1): explicit workflow.title, then the
+ * first nonempty task line labelled 取自任务首行, then 未命名委派. A Worker
+ * resultSummary is never a title; callers show it only as a “结果” line. The
+ * raw task text stays available in the detail view.
  */
-export function taskTitle(task: Task): string {
-  const summary = task.workflow?.resultSummary;
-  const firstLine = typeof task.task === "string" ? task.task.trim().split("\n", 1)[0] ?? "" : "";
-  return normalizeDisplay(typeof summary === "string" ? summary : "") || normalizeDisplay(firstLine) || "未命名委派";
+export function taskTitle(task: Task): { text: string; source: TitleSource } {
+  const explicit = normalizeDisplay(typeof task.workflow?.title === "string" ? task.workflow.title : "");
+  if (explicit) return { text: explicit, source: "title" };
+  const firstLine = typeof task.task === "string"
+    ? normalizeDisplay(task.task.trim().split("\n", 1)[0] ?? "")
+    : "";
+  if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), source: "task" };
+  return { text: UNTITLED_DELEGATION, source: "none" };
 }
 
 export function needsReview(task: Task): boolean {

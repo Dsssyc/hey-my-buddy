@@ -8,7 +8,7 @@ import {
 import type { Dispatch, SetStateAction } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, isReadOnlyRefusal, uncertainResponse } from "./api";
-import { READ_ONLY_ACTION_REFUSAL, READ_ONLY_SAVE_REFUSAL, UNRESOLVED_PUBLICATION_HANDOFF, createAuthorityLatch } from "./console-session";
+import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SAVE_NOTE, createAuthorityLatch } from "./console-session";
 import type { AuthorityLatch } from "./console-session";
 import {
   changedProfileIds,
@@ -275,7 +275,7 @@ export function useEditor(
    * definitely not committed.
    */
   function readOnlyRefusalText(ambiguous: boolean): string {
-    return ambiguous ? UNRESOLVED_PUBLICATION_HANDOFF : READ_ONLY_SAVE_REFUSAL;
+    return ambiguous ? UNRESOLVED_SAVE_NOTE : LOGIN_EXPIRED_SAVE_REFUSAL;
   }
 
   // Keep a *known* writer intent alive. Once an outcome is unknown the page stops
@@ -307,17 +307,17 @@ export function useEditor(
           loseAuthority();
           dropGrantMirror();
           setUncertain(hasUnknownIntent());
-          setError(hasUnknownIntent() ? UNRESOLVED_PUBLICATION_HANDOFF : errorText(failure));
+          setError(hasUnknownIntent() ? UNRESOLVED_SAVE_NOTE : errorText(failure));
         } else if (isTerminalGrant(failure)) {
           // A dead lease proves nothing about an earlier ambiguous publication:
           // the unknown result and its command identity stay retained.
           dropGrantMirror();
           if (hasUnknownIntent()) {
             setUncertain(true);
-            setNotice("编辑资格已过期；此前未确认的提交仍保留在本页，请在新窗口核对最新记录。");
+            setNotice("保存租约已过期；此前未确认的提交仍保留在本页，可重试同一保存核对结果。");
           } else {
             setUncertain(false);
-            setNotice("编辑资格已过期；再次保存会重新申请，不会重复发布。");
+            setNotice("保存租约已过期；再次保存会重新申请，不会重复发布。");
           }
         } else if (uncertainResponse(failure)) {
           setUncertain(true);
@@ -369,12 +369,12 @@ export function useEditor(
   function enter() {
     setBlocked("");
     if (busy) {
-      setBlocked("正在保存或读取目录。请等待结束后再进入编辑模式。");
+      setBlocked("正在保存或读取目录。请等待结束后再开启编辑设置。");
       return;
     }
     if (!mayWrite()) {
       // A read-only page never opens a new draft; an existing draft stays as is.
-      setBlocked(READ_ONLY_ACTION_REFUSAL);
+      setBlocked(LOGIN_EXPIRED_ACTION_REFUSAL);
       return;
     }
     setNotice("");
@@ -402,7 +402,7 @@ export function useEditor(
         // ambiguous to retain.
         forgetBegin();
         setUncertain(false);
-        setError(READ_ONLY_SAVE_REFUSAL);
+        setError(LOGIN_EXPIRED_SAVE_REFUSAL);
       } else {
         // A previously dispatched request still has no reply. Its request ID and
         // unknown-result status are kept for the new writable window.
@@ -429,7 +429,7 @@ export function useEditor(
           // The refusal proves only that this retry was denied; the earlier
           // attempt with the same request ID may already have created a grant.
           setUncertain(true);
-          setError(UNRESOLVED_PUBLICATION_HANDOFF);
+          setError(UNRESOLVED_SAVE_NOTE);
         } else {
           // A definitely rejected first request: nothing was created.
           forgetBegin();
@@ -540,8 +540,8 @@ export function useEditor(
       // result; no release is claimed either way.
       dropGrantMirror();
       setNotice(hasUnknownIntent()
-        ? "当前页面为只读：不会发送编辑资格或保存操作；此前提交结果未确认的记录仍保留在本页，请在新窗口核对。"
-        : "当前页面为只读：未发送编辑资格操作；未完成的短租约到期后自动失效。");
+        ? "登录已失效：不会发送保存或租约操作；此前提交结果未确认的记录仍保留在本页，重新登录后可核对。"
+        : "登录已失效：未发送保存租约操作；未完成的短租约到期后自动失效。");
       return false;
     }
     if (!(await flushUnresolvedAbort())) return false;
@@ -562,12 +562,12 @@ export function useEditor(
     setBlocked("");
     if (busy) {
       setBlocked(waiting
-        ? "正在等待编辑资格。请先取消等待，或等待保存结束。"
+        ? "正在等待其他保存完成。请先取消等待，或等待保存结束。"
         : "正在保存。请等待保存结束；结果未确认前不会丢弃草稿。");
       return;
     }
     if (confirming) {
-      setBlocked("保存结果尚未确认。请先点击“确认保存结果”，再决定是否退出编辑模式。");
+      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再决定是否退出编辑设置。");
       return;
     }
     if (!dirty) {
@@ -665,8 +665,8 @@ export function useEditor(
     cancelRequested.current = false;
     setWaiting(true);
     setNotice(owner.queuePosition && owner.queuePosition > 1
-      ? `正在等待编辑资格（前面还有 ${owner.queuePosition - 1} 位）…`
-      : "正在等待编辑资格…");
+      ? `正在等待其他保存完成（前面还有 ${owner.queuePosition - 1} 位）…`
+      : "正在等待其他保存完成…");
     const deadline = Date.now() + QUEUE_LIMIT_MS;
     let current = owner;
     try {
@@ -684,10 +684,10 @@ export function useEditor(
           setGrant(null);
           if (released) {
             setUncertain(false);
-            setError("等待编辑资格超时，已释放排队中的编辑资格。草稿保持不变，可以再次保存。");
+            setError("等待其他保存超时，已释放排队中的保存资格。草稿保持不变，可以再次保存。");
           } else {
             setUncertain(true);
-            setError("等待编辑资格超时，且未能确认释放结果；草稿保持不变，可以再次保存。");
+            setError("等待其他保存超时，且未能确认释放结果；草稿保持不变，可以再次保存。");
           }
           return null;
         }
@@ -777,13 +777,13 @@ export function useEditor(
         // automatic replay, release or new identity.
         setUncertain(true);
         setConfirming(true);
-        setError(UNRESOLVED_PUBLICATION_HANDOFF);
+        setError(UNRESOLVED_SAVE_NOTE);
       } else {
         // Never dispatched: an unsent intent is not an unknown result.
         if (staged) forgetPublication();
         setUncertain(hasUnknownIntent());
         setConfirming(false);
-        setError(READ_ONLY_SAVE_REFUSAL);
+        setError(LOGIN_EXPIRED_SAVE_REFUSAL);
       }
       return;
     }
@@ -811,7 +811,7 @@ export function useEditor(
           // staged payload, its identity and its unknown-result status.
           setUncertain(true);
           setConfirming(true);
-          setError(UNRESOLVED_PUBLICATION_HANDOFF);
+          setError(UNRESOLVED_SAVE_NOTE);
           return;
         }
         // A first request that was definitely refused: nothing committed, so
@@ -829,7 +829,7 @@ export function useEditor(
         saveAmbiguous.current = true;
         setUncertain(true);
         setConfirming(true);
-        setError("尚未确认保存结果。再次点击“确认保存结果”会复用同一请求，不会重复发布；草稿保持原样。");
+        setError("保存结果未确认：可能已经生效。草稿和提交标识都保留；重试同一保存会复用同一请求，不会重复发布。");
         return;
       }
       forgetPublication();
@@ -848,7 +848,7 @@ export function useEditor(
       if (!released) setUncertain(true);
       if (isRevisionConflict(failure)) {
         await refresh();
-        setError("共享评价表已发布新版本，你的草稿仍保留。请选择重新加载最新版本，或放弃修改。");
+        setError("设置已在别处更新，你的草稿仍保留。请选择重新加载最新版本，或放弃修改。");
         return;
       }
       setError(errorText(failure));
@@ -869,14 +869,14 @@ export function useEditor(
         // retry cannot resolve it from a read-only page.
         setUncertain(true);
         setConfirming(true);
-        setBlocked(UNRESOLVED_PUBLICATION_HANDOFF);
+        setBlocked(UNRESOLVED_SAVE_NOTE);
       } else {
         // An unsent payload is not an unknown result; the draft itself stays.
         if (pendingSave.current) forgetPublication();
         const unknown = hasUnknownIntent();
         setUncertain(unknown);
         setConfirming(false);
-        setBlocked(unknown ? UNRESOLVED_PUBLICATION_HANDOFF : READ_ONLY_SAVE_REFUSAL);
+        setBlocked(unknown ? UNRESOLVED_SAVE_NOTE : LOGIN_EXPIRED_SAVE_REFUSAL);
       }
       return;
     }
@@ -910,7 +910,7 @@ export function useEditor(
         return;
       }
       if (snapshot.tableRevision !== current.tableRevision) {
-        setError(`共享评价表已发布 V${snapshot.tableRevision}，你的草稿基于 V${current.tableRevision}。草稿仍保留：请选择重新加载最新版本，或放弃修改。`);
+        setError(`设置已在别处更新，你的草稿仍保留。请选择重新加载最新版本，或放弃修改。`);
         return;
       }
       const owner = await acquire(current);
@@ -934,11 +934,11 @@ export function useEditor(
 
   async function discard() {
     if (busy) {
-      setBlocked(waiting ? "正在等待编辑资格，请先取消等待。" : "正在保存，请等待结果；草稿不会被静默丢弃。");
+      setBlocked(waiting ? "正在等待其他保存完成，请先取消等待。" : "正在保存，请等待结果；草稿不会被静默丢弃。");
       return;
     }
     if (confirming) {
-      setBlocked("保存结果尚未确认。请先确认保存结果，再决定是否放弃草稿。");
+      setBlocked("保存结果尚未确认。请先重试同一保存或核对结果，再决定是否放弃草稿。");
       return;
     }
     setExitPrompt(false);
