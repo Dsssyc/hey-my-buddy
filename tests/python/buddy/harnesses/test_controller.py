@@ -471,7 +471,7 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
         directory.mkdir(mode=0o700)
         paths = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
         context = SimpleNamespace(directory=directory, environment={}, log_paths=lambda: paths,
-                                  timeout_seconds=None)
+                                  timeout_seconds=None, turn_input=None)
         trace = []
         opened = []
         original_open_logs = controller.open_logs

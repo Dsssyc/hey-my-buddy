@@ -10,6 +10,7 @@ from ...errors import BoardError
 _records = ContextVar('harness_records', default=None)
 _environment = ContextVar('harness_environment', default=None)
 RECORD_FILE = 'HMB_HARNESS_RECORD_FILE'
+LEAD_LAUNCHER = 'HMB_LEAD_LAUNCHER'
 
 
 def environment_for(environment=None):
@@ -57,15 +58,15 @@ def native_environment(environment, *, harness):
 
 
 def worker_launcher_environment(environment):
-    """Give an admitted Worker turn's launcher its board and file credential."""
-    if 'HMB_AGENT_CREDENTIAL_FILE' not in environment:
+    """Give a Lead turn's native launcher its board and file credential."""
+    if environment.get(LEAD_LAUNCHER) != '1':
         return {}
     keys = ('HMB_STATE_DIR', 'HMB_AGENT_CREDENTIAL_FILE', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME',
             'HMB_RUNTIME_IDENTITY', 'HMB_DEV_SOURCE')
     return {key: environment[key] for key in keys if key in environment}
 
 
-def controller_environment(directory, environment=None, *, read_only=False):
+def controller_environment(directory, environment=None, *, read_only=False, turn_input=None):
     """Only trusted Python controllers receive the private command selection."""
     source = (_environment.get() or os.environ) if environment is None else environment
     from .discovery import native_environment
@@ -81,6 +82,8 @@ def controller_environment(directory, environment=None, *, read_only=False):
         for key in ('HMB_AGENT_CREDENTIAL', 'HMB_AGENT_CREDENTIAL_FILE', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID'):
             if key in source:
                 env[key] = source[key]
+    if turn_input is not None and turn_input['context'].get('delegationAuthority') is True:
+        env[LEAD_LAUNCHER] = '1'
     if source.get('HMB_DEV_SOURCE') == '1':
         for key in ('HMB_DEV_SOURCE', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI',
                     'HMB_NODE', 'HMB_CODEX_FIXTURE_CASE', 'HMB_CODEX_FIXTURE_STATE',

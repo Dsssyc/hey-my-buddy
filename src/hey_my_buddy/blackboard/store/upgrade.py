@@ -170,6 +170,7 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', _attempt)
             _rebuild(connection, 'workflow_runs', _run)
+            _rebuild(connection, 'agent_credentials', lambda row: row)
             ddl, indexes = _fresh_ddl('workflow_lead_tasks')
             connection.execute(ddl)
             for index in indexes:

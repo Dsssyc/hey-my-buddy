@@ -1,5 +1,4 @@
 """Lead credentials extend the existing operation and target boundaries."""
-import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
@@ -103,9 +102,6 @@ class LeadOwnedTests(WorkflowTestCase):
                 board.call(operation, {"runId": submitted["runId"], **submitted["control"],
                                        "credential": claim["agentCredential"]})
             self.assertEqual(caught.exception.code, "FORBIDDEN")
-        with board.store.db.read() as db:
-            scopes = json.loads(db.execute("SELECT scopes_json FROM agent_credentials").fetchone()[0])
-            self.assertEqual(set(scopes), workflow.AGENT_OPERATIONS)
 
     def test_foreign_host_other_lead_and_helper_targets_are_denied_for_every_selector(self):
         board = self.board(max_concurrent=4)
@@ -134,7 +130,6 @@ class LeadOwnedTests(WorkflowTestCase):
                              {"requestId": view["activeRequest"]["requestId"] if operation == "workflow_decide" else view["requestId"]},
                              {"attemptId": attempt["attempt"]["attemptId"]}, {"messageId": message["messageId"]},
                              {"runId": owned["runId"], "taskId": view["runId"]},
-                             {"runId": owned["runId"], "targetRunId": view["runId"]},
                              {"runId": owned["runId"], "attemptId": attempt["attempt"]["attemptId"]},
                              {"runId": owned["runId"], "messageId": message["messageId"]}]
                 for selector in selectors:
@@ -250,7 +245,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.assertEqual(result["state"], "cancelled")
         self.assertEqual(result["leadOwnership"], original)
 
-    def test_helper_proxy_request_cannot_make_a_lead_control_a_helper(self):
+    def test_lead_answers_its_owned_micro_tasks_helper_proxy_request(self):
         board = self.board()
         _, claim = self.lead(board)
         owned = self.owned(board, claim)
@@ -263,10 +258,64 @@ class LeadOwnedTests(WorkflowTestCase):
         self.finish_owned(board, helper, disposition="assistance")
         parent = board.call("workflow_get", {"runId": owned["runId"]})
         self.assertEqual(parent["activeRequest"]["childTaskId"], helper["runId"])
-        with self.assertRaises(BoardError) as caught:
-            self.decide(board, parent, parent["activeRequest"]["requestId"], command_id="proxy",
-                        decision="decline", credential=claim["agentCredential"])
-        self.assertEqual(caught.exception.code, "FORBIDDEN")
+        request_id = parent["activeRequest"]["requestId"]
+        decided = self.decide(board, parent, request_id, command_id="proxy",
+                              decision="decline", credential=claim["agentCredential"])
+        self.assertEqual(decided["runId"], owned["runId"])
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM workflow_requests WHERE request_id=?", (request_id,)).fetchone()[0], "declined")
+
+    def test_lead_accepts_and_concludes_its_owned_micro_tasks_helpers(self):
+        board = self.board()
+        _, claim = self.lead(board)
+        owned = self.owned(board, claim)
+        view, _ = self.finish_owned(board, owned, disposition="assistance")
+        parent = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+            "requestId": name, "task": "Help owned work", "cwd": str(self.workdir(name)),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+        } for name in ("accept-helper", "conclude-helper")], autoContinue=False, credential=claim["agentCredential"])
+        helpers = []
+        for child in parent["children"]:
+            helper = board.call("workflow_get", {"runId": child["taskId"]})
+            finished, _ = self.finish_owned(board, helper)
+            helpers.append(finished)
+        first, second = helpers
+        control = {**owned["control"], "credential": claim["agentCredential"]}
+        accepted = board.call("workflow_accept", {"runId": owned["runId"], "targetRunId": first["runId"],
+                                                  "artifactId": first["finalArtifactId"], "note": "Reviewed helper output",
+                                                  "notRequired": "No separate integration target", **control})
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["targetRunId"], first["runId"])
+        concluded = board.call("workflow_conclude", {"runId": owned["runId"], "targetRunId": second["runId"],
+                                                     "note": "Concluded helper work", **control})
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertEqual(concluded["targetRunId"], second["runId"])
+
+    def test_handlers_refuse_foreign_host_and_other_leads_helper_targets(self):
+        board = self.board(max_concurrent=4)
+        _, claim = self.lead(board)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)"
+                       " VALUES(?,?,?,4,?,?)", (BUDDY["harness"], BUDDY["provider"], BUDDY["model"], board.store.now(), board.store.now()))
+        owned = self.owned(board, claim)
+        host = self.submit(board, request_id="host-root", cwd=str(self.workdir("host-root")))
+        _, other_claim = self.lead(board, "other-lead", "w3")
+        other_owned = self.owned(board, other_claim, "other-owned")
+        for parent in (host, other_owned):
+            view, _ = self.finish_owned(board, parent, disposition="assistance")
+            created = self.decide(board, view, view["activeRequest"]["requestId"], command_id="approve-" + parent["requestId"], helpers=[{
+                "requestId": "helper-" + parent["requestId"], "task": "Foreign help",
+                "cwd": str(self.workdir("helper-" + parent["requestId"])),
+                "executionWorkspace": {"kind": "existing", "access": "write"},
+            }], autoContinue=False)
+            target = created["children"][0]["taskId"]
+            control = {"runId": owned["runId"], "targetRunId": target, **owned["control"], "credential": claim["agentCredential"]}
+            for operation, params in (("workflow_conclude", {"note": "Cannot conclude foreign help"}),
+                                      ("workflow_accept", {"artifactId": "foreign-artifact", "note": "Cannot accept foreign help",
+                                                           "notRequired": "No separate integration target"})):
+                with self.subTest(parent=parent["requestId"], operation=operation), self.assertRaises(BoardError) as caught:
+                    board.call(operation, {**control, **params})
+                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
     def test_revocation_during_preparation_fences_new_admission(self):
         self.revocation_fence("submit")

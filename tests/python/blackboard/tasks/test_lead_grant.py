@@ -81,8 +81,7 @@ class LeadGrantTests(WorkflowTestCase):
         self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertEqual(board.store.count_tasks(), 0)
 
-    def test_grant_is_persisted_readable_and_frozen_with_lead_scopes(self):
-        from hey_my_buddy.blackboard.tasks.workflow import AGENT_OPERATIONS, LEAD_OPERATIONS
+    def test_grant_is_persisted_readable_and_frozen_with_lead_authority(self):
         from hey_my_buddy.json_codec import decode_strict_json
         board = self.board()
         submitted = self.grant(board)
@@ -102,8 +101,6 @@ class LeadGrantTests(WorkflowTestCase):
             event = decode_strict_json(db.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()[0])
             self.assertEqual(event, {"actor": "host:host", "buddy": BUDDY})
-            scopes = decode_strict_json(db.execute("SELECT scopes_json FROM agent_credentials").fetchone()[0])
-            self.assertEqual(set(scopes), AGENT_OPERATIONS | LEAD_OPERATIONS)
 
     def test_absent_or_false_grant_has_one_identity_and_no_authority(self):
         board = self.board()

@@ -822,7 +822,6 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
     generation      INTEGER,
     turn_id         TEXT,
     token_verifier  TEXT NOT NULL,
-    scopes_json     TEXT NOT NULL DEFAULT '[]',
     state           TEXT NOT NULL CHECK (state IN ('active','revoked','expired')),
     created_at      TEXT NOT NULL,
     expires_at      TEXT,

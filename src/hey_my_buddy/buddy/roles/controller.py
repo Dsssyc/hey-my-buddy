@@ -8,6 +8,7 @@ import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
+from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import (
     Adapter,
     AdapterOutcome,
@@ -104,7 +105,7 @@ def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | N
         return "wrap-up"
     if grace_expired:
         return "grace-expired"
-    if stop_initiator in ("host", "lead"):
+    if stop_initiator in WRAP_UP_INITIATORS:
         return "forced-stop"
     if stop_initiator == "console":
         return "console-stop"
@@ -132,7 +133,7 @@ def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
     """Route the first stop request through the selected executor's policy."""
     with handle.stop_lock:
         if handle.force_stop_requested or (handle.cancel_requested and
-                (not handle.wrap_up_started or stop_initiator in ("host", "lead"))):
+                (not handle.wrap_up_started or stop_initiator in WRAP_UP_INITIATORS)):
             return
         handle.stop_initiator = stop_initiator
         if handle.cancel_requested:

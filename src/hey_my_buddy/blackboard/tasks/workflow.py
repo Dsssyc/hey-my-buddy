@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.stop import WRAP_UP_INITIATORS
 from . import host_conclusions
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
@@ -939,21 +940,22 @@ class WorkflowCoordinator:
             )
         if operation not in AGENT_RUN_BOUND_OPERATIONS | LEAD_OWNED_OPERATIONS:
             return
-        targets = [params[key] for key in ("runId", "taskId", "targetRunId") if params.get(key)]
+        targets = [params[key] for key in ("runId", "taskId") if params.get(key)]
         selectors = (
-            ("requestId", "SELECT run_id AS task_id,child_task_id FROM workflow_requests WHERE request_id=?"
-             if operation == "workflow_decide" else "SELECT task_id FROM tasks WHERE request_id=?"),
+            ("requestId", "SELECT task_id FROM tasks WHERE request_id=?"),
             ("attemptId", "SELECT task_id FROM attempts WHERE attempt_id=?"),
             ("messageId", "SELECT task_id FROM messages WHERE message_id=?"),
         )
         with self.db.read() as connection:
             for key, query in selectors:
+                # A decision request belongs to the bound run; its handler checks
+                # that request and any helper target through the existing tree.
+                if operation == "workflow_decide" and key == "requestId":
+                    continue
                 value = params.get(key)
                 if isinstance(value, str) and value:
                     row = connection.execute(query, (value,)).fetchone()
                     targets.append(row["task_id"] if row is not None else "__unknown__")
-                    if operation == "workflow_decide" and key == "requestId" and row is not None and row["child_task_id"] is not None:
-                        targets.append(row["child_task_id"])
             for target in targets:
                 own = operation in AGENT_RUN_BOUND_OPERATIONS and target == scope["runId"]
                 owned = lead and operation in LEAD_OWNED_OPERATIONS and connection.execute(
@@ -3603,10 +3605,10 @@ class WorkflowCoordinator:
             "SELECT * FROM attempts WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
             (task_id,),
         ).fetchall():
-            if attempt["cancel_requested_at"] is not None and initiator in ("host", "lead"):
+            if attempt["cancel_requested_at"] is not None and initiator in WRAP_UP_INITIATORS:
                 continue
             deadline = attempt["grace_deadline"]
-            if (wrap_up and initiator in ("host", "lead") and attempt["adapter"] != "external"
+            if (wrap_up and initiator in WRAP_UP_INITIATORS and attempt["adapter"] != "external"
                     and self._execution_adapter(attempt["adapter"]).interrupted_resume
                     and attempt["execution_state"] in ("starting", "executing")):
                 deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
@@ -6330,7 +6332,7 @@ class WorkflowCoordinator:
         )
         connection.execute(
             "INSERT INTO agent_credentials(credential_id, run_id, task_id, attempt_id, generation, turn_id,"
-            " token_verifier, scopes_json, state, created_at) VALUES(?,?,?,?,?,?,?,?,'active',?)",
+            " token_verifier, state, created_at) VALUES(?,?,?,?,?,?,?,'active',?)",
             (
                 f"cred-{attempt_id}",
                 run_row["run_id"],
@@ -6339,7 +6341,6 @@ class WorkflowCoordinator:
                 generation,
                 turn_id,
                 self.db.agent_token_verifier(token),
-                canonical_json(sorted(AGENT_OPERATIONS | (LEAD_OPERATIONS if run_row["delegation_authority"] else frozenset()))),
                 now,
             ),
         )

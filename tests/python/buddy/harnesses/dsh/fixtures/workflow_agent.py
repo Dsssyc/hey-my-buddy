@@ -97,6 +97,10 @@ class WorkflowAgent(fake_agent.FakeAgent):
                     self.finish_tool = f"mcp__{server}__hey_my_buddy_finish_turn"
             fake_agent.log(self.log_path, {"event": "workflow-binding",
                                            "mode": self.workflow_mode,
+                                           "launcherEnvKeys": sorted(key for key in os.environ if key in (
+                                               "HMB_STATE_DIR", "HMB_AGENT_CREDENTIAL_FILE",
+                                               "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+                                               "HMB_DEV_SOURCE")),
                                            "bridge": self.bridge_config,
                                            "finishTool": self.finish_tool})
         return payload
