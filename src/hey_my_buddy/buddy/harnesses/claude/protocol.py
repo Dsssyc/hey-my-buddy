@@ -378,6 +378,7 @@ class TurnEvidence:
         self.init_observed = False
         self.init_session_id: str | None = None
         self.session_model: str | None = None
+        self.permission_mode: str | None = None
         self.result: dict | None = None
         self.event_seq = 0
         self.model_messages = 0
@@ -447,6 +448,10 @@ class TurnEvidence:
                 # argv is never treated as attestation, and context-suffix
                 # differences stay explicit until a live probe verifies them.
                 self.session_model = model if isinstance(model, str) and model and len(model) <= 128 else None
+                mode = frame.get("permissionMode")
+                if isinstance(mode, str) and mode in (
+                        "default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"):
+                    self.permission_mode = mode
                 self.init_observed = True
                 self.init_session_id = init_session
                 return "starting", None

@@ -84,7 +84,7 @@ def result_frame(case, session_id):
 
 def run_turn(case, session_id):
     send({"type": "system", "subtype": "init", "session_id": session_id, "cwd": os.getcwd(),
-          "model": argv_value("--model") or "", "permissionMode": "default", "tools": []})
+          "model": argv_value("--model") or "", "permissionMode": argv_value("--permission-mode") or "default", "tools": []})
     if case == "usage-long-text":
         full = "long-fixture-text:" + "x" * 70000
         raw = full.encode()

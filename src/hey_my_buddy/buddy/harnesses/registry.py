@@ -140,7 +140,7 @@ EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 _WORKER_PERMISSIONS = {
     "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
               "full": ("full", "enforced")},
-    "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
+    "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
     "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
     "zcode": {"read": ("write", "convention"), "write": ("write", "convention")},
 }

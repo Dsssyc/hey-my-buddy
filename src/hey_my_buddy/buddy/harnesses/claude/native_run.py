@@ -98,6 +98,7 @@ from .config import (
     native_environment,
     provider_from_account,
     sandbox_settings,
+    worker_sandbox_settings,
 )
 from .protocol import (
     QUOTA_REJECTED_ERROR,
@@ -216,7 +217,7 @@ class _Preparation:
     command: list[str]
     environment: dict
     args: list[str]
-    network_domains: list
+    settings: dict
 
 
 @dataclasses.dataclass
@@ -289,19 +290,20 @@ def _prepare(request: RunRequest) -> _Preparation:
     incoming = dict(os.environ)
     command = cli_command(incoming)
     environment = native_environment(incoming)
-    # The network allowlist and the extra session-wide denials come from the
-    # request controls alone: None keeps the native default under every scope,
-    # and an offline or extra-denied run is the caller's explicit decision.
-    settings = sandbox_settings(request.network_allowed_domains)
+    # Worker levels select their native sandbox posture for this turn. Calls
+    # without a Worker level keep the explicit Router controls unchanged.
+    settings = (worker_sandbox_settings(request.worker_permission.level)
+                if request.worker_permission is not None else sandbox_settings(request.network_allowed_domains))
     private_json(native_root / _SETTINGS_FILE, settings)
     args = execution_args(session_id=session_id, model=request.configuration.model,
                           effort=request.configuration.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
-                          additional_denied_tools=request.additional_denied_tools)
+                          additional_denied_tools=request.additional_denied_tools,
+                          full_access=request.worker_permission is not None and request.worker_permission.level == "full")
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
                         command=command, environment=environment, args=args,
-                        network_domains=list(settings["sandbox"]["network"]["allowedDomains"]))
+                        settings=settings)
 
 
 # -- phase 2: the owned native process -------------------------------------------
@@ -402,7 +404,7 @@ class _TurnCollector:
 
     def __init__(self, request: RunRequest, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
-                 native_schema_delivery: bool = False):
+                 native_schema_delivery: bool = False, expected_permission_mode: str | None = None):
         self._publisher = publisher
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"adapter": "claude", "taskId": request.identity.task_id,
@@ -411,6 +413,8 @@ class _TurnCollector:
                                           native_schema_delivery=native_schema_delivery)
         self.evidence: TurnEvidence | None = None
         self.denied: list[dict] = []
+        self.denied_operation_summary = ""
+        self.expected_permission_mode = expected_permission_mode
         self.unsupported_requests = 0
         self.early_messages: list[tuple[bool, dict]] = []
         self.user_sent = False
@@ -441,6 +445,18 @@ class _TurnCollector:
             tool = request.get("tool_name")
             tool_id = request.get("tool_use_id")
             request_id = frame.get("request_id")
+            inputs = request.get("input")
+            operation = "<command or path unread>"
+            if isinstance(inputs, dict):
+                for key in ("command", "file_path", "path", "notebook_path", "url"):
+                    if isinstance(inputs.get(key), str) and inputs[key]:
+                        operation = inputs[key]
+                        break
+            name = tool[:80] if isinstance(tool, str) and tool else "<unknown>"
+            summary = "\n".join(filter(None, (self.denied_operation_summary, name + ": " + operation)))
+            # The native-input boundary owns the one UTF-8 bound; role code
+            # consumes this already-bounded fact without interpreting inputs.
+            self.denied_operation_summary = summary.encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
             self.denied.append({
                 "toolName": tool[:80] if isinstance(tool, str) and tool else "<unknown>",
                 "toolUseId": tool_id[:256] if isinstance(tool_id, str) and tool_id else None,
@@ -481,6 +497,14 @@ class _TurnCollector:
         self.tools.observe_frame(frame)
         if self.evidence is not None:
             activity = self.evidence.observe(frame)
+            if (frame.get("type") == "system" and frame.get("subtype") == "init"
+                    and self.expected_permission_mode is not None
+                    and self.evidence.permission_mode is not None
+                    and self.evidence.permission_mode != self.expected_permission_mode):
+                raise ClaudeProtocolError(
+                    "unsupported-capability",
+                    "Claude Code cannot provide this Worker's permission level: requested "
+                    + self.expected_permission_mode + ", native session reported " + self.evidence.permission_mode)
             if activity:
                 self.publish_activity(*activity)
         if self.tools.tool_calls != self._last_tool_calls:
@@ -668,6 +692,8 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
         observations["nativeInterruptRequested"] = True
         observations["nativeInterruptAcknowledged"] = state.interrupt_acknowledged is True
     if collector.evidence is not None:
+        observations["permissionMode"] = collector.evidence.permission_mode
+        observations["permissionModeStatus"] = "confirmed" if collector.evidence.permission_mode is not None else "unread"
         observations["quota"] = collector.evidence.quota_candidate()
         observations["rateLimitObservations"] = dict(sorted(collector.evidence.rate_limits.items()))
     return observations
@@ -715,6 +741,7 @@ def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str)
                                                   if item["toolUseId"]]}
     if collector.denied:
         facts["deniedToolNames"] = [item["toolName"] for item in collector.denied[:32]]
+        facts["deniedOperationSummary"] = collector.denied_operation_summary
     return facts
 
 
@@ -725,7 +752,8 @@ def _effective_policy(preparation: _Preparation) -> EffectivePolicy:
     requested = {"tools": tools_value.split(",") if tools_value else [],
                  "permissionMode": _flag_value(preparation.args, "--permission-mode"),
                  "disallowedTools": disallowed_value.split(",") if disallowed_value else [],
-                 "sandboxNetworkAllowedDomains": list(preparation.network_domains)}
+                 "sandboxNetworkAllowedDomains": list(preparation.settings["sandbox"].get("network", {}).get("allowedDomains", [])),
+                 "sandbox": preparation.settings["sandbox"]}
     return EffectivePolicy(
         tools=PolicyFact(requested=requested))
 
@@ -899,9 +927,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.harness != "claude":
         raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
-    if request.tool_scope == "full" or (request.worker_permission is not None
-                                        and request.worker_permission.level == "full"):
-        raise BoardError("INVALID_ARGUMENT", "claude full access is not implemented", toolScope=request.tool_scope)
+    if request.tool_scope == "full" and request.worker_permission is None:
+        raise BoardError("INVALID_ARGUMENT", "claude full access requires a Worker permission", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, RunServices):
         # No in-run session service exists on this harness; the one accepted
         # binding is this module's own controller endpoint binding, and a
@@ -940,7 +967,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             # The delivery identification is armed by this run's own command
             # line carrying the native schema, never by the caller's role or
             # the tool scope: a run without the flag exempts nothing.
-            native_schema_delivery="--json-schema" in preparation.args)
+            native_schema_delivery="--json-schema" in preparation.args,
+            expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
+            if request.worker_permission is not None else None)
         spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
                               environment=preparation.environment,
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,

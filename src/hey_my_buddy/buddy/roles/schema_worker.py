@@ -132,6 +132,8 @@ class NativeSchemaWorker:
             else:
                 summary = f"{self.display_name} denied {facts.get('permissionDenials', 0)} native tool permission request(s) during the turn"
             attempted = "The owned controller denied the correlated native permission request without granting access"
+            if facts.get("deniedOperationSummary"):
+                attempted += ": " + facts["deniedOperationSummary"]
         return {"disposition": "attention", "summary": summary, "remaining": [], "decisions": [],
                 "artifacts": [], "request": {"summary": summary, "attempted": attempted,
                     "neededWork": "Host must review the requested action and choose a permitted continuation",
