@@ -12,8 +12,9 @@ import {
 } from "./console-data";
 import type { Preference, Buddy, Task } from "./types";
 
-const buddy = (buddyId: string, harness: string, provider: string, effort: string): Buddy => ({
-  buddyId, harness, provider, model: "shared-model", effort, label: "Shared model", available: true,
+const buddy = (buddyId: string, harness: string, provider: string, effort: string,
+  effortRank: number | null = null): Buddy => ({
+  buddyId, harness, provider, model: "shared-model", effort, effortRank, label: "Shared model", available: true,
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 
@@ -33,20 +34,17 @@ describe("console grouping and recorded attribution", () => {
     expect(taskHost({} as Task)).toBe("Delegator not recorded");
     expect(taskHost({ lineage: { rootLeadRunId: "lead-run" } } as Task)).toBe("Lead · lead-run");
   });
-  it("orders extended thinking levels by intensity in model service labels and variant tabs", () => {
-    for (const harness of ["claude", "codex"]) {
-      const levels = ["ultra", "max", "high", "medium", "xhigh", "low"];
-      const buddies = levels.map(effort => buddy(`${harness}-${effort}`, harness, "provider", effort));
-      expect(modelServices(buddies)[0].buddies.map(item => item.effort))
-        .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-      expect(buddies.map(item => item.effort)).toEqual(levels);
-    }
-  });
-
-  it("keeps default and non-thinking modes ahead of ranked efforts and retains unknown native levels", () => {
-    const levels = ["future", "ultra", "minimal", "off", "default", "none"];
-    expect(modelServices(levels.map(effort => buddy(effort, "codex", "provider", effort)))[0]
-      .buddies.map(item => item.effort)).toEqual(["default", "none", "off", "minimal", "ultra", "future"]);
+  it("orders each model's efforts by its native catalog rank, then puts unranked efforts last by name", () => {
+    const native = [
+      { effort: "max", effortRank: 0 },
+      { effort: "turbo", effortRank: null },
+      { effort: "low", effortRank: 2 },
+      { effort: "default", effortRank: null },
+      { effort: "high", effortRank: 1 },
+    ];
+    expect(modelServices(native.map(({ effort, effortRank }) =>
+      buddy(effort, "codex", "provider", effort, effortRank)))[0]
+      .buddies.map(item => item.effort)).toEqual(["max", "high", "low", "default", "turbo"]);
   });
 
   it("groups efforts while keeping the same model name from different harnesses and providers separate", () => {
@@ -73,10 +71,10 @@ describe("console grouping and recorded attribution", () => {
       .toBe("retired");
   });
 
-  it("selects the preferred buddy from effort order without changing that order", () => {
+  it("selects the preferred buddy from the native effort order without changing that order", () => {
     const modelService = modelServices([
-      buddy("high", "codex", "openai", "high"),
-      buddy("low", "codex", "openai", "low"),
+      buddy("high", "codex", "openai", "high", 1),
+      buddy("low", "codex", "openai", "low", 0),
     ])[0];
     expect(modelService.buddies.map(row => row.buddyId)).toEqual(["low", "high"]);
     expect(preferredVariant(modelService, [{ buddyId: "high", mode: "prefer", reason: "coding" }]).buddyId).toBe("high");

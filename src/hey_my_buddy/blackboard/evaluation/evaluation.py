@@ -43,10 +43,13 @@ class EvaluationStore:
                 configuration_error = {"code": error.code, "message": str(error)}
             configured_ids = (settings or {}).get("routerBuddyIds") or []
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
+            from ..catalog import catalog_store
             from ..catalog.catalog import pending_model_services
             pending = pending_model_services(connection)
+            current_catalog = catalog_store.current(connection)
+            effort_ranks = current_catalog.effort_ranks() if current_catalog is not None else {}
             buddies = [
-                self._buddy_view(row, pending=pending)
+                self._buddy_view(row, pending=pending, effort_ranks=effort_ranks)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p "
                     "LEFT JOIN harness_health h ON h.harness=p.harness "
@@ -133,7 +136,8 @@ class EvaluationStore:
         return catalog_store.record(self, discovered, observation_id)
 
     @staticmethod
-    def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None) -> dict:
+    def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None,
+                    effort_ranks: dict[tuple[str, str, str], dict[str, int]]) -> dict:
         from ...buddy.harnesses.registry import adapters
         native = adapters().get(row["harness"])
         capabilities = json.loads(row["capabilities_json"])
@@ -151,6 +155,7 @@ class EvaluationStore:
             "provider": row["provider"],
             "model": row["model"],
             "effort": row["effort"],
+            "effortRank": effort_ranks.get((row["harness"], row["provider"], row["model"]), {}).get(row["effort"]),
             "available": bool(row["available"]) and ("harness_status" not in row.keys() or row["harness_status"] == "ready"),
             "enabled": bool(row["enabled"]),
             "capabilities": capabilities,

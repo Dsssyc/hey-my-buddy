@@ -265,7 +265,9 @@ def buddies(evaluation, params):
         rows = db.execute('SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness LEFT JOIN catalog_current c ON c.harness=p.harness WHERE ' + ' AND '.join(clauses) + ' ORDER BY p.buddy_id LIMIT ?', [*values, limit + 1]).fetchall()
         from .catalog import pending_model_services
         pending = pending_model_services(db)
-        values = [evaluation._buddy_view(row, pending=pending) for row in rows[:limit]]
+        current_catalog = current(db)
+        effort_ranks = current_catalog.effort_ranks() if current_catalog is not None else {}
+        values = [evaluation._buddy_view(row, pending=pending, effort_ranks=effort_ranks) for row in rows[:limit]]
         from ...protocol.billing import for_provider
         from ..routing.quota_routing import buddy_retry
         for value in values:

@@ -332,6 +332,54 @@ class CatalogRefreshTests(EvaluationTestCase):
         self.assertEqual(len(self.snapshot(board)["buddies"]), len(proposals))
 
 
+class EffortRankTests(EvaluationTestCase):
+    def test_buddy_views_rank_efforts_by_each_models_native_catalog_order(self):
+        self.catalog_fixture({
+            "source": "file:test-fixture",
+            "providers": [{
+                "harness": "dsh",
+                "provider": "deepseek-official",
+                "models": [
+                    {"id": "deepseek-flash", "efforts": ["low", "medium", "high", "xhigh", "max"]},
+                    {"id": "deepseek-v4-pro", "efforts": ["off", "low", "high", "max"]},
+                ],
+            }],
+        })
+        board = self.board()
+        self.seed_catalog(board)
+        expected = {
+            ("deepseek-flash", "low"): 0,
+            ("deepseek-flash", "medium"): 1,
+            ("deepseek-flash", "high"): 2,
+            ("deepseek-flash", "xhigh"): 3,
+            ("deepseek-flash", "max"): 4,
+            ("deepseek-v4-pro", "off"): 0,
+            ("deepseek-v4-pro", "low"): 1,
+            ("deepseek-v4-pro", "high"): 2,
+            ("deepseek-v4-pro", "max"): 3,
+        }
+
+        def ranks(rows):
+            return {(row["model"], row["effort"]): row["effortRank"] for row in rows}
+
+        self.assertEqual(ranks(self.snapshot(board)["buddies"]), expected)
+        self.assertEqual(ranks(board.call("buddy_list", {"includeUnavailable": True})["buddies"]), expected)
+
+        # A retained buddy whose model or effort is not in the current catalog
+        # keeps its row but has no position in that catalog's order.
+        with board.store.db.write() as db:
+            for model, effort in (("retired-model", "max"), ("deepseek-flash", "ultra")):
+                buddy_id = f"dsh:deepseek-official:{model}:{effort}"
+                db.execute(
+                    "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
+                    " VALUES(?,?,?,?,?,?,?,?,?)",
+                    (buddy_id, buddy_id, "dsh", "deepseek-official", model, effort, 1, 1, "[]"),
+                )
+        expected.update({("retired-model", "max"): None, ("deepseek-flash", "ultra"): None})
+        self.assertEqual(ranks(self.snapshot(board)["buddies"]), expected)
+        self.assertEqual(ranks(board.call("buddy_list", {"includeUnavailable": True})["buddies"]), expected)
+
+
 if __name__ == "__main__":
     unittest.main()
 

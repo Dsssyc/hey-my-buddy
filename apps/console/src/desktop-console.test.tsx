@@ -18,9 +18,9 @@ function catalog(): Buddy[] {
   const enabled = new Set(["dsh:deepseek-flash:off", "dsh:deepseek-flash:max", "zcode:GLM-5.3:high", "zcode:GLM-5.3-Flash:max"]);
   return [
     ...["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
-      .flatMap(model => ["off", "low", "high", "max"].map(effort => ({ harness: "dsh", provider: "deepseek-official", model, effort }))),
+      .flatMap(model => ["off", "low", "high", "max"].map((effort, effortRank) => ({ harness: "dsh", provider: "deepseek-official", model, effort, effortRank }))),
     ...["GLM-5.3", "GLM-5.3-Flash"].flatMap(model => ["low", "high", "max"]
-      .map(effort => ({ harness: "zcode", provider: "bigmodel-api", model, effort }))),
+      .map((effort, effortRank) => ({ harness: "zcode", provider: "bigmodel-api", model, effort, effortRank }))),
   ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
     available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
