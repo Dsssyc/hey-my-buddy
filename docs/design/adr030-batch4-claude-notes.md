@@ -10,7 +10,7 @@
 | `native_run._catalog` / `invalid-catalog`，模型超过 200 项 | I | 保留数量上限，属于别的进程送来的内容超过上限；未知字段形状不绕过列表数量检查。 | N `test_oversized_catalog_still_refuses_with_confirmed_stop` |
 | `native_run._prepare` / `INVALID_ARGUMENT`，无工具执行 | I | 保留；Claude 的描述明确没有原生 no-tool 能力，本任务不实现新的执行能力。 | N `test_this_harness_declares_no_no_tool_service_or_resume_capability` |
 | `native_run._prepare` / `INVALID_ARGUMENT`，原生续接 | C / merge | 删除运行模块的重复拒绝；唯一能力检查保留在已有 `WorkerRunExecutor.prepare` 请求边界；没有新增续接实现。删除直接模块测试中的重复断言。 | R `test_native_session_resume_is_refused_and_fresh_sessions_are_allocated` |
-| `native_run._check_catalog` / `invalid-configuration`，供应方、模型及 effort 目录成员 | I | 固定 anthropic 子条件已不存在；目录成员检查改为布尔事实，不因本次目录未列出而拒绝。匹配仍能证明 checked 配置；未匹配写 `configurationStatus=unknown` 并省略 checked 配置，原生真实拒绝继续上报。 | N `test_catalog_membership_absence_continues_as_unconfirmed`、`test_a_model_outside_the_catalog_continues_without_confirmed_membership`；R `test_model_and_effort_absence_is_reported_without_refusing_the_turn`；N `test_a_native_failure_keeps_the_observed_stream_end` |
+| `native_run._check_catalog` / `invalid-configuration`，供应方、模型及 effort 目录成员 | I | 固定 anthropic 子条件已不存在；按目录读取状态拆开：unknown 时不能比对，写 `configurationStatus=unknown`，省略 checked 配置并继续；complete 时缺少所选模型或 effort 属于能力缺失，仍在 user 消息前以原错误码拒绝；目录里有才生成 checked 配置，遵循 ADR-027 第 5 条。 | N `test_unread_catalog_continues_the_turn_without_checked_configuration`、`test_readable_empty_catalog_refuses_before_the_user_message`、`test_a_model_outside_the_readable_catalog_is_refused_before_the_user_message`、`test_an_effort_outside_the_readable_catalog_is_refused_before_the_user_message`、`test_the_catalog_check_confirms_only_what_native_readback_proved`；R `test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start` |
 | `native_run._TurnCollector.buffer` / `invalid-protocol`，初始化暂存超过 128 帧 | I | 保留别的进程输入的数量上限，与事件是否读懂无关。 | N `test_initialization_and_permission_request_bounds_still_refuse` |
 | `native_run._TurnCollector.on_request` / `native-request-limit`，权限请求超过 32 条 | I | 保留别的进程输入的数量上限；既有拒绝回执继续关联其原生 request ID。 | N `test_initialization_and_permission_request_bounds_still_refuse`、`test_a_denied_interaction_reaches_the_role_before_further_waiting` |
 | `native_run._check_terminal` / `native-turn-failed`，非 success 或 is_error 非 false | I | 暂不修改整个条件，等待 Host 决定共享表示；真实失败、归属和背景任务仍然拒绝，未知终态目前同样保留拒绝，不能伪造成功。原因见下文。 | N `test_unknown_terminal_remains_refused_pending_shared_contract`、`test_a_native_failure_keeps_the_observed_stream_end`、`test_wrong_session_and_duplicate_results_are_rejected`、`test_background_work_must_settle_before_the_result_is_usable` |
@@ -25,7 +25,7 @@
 
 回合沿用 `RunResult.evidence_refs` 中的 `native-observations`，增加 protocol 的 incomplete 状态、未读字段计数、形状样本、样本截断事实，以及 catalogStatus、catalogWarnings 和 configurationStatus；这些字段不生成 CompletionEvidence、checked 配置或停止事实。既有 observer 的事实快照携带 protocolObservations；泛指所有未知事件的原 unknownEvents 字段仍为 None，避免将只计了缺失 type 的计数冒充全面分类。单帧仍先经过 8 MiB 严格 JSON 边界，最多留 16 个脱敏样本，其他帧只增加计数；sample 不保存未知 payload、字段内容、账户或原生错误文本。初始化目录沿用 warnings 出口，保留最多 14 个同样脱敏的样本，包括未读控制答复的关联 ID；没有另外建立日志或结果协议。
 
-被取代的缺失 type 拒绝断言和即时目录资格断言已经替换；发现测试中的 invalid-catalog 失败样本改用真实原生 initialize error，停止未知测试则检查 native-shutdown-failed。`_interrupt` 只在原生答复读懂后确认 acknowledged；确认停止依旧独立。R 的夹具给控制器一个动态解析到当前检出 src 的绝对 PYTHONPATH，因为控制器切到私有检出后，相对 src 会误读冻结解释器安装的旧源码；这一修正不改变产品启动环境。
+被取代的缺失 type 拒绝断言已经替换；目录资格断言现区分读取 unknown 与读懂后确实缺失，后者保留能力拒绝。发现测试中的 invalid-catalog 失败样本改用真实原生 initialize error，停止未知测试则检查 native-shutdown-failed。`_interrupt` 只在原生答复读懂后确认 acknowledged；确认停止依旧独立。R 的夹具给控制器一个动态解析到当前检出 src 的绝对 PYTHONPATH，因为控制器切到私有检出后，相对 src 会误读冻结解释器安装的旧源码；这一修正不改变产品启动环境。
 
 ## 找不到的和留给 Host 的工作
 
@@ -43,7 +43,7 @@
 
 一次额外命令误包含了 test_claude_worker 及其导入的继承测试，六个 Claude 模块合计 180 条通过，但其中包含私有 daemon/Worker 和共享内存测试，超出了本任务“不启动任何服务与 Worker”的限制；测试命令已退出，夹具使用私有临时状态并按其 finally 和 cleanup 关闭子进程，未读取日常看板或启动已安装服务。此项明确作为执行偏差交给 Host；不以它替代 Host 要求的真实回合或完整检查。后续命令限于受影响的 P、N、R 三个文件，不再次运行 daemon/Worker 测试。
 
-最终聚焦验证使用绝对 PYTHONPATH，确保控制器切换 cwd 后仍加载此检出的源码；下面的三个文件合计 132 条测试通过，退出码为 0，用时 45.753 秒。真实 Claude Code、付费模型回合、全仓检查及 Host 故障注入未执行；本任务没有剩余未跑的受影响测试方法，Host 仍须复核涉及共享内存的 R 控制器测试与 N 中 RoleSurfaceTests 的 C-Two endpoint 路径，以及 `test_claude_worker.ClaudeWorkerTests.test_governed_worker_seals_only_a_proven_claude_result`、`test_quota_failure_is_persisted_as_harness_error_without_a_capability_sample`。
+上一回合最后的聚焦验证使用绝对 PYTHONPATH，三个文件合计 132 条测试通过，退出码为 0，用时 45.753 秒；这记录的是打回前的候选，不能证明本轮修改。下面保留该命令供 Host 复核，Worker 本轮不执行其中的 R 控制器测试。真实 Claude Code、付费模型回合、全仓检查及 Host 故障注入未执行。
 
 ```sh
 env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME \
@@ -55,6 +55,10 @@ env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME \
   buddy.harnesses.claude.test_native_run \
   buddy.harnesses.claude.test_claude
 ```
+
+打回 1 按 ADR-027 第 5 条恢复读懂目录的能力检查，替换上一候选中“目录确实缺失仍继续”的三处断言，并增加“有模型而没有 effort”在 user 消息之前拒绝的直接运行回归。未知目录的继续与事实、已列出配置的 checked 回归继续保留。本轮只运行 N 全文件，69 条测试通过，退出码 0，用时 11.871 秒：它使用私有假 Claude 子进程和管道；RoleSurfaceTests 的 endpoint 用于内存中的 publish/observe，没有调用 start、注册服务器或分配共享内存，不启动 hey-my-buddy 服务或 Worker。R 修改后的源码通过 compile 语法检查，未执行其控制器测试。
+
+本轮需要 Host 跑 `test_claude.ClaudeAdapterTests.test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start`，并建议按文件独立进程重跑 R 全文件，它通过角色控制器启动 C-Two 服务与共享内存，Worker 未执行；`test_claude_worker` 的 daemon/Worker 测试也没有再次执行。`_check_terminal` 与两处范围外投影问题沿用上面的交接，本轮不扩展范围。
 
 ## Host 的真实 Claude Code 无模型读取核对
 

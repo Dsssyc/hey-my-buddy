@@ -364,10 +364,15 @@ def _initialize(spawn: _Spawn) -> dict:
 
 
 def _check_catalog(request: RunRequest, catalog: dict) -> bool:
-    """Record directory membership; the native turn decides actual support."""
+    """Unknown catalogs prove nothing; readable catalogs gate native capability."""
+    if catalog["discoveries"][0]["status"] == "unknown":
+        return False
     configuration = request.configuration
-    return any(model["id"] == configuration.model and configuration.effort in model["efforts"]
-               for model in catalog["providers"][0]["models"])
+    if not any(model["id"] == configuration.model and configuration.effort in model["efforts"]
+               for model in catalog["providers"][0]["models"]):
+        raise ClaudeProtocolError("invalid-configuration",
+                                  "the selected Claude model and effort are not in the current native catalog")
+    return True
 
 
 # -- the live collectors of one execution run ------------------------------------

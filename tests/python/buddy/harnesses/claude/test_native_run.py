@@ -144,13 +144,15 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(facts["configurationStatus"], "unknown")
         self.assertIn("unread", facts["catalogWarnings"][0])
 
-    def test_catalog_membership_absence_continues_as_unconfirmed(self):
+    def test_readable_empty_catalog_refuses_before_the_user_message(self):
         self.fixture_case("empty-catalog")
         result = self.execute(self.request())
-        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIsNone(result.model_started)
         self.assertIsNone(result.configuration.checked.model)
         self.assertIsNone(result.configuration.checked.effort)
-        self.assertEqual(self.observations(result)["configurationStatus"], "unknown")
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_unknown_initialize_reply_continues_with_correlated_result_facts(self):
         self.fixture_case("unknown-initialize")
@@ -260,21 +262,31 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(checked.model.value, CONFIGURATION["model"])
         self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
 
-    def test_a_model_outside_the_catalog_continues_without_confirmed_membership(self):
+    def test_a_model_outside_the_readable_catalog_is_refused_before_the_user_message(self):
         self.fixture_case("ok")
         request = self.request()
         broken = request.model_copy(update={"configuration": RunConfiguration(
             provider="anthropic", model="claude-not-in-catalog", effort="high")})
         result = self.execute(broken)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertTrue(result.model_started)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIsNone(result.model_started)
         checked = result.configuration.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
         self.assertIsNone(checked.effort)
-        self.assertEqual(self.fixture_state()["userTurns"], 1)
-        ref = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
-        self.assertEqual(json.loads(Path(ref.location).read_bytes())["configurationStatus"], "unknown")
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+
+    def test_an_effort_outside_the_readable_catalog_is_refused_before_the_user_message(self):
+        request = self.request().model_copy(update={"configuration": RunConfiguration(
+            provider="anthropic", model=CONFIGURATION["model"], effort="default")})
+        result = self.execute(request)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-configuration")
+        self.assertIsNone(result.model_started)
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.configuration.checked.effort)
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
         result = self.execute(self.request())
