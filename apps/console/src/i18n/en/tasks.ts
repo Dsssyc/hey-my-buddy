@@ -1,6 +1,6 @@
 import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
-  sort: { label: "Sort", basis: "Sort: {{basis}}", activity: "Last updated", created: "Created", descending: "Descending", ascending: "Ascending" },
+  sort: { label: "Sort", basis: "Sort by", direction: "Order", activity: "Last activity", created: "Created", descending: "Descending", ascending: "Ascending" },
   collapseAll: "Collapse all",
   legendLabel: "Legend",
   resizeNames: "Drag to resize names; use arrow keys to adjust, or double-click to reset.",
@@ -18,7 +18,7 @@ export const tasks = {
     events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", takeover: "Takeover" },
   },
   legendMeaning: {
-    execution: "Time a buddy spent working; colours distinguish buddies.", wait: "Time between two activities.", waiting: "The diamond marks where work passed to the Host or Lead; a dashed line means it is still waiting.",
+    execution: "Time a buddy spent working; colours distinguish buddies.", wait: "Time between two activities.", waiting: "The filled diamond marks where work passed to the Host or Lead; a dashed line means it is still waiting.", review: "The outlined orange diamond marks the start of waiting for acceptance; a dashed line means it is still waiting.",
     silent: "Execution continues, but no native activity was seen for a while.", inquiry: "A question from the Host to a running turn.", event: "A recorded decision or other action.",
     accepted: "This micro task passed acceptance.", failed: "This micro task ended with a failed conclusion.", cluster: "Nearby marks are merged; the number counts them. Click to list each.", idle: "A long inactive stretch folded on the timeline.",
   },

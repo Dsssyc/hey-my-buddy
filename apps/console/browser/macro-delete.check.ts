@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 import { listSummary, macroTaskTimelineFixture } from "../src/macro-task-fixtures";
 import type { DeletionBlocker, MacroTaskDeletionPreview } from "../src/macro-task-deletion";
@@ -14,6 +14,15 @@ const words = {
     blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Ownership of this object could not be proven.", started: "Deletion has started. Retry the same request to continue cleanup.", unnamed: "Unnamed",
     knownScope: ["14; total 6.2 MB", "11; total 48.0 MB", "Checkouts: 3; Git refs: 12"], mixedScope: ["0; total 0 B", "Count unknown; Size unknown", "Checkouts: 0; Git ref count unknown"] },
 };
+
+async function openDeletionMenu(page: Page, locale: keyof typeof words): Promise<Locator> {
+  const list = page.getByRole("region", { name: locale === "zh-CN" ? "宏任务列表" : "Macro task list" });
+  if (!await list.isVisible()) await page.locator('[data-slot="macro-overview-header"]').getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks" }).click();
+  const more = list.locator('[data-macro-task-id="macro-1"] [data-slot="macro-menu-button"]');
+  await more.click();
+  await page.getByRole("menuitem", { name: words[locale].action, exact: true }).click();
+  return more;
+}
 
 /** Browser-only fixtures mirror the engine's current replies; no board is opened. */
 async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDeletionPreview["scope"] = {
@@ -76,9 +85,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page);
       await open(page, "#tasks/macro-1");
-      const more = page.getByRole("button", { name: w.more, exact: true });
-      await more.click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      const more = await openDeletionMenu(page, locale);
       let dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await expect(dialog.getByRole("button", { name: w.cancel, exact: true })).toBeFocused();
       await expect(dialog.getByRole("button", { name: w.confirm, exact: true })).toBeVisible();
@@ -97,8 +104,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await expect(dialog).toHaveCount(0);
       await expect(more).toBeFocused();
       expect(commands.every(command => command.operation === "macro_task_deletion_preview")).toBe(true);
-      await more.click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      await openDeletionMenu(page, locale);
       dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await dialog.getByRole("button", { name: w.confirm, exact: true }).click();
       await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();
@@ -123,8 +129,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page, false, { artifacts: { count: 0, bytes: 0 }, sessions: { count: null, bytes: null }, checkouts: 0, gitRefs: null });
       await open(page, "#tasks/macro-1");
-      await page.getByRole("button", { name: w.more, exact: true }).click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      await openDeletionMenu(page, locale);
       const dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await expect(dialog.getByRole("button", { name: w.confirm, exact: true })).toBeVisible();
       expect((await dialog.locator("[data-slot=macro-delete-scope] dd").allTextContents()).slice(1)).toEqual(w.mixedScope);
@@ -142,8 +147,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       const commands = await deletionFixture(page, true);
       await open(page, "#tasks/macro-1");
-      await page.getByRole("button", { name: w.more, exact: true }).click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      await openDeletionMenu(page, locale);
       const dialog = page.getByRole("dialog", { name: w.blocked, exact: true });
       await expect(dialog.getByRole("button", { name: w.acknowledge, exact: true })).toBeFocused();
       await expect(dialog.getByRole("button", { name: w.confirm, exact: true })).toHaveCount(0);
@@ -182,8 +186,7 @@ for (const { locale, width, theme } of [
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await deletionFixture(page, false, undefined, false, firstDeleteGate);
       await open(page, "#tasks/macro-1");
-      await page.getByRole("button", { name: w.more, exact: true }).click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      await openDeletionMenu(page, locale);
       const dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await dialog.getByRole("button", { name: w.confirm, exact: true }).click();
       try {
@@ -207,8 +210,7 @@ for (const { locale, width, theme } of [
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await deletionFixture(page, false, undefined, true);
       await open(page, "#tasks/macro-1");
-      await page.getByRole("button", { name: w.more, exact: true }).click();
-      await page.getByRole("button", { name: w.action, exact: true }).click();
+      await openDeletionMenu(page, locale);
       const dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await expect(dialog.getByText(w.started, { exact: true })).toBeVisible();
       await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();

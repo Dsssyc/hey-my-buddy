@@ -11,7 +11,7 @@ import i18n from "i18next";
 import * as formatting from "./i18n/format";
 
 const props = (): MacroTaskListProps => ({
-  sort: "activity-desc", onSortChange: vi.fn(),
+  sortFor: () => "activity-desc", onSortChange: vi.fn(),
   groups: macroTaskGroups(listFixture()), totals: { all: 12, active: 2, host: 1, review: 3 }, loading: false, error: "", reorder: null,
   filter: "all", query: "", selected: null,
   onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
@@ -64,6 +64,15 @@ describe("macro task list", () => {
     expect(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ })).toBeTruthy();
   });
 
+  it("routes a project sort choice to that project's id", async () => {
+    const p = props(); render(<MacroTaskList {...p}/>);
+    const group = document.querySelector<HTMLElement>('[data-slot="macro-group"]')!;
+    group.querySelector<HTMLButtonElement>('[data-slot="macro-sort-button"]')!.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "创建时间" }));
+    expect(p.onSortChange).toHaveBeenCalledWith(p.groups[0]!.id, "created-desc");
+  });
+
   it("filters, searches, selects and names the tabs with their counts", async () => {
     const p = props(); render(<MacroTaskList {...p}/>);
     expect(screen.getByRole("heading", { name: "宏任务 12" }).querySelector("[data-slot=macro-list-total]")?.textContent).toBe("12");
@@ -93,6 +102,7 @@ describe("macro task list", () => {
     const p = props();
     const variants = [
       { host: 1, review: 2, active: 1, failed: 1, accepted: 0 },
+      { host: 0, review: 1, active: 1, failed: 1, accepted: 0 },
       { host: 0, review: 0, active: 1, failed: 1, accepted: 0 },
       { host: 0, review: 0, active: 0, failed: 1, accepted: 0 },
       { host: 0, review: 0, active: 0, failed: 0, accepted: 1 },
@@ -102,13 +112,14 @@ describe("macro task list", () => {
     p.groups = macroTaskGroups(rows);
     render(<MacroTaskList {...p}/>);
     const entries = [...document.querySelectorAll<HTMLButtonElement>('[data-slot="macro-entry"]')];
-    expect(entries.map(entry => entry.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind") ?? null)).toEqual(["hand", "live", "fail", null]);
+    expect(entries.map(entry => entry.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind") ?? null)).toEqual(["hand", "review", "live", "fail", null]);
     expect(entries.every(entry => ![...entry.classList].some(name => name.startsWith("before:")))).toBe(true);
     expect(entries.every(entry => !entry.querySelector('[data-slot="macro-entry-counts"]'))).toBe(true);
     expect(entries.every(entry => entry.classList.contains("h-7"))).toBe(true);
     expect(entries.every(entry => entry.querySelector("time") === null)).toBe(true);
     expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("sidebar-label"))).toBe(true);
     expect(within(entries[0]!).getByText("等待 Host", { selector: ".sr-only" })).toBeTruthy();
+    expect(within(entries[1]!).getByText("等待验收", { selector: ".sr-only" })).toBeTruthy();
   });
 
   it("marks the selected row and explains the sort time with the full title", () => {
@@ -116,7 +127,7 @@ describe("macro task list", () => {
     const view = render(<MacroTaskList {...p}/>);
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     expect(entry.getAttribute("aria-description")).toContain(`${row(p).title} · 最后活动：`);
-    view.rerender(<MacroTaskList {...p} sort="created-desc" selected="macro-1"/>);
+    view.rerender(<MacroTaskList {...p} sortFor={() => "created-desc"} selected="macro-1"/>);
     const sorted = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     expect(sorted.getAttribute("aria-description")).toContain(`开始：${formatting.formatDateTime(Date.parse(row(p).createdAt!))}`);
     expect(sorted.getAttribute("aria-pressed")).toBe("true");
@@ -168,9 +179,9 @@ describe("macro task list", () => {
     p.groups = [{ ...p.groups[0]!, macroTasks: rows }];
     view.rerender(<MacroTaskList {...p}/>);
     await waitFor(() => expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24));
-    view.rerender(<MacroTaskList {...p} sort="created-desc"/>);
+    view.rerender(<MacroTaskList {...p} sortFor={() => "created-desc"}/>);
     expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24);
-    view.rerender(<MacroTaskList {...p} sort="created-desc" filter="active"/>);
+    view.rerender(<MacroTaskList {...p} sortFor={() => "created-desc"} filter="active"/>);
     expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24);
   });
 

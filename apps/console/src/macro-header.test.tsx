@@ -55,4 +55,18 @@ describe("the macro task header", () => {
     expect(failed.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind")).toBe("fail");
     expect(document.querySelector('[data-slot="macro-overview-count-ended"]')?.textContent).toContain("1已结束");
   });
+
+  it("distinguishes Host decisions from acceptance in the state counts", () => {
+    const original = macroTaskTimelineFixture();
+    const timeline = { ...original, macroTask: { ...original.macroTask,
+      counts: { ...original.macroTask.counts, host: 1, review: 2 } } };
+    render(<MacroTaskOverview readGoals={vi.fn()} summary={null} timeline={timeline} loading={false}
+      stale={false} onBackToList={() => {}} />);
+    const host = document.querySelector('[data-slot="macro-overview-count-host"]')!;
+    const review = document.querySelector('[data-slot="macro-overview-count-review"]')!;
+    expect(host.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind")).toBe("hand");
+    expect(review.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind")).toBe("review");
+    expect(review.querySelector("path")?.getAttribute("fill")).toBe("none");
+    expect(review.querySelector("path")?.getAttribute("class")).toBe("stroke-hand-mark");
+  });
 });

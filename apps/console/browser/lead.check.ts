@@ -14,7 +14,7 @@ async function openLeadMacro(page: Page, language: string, tasks: string) {
   await expect(page.locator("html")).toHaveAttribute("lang", language);
   await expect(page.getByRole("navigation").first().getByRole("link", { name: new RegExp(`^${tasks}`) })).toBeVisible();
   const read = page.waitForResponse(response => new URL(response.url()).pathname === TIMELINE);
-  await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
+  await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
   const response = await read;
   expect(response.status()).toBe(200);
   expect(response.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
@@ -107,9 +107,9 @@ for (const { locale, language, tasks } of [
       const stopName = zh ? "停止宏任务" : "Stop macro task";
       const cancelName = zh ? "取消" : "Cancel";
       const confirmName = zh ? "确认停止宏任务" : "Confirm stop";
-      const more = page.getByRole("button", { name: zh ? "更多" : "More", exact: true });
+      const more = page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`);
       await more.click();
-      const stop = page.getByRole("button", { name: stopName, exact: true });
+      const stop = page.getByRole("menuitem", { name: stopName, exact: true });
       await expect(stop).toBeEnabled();
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
@@ -156,7 +156,6 @@ for (const { locale, language, tasks } of [
         ? "无操作权限；请重新打开控制台。" : "You may not do this; reopen the console.");
       await expectTextUncut(status);
       await expect(page.getByText(zh ? "已停止" : "Stopped", { exact: true })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
 
       const unchanged = await page.request.get(TIMELINE);
       expect(unchanged.status()).toBe(200);
@@ -164,7 +163,9 @@ for (const { locale, language, tasks } of [
       expect(await unchanged.text()).toBe(body);
       await expectReadableStart(row(page, LEAD).getByText(zh ? "等待名下的微任务" : "Waiting for owned micro tasks", { exact: true }), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
       await expectReadableStart(row(page, WAITING).getByText(zh ? "等待 Lead" : "Waiting for Lead", { exact: true }), zh ? "等待 Lead" : "Waiting for Lead");
-      await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
+      await more.click();
+      await expect(page.getByRole("menuitem", { name: zh ? "重试停止" : "Retry stop", exact: true })).toHaveCount(0);
+      await page.getByRole("menuitem", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       // Dismissing this browser's refusal leaves the earlier recorded Lead stop visible.
       await expect(status).toHaveText(zh ? "正在停止" : "Stopping");
       await expect(status).toHaveAttribute("aria-description", zh ? "仍有 1 项停止未确认" : "Stops unconfirmed 1");
@@ -193,9 +194,10 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
       await route.fulfill({ response, json: data });
     });
     await open(page, "#tasks");
-    await page.locator(`[data-macro-task-id="${MACRO}"] button`).click();
-    await page.getByRole("button", { name: locale === "zh-CN" ? "更多" : "More", exact: true }).click();
-    await page.getByRole("button", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
+    await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-entry]`).click();
+    await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: locale === "zh-CN" ? "‹ 宏任务" : "‹ Macro tasks", exact: true }).click();
+    await page.locator(`[data-macro-task-id="${MACRO}"] [data-slot=macro-menu-button]`).click();
+    await page.getByRole("menuitem", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
     const dialog = page.getByRole("dialog");
     const titleLine = dialog.locator("#stop-macro-task-name");
     await settle(page);

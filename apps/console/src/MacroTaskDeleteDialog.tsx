@@ -29,9 +29,10 @@ function DeletionBlockers({ blockers }: { blockers: DeletionBlocker[] }) {
   return <ul className="pt-3" data-slot="macro-delete-blockers">
     {[...groups].map(([id, reasons]) => {
       const title = reasons[0].titleSource === "none" ? t("unnamed") : reasons[0].title;
-      const hand = reasons.some(reason => ["awaiting-host", "review", "stop-unconfirmed"].includes(blockerKind(reason)));
+      const hand = reasons.some(reason => ["awaiting-host", "stop-unconfirmed"].includes(blockerKind(reason)));
+      const review = reasons.some(reason => blockerKind(reason) === "review");
       return <li key={id} className="flex gap-2.5 border-t py-2.5 last:border-b">
-        <StateMark className="mt-1.5" kind={hand ? "hand" : reasons.every(reason => blockerKind(reason) === "queued") ? "idle" : "live"}/>
+        <StateMark className="mt-1.5" kind={hand ? "hand" : review ? "review" : reasons.every(reason => blockerKind(reason) === "queued") ? "idle" : "live"}/>
         <div className="min-w-0 flex-1 wrap-anywhere">
           <div className="flex items-baseline justify-between gap-3">
             <p className="min-w-0 font-medium">{title}</p>

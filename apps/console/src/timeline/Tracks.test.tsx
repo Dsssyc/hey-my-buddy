@@ -201,9 +201,12 @@ describe("timeline drawings follow recorded facts", () => {
     track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);
     expect(slot("host-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("data-kind")).toBe("hand");
     cleanup(); track([execution()], { acceptedAt: at(25) });
     expect(slot("acceptance-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
-    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("stroke-hand-mark");
+    expect(slot("waiting-diamond")?.getAttribute("fill")).toBe("none");
+    expect(slot("waiting-diamond")?.getAttribute("data-kind")).toBe("review");
   });
   it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
     const user = userEvent.setup();

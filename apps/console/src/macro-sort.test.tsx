@@ -14,78 +14,61 @@ function ControlledSort() {
 afterEach(async () => { cleanup(); await i18n.changeLanguage("zh-CN"); });
 
 const copies = [
-  { language: "zh-CN", basis: ["最近更新", "创建时间"], direction: ["降序", "升序"], basisLabel: (basis: string) => `排序：${basis}` },
-  { language: "en-US", basis: ["Last updated", "Created"], direction: ["Descending", "Ascending"], basisLabel: (basis: string) => `Sort: ${basis}` },
+  { language: "zh-CN", trigger: "排序", basisLabel: "排序依据", orderLabel: "顺序", basis: ["最近活动", "创建时间"], direction: ["降序", "升序"] },
+  { language: "en-US", trigger: "Sort", basisLabel: "Sort by", orderLabel: "Order", basis: ["Last activity", "Created"], direction: ["Descending", "Ascending"] },
 ] as const;
 
-describe("macro sort buttons", () => {
-  for (const copy of copies) it(`keeps the basis and the direction in their own buttons (${copy.language})`, async () => {
+describe("macro sort menu", () => {
+  for (const copy of copies) it(`chooses basis and direction separately in ${copy.language}`, async () => {
     await i18n.changeLanguage(copy.language);
     const user = userEvent.setup(); render(<ControlledSort/>);
-    const basis = screen.getByRole("button", { name: copy.basisLabel(copy.basis[0]) });
-    const direction = screen.getByRole("button", { name: copy.direction[0] });
-    expect(basis.getAttribute("aria-description")).toBe(copy.basisLabel(copy.basis[0]));
-    expect(direction.getAttribute("aria-description")).toBe(copy.direction[0]);
-    expect(basis.hasAttribute("data-emphasized")).toBe(false);
-    expect(direction.hasAttribute("data-emphasized")).toBe(false);
-    expect(basis.querySelector(".lucide-history")).toBeTruthy();
-    expect(direction.querySelector(".lucide-arrow-down-wide-narrow")).toBeTruthy();
-    await user.hover(basis);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(copy.basisLabel(copy.basis[0]));
-    await user.unhover(basis);
-    await user.hover(direction);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(copy.direction[0]);
+    const trigger = screen.getByRole("button", { name: copy.trigger });
+    expect(document.querySelectorAll('[data-slot="macro-sort-button"]')).toHaveLength(1);
+    expect(trigger.querySelector(".lucide-arrow-down-wide-narrow")).toBeTruthy();
+    expect(trigger.getAttribute("aria-description")).toBe(copy.trigger);
 
-    await user.click(basis);
-    const popup = screen.getByRole("dialog");
-    expect(within(popup).getAllByRole("radio").map(item => item.textContent)).toEqual([...copy.basis]);
-    expect(within(popup).queryByRole("separator")).toBeNull();
-    expect(popup.querySelector("[data-slot=segmented]")).toBeNull();
-    expect(within(popup).getByRole("radio", { name: copy.basis[0] }).getAttribute("aria-checked")).toBe("true");
-    expect(within(popup).getByRole("radio", { name: copy.basis[0] }).querySelector(".lucide-check")).toBeTruthy();
-    await user.click(within(popup).getByRole("radio", { name: copy.basis[1] }));
-    expect(screen.getByRole("dialog")).toBe(popup);
-    expect(basis.getAttribute("aria-label")).toBe(copy.basisLabel(copy.basis[1]));
-    expect(basis.getAttribute("data-emphasized")).toBe("true");
-    expect(basis.querySelector(".lucide-calendar-plus")).toBeTruthy();
-    expect(direction.hasAttribute("data-emphasized")).toBe(false);
-    expect(within(popup).getByRole("radio", { name: copy.basis[1] }).querySelector(".lucide-check")).toBeTruthy();
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    let menu = screen.getByRole("menu", { name: copy.trigger });
+    expect(within(menu).getByText(copy.basisLabel)).toBeTruthy();
+    expect(within(menu).getByText(copy.orderLabel)).toBeTruthy();
+    expect(within(menu).getAllByRole("menuitemradio").map(item => item.textContent?.trim())).toEqual([...copy.basis, ...copy.direction]);
+    expect(within(menu).getByRole("menuitemradio", { name: copy.basis[0] }).getAttribute("aria-checked")).toBe("true");
+    expect(within(menu).getByRole("menuitemradio", { name: copy.direction[0] }).getAttribute("aria-checked")).toBe("true");
+    await user.click(within(menu).getByRole("menuitemradio", { name: copy.basis[1] }));
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await user.click(trigger);
+    menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitemradio", { name: copy.basis[1] }).getAttribute("aria-checked")).toBe("true");
+    expect(within(menu).getByRole("menuitemradio", { name: copy.direction[0] }).getAttribute("aria-checked")).toBe("true");
+    await user.click(within(menu).getByRole("menuitemradio", { name: copy.direction[1] }));
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await user.click(trigger);
+    menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitemradio", { name: copy.basis[1] }).getAttribute("aria-checked")).toBe("true");
+    expect(within(menu).getByRole("menuitemradio", { name: copy.direction[1] }).getAttribute("aria-checked")).toBe("true");
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).toBeNull();
-
-    await user.click(direction);
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(direction.getAttribute("aria-label")).toBe(copy.direction[1]);
-    expect(direction.getAttribute("aria-description")).toBe(copy.direction[1]);
-    expect(direction.querySelector(".lucide-arrow-up-narrow-wide")).toBeTruthy();
-    expect(direction.getAttribute("data-emphasized")).toBe("true");
-    expect(basis.getAttribute("data-emphasized")).toBe("true");
-    await user.click(direction);
-    expect(direction.getAttribute("aria-label")).toBe(copy.direction[0]);
-    expect(direction.hasAttribute("data-emphasized")).toBe(false);
-    expect(basis.getAttribute("data-emphasized")).toBe("true");
-
-    await user.click(basis);
-    await user.click(screen.getByRole("radio", { name: copy.basis[0] }));
-    expect(basis.hasAttribute("data-emphasized")).toBe(false);
-    expect(direction.hasAttribute("data-emphasized")).toBe(false);
-    expect(basis.className).toContain("text-muted-foreground");
-    expect(basis.className).toContain("data-[emphasized=true]:text-foreground");
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(basis); await user.click(basis);
-    expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(basis); await user.click(screen.getByRole("button", { name: "Outside" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Outside" }));
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("uses arrow keys and Space for the basis choices", async () => {
+  it("supports keyboard selection and closes after choosing", async () => {
     const user = userEvent.setup(); render(<ControlledSort/>);
-    await user.click(screen.getByRole("button", { name: "排序：最近更新" }));
-    const activity = screen.getByRole("radio", { name: "最近更新" });
-    activity.focus(); await user.keyboard("{ArrowDown} ");
-    expect(screen.getByRole("radio", { name: "创建时间" }).getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByRole("button", { name: "排序：创建时间" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "降序" })).toBeTruthy();
+    const trigger = screen.getByRole("button", { name: "排序" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const created = screen.getByRole("menuitemradio", { name: "创建时间" });
+    created.focus();
+    await user.keyboard(" ");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("menuitemradio", { name: "创建时间" }).getAttribute("aria-checked")).toBe("true");
+    await user.keyboard("{Escape}");
+    await user.hover(trigger);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("排序");
   });
 });

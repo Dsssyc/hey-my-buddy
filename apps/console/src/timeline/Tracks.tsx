@@ -303,7 +303,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
     {ruler}<IdlePattern id={pattern}/>{scale.breaks.map(gap => <rect aria-hidden="true" data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} fill={`url(#${pattern})`}/>)}
     {selected && <rect aria-hidden="true" pointerEvents="none" data-slot="selected-row" x={-INSET_PX} width={scale.widthPx + INSET_PX * 2} height={height} className="fill-selected-row"/>}
     {ongoing && <line aria-hidden="true" data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
-    {acceptance && <line data-slot="acceptance-wait" x1={acceptance.start} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
+    {acceptance && <line data-slot="acceptance-wait" x1={Math.min(acceptance.start + 6, acceptance.end)} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
     {owned.map(entry => <line key={entry.wait.startMs} data-slot="owned-wait" x1={entry.start} x2={entry.end} y1={middle} y2={middle} strokeWidth={entry.wait.open ? 2 : 1.5} strokeDasharray={entry.wait.open ? "5 4" : undefined} className={entry.wait.open ? "stroke-hand-mark" : "stroke-ink3"}/>)}
     {positioned.map(({ span, start, end, execution, outcome }) => {
       const selection = spanSelection(start, end);
@@ -341,7 +341,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
     })}
     {/* Status strokes sit above the moving edge, so motion cannot erase their paper. */}
     {tails.map(tail => <IsolatedStatusMark key={tail.item.span.spanId} slot="silent-tail-outline" d={`M${tail.x} ${middle - 10.25}h${Math.max(0, tail.item.end - tail.x)}v20.5h${-Math.max(0, tail.item.end - tail.x)}Z`} paper={paper} stroke="stroke-hand-mark" width={1.5}/>)}
-    {acceptance && <WaitingDiamond x={acceptance.start} y={middle}/>}
+    {acceptance && <WaitingDiamond x={acceptance.start} y={middle} kind="review"/>}
     {positioned.filter(item => item.span.kind === "host").map(item => <WaitingDiamond key={item.span.spanId} x={item.start} y={middle}/>)}
     {expected.map(entry => <IsolatedStatusMark slot="expected-mark" key={entry.item.span.spanId} d={`M${entry.x} ${middle - 16}v32`} paper={paper} stroke="stroke-hand-mark"/>)}
     {singletonInquiries.map(marker => <Hint key={markerKey(marker)} text={markerReadout(marker)}><g role="button" tabIndex={itemLinks?.has(markerKey(marker)) || tabKey === markerKey(marker) ? 0 : -1} data-linked-item={itemLinks?.get(markerKey(marker))} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}

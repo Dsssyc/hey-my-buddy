@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
 import { buddyColorsFor } from "../timeline/buddyColors";
 import { Axis, Track } from "../timeline/Tracks";
-import { fragmentHitPath, TIMELINE_OUTSET_PX as SLACK } from "../timeline/trackMarks";
+import { fragmentHitPath, WaitingDiamond, TIMELINE_OUTSET_PX as SLACK } from "../timeline/trackMarks";
 import { timelineScaleInput } from "../timeline/scale";
 import { useTimelineZoom } from "../timeline/useTimelineZoom";
 import { useTimelineGestures } from "../timeline/useTimelineGestures";
@@ -45,7 +45,7 @@ function anchorOf(step: Step | null, spans: readonly { spanId: string; startAt: 
  * a slice switches the step shown below; one slice is selected at a time, and
  * every retained step has a slice of its own — the delegation is the dot at
  * the row's start, a change of buddy is the diamond at the boundary it
- * happened on, the open acceptance is the diamond at the wait's start, and a
+ * happened on, the open acceptance is the outlined diamond at the wait's start, and a
  * settled acceptance is its settling mark. Inquiries, waits (including a
  * finished acceptance wait) and events are separate targets within a step.
  * The strip is centred on the step
@@ -179,7 +179,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
                 <path d={`M${x(item.at!)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-ink2"/>)
               : null)}
             {acceptanceIndex >= 0 && wait && sliceButton(`settle:${row.runId}`, acceptanceIndex, t("wait.acceptance"), x(wait.startMs),
-              <path d={`M${x(wait.startMs)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-hand-mark"/>,
+              <WaitingDiamond x={x(wait.startMs)} y={middle} kind="review"/>,
               `settle:${row.runId}`)}
           </>)}
         </div>

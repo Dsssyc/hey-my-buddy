@@ -9,6 +9,8 @@ import { parseTask } from "./parse";
 afterEach(async () => { cleanup(); await i18n.changeLanguage("zh"); });
 
 const cases = [
+  { state: "awaiting-host", taskState: "completed", lead: false, zh: "等待 Host", en: "Waiting for Host", mark: "hand" },
+  { state: "delivered", taskState: "completed", lead: false, zh: "等待验收", en: "Awaiting acceptance", mark: "review" },
   { state: "failed", lead: false, zh: "失败，等待 Host", en: "Failed, waiting for Host", mark: "hand" },
   { state: "cancelled", lead: false, zh: "已取消，等待 Host", en: "Cancelled, waiting for Host", mark: "hand" },
   { state: "failed", lead: true, zh: "失败，等待 Lead", en: "Failed, waiting for Lead", mark: "hand" },
@@ -48,8 +50,12 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     expect(screen.getByRole("heading", { name: language === "zh" ? "未命名微任务" : "Unnamed micro task" })).toBeTruthy();
     expect(status.textContent).toBe(entry[language]);
     expect(status.querySelector("[data-slot=state-mark]")?.getAttribute("data-kind")).toBe(entry.mark);
+    if (entry.mark === "review") {
+      expect(status.querySelector("[data-slot=state-mark] path")?.getAttribute("fill")).toBe("none");
+      expect(status.querySelector("[data-slot=state-mark] path")?.getAttribute("class")).toBe("stroke-hand-mark");
+    }
     expect(status.classList.contains("text-fail")).toBe(entry.mark === "fail");
-    expect(status.classList.contains("text-hand")).toBe(entry.mark === "hand");
+    expect(status.classList.contains("text-hand")).toBe(entry.mark === "hand" || entry.mark === "review");
     expect(screen.queryByRole("button", { name: /续做|结束|continue|conclude/i })).toBeNull();
   });
 });

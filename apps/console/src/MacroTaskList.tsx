@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MacroTaskFilter, MacroTaskGroup, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 import { Hint } from "./components/hint";
@@ -18,7 +18,8 @@ import { useTextClipped } from "./components/use-text-clipped";
 export type MacroTaskListProps = {
   groups: MacroTaskGroup[]; totals: Record<MacroTaskFilter, number>;
   loading: boolean; error: string; reorder: { count: number | null } | null;
-  sort: MacroTaskSort; onSortChange: (sort: MacroTaskSort) => void;
+  sortFor: (groupId: string) => MacroTaskSort; onSortChange: (groupId: string, sort: MacroTaskSort) => void;
+  actions?: (row: MacroTaskSummary) => ReactNode;
   filter: MacroTaskFilter; query: string; selected: string | null; active?: boolean; visible?: boolean;
   onCollapse: () => void;
   onFilterChange: (filter: MacroTaskFilter) => void; onQueryChange: (query: string) => void;
@@ -42,32 +43,38 @@ function FilterTab({ value, label, full, count, tone, busy }: { value: MacroTask
 export function ListFold({ label, onClick }: { label: string; onClick: () => void }) {
   return <Hint text={label}><Button data-slot="macro-fold" variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}><PanelLeft aria-hidden="true"/></Button></Hint>;
 }
-function GroupHeading({ label, count, open, standalone }: { label: string; count: number; open: boolean; standalone: boolean }) {
+function GroupHeading({ label, count, open, standalone, sort, onSortChange }: { label: string; count: number; open: boolean; standalone: boolean; sort: MacroTaskSort; onSortChange: (sort: MacroTaskSort) => void }) {
   const Icon = open ? FolderOpen : Folder;
   const [labelRef, clipped] = useTextClipped<HTMLSpanElement>(label);
-  return <Hint text={clipped ? label : undefined}><CollapsibleTrigger asChild><button type="button" data-slot="macro-group-heading" className="disclosure-trigger grid h-8 w-full grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-x-2 pr-4 pl-3 text-left text-sm motion-reduce:transition-none">
-    <Icon aria-hidden="true" className="size-4 text-ink2" strokeWidth={1.75} strokeDasharray={standalone ? "3 2.4" : undefined}/>
-    <span ref={labelRef} className={cn("sidebar-label min-w-0 font-semibold", clipped && "sidebar-label-fade")}>{label}</span><span className="text-xs text-ink3 tabular-nums">{formatNumber(count)}</span>
-  </button></CollapsibleTrigger></Hint>;
+  return <div className="group/project relative">
+    <Hint text={clipped ? label : undefined}><CollapsibleTrigger asChild><button type="button" data-slot="macro-group-heading" className="disclosure-trigger grid h-8 w-full grid-cols-[16px_minmax(0,1fr)_24px] items-center gap-x-2 pr-4 pl-3 text-left text-sm motion-reduce:transition-none">
+      <Icon aria-hidden="true" className="size-4 text-ink2" strokeWidth={1.75} strokeDasharray={standalone ? "3 2.4" : undefined}/>
+      <span ref={labelRef} className={cn("sidebar-label min-w-0 font-semibold", clipped && "sidebar-label-fade")}>{label}</span>
+      <span data-slot="macro-group-count" className="text-right text-xs text-ink3 tabular-nums group-hover/project:opacity-0 group-focus-within/project:opacity-0 group-has-[[data-slot=macro-sort-button][data-state=open]]/project:opacity-0">{formatNumber(count)}</span>
+    </button></CollapsibleTrigger></Hint>
+    <div className="absolute top-1 right-4 opacity-0 pointer-events-none group-hover/project:opacity-100 group-hover/project:pointer-events-auto group-focus-within/project:opacity-100 group-focus-within/project:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">
+      <MacroSort sort={sort} onChange={onSortChange}/>
+    </div>
+  </div>;
 }
-const Entry = memo(function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: boolean; onSelect: (id: string) => void }) {
+const Entry = memo(function Entry({ row, basis, selected, onSelect, actions }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: boolean; onSelect: (id: string) => void; actions?: (row: MacroTaskSummary) => ReactNode }) {
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title!).slice(0, 40).join("") : row.title!;
   const [titleRef, clipped] = useTextClipped<HTMLSpanElement>(text);
   const waiting = row.counts.host + row.counts.review > 0;
-  const mark = waiting ? "hand" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : null;
+  const mark = row.counts.host > 0 ? "hand" : row.counts.review > 0 ? "review" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : null;
   const status = waiting ? row.counts.host > 0 ? "host" : "review" : row.counts.active > 0 ? "active" : row.counts.failed > 0 ? "failed" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "accepted" : "ended";
   const stamp = basis === "created" ? row.createdAt : row.lastActivityAt;
   const hint = `${row.titleSource === "none" ? text : row.title} · ${t("entryTime", {
     basis: t(basis === "created" ? "entryStarted" : "entryActivity"),
     time: stamp === null ? t("unknown") : formatDateTime(Date.parse(stamp)),
   })}${row.titleSource === "task" ? ` · ${t("source")}` : ""}`;
-  return <li data-macro-task-id={row.macroTaskId}><Hint text={hint}>
-    <button type="button" data-slot="macro-entry" className={cn("grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[13px] text-ink2 hover:text-ink aria-pressed:text-ink hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
+  return <li data-macro-task-id={row.macroTaskId} data-selected={selected} className="group/entry relative"><Hint text={hint}>
+    <button type="button" data-slot="macro-entry" className={cn("grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-12 pl-3 text-left text-[13px] text-ink2 hover:text-ink aria-pressed:text-ink hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
       <span className="flex items-center justify-center">{mark && <Hint text={t(status)}><span className="flex"><StateMark kind={mark} className="size-2.5"/></span></Hint>}</span>
       <span ref={titleRef} data-slot="macro-entry-title" className={cn("sidebar-label min-w-0", clipped && "sidebar-label-fade")}>{text}</span><span className="sr-only">{t(status)}</span>
     </button>
-  </Hint></li>;
+  </Hint><div className="absolute top-0.5 right-4 opacity-0 pointer-events-none group-hover/entry:opacity-100 group-hover/entry:pointer-events-auto group-focus-within/entry:opacity-100 group-focus-within/entry:pointer-events-auto group-data-[selected=true]/entry:opacity-100 group-data-[selected=true]/entry:pointer-events-auto has-[[data-state=open]]:opacity-100 has-[[data-state=open]]:pointer-events-auto">{actions?.(row)}</div></li>;
 });
 /** Radix measures each appended page, so showing more uses the same reveal as a group. */
 function MoreEntries({ children }: { children: React.ReactNode }) {
@@ -79,7 +86,7 @@ function MoreEntries({ children }: { children: React.ReactNode }) {
   return <Collapsible open={open}><CollapsibleContent>{children}</CollapsibleContent></Collapsible>;
 }
 /** A response adds one reveal batch, regardless of how many rows the service returned. */
-function GroupEntries({ rows, basis, selected, onSelect }: { rows: MacroTaskSummary[]; basis: "created" | "activity"; selected: string | null; onSelect: (id: string) => void }) {
+function GroupEntries({ rows, basis, selected, onSelect, actions }: { rows: MacroTaskSummary[]; basis: "created" | "activity"; selected: string | null; onSelect: (id: string) => void; actions?: (row: MacroTaskSummary) => ReactNode }) {
   const history = useRef<{ ids: string[]; ends: number[] }>({ ids: [], ends: [] });
   const ids = rows.map(row => row.macroTaskId);
   const previous = history.current;
@@ -91,7 +98,7 @@ function GroupEntries({ rows, basis, selected, onSelect }: { rows: MacroTaskSumm
   let start = 0;
   return <>{history.current.ends.map((end, index) => {
     const from = start; start = end;
-    const entries = <ul className="m-0 list-none p-0">{rows.slice(from, end).map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={selected === row.macroTaskId} onSelect={onSelect}/>)}</ul>;
+    const entries = <ul className="m-0 list-none p-0">{rows.slice(from, end).map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={selected === row.macroTaskId} onSelect={onSelect} actions={actions}/>)}</ul>;
     return index === 0 ? <Fragment key="initial">{entries}</Fragment> : <MoreEntries key={`${from}:${rows[from]?.macroTaskId}`}>{entries}</MoreEntries>;
   })}</>;
 }
@@ -103,7 +110,6 @@ export function MacroTaskList(props: MacroTaskListProps) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["standalone"]));
   const scroll = useRef<HTMLDivElement>(null), pointer = useRef(false), applying = useRef(false);
   const visible = props.visible ?? props.active !== false;
-  const basis = props.sort.startsWith("created-") ? "created" : "activity";
   if (!props.reorder) applying.current = false;
   function apply() { if (applying.current) return; applying.current = true; props.onApplyReorder(); }
   function idle() {
@@ -118,7 +124,6 @@ export function MacroTaskList(props: MacroTaskListProps) {
       <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2"><MacroListHeading count={props.totals.all}/>
         {props.reorder && <Hint text={t("update")}><Button data-slot="macro-update" variant="ghost" size="icon-sm" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><RefreshCw aria-hidden="true"/></Button></Hint>}
         <div className="ml-auto flex items-center gap-1">
-          <MacroSort sort={props.sort} onChange={props.onSortChange}/>
           <Hint text={t("collapseAll")}><Button data-slot="macro-collapse-all" variant="ghost" size="icon-sm" aria-label={t("collapseAll")} onClick={() => setCollapsed(new Set(groups.map(group => group.id)))}><CopyMinus aria-hidden="true"/></Button></Hint>
           <ListFold label={t("collapse")} onClick={props.onCollapse}/>
         </div>
@@ -137,10 +142,10 @@ export function MacroTaskList(props: MacroTaskListProps) {
     </div>
     <ScrollArea ref={scroll} className="min-h-0 flex-1" viewportProps={{ "aria-label": t("entries"), tabIndex: 0 }} onScrollCapture={idle}>
       <div className="pt-1.5 pb-4">
-      {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" className="[&+&]:mt-5" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
-        <GroupHeading label={group.project?.label ?? t("standalone")} count={group.total} open={!collapsed.has(group.id)} standalone={group.id === "standalone"}/>
+      {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" data-group-id={group.id} className="[&+&]:mt-5" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
+        <GroupHeading label={group.project?.label ?? t("standalone")} count={group.total} open={!collapsed.has(group.id)} standalone={group.id === "standalone"} sort={props.sortFor(group.id)} onSortChange={sort => props.onSortChange(group.id, sort)}/>
         <CollapsibleContent>
-          <GroupEntries key={`${props.sort}:${props.filter}:${props.query}`} rows={group.macroTasks} basis={basis} selected={props.selected} onSelect={onSelect}/>
+          <GroupEntries key={`${props.sortFor(group.id)}:${props.filter}:${props.query}`} rows={group.macroTasks} basis={props.sortFor(group.id).startsWith("created-") ? "created" : "activity"} selected={props.selected} onSelect={onSelect} actions={props.actions}/>
           {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-[26px] w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span className="flex justify-center"><ChevronDown aria-hidden="true" className="size-3 text-ink3"/></span><span>{t("showMore")}</span></button>}
         </CollapsibleContent>
       </Collapsible>)}

@@ -115,15 +115,27 @@ function harness(options: StopOptions = {}) {
   return { ...view, api, refresh, tasks, timeline, user, listed, stopAttempts: () => stopAttempts };
 }
 
+async function openMacroMenu(f: ReturnType<typeof harness>) {
+  if (!screen.queryByRole("region", { name: "宏任务列表" })) {
+    await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
+  }
+  const row = document.querySelector('[data-macro-task-id][data-selected="true"]') as HTMLElement;
+  within(row).getByRole("button", { name: "更多" }).focus();
+  await f.user.keyboard("{Enter}");
+}
+
 async function openStopMenu(f: ReturnType<typeof harness>) {
-  const existing = screen.queryByRole("button", { name: "停止宏任务" });
-  if (existing) return existing;
-  await f.user.click(screen.getByRole("button", { name: "更多" }));
-  return screen.findByRole("button", { name: "停止宏任务" });
+  await openMacroMenu(f);
+  return screen.findByRole("menuitem", { name: "停止宏任务" });
 }
 
 async function requestStop(f: ReturnType<typeof harness>) {
   await f.user.click(await openStopMenu(f));
+}
+
+async function retryStop(f: ReturnType<typeof harness>) {
+  await openMacroMenu(f);
+  await f.user.click(await screen.findByRole("menuitem", { name: "重试停止" }));
 }
 
 const stopCalls = (f: ReturnType<typeof harness>) =>
@@ -371,7 +383,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       delivered: 1, awaitingHost: 1 });
     await openMacroTask(f);
     const stop = await openStopMenu(f);
-    expect(stop.getAttribute("aria-disabled")).toBe("false");
+    expect(stop.getAttribute("aria-disabled")).toBeNull();
     await f.user.click(stop);
     expect((await screen.findByRole("dialog", { name: "停止宏任务" })).textContent)
       .toContain("停止 0 个微任务停止 1 个协助任务");
@@ -467,7 +479,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await waitFor(() => expect(attempts).toBe(1));
     expect((await screen.findByText("停止未确认")).textContent).toContain("停止未确认");
     // The replay is refused, but that refusal proves nothing about attempt #1.
-    await f.user.click(screen.getByRole("button", { name: "重试停止" }));
+    await retryStop(f);
     await waitFor(() => expect(attempts).toBe(2));
     await waitFor(() => expect((f.api.command as ReturnType<typeof vi.fn>).mock.calls
       .filter(([operation]) => operation === "macro_task_stop").length).toBe(2));
@@ -529,7 +541,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await f.user.click(screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     // Replay keeps the exact command identity; the server deduplicates it.
     fail = false;
-    await f.user.click(await screen.findByRole("button", { name: "重试停止" }));
+    await retryStop(f);
     await waitFor(() => expect(f.api.command).toHaveBeenCalledTimes(2));
     const calls = (f.api.command as ReturnType<typeof vi.fn>).mock.calls
       .filter(([operation]) => operation === "macro_task_stop") as [string, Record<string, unknown>][];
@@ -626,7 +638,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(stopCalls(f).length).toBe(1);
     // Writer back once more: the retry replays the EXACT retained identity.
     f.rerender(<MacroTasks snapshot={snapshot} api={f.api} refresh={f.refresh} active writesAvailable />);
-    await f.user.click(screen.getByRole("button", { name: "重试停止" }));
+    await retryStop(f);
     await waitFor(() => expect(stopCalls(f).length).toBe(2));
     expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
   });
@@ -654,10 +666,11 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     // The malformed reply is refused client-side as an unknown outcome.
     await waitFor(() => expect(attempts).toBe(1));
     expect(await screen.findByText("停止未确认")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重试停止" })).toBeTruthy();
+    await openMacroMenu(f);
+    expect(screen.getByRole("menuitem", { name: "重试停止" })).toBeTruthy();
     expect(screen.queryByText("停止请求未提交")).toBeNull();
     // The replay keeps the identity; the coherent reply settles it.
-    await f.user.click(screen.getByRole("button", { name: "重试停止" }));
+    await f.user.click(screen.getByRole("menuitem", { name: "重试停止" }));
     await waitFor(() => expect(attempts).toBe(2));
     expect(stopCalls(f)[1]![1]).toEqual(stopCalls(f)[0]![1]);
     expect(await screen.findByText("正在停止")).toBeTruthy();

@@ -14,7 +14,7 @@ import { HeaderIdentifier } from "./HeaderIdentifier";
 import { MacroTaskGoal } from "./MacroTaskGoal";
 import type { ConsoleApi } from "./api";
 
-type Count = { key: "host" | "review" | "active" | "accepted" | "failed" | "ended"; mark: "hand" | "live" | "done" | "fail" | "idle"; value: number };
+type Count = { key: "host" | "review" | "active" | "accepted" | "failed" | "ended"; mark: "hand" | "review" | "live" | "done" | "fail" | "idle"; value: number };
 
 /** One macro task's title, context, state counts and expandable recorded facts. */
 export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, readGoals, onBackToList, listToggle, headerActions }: {
@@ -50,19 +50,19 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
     ? metrics.sumMs : null;
   const counts: Count[] = [
     { key: "host", mark: "hand", value: shown.counts.host },
-    { key: "review", mark: "hand", value: shown.counts.review },
+    { key: "review", mark: "review", value: shown.counts.review },
     { key: "active", mark: "live", value: shown.counts.active },
     { key: "accepted", mark: "done", value: shown.counts.accepted },
     { key: "failed", mark: "fail", value: shown.counts.failed },
     { key: "ended", mark: "idle", value: shown.counts.ended - shown.counts.accepted - shown.counts.failed },
   ];
 
-  return <header data-slot="macro-overview-header" className="relative flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-8 @min-[700px]:grid @min-[700px]:grid-cols-[minmax(0,1fr)_auto] @min-[700px]:items-start @min-[700px]:gap-x-6 @min-[700px]:gap-y-1.5 @min-[700px]:pt-4.5 @min-[700px]:pb-4">
-    <div className="min-w-0 flex-1 @min-[700px]:contents">
-      <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden @max-[700px]:inline-flex">
+  return <header data-slot="macro-overview-header" className="relative flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-8 @min-[761px]:grid @min-[761px]:grid-cols-[minmax(0,1fr)_auto] @min-[761px]:items-start @min-[761px]:gap-x-6 @min-[761px]:gap-y-1.5 @min-[761px]:pt-4.5 @min-[761px]:pb-4">
+    <div className="min-w-0 flex-1 @min-[761px]:contents">
+      <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden @max-[761px]:inline-flex">
         {t("back")}
       </Button>
-      <div className="flex min-w-0 items-start gap-3 @min-[700px]:col-start-1 @min-[700px]:row-start-1">
+      <div className="flex min-w-0 items-start gap-3 @min-[761px]:col-start-1 @min-[761px]:row-start-1">
         {listToggle}
         <div className="min-w-0 flex-1">
           <Hint text={titleHint}>
@@ -70,7 +70,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           </Hint>
         </div>
       </div>
-        <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-center @min-[700px]:col-span-2 @min-[700px]:row-start-2 @min-[700px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
+        <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-center @min-[761px]:col-span-2 @min-[761px]:row-start-2 @min-[761px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
           <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.project?.label ?? t("unrecorded")}</dd></div>
           <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
           <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
@@ -108,10 +108,10 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           {timeline?.macroTask.goal && <MacroTaskGoal key={shown.macroTaskId} macroTaskId={shown.macroTaskId} goal={timeline.macroTask.goal} readGoals={readGoals} active={active}/>}
         </dl>
     </div>
-    <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[700px]:col-start-2 @min-[700px]:row-start-1 @max-[700px]:w-full @max-[700px]:items-center @min-[700px]:gap-10">
-      <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 @max-[700px]:min-w-0 @max-[700px]:flex-1 @min-[700px]:gap-x-5">
-        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap @max-[700px]:flex-row @max-[700px]:items-center @max-[700px]:gap-1.5">
-          <dd className={`text-lg font-semibold leading-tight tabular-nums @max-[700px]:text-sm ${count.mark === "hand" ? "text-hand" : count.mark === "live" ? "text-foreground state-breathe" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
+    <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[761px]:col-start-2 @min-[761px]:row-start-1 @max-[761px]:w-full @max-[761px]:items-center @min-[761px]:gap-10">
+      <dl data-slot="macro-overview-counts" className="flex flex-wrap gap-x-4 gap-y-1.5 @max-[761px]:min-w-0 @max-[761px]:flex-1 @min-[761px]:gap-x-5">
+        {counts.filter(count => count.value > 0).map(count => <div key={count.key} data-slot={`macro-overview-count-${count.key}`} className="flex flex-col items-end gap-0.5 whitespace-nowrap @max-[761px]:flex-row @max-[761px]:items-center @max-[761px]:gap-1.5">
+          <dd className={`text-lg font-semibold leading-tight tabular-nums @max-[761px]:text-sm ${count.mark === "hand" || count.mark === "review" ? "text-hand" : count.mark === "live" ? "text-foreground state-breathe" : count.mark === "fail" ? "text-fail" : "text-ink"}`}>{formatNumber(count.value)}</dd>
           <dt className="flex items-center gap-1.5 text-xs text-ink2"><StateMark kind={count.mark} />{t(count.key === "host" ? "hostWait" : count.key)}</dt>
         </div>)}
       </dl>

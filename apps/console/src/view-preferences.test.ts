@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { readViewPreference, readNumberViewPreference, storeViewPreference, useViewPreference, useNumberViewPreference, VIEW_PREFERENCE_PREFIX } from "./view-preferences";
+import { readViewPreference, readNumberViewPreference, readChoiceViewPreference, storeViewPreference, useViewPreference, useNumberViewPreference, VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
 it("only restores standard stored booleans; absent and damaged values are unchecked", () => {
@@ -13,6 +13,18 @@ it("only restores standard stored booleans; absent and damaged values are unchec
   expect(readViewPreference("example")).toBe(true);
   storeViewPreference("example", false);
   expect(readViewPreference("example")).toBe(false);
+});
+it("reads only supported sort choices for a specific project", () => {
+  const key = "macro-task-sort:project:p1";
+  const choices = ["activity-desc", "activity-asc", "created-desc", "created-asc"] as const;
+  expect(readChoiceViewPreference(key, choices)).toBeNull();
+  for (const value of ["created", "created-descending", "unsupported"]) {
+    localStorage.setItem(VIEW_PREFERENCE_PREFIX + key, value);
+    expect(readChoiceViewPreference(key, choices)).toBeNull();
+  }
+  storeViewPreference(key, "created-asc");
+  expect(readChoiceViewPreference(key, choices)).toBe("created-asc");
+  expect(readChoiceViewPreference("macro-task-sort:project:p2", choices)).toBeNull();
 });
 it("does not throw when storage is unavailable and keeps the current view usable", () => {
   vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });

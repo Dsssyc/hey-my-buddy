@@ -2,10 +2,8 @@ import { Cell, Grid, Gridline, useGridRef } from "react-resizable-panels";
 import { cn } from "cn";
 import { Button } from "./components/ui/button";
 import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { memo, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Ellipsis } from "lucide-react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
@@ -14,7 +12,7 @@ import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 
 import { ListFold, MacroListHeading } from "./MacroTaskList";
 import { Hint } from "./components/hint";
-import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
+import { MacroTaskEntryMenu } from "./MacroTaskEntryMenu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./components/ui/dialog";
 import { StateMark } from "./components/ui/state-mark";
 import { formatClockMinutes, formatNumber } from "./i18n/format";
@@ -45,17 +43,18 @@ function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; 
 }
 
 /** The macroTask stop's explicit confirmation: names the macroTask and its scope. */
-function StopDialog({ summary, scope, onConfirm, onCancel }: {
+function StopDialog({ summary, scope, onConfirm, onCancel, returnFocus }: {
   summary: MacroTaskSummary;
   scope: StopScope;
   onConfirm: () => void;
   onCancel: () => void;
+  returnFocus: RefObject<HTMLButtonElement | null>;
 }) {
   const { t } = useTranslation(["shell", "tasks"]);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
   return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
-    <DialogContent className="text-sm" onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
+    <DialogContent className="text-sm" onCloseAutoFocus={event => { event.preventDefault(); returnFocus.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
       <DialogTitle>{t("macroStop.title")}</DialogTitle>
       <Hint text={title}><p id="stop-macro-task-name" tabIndex={0} className="truncate text-sm font-medium">{title}</p></Hint>
       <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
@@ -95,7 +94,6 @@ export const MacroTasks = memo(function MacroTasks({ snapshot, api, refresh, act
   // The one focused item, shared by the detail strip and its overview.
   const [origin, setOrigin] = useState<string | null>(null);
   function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
-    next = { ...next, sort: next.sort ?? location.sort };
     const hash = tasksHash(next);
     const state = window.history.state;
     if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, state, "", hash);
@@ -104,13 +102,18 @@ export const MacroTasks = memo(function MacroTasks({ snapshot, api, refresh, act
     onAddress?.(hash);
   }
   useEffect(() => {
-    onAddress?.(tasksHash(location));
+    function canonicalAddress(next: TasksLocation) {
+      const hash = tasksHash(next);
+      if (window.location.hash !== hash) window.history.replaceState(window.history.state, "", hash);
+      onAddress?.(hash);
+    }
+    if (tasksLocation(window.location.hash)) canonicalAddress(location);
     const changed = () => {
       const next = tasksLocation(window.location.hash);
       if (!next) return;
       setOrigin(null);
       setLocation(next);
-      onAddress?.(tasksHash(next));
+      canonicalAddress(next);
     };
     // A step back or forward through the history, and a hand-written address, both land here.
     window.addEventListener("hashchange", changed);
@@ -141,12 +144,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, [folding, listCollapsed]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState("");
-  const sort = location.sort ?? "activity-desc";
   const selected = location.macroTaskId;
   const [showNarrowList, setShowNarrowList] = useState(!selected);
-  const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const deletionOpening = useRef(false);
   const [deleteTarget, setDeleteTarget] = useState<MacroTaskSummary | null>(null);
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
   const [deletionNotice, setDeletionNotice] = useState<{ macroTaskId: string; title: string | null; refreshFailed: boolean } | null>(null);
@@ -155,7 +155,6 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   selectedRef.current = selected;
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   useEffect(() => { if (deletionNotice) noticeRef.current?.focus(); }, [deletionNotice?.macroTaskId]);
-  useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
   useEffect(() => { if (detailRunId) setShowNarrowList(false); }, [detailRunId]);
   const [narrow, setNarrow] = useState(() => window.matchMedia?.("(max-width: 760px)").matches ?? false);
@@ -178,7 +177,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     changed(); media.addEventListener("change", changed);
     return () => media.removeEventListener("change", changed);
   }, []);
-  const list = useMacroTaskList(api, { query, filter, sort }, active);
+  const list = useMacroTaskList(api, { query, filter }, active);
   const rows = list.rows.filter(row => !deletedIds.has(row.macroTaskId));
   const groups = useMemo(() => list.groups.map(group => {
     const macroTasks = group.macroTasks.filter(row => !deletedIds.has(row.macroTaskId));
@@ -243,29 +242,16 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const openRun = (runId: string, from: string | null = null) => go({ macroTaskId: selected, runId, step: null }, "push", from);
   const backToTimeline = () => go({ macroTaskId: selected, runId: null, step: null }, "push");
 
-  let stopControl: ReactNode = null;
-  if (selectedSummary) {
-    const stopping = stopEntry?.phase === "stopping";
-    const scope = stopScope(selectedSummary);
-    const reason = !stop.writable ? t("readonly") : stopping ? t("stopping") : scope.roots + scope.helpers === 0 ? t("shell:macroStop.noActive") : undefined;
-    stopControl = <div data-slot="macro-stop-menu" className="flex items-center gap-2">
-      {stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" tabIndex={0} className={cn("text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-foreground state-breathe" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>}
-      {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><Button variant="outline" size="sm" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</Button></Hint>}
-      {stopState?.phase === "refused" && <Button variant="outline" size="sm" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</Button>}
-      <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><Hint text={t("more")}><PopoverTrigger asChild><Button ref={menuButtonRef} data-slot="macro-menu-button" variant="ghost" size="icon-sm" aria-label={t("more")}><Ellipsis aria-hidden="true"/></Button></PopoverTrigger></Hint>
-        <PopoverContent align="end" className="w-48 p-1" onCloseAutoFocus={event => { if (deletionOpening.current) { event.preventDefault(); deletionOpening.current = false; } }}>
-          <Hint text={reason}><Button data-slot="macro-stop-action" variant="ghost" className="w-full justify-start" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</Button></Hint>
-          <div className="my-1 border-t"/>
-          <Button data-slot="macro-delete-action" variant="ghost" className="w-full justify-start text-fail" onClick={() => { deletionOpening.current = true; setMenuOpen(false); setDeleteTarget(selectedSummary); }}>{t("macroHeader:deletion.action")}</Button>
-        </PopoverContent>
-      </Popover>
-    </div>;
-  }
+  const stopControl = stopState && <Hint text={stopState.detail}><span data-slot="macro-stop-state" tabIndex={0} className={cn("shrink-0 whitespace-nowrap text-xs", stopState.phase === "refused" ? "text-fail" : stopState.phase === "stopping" || stopState.phase === "in-progress" ? "text-foreground state-breathe" : stopState.phase === "stopped" || stopState.phase === "acknowledged" ? "text-past" : "text-hand")} role="status">{stopState.label}</span></Hint>;
+  const entryActions = (summary: MacroTaskSummary) => <MacroTaskEntryMenu summary={summary} entry={stop.entries.get(summary.macroTaskId)} writable={stop.writable} active={active}
+    onStop={(row, button) => { menuButtonRef.current = button; stop.requestStop(row, stopScope(row)); }}
+    onRetry={stop.retryStop} onDismiss={stop.dismissStop}
+    onDelete={(row, button) => { menuButtonRef.current = button; setDeleteTarget(row); }}/>;
   const listPane = <MacroTaskList
     groups={groups} totals={totals} loading={list.loading} error={list.error}
-    reorder={list.reorder} filter={filter} query={query} sort={sort} selected={selected}
+    reorder={list.reorder} filter={filter} query={query} sortFor={list.sortFor} selected={selected} actions={entryActions}
     active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} onCollapse={onCollapseList}
-    onSortChange={sort => go({ ...location, sort }, "push", origin)}
+    onSortChange={list.changeSort}
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
     onMore={list.more} onApplyReorder={list.applyReorder} />;
 
@@ -328,9 +314,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
       onConfirm={() => stop.confirmStop(stop.confirming!.summary)}
-      onCancel={stop.cancelConfirm} />}
+      onCancel={stop.cancelConfirm} returnFocus={menuButtonRef} />}
     {deleteTarget && <MacroTaskDeleteDialog key={deleteTarget.macroTaskId} summary={deleteTarget}
-      open={active && selected === deleteTarget.macroTaskId} returnFocus={menuButtonRef}
+      open={active} returnFocus={menuButtonRef}
       api={api} snapshot={snapshot} authority={authority} writesAvailable={writesAvailable && !connectionError}
       onClose={() => setDeleteTarget(null)} onDeleted={id => deleted(id, deleteTarget)}/>}
 
