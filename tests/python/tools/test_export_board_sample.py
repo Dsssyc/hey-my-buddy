@@ -227,13 +227,13 @@ class ExportBoardSampleTests(WorkflowTestCase):
     def test_unsupported_schema_preserves_source_and_publishes_no_sample(self):
         board = self.source_board()
         board.store.db.close()
-        for schema in (28, 31):
+        for schema in (29, 31):
             with self.subTest(schema=schema):
                 with closing(sqlite3.connect(board.directory / DB_FILE)) as connection, connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(schema),))
                 before = files(board.directory)
                 output = self.directory / f'unsupported-{schema}'
-                with self.assertRaisesRegex(ValueError, f'Source must use schema 29 or {SCHEMA_VERSION}'):
+                with self.assertRaisesRegex(ValueError, f'Source must use schema {SCHEMA_VERSION}'):
                     export_sample(board.directory, output)
                 self.assertFalse(output.exists())
                 self.assert_source_unchanged(before, files(board.directory))

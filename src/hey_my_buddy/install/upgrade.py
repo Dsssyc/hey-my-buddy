@@ -22,7 +22,6 @@ from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
-from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -65,8 +64,8 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
+    if schema is None or schema[0] != str(SCHEMA_VERSION):
+        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -297,10 +296,9 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
-    expected_schema = before['schema']
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != expected_schema:
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
-                         tables=['meta'] if health.get('schemaVersion') != expected_schema else [])
+                         tables=['meta'] if health.get('schemaVersion') != SCHEMA_VERSION else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
@@ -314,7 +312,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
                    if actual['fingerprints'].get(name) != value]
         if changed:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
-    return {'runtimeContentId': target.name, 'schemaVersion': expected_schema,
+    return {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION,
             **({'retainedDataFingerprints': True} if contract_changed else {})}
 
 
@@ -515,18 +513,13 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
-                    expected = before
-                    if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA:
-                        migration = upgrade_state(state)
-                        expected = {**idle_snapshot(state), 'runtimeSettings': runtime_settings}
-                        journal['schemaUpgrade'] = migration
-                    journal.update(phase='prepared', expected=expected)
+                    journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
                 active = target
                 health = start(state, target)
-                evidence = verify_started(state, target, health, expected, contract_changed=contract_changed)
+                evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
                 _verify_skill_generation(skill_paths, target, health)
-                journal.update(phase='skill-switching', expected=expected)
+                journal.update(phase='skill-switching', expected=before)
                 write_journal(marker, journal)
                 _publish_skill(journal, skill_paths)
                 write_journal(marker, journal)
