@@ -191,6 +191,7 @@ EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
     "normal": ("console.json", "macro-tasks.json", "messages-preview-run-a1.json", "messages-preview-run-a3.json",
+               "messages-preview-run-b8.json", "messages-preview-run-b9.json",
                "runtime-version.json", "tasks.json",
                "timeline-macro-a.json", "timeline-macro-b.json", "timeline-macro-c.json", "timeline-standalone.json",
                "workflow-audit-preview-run-a1.json", "workflow-audit-preview-run-a2.json",
@@ -606,13 +607,14 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
 def message(message_id: str, attempt_id: str | None, question: str, *, author: str, created: str, state: str,
             reason: dict | None = None, note: str | None = None,
             delivered: str | None = None, answer: str | None = None,
-            answered: str | None = None) -> dict:
+            answered: str | None = None, delivery_mode: str | None = None) -> dict:
     """One inquiry as ``message_list`` returns it; ``taskId`` is set when the run is assembled."""
     return {"messageId": message_id, "taskId": None, "attemptId": attempt_id, "inquiryId": message_id,
             "direction": "question", "author": author, "recipient": "worker",
             "question": question, "questionBytes": len(question.encode()),
             "questionSha256": digest(f"question-{message_id}"), "state": state, "reason": reason, "note": note,
-            "delivery": {"deliveredAt": delivered} if delivered else None,
+            "delivery": ({**({"deliveredAt": delivered} if delivered else {}),
+                          **({"admittedDelivery": delivery_mode} if delivery_mode else {})} or None),
             "answer": ({"text": answer, "bytes": len(answer.encode()), "via": "tool", "toolCallId": None,
                         "at": answered, "truncated": False, "source": "native"} if answer else None),
             "attempts": 1, "createdAt": created, "updatedAt": answered or delivered or created, "revision": 2}
@@ -1021,6 +1023,13 @@ def build_runs() -> dict[str, dict]:
                               usage=None, turn_state="rejected"),
                       attempt("att-b9-2", 2, "finished", True, instant(7, 16), instant(7, 18), CFG_FLASH,
                               result="合成预览：编码样例一致。", usage=usage("dsh-native", 1700, 500, 200))],
+            messages=[
+                message("inq-b9-unanswered", "att-b9-2", "编码核对结束前，请说明尚未覆盖的路径样例。", author=HOST_B,
+                        created=instant(7, 17), state="unavailable", delivered=instant(7, 17, 3),
+                        delivery_mode="cooperative-checkpoint", reason=reason("inquiry-delivered-at-attempt-end")),
+                message("inq-b9-after-end", "att-b9-2", "回合结束后提出的问题是否还能排入？", author=HOST_B,
+                        created=instant(7, 18, 30), state="unavailable", reason=reason("inquiry-root-turn-ended")),
+            ],
             artifacts=[artifact("art-b9", "att-b9-2", digest("b9-output")[:40],
                                 "/synthetic-preview/diffs/b9.diff", ["synthetic/path-encoding.txt"])],
             markers=[marker(instant(7, 14), "dispatch", actor={"role": "lead", "id": "preview-run-b3"}),
@@ -1066,6 +1075,8 @@ def build_runs() -> dict[str, dict]:
                               usage=usage("zcode-native", None, None, None),
                               stop_initiator="lead", cancel_requested_at=instant(9, 59, 30),
                               grace_deadline=instant(10, 0, 15))],
+            messages=[message("inq-b8-checkpoint", "att-b8-1", "请在下次检查点报告当前平台核对进度。", author=HOST_B,
+                              created=instant(9, 50), state="queued", delivery_mode="cooperative-checkpoint")],
             markers=[marker(instant(9, 46), "dispatch", actor={"role": "lead", "id": "preview-run-b7"}),
                      marker(instant(9, 59, 30), "cancel", actor={"role": "lead", "id": "preview-run-b7"},
                             stopInitiator="lead", note="Lead 停止这条平台核对")]),
@@ -3485,7 +3496,7 @@ def emit_fixture_files() -> list[dict]:
                     "POST /api/command workflow_get includeAudit", 200, "accepted",
                     workflow_get({"runId": run_id, "includeAudit": True, "routingHistory": {"limit": 100}}),
                     request={"runId": run_id})
-            for run_id in ("preview-run-a1", "preview-run-a3"):
+            for run_id in ("preview-run-a1", "preview-run-a3", "preview-run-b8", "preview-run-b9"):
                 add(scenario, f"messages-{run_id}.json", "message-list", "POST /api/command message_list",
                     200, "accepted", message_list({"runId": run_id, "limit": 200}), request={"runId": run_id})
         for run_id in workflows[scenario]:

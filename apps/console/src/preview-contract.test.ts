@@ -314,7 +314,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(audits.flatMap(audit => audit.facts.routing as { routerBuddy: unknown }[]).every(entry => entry.routerBuddy !== null)).toBe(true);
     const inquiries = outcomes.filter(outcome => outcome.kind === "message-list")
       .flatMap(list => list.facts.inquiries as { state: string; answered: boolean; attemptId: string | null }[]);
-    expect(new Set(inquiries.map(item => item.state))).toEqual(new Set(["answered", "unavailable", "delivered", "discarded"]));
+    expect(new Set(inquiries.map(item => item.state))).toEqual(new Set(["answered", "unavailable", "delivered", "discarded", "queued"]));
     expect(inquiries.filter(item => item.answered)).toHaveLength(1);
     // One inquiry names no attempt: the detail still has to show it.
     expect(inquiries.filter(item => item.attemptId === null)).toHaveLength(1);
