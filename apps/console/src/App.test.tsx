@@ -93,7 +93,7 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "等待验收" }));
     expect(
-      await screen.findByRole("heading", { name: "没有匹配的委派" }),
+      await screen.findByRole("heading", { name: "没有匹配的微任务" }),
     ).toBeTruthy();
   });
 
@@ -160,7 +160,7 @@ describe("console interactions", () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一项微任务" });
     await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     // There is no global edit switch: controls are directly editable, and no

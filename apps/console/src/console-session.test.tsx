@@ -314,7 +314,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     // Navigation keeps working and no control reacquires authority.
     await user.click(screen.getByRole("link", { name: "任务" }));
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
-    expect(screen.getByRole("heading", { name: "选择一项委派" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "选择一项微任务" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights without a new login.
     // The edit cluster only exists on the settings tabs (P1.2), so return there.
@@ -542,7 +542,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(await within(detail).findByRole("tab", { name: "路由依据" }));
     expect(await within(detail).findByText("记录的选择依据")).toBeTruthy();
     // Filters and searches stay usable without any write attempt.
-    await user.type(screen.getByLabelText("搜索委派"), "可浏览");
+    await user.type(screen.getByLabelText("搜索微任务"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(await screen.findByRole("checkbox", { name: "显示不可用 1" }));

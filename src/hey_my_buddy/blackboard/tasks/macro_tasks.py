@@ -30,7 +30,7 @@ MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
 #: Display fallback when a micro task recorded no intent title or task line.
-UNTITLED = "未命名委派"
+UNTITLED = "未命名微任务"
 TITLE_LIMIT = 200
 CURSOR_VERSION = 1
 

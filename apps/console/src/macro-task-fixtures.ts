@@ -1,6 +1,6 @@
 /**
  * Realistic, contract-typed fixtures for the work macro task tests. Every value
- * mirrors the documented read shapes in docs/reference/objectives.md; nothing
+ * mirrors the documented read shapes in docs/reference/macro-tasks.md; nothing
  * here claims a cost, a model call or an invented duration.
  */
 
@@ -27,9 +27,9 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
   return {
     macroTaskId: "macro-1",
     kind: "macro-task",
-    title: "工作目标时间轴：设计、接口与实现",
+    title: "宏任务时间轴：设计、接口与实现",
     titleSource: "macro-task",
-    description: "按用户认可的第 X 节设计工作目标时间轴。本目标覆盖只读接口、前端呈现与离线升级验证。",
+    description: "按用户认可的第 X 节设计宏任务时间轴。本目标覆盖只读接口、前端呈现与离线升级验证。",
     summary: null,
     project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
     sourceHostId: "codex-desktop",
@@ -50,7 +50,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     runId,
     parentRunId: null,
     rootRunId: runId,
-    title: `委派 ${runId}`,
+    title: `微任务 ${runId}`,
     titleSource: "title",
     taskSummary: null,
     summary: null,
@@ -86,10 +86,10 @@ function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: stri
 /** Six micro tasks, folding gaps, every span kind and terminal marker. */
 export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
   const rows: TimelineRow[] = [
-    row("r1", { title: "设计工作目标时间轴视图与交互规范", taskSummary: "设计只读的工作目标时间轴视图、交互规范与验收标准。",
+    row("r1", { title: "设计宏任务时间轴视图与交互规范", taskSummary: "设计只读的宏任务时间轴视图、交互规范与验收标准。",
       summary: "已完成时间轴视图与交互规范设计并交付审阅。", createdAt: "2026-09-26T01:12:00Z", state: "accepted", status: "completed",
       buddy: OPUS, acceptedAt: "2026-09-26T02:20:00Z", acceptanceVerdict: "accepted" }),
-    row("r2", { title: "实现 objectives 表、objective_list 与只读时间轴接口", taskSummary: "实现 objectives 表与 objective_list、objective_timeline 两个只读接口。",
+    row("r2", { title: "实现 macro_tasks 表、macro_task_list 与只读时间轴接口", taskSummary: "实现 macro_tasks 表与 macro_task_list、macro_task_timeline 两个只读接口。",
       summary: null, createdAt: "2026-09-26T01:20:00Z", state: "accepted", status: "completed",
       buddy: CODEX, acceptedAt: "2026-09-26T03:30:00Z", acceptanceVerdict: "accepted" }),
     row("r3", { title: "补充 schema 升级离线副本的验证测试", taskSummary: "为离线副本升级补充验证测试，覆盖行数与哈希不变。",

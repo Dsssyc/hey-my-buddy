@@ -29,8 +29,8 @@ describe("0.16 status vocabulary (0.2)", () => {
 
   it("composes the header progress sentence", () => {
     expect(macroTaskProgressText(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, active: 0, host: 0, review: 0, ended: 3 } })))
-      .toBe("已完成 · 3 / 3 个委派已验收");
-    expect(macroTaskProgressText(summary())).toBe("进行中 · 1 / 3 个委派已验收");
+      .toBe("已完成 · 3 / 3 个微任务已验收");
+    expect(macroTaskProgressText(summary())).toBe("进行中 · 1 / 3 个微任务已验收");
   });
 });
 

@@ -4,7 +4,7 @@ The console binds ``127.0.0.1`` on a fixed configurable port. Local access is
 login-free by default; optional login uses a single-use ten-minute entry and
 explicitly revocable hashed sessions. Every request passes the exact loopback
 origin boundary and writes also need a bootstrap CSRF value. Each admitted client
-uses the existing named, validated operations and revision fences. There is no
+uses the existing named, validated operations and command receipts. There is no
 CORS, generic SQL surface or browser authority over Host workflow commands.
 
 The page is the built React/Vite bundle served from ``src/hey_my_buddy/console/assets``.

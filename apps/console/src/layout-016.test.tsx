@@ -312,7 +312,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     expect(dock().className).toContain("collapsed");
     view.rerender(<MacroTaskTimeline {...baseProps(timeline, { selection: pinned })} />);
     expect(dock().className).toContain("collapsed");
-    expect(dock().querySelector(".inspector-dock-title")!.textContent).toContain("整项委派");
+    expect(dock().querySelector(".inspector-dock-title")!.textContent).toContain("整项微任务");
     await user.click(within(dock()).getByRole("button", { name: "展开检查器" }));
     expect(document.querySelector(".timeline-inspector")).toBeTruthy();
     await user.click(within(dock()).getByRole("button", { name: "收起检查器" }));

@@ -111,8 +111,8 @@ export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: Macr
       detail: "时间轴读取不完整 · 停止未确认",
     };
   }
-  // runIds mixes roots and helpers; only the root count names 委派.
-  return { phase: "stopped", label: "已停止", detail: `${affectedRoots.size} 个委派及协助任务已停止` };
+  // runIds mixes roots and helpers; only the root count names 微任务.
+  return { phase: "stopped", label: "已停止", detail: `${affectedRoots.size} 个微任务及协助任务已停止` };
 }
 
 export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvailable: boolean, authority: AuthorityLatch | undefined, refresh: () => Promise<unknown>) {

@@ -707,8 +707,8 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
   const openClusterView = openCluster ? clusters.find(cluster => cluster.key === openCluster) ?? null : null;
 
   const truncation: string[] = [];
-  if (timeline?.filtered) truncation.push(`已按筛选显示 ${timeline.rows.length} / ${timeline.totals.allRows} 个委派`);
-  if (timeline?.truncated.rows) truncation.push(`委派行已截断：显示 ${timeline.rows.length} / ${timeline.totals.rows} 个`);
+  if (timeline?.filtered) truncation.push(`已按筛选显示 ${timeline.rows.length} / ${timeline.totals.allRows} 个微任务`);
+  if (timeline?.truncated.rows) truncation.push(`微任务行已截断：显示 ${timeline.rows.length} / ${timeline.totals.rows} 个`);
   if (timeline?.truncated.spans) truncation.push(`执行片段已截断：显示 ${timeline.spans.length} / ${timeline.totals.spans} 段`);
   if (timeline?.truncated.events) truncation.push(`Host 事件已截断：显示 ${timeline.events.length} / ${timeline.totals.events} 条`);
   const missingEvents = timeline && timeline.truncated.events ? Math.max(0, timeline.totals.events - timeline.events.length) : 0;
@@ -837,10 +837,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
           <div ref={scrollRef} className="tl-scroll"
             onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
             onKeyDown={onCanvasKeyDown}>
-            <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
+            <div ref={gridRef} className="tl-grid" role="group" aria-label="宏任务时间轴"
               style={{ width: `calc(var(--label-w) + ${widthPx + TRACK_END_PX}px)`, "--track-end": `${TRACK_END_PX}px` } as CSSProperties}>
               <div className="tl-row axis">
-                <div className="tl-label">委派 / 时间</div>
+                <div className="tl-label">微任务 / 时间</div>
                 <div className="tl-track">
                   {ticks.map(tick => <span key={tick.at} className="tick" style={{ left: `${tick.left}%` }}>{tick.label}</span>)}
                   {eligibleGaps.map(gap => <span key={gap.id} className="idle-block" tabIndex={0} data-gap-id={gap.id}
@@ -1035,7 +1035,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       </div>
     </div>
     {timeline && truncation.length > 0 && <div className="banner trunc-banner" role="status">
-      时间轴记录不完整：{truncation.join("；")}。可调整筛选或打开委派详情。
+      时间轴记录不完整：{truncation.join("；")}。可调整筛选或打开微任务详情。
     </div>}
     {body}
     {!drawerActuallyCollapsed && <InspectorSeparator min={DRAWER_MIN_PX} max={drawerMax} value={drawerValue}
@@ -1044,7 +1044,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     <div className={"inspector-dock" + (drawerActuallyCollapsed ? " collapsed" : "")} style={{ height: `${drawerValue}px` }}>
       <div className="inspector-dock-head">
         <span className="inspector-dock-title">{selectedCard
-          ? [selectedCard.head, selectedCard.fields.find(field => field.label === "委派")?.value,
+          ? [selectedCard.head, selectedCard.fields.find(field => field.label === "微任务")?.value,
             selectedCard.fields.find(field => field.label === "时间")?.value].filter(Boolean).join(" · ")
           : selection ? "选中记录 · 当前读取范围外" : "检查器"}</span>
         <button type="button" className="icon-button inspector-dock-toggle"

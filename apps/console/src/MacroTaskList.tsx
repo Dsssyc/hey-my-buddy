@@ -22,7 +22,7 @@ export type MacroTaskListProps = {
   hostId: string;
   choices: { projects: { id: string; label: string; path: string | null }[]; hosts: string[] };
   selected: string | null;
-  /** False while the 委派记录 tab is switched away; transient popovers close. */
+  /** False while the 微任务记录 tab is switched away; transient popovers close. */
   active?: boolean;
   /** Whether this particular list surface is visible (rail, drawer and mobile differ). */
   visible?: boolean;
@@ -44,12 +44,12 @@ export type MacroTaskListProps = {
 };
 
 type ShowKind = "macroTasks" | "standalone" | "all";
-const SHOW_OPTIONS: [ShowKind, string][] = [["macroTasks", "工作目标"], ["standalone", "历史独立委派"], ["all", "全部"]];
+const SHOW_OPTIONS: [ShowKind, string][] = [["macroTasks", "宏任务"], ["standalone", "历史独立微任务"], ["all", "全部"]];
 
 /** The one progress sentence from recorded counts (0.16 P1.4). */
 function progressText(row: MacroTaskSummary): string {
   const counts = row.counts;
-  const base = `${counts.roots} 个委派`;
+  const base = `${counts.roots} 个微任务`;
   if (row.state === "host") return `${base} · 等待 Host`;
   if (row.state === "active") return `${base} · 进行中`;
   if (row.state === "review") return `${base} · ${counts.review} 个等待验收`;
@@ -111,11 +111,11 @@ function ProjectGroups({ rows, collapsed, toggle, selected, onSelect, headingNou
 }
 
 /**
- * Left column of the 委派记录 tab (0.16 P1.4): work macroTasks grouped by
+ * Left column of the 微任务记录 tab (0.16 P1.4): work macroTasks grouped by
  * source project, ordered by latest activity. One 筛选 popup folds the
  * project/host selectors and the show-kind choice; entries are two lines —
  * title, then state + progress sentence + relative time — with the Host ID
- * only in the tooltip. Standalone roots are 历史独立委派 in their own
+ * only in the tooltip. Standalone roots are 历史独立微任务 in their own
  * collapsed section. Reads only — and while a detail is open the column can
  * collapse into an expandable narrow rail (U1).
  */
@@ -172,26 +172,26 @@ export function MacroTaskList(props: MacroTaskListProps) {
   }
   const mainRows = show === "standalone" ? standalone : show === "all" ? rows : macroTasks;
   return <>
-    <section className="panel list-panel rail-panel" hidden={!props.rail} aria-label="工作目标列表（已收起）">
+    <section className="panel list-panel rail-panel" hidden={!props.rail} aria-label="宏任务列表（已收起）">
       {props.listNavigation}
       <button ref={props.railButtonRef} type="button" className="rail-expand" onClick={props.onToggleRail}
-        aria-expanded={false} aria-label="展开工作目标列表" title="展开工作目标列表">
-        <span className="rail-text" aria-hidden="true">工作目标 ›</span>
+        aria-expanded={false} aria-label="展开宏任务列表" title="展开宏任务列表">
+        <span className="rail-text" aria-hidden="true">宏任务 ›</span>
       </button>
     </section>
-    <section className="panel list-panel" hidden={props.rail} aria-label="工作目标列表"
+    <section className="panel list-panel" hidden={props.rail} aria-label="宏任务列表"
     onPointerEnter={() => { pointerInside.current = true; }}
     onPointerLeave={() => { pointerInside.current = false; applyIfIdle(); }}>
-    <div className="panel-toolbar">{props.listNavigation}<h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>工作目标</h2>
+    <div className="panel-toolbar">{props.listNavigation}<h2 title={`按最近活动排序 · 已加载 ${rows.length} 个`}>宏任务</h2>
       {props.onCollapse && <button type="button" className="button small-button list-collapse"
-        title="收起工作目标列表" aria-label="收起工作目标列表" aria-expanded={true} onClick={props.onCollapse}>‹</button>}
+        title="收起宏任务列表" aria-label="收起宏任务列表" aria-expanded={true} onClick={props.onCollapse}>‹</button>}
       {reorder && visible && <button type="button" className="macro-task-update" title="按最近活动重新排序"
         onClick={() => { apply(); if (scroll.current) scroll.current.scrollTop = 0; }}>有更新</button>}
     </div>
     <p className="small muted local-read-state">{readVerificationText(props.verifiedAtMs)}</p>
     <div className="list-filters">
       <div className="list-filter-row">
-        <label className="search"><span className="sr-only">搜索工作目标</span><input value={props.query} maxLength={200}
+        <label className="search"><span className="sr-only">搜索宏任务</span><input value={props.query} maxLength={200}
           onChange={event => props.onQueryChange(event.target.value)} placeholder="搜索目标、项目或 ID" /></label>
         <button ref={filterButton} type="button" className="button small-button filters-button"
           id="macro-task-filters-button" aria-expanded={filtersShown} aria-controls="macro-task-filters-popover"
@@ -199,7 +199,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
         {filtersShown && <Popover id="macro-task-filters-popover" anchor={filterButton.current} label="筛选" width="min(22em, calc(100vw - 16px))"
           className="filters-popover" onClose={() => setFiltersOpen(false)}>
           <div className="filters-popover-body">
-            <div className="segmented" aria-label="按委派状态筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
+            <div className="segmented" aria-label="按微任务状态筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
               <button key={key} aria-pressed={props.filter === key} onClick={() => props.onFilterChange(key)}>{label}</button>)}</div>
             <label><span className="field-label">项目</span>
               <select ref={projectSelect} value={props.projectId} onChange={event => props.onProjectChange(event.target.value)}>
@@ -225,7 +225,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
       </div>
     </div>
     {error && <div className="list-error" role="alert">{error}<button className="button small-button" onClick={props.onRetry}>重试读取</button></div>}
-    <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="工作目标条目"
+    <div ref={scroll} className="list-scroll" tabIndex={0} aria-label="宏任务条目"
       onWheel={() => { scrollIntent.current = true; }} onTouchMove={() => { scrollIntent.current = true; }}
       onKeyDown={event => { if (["ArrowDown", "PageDown", "End"].includes(event.key)) scrollIntent.current = true; }}
       onScroll={event => {
@@ -235,26 +235,26 @@ export function MacroTaskList(props: MacroTaskListProps) {
       }}>
       <ProjectGroups rows={mainRows} collapsed={collapsed} toggle={toggle}
         selected={props.selected} onSelect={props.onSelect}
-        headingNoun={show === "standalone" ? "历史独立委派" : "工作目标"} />
+        headingNoun={show === "standalone" ? "历史独立微任务" : "宏任务"} />
       {show === "macroTasks" && standalone.length > 0 && <section className="project-group standalone-group">
         <button className="group-heading" aria-expanded={standaloneOpen}
-          title={`未指定工作目标 · 已加载 ${standalone.length} 个${nextCursor ? "，还有更多" : ""}`}
+          title={`未指定宏任务 · 已加载 ${standalone.length} 个${nextCursor ? "，还有更多" : ""}`}
           onClick={() => setStandaloneOpen(current => !current)}>
-          <span>{standaloneOpen ? "▾" : "▸"} 历史独立委派（{standalone.length}）</span>
+          <span>{standaloneOpen ? "▾" : "▸"} 历史独立微任务（{standalone.length}）</span>
         </button>
         {standaloneOpen && <ProjectGroups rows={standalone} collapsed={collapsed} toggle={toggle}
-          selected={props.selected} onSelect={props.onSelect} headingNoun="历史独立委派" />}
+          selected={props.selected} onSelect={props.onSelect} headingNoun="历史独立微任务" />}
       </section>}
       {show !== "standalone" && !mainRows.length && !loading && !error && (filtersIdle
         ? (standalone.length
-          ? <Empty title="已加载的记录中暂无工作目标" action={nextCursor
-              ? <div className="actions"><button type="button" className="button small-button" onClick={loadMore}>加载更早工作目标</button></div>
+          ? <Empty title="已加载的记录中暂无宏任务" action={nextCursor
+              ? <div className="actions"><button type="button" className="button small-button" onClick={loadMore}>加载更早宏任务</button></div>
               : undefined} />
-          : <Empty title="还没有工作目标" />)
-        : <Empty title="没有匹配的工作目标">试试其他筛选或关键词。</Empty>)}
-      {show === "standalone" && !standalone.length && !loading && !error && <Empty title="没有历史独立委派">已加载的记录都归属于工作目标。</Empty>}
-      {loading && <p className="loading-row" role="status">正在读取工作目标…</p>}
-      {nextCursor && <button className="load-more" disabled={loading} onClick={loadMore}>加载更早工作目标</button>}
+          : <Empty title="还没有宏任务" />)
+        : <Empty title="没有匹配的宏任务">试试其他筛选或关键词。</Empty>)}
+      {show === "standalone" && !standalone.length && !loading && !error && <Empty title="没有历史独立微任务">已加载的记录都归属于宏任务。</Empty>}
+      {loading && <p className="loading-row" role="status">正在读取宏任务…</p>}
+      {nextCursor && <button className="load-more" disabled={loading} onClick={loadMore}>加载更早宏任务</button>}
     </div>
   </section></>;
 }

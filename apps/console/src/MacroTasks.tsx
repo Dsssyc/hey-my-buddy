@@ -109,11 +109,11 @@ function StopDialog({ summary, onConfirm, onCancel }: {
   const unaccepted = roots - summary.counts.accepted;
   const title = displayTitle(summary.titleSource, summary.title).text;
   const scope = summary.kind === "standalone"
-    ? `将停止这条历史独立委派及其协助任务。`
-    : `将停止「${title}」中尚未验收的 ${unaccepted} 个委派及其协助任务；已验收的 ${summary.counts.accepted} 个保留。`;
+    ? `将停止这条历史独立微任务及其协助任务。`
+    : `将停止「${title}」中尚未验收的 ${unaccepted} 个微任务及其协助任务；已验收的 ${summary.counts.accepted} 个保留。`;
   return <div className="dialog-backdrop" ref={backdrop}>
     <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-macro-task-title" aria-describedby="stop-macro-task-body">
-      <h2 id="stop-macro-task-title">停止工作目标</h2>
+      <h2 id="stop-macro-task-title">停止宏任务</h2>
       <p id="stop-macro-task-body">
         {scope}{helpers ? `（涉及 ${helpers} 个协助任务）` : ""}
       </p>
@@ -126,7 +126,7 @@ function StopDialog({ summary, onConfirm, onCancel }: {
 }
 
 /**
- * Content of the 委派记录 tab. The primary view browses micro tasks
+ * Content of the 微任务记录 tab. The primary view browses micro tasks
  * as work macroTasks; the clearly labelled secondary switch keeps the
  * raw task history (command and external records included) reachable
  * instead of silently removing it.
@@ -137,7 +137,7 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
 }) {
   const [view, setView] = useState<"macroTasks" | "records">("macroTasks");
   const [listCollapsed, setListCollapsed] = useViewPreference("micro-task-list-collapsed");
-  const destination = view === "macroTasks" ? "全部执行记录" : "工作目标";
+  const destination = view === "macroTasks" ? "全部执行记录" : "宏任务";
   const listNavigation = <button type="button" className="button small-button history-view-toggle"
     title={`切换到${destination}`} aria-label={`切换到${destination}`}
     onClick={() => setView(current => current === "macroTasks" ? "records" : "macroTasks")}>
@@ -337,7 +337,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     stopControl = <span className="stop-control">
       {showButton && <button type="button" className="button small-button danger"
         disabled={!stop.writable || stopping}
-        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收委派及协助任务（需确认）。"}
+        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收微任务及协助任务（需确认）。"}
         onClick={() => stop.requestStop(selectedSummary)}>停止目标</button>}
       {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
         title={stopState.detail}>{stopState.label}</span>}
@@ -419,11 +419,11 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     ? ({ "--dock-detail-width": `${dockDetailWidth}px` } as CSSProperties)
     : undefined;
   const detailPane = <aside className={"panel detail-panel" + (detailOpen && !narrowViewport ? " docked" : "")}
-    ref={paneRef} aria-label="工作目标详情">
+    ref={paneRef} aria-label="宏任务详情">
     {selected && <div className="panel-toolbar list-mobile-navigation">
-      {listNavigation}<h2>工作目标</h2>
-      <button type="button" className="button small-button" title={listCollapsed ? "展开工作目标列表" : "收起工作目标列表"}
-        aria-label={listCollapsed ? "展开工作目标列表" : "收起工作目标列表"}
+      {listNavigation}<h2>宏任务</h2>
+      <button type="button" className="button small-button" title={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
+        aria-label={listCollapsed ? "展开宏任务列表" : "收起宏任务列表"}
         onClick={listCollapsed ? onExpandList : onCollapseList}>{listCollapsed ? "展开列表" : "收起列表"}</button>
     </div>}
     {selected
@@ -436,14 +436,14 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         {detailNode && <div key="detail" id="timeline-detail-column" className="right-stage-pane detail-stage">{detailNode}</div>}
       </div>
       : <div className="detail-placeholder">
-        <h2>选择一个工作目标</h2>
+        <h2>选择一个宏任务</h2>
 
       </div>}
   </aside>;
   return <>
     <div className="workspace-wrap">
       <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
-      {railActive && drawerOpen && <div className="list-drawer" role="dialog" aria-label="工作目标列表（抽屉）">
+      {railActive && drawerOpen && <div className="list-drawer" role="dialog" aria-label="宏任务列表（抽屉）">
         <MacroTaskList
           rows={list.rows} total={list.total} loading={list.loading} error={list.error} verifiedAtMs={list.verifiedAtMs}
           nextCursor={list.nextCursor} reorder={list.reorder}

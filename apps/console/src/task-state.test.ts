@@ -64,9 +64,9 @@ describe("micro task title rule (0.16 T1)", () => {
 
   it("names an unnamed microTask only when the title and first line are empty", () => {
     expect(taskTitle(task({ task: "   \n\t ", workflow: { state: "queued", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 0, resultSummary: null } })).text)
-      .toBe("未命名委派");
+      .toBe("未命名微任务");
     expect(taskTitle(task({ task: "", workflow: undefined })).source).toBe("none");
-    expect(taskTitle(task({ task: "", workflow: undefined })).text).toBe("未命名委派");
+    expect(taskTitle(task({ task: "", workflow: undefined })).text).toBe("未命名微任务");
   });
 
   it("treats empty, whitespace and malformed non-string titles as absent", () => {

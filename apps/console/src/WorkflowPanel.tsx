@@ -87,7 +87,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
     {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button></div>}
-    <DetailTabs id={tabsId} label="委派详情栏目" value={selectedSection}
+    <DetailTabs id={tabsId} label="微任务详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
     <div className="detail-body">
     {!value ? <p role="status">正在读取协作记录…</p> : <>

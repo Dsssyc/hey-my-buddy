@@ -27,7 +27,7 @@ export type MetricLimitation = {
 
 export const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
   scope: "读取范围不完整",
-  rows: "委派行已截断",
+  rows: "微任务行已截断",
   spans: "执行片段已截断",
   events: "Host 事件已截断",
   "missing-time": "片段缺少时间",

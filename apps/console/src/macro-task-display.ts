@@ -93,11 +93,11 @@ export function eventVocab(kind: string): { label: string; glyph: string } {
 }
 
 /**
- * One natural-language Host-event sentence (0.16 P1.7): “13:20 Host 派发「{委派}」”.
+ * One natural-language Host-event sentence (0.16 P1.7): “13:20 Host 派发「{微任务}」”.
  * A decide marker keeps both verbs unless its raw event kind names one side.
  */
 export function eventSentence(event: TimelineEvent, row: TimelineRow | null): string {
-  const title = row ? displayTitle(row.titleSource, row.title).text : `委派 ${event.runId}`;
+  const title = row ? displayTitle(row.titleSource, row.title).text : `微任务 ${event.runId}`;
   const time = clockTime(event.at);
   const raw = (event.eventKind ?? "").toLowerCase();
   switch (event.kind) {
@@ -162,9 +162,9 @@ export function macroTaskStateLabel(summary: MacroTaskSummary): string {
   return CATEGORY_LABEL[summary.state];
 }
 
-/** The header progress sentence: “{状态} · x / y 个委派已验收”. */
+/** The header progress sentence: “{状态} · x / y 个微任务已验收”. */
 export function macroTaskProgressText(summary: MacroTaskSummary): string {
-  return `${macroTaskStateLabel(summary)} · ${summary.counts.accepted} / ${summary.counts.roots} 个委派已验收`;
+  return `${macroTaskStateLabel(summary)} · ${summary.counts.accepted} / ${summary.counts.roots} 个微任务已验收`;
 }
 
 export function categoryTone(category: MacroTaskCategory): "green" | "amber" | "neutral" {
@@ -214,7 +214,7 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
 
 /** `title` is always the intent under 0.15; the nullable `summary` is a separate result line. */
 export const TITLE_SOURCE_LABEL: Record<string, string> = {
-  "macro-task": "工作目标标题", title: "Host 标题", task: "原始任务首行", none: "未命名委派",
+  "macro-task": "宏任务标题", title: "Host 标题", task: "原始任务首行", none: "未命名微任务",
 };
 
 /* ---- one-line title presentation (0.15.1 U3) ---- */
@@ -537,7 +537,7 @@ export function rowLabelItem(row: TimelineRow): TimelineItem {
     key: `row:${row.runId}`,
     runId: row.runId,
     section: "overview",
-    head: "委派",
+    head: "微任务",
     parts: [title.text, `${hierarchy}${state.label}`, `标题来源：${TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource}`],
     locator: "",
     atMs: null,
@@ -600,7 +600,7 @@ export function settleItem(row: TimelineRow): TimelineItem | null {
 export function eventItem(event: TimelineEvent, rowsById: Map<string, TimelineRow>): TimelineItem {
   const vocab = eventVocab(event.kind);
   const row = rowsById.get(event.runId);
-  const title = row ? displayTitle(row.titleSource, row.title).text : `委派 ${event.runId}`;
+  const title = row ? displayTitle(row.titleSource, row.title).text : `微任务 ${event.runId}`;
   return {
     key: `event:${event.seq}`,
     runId: event.runId,

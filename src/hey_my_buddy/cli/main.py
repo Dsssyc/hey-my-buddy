@@ -1,6 +1,6 @@
 """Structured CLI for the hey-my-buddy service (the single supported entrypoint).
 
-Everything the plugin offers is one ``hey-my-buddy`` command: one method name, one JSON
+Everything the shared skill offers is one ``hey-my-buddy`` command: one method name, one JSON
 object argument, one JSON object on stdout. The single micro task lifecycle owns
 the bare names (``submit``, ``get``, ``decide``, ``continue``, ``takeover``,
 ``cancel``, ``accept``, ``conclude``, ``reclaim``, ``await``, ``suggest``); ``execution-*`` names reach the
@@ -170,7 +170,7 @@ examples:
       Cancel a micro task with cancel, or an execution record with execution-cancel.
 
   Advanced execution records (command/external adapters and internal decision
-  infrastructure only; the service refuses execution dsh/zcode here):
+  infrastructure only; the service refuses coding harnesses here):
   hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"timeoutSeconds":1800}'
   hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'

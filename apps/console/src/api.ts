@@ -660,7 +660,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", "委派历史不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "微任务历史不完整；请检查服务版本。");
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -674,7 +674,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.macroTasks.every(validMacroTaskSummary)) {
-        throw new ApiError("INVALID_RESPONSE", "工作目标列表不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "宏任务列表不完整；请检查服务版本。");
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -711,7 +711,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", "工作目标时间轴不完整；请检查服务版本。");
+        throw new ApiError("INVALID_RESPONSE", "宏任务时间轴不完整；请检查服务版本。");
       }
       return { timeline: data, verifiedAtMs };
     },

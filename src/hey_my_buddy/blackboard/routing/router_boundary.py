@@ -7,7 +7,6 @@ from ...errors import BoardError
 from ...protocol.schemas import BUDDY_FIELDS
 
 KINDS = ("router-unavailable", "routing-changed", "router-abstained")
-TABLE_CHANGED_REASON = "评价表在请求冻结之后已变化；请由 Host 显式 reroute"
 
 
 def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list,
@@ -50,11 +49,11 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
             raise BoardError("INVALID_ARGUMENT", "A frozen Router candidate needs a complete buddy identity")
         identities.append({key: candidate[key] for key in BUDDY_FIELDS})
 
-    blocked = ("独立 selection-request 没有关联业务委派，不能生成 continue 命令" if run_id is None else
+    blocked = ("独立 selection-request 没有关联业务微任务，不能生成 continue 命令" if run_id is None else
                "Router 或拥有的执行尚未确认停止" if not shutdown_confirmed else
-               continuation_problem or ("当前目标 revision 未提供" if revision is None else None))
+               continuation_problem or ("当前微任务 revision 未提供" if revision is None else None))
     base = {"runId": run_id, "expectedRevision": revision, "controlFile": "<saved-control-file>",
-            "input": "继续既定工作目标。"}
+            "input": "继续既定微任务。"}
     if target_run_id is not None:
         base["targetRunId"] = target_run_id
     if helper_policy is not None:
@@ -80,7 +79,7 @@ def build_boundary(*, kind: str, code: str | None, reason: str, candidates: list
     reroute_reason = blocked or ("尚无可知的 Router 恢复时间；可先读取 health 再决定" if retry_at is None else None)
     reroute_params = None if reroute_reason else {
         **base, "commandId": command_id("reroute"), "reroute": True,
-        "reason": "在 Router 再试时间之后重新路由同一工作目标"}
+        "reason": "在 Router 再试时间之后重新路由同一微任务"}
     if (kind in ("router-unavailable", "routing-changed")
             and "取消后重新提交没有用" not in reason):
         reason += "；取消后重新提交没有用。"

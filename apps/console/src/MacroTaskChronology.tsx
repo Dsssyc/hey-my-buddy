@@ -35,7 +35,7 @@ export function MacroTaskChronology({ entries, palette, onSelectItem, onOpenItem
         // Task first-line fallbacks stay one ~40-character line here too, and
         // the full text never leaks into the tooltip (0.15.1 U3).
         const line = entry.row ? displayTitle(entry.row.titleSource, entry.row.title) : null;
-        const title = line ? line.text : `委派 ${entry.event.runId}`;
+        const title = line ? line.text : `微任务 ${entry.event.runId}`;
         return <button key={entry.item.key} data-key={entry.item.key}
           className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "") + (openedKey === entry.item.key ? " opened" : "")}
           onClick={() => onSelectItem(entry.item)}

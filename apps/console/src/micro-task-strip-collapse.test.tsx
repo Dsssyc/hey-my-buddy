@@ -128,11 +128,11 @@ describe("U7 reversible two-row microTask strip", () => {
 
   it("keeps the existing whole-band collapse independent of the two-row control and selection", async () => {
     const view = setup("card-20");
-    await view.user.click(screen.getByRole("button", { name: "委派（21）" }));
+    await view.user.click(screen.getByRole("button", { name: "微任务（21）" }));
     expect(view.onToggleCollapsed).toHaveBeenCalledOnce();
     view.rerender(<MicroTaskStrip {...view.props} collapsed />);
     expect(cards()).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "委派（21）" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("button", { name: "微任务（21）" }).getAttribute("aria-expanded")).toBe("false");
     view.rerender(<MicroTaskStrip {...view.props} />);
     expect(cards()[20]!.getAttribute("aria-pressed")).toBe("true");
   });
@@ -268,12 +268,12 @@ describe("U7 measured card budget and independent scrolling", () => {
     expect(view.strip.scrollTop).toBe(0);
     expect(cards()).toHaveLength(singleColumn ? 2 : 4);
     expect(control.getAttribute("aria-expanded")).toBe("false");
-    await view.user.click(screen.getByRole("button", { name: "委派（24）" }));
+    await view.user.click(screen.getByRole("button", { name: "微任务（24）" }));
     expect(cards()).toHaveLength(0);
     expect(view.band.style.minHeight).toBe("");
     expect(view.band.style.maxHeight).toBe("");
     expect(getComputedStyle(view.band).maxHeight).toBe("none");
-    await view.user.click(screen.getByRole("button", { name: "委派（24）" }));
+    await view.user.click(screen.getByRole("button", { name: "微任务（24）" }));
     expect(cards()).toHaveLength(singleColumn ? 2 : 4);
     expect(view.band.style.maxHeight).toBe("360px");
   });

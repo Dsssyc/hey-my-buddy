@@ -46,7 +46,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       const { timeline: next, verifiedAtMs } = await api.macroTaskTimeline(macroTaskId, { limit: 200 }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
       if (next.macroTask.macroTaskId !== macroTaskId) {
-        setError("返回的工作目标标识与请求不符，未采用该数据。");
+        setError("返回的宏任务标识与请求不符，未采用该数据。");
         return;
       }
       setError("");

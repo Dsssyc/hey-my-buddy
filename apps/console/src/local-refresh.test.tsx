@@ -68,7 +68,7 @@ describe("opened microtask local refresh", () => {
     expect(screen.getByText("核对时间未记录")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "刷新微任务详情" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeNull());
-    expect(screen.getByRole("alert").textContent).toContain("委派详情不完整");
+    expect(screen.getByRole("alert").textContent).toContain("微任务详情不完整");
     expect(screen.getByText("结果 command-1")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重试读取" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
@@ -107,7 +107,7 @@ describe("opened microtask local refresh", () => {
     const f = fixture(); const user = userEvent.setup();
     const reader = f.api.task as ReturnType<typeof vi.fn>;
     reader.mockResolvedValue(task());
-    render(<RunDetailPane macroTaskTitle="工作目标" target={{ runId: "command-1" }} snapshot={snapshot} api={f.api}
+    render(<RunDetailPane macroTaskTitle="宏任务" target={{ runId: "command-1" }} snapshot={snapshot} api={f.api}
       refresh={f.refresh} active onBack={vi.fn()} onNavigate={vi.fn()} />);
     await screen.findByRole("button", { name: "刷新微任务详情" });
     await screen.findByText("结果 command-1");
@@ -195,7 +195,7 @@ describe("opened microtask local refresh", () => {
     });
     (f.api.task as ReturnType<typeof vi.fn>).mockResolvedValue(original);
     render(<Tasks snapshot={snapshot} api={f.api} refresh={f.refresh} active />);
-    await screen.findByText("没有匹配的委派");
+    await screen.findByText("没有匹配的微任务");
     await user.click(screen.getByRole("checkbox", { name: "显示协助任务与内部执行" }));
     await user.click(await screen.findByRole("button", { name: /原始任务 command-1/ }));
     await screen.findByText("结果 command-1");
