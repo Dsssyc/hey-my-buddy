@@ -11,6 +11,7 @@ import shutil
 import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
@@ -85,6 +86,40 @@ class AttachFixture(unittest.TestCase):
     def write_endpoint(self, value, mode):
         self.endpoint_file.write_text(json.dumps(value))
         self.endpoint_file.chmod(mode)
+
+
+@unittest.skipIf(os.name == "nt", "POSIX directory ownership and account databases")
+class AncestorGroupTrustTests(unittest.TestCase):
+    def trusted(self, *, mode=0o775, directory_gid=2000, group_name="fixture-user", members=()):
+        parents = {
+            Path("/fixture"): os.stat_result((stat.S_IFDIR | mode, 1, 1, 1, 1000,
+                                              directory_gid, 0, 0, 0, 0)),
+            Path("/"): os.stat_result((stat.S_IFDIR | 0o755, 2, 1, 1, 0, 0, 0, 0, 0, 0)),
+        }
+        account = SimpleNamespace(pw_name="fixture-user", pw_gid=2000)
+        group = SimpleNamespace(gr_name=group_name, gr_mem=list(members))
+        with patch.object(transport.os, "geteuid", return_value=1000), \
+                patch.object(transport.os, "lstat", side_effect=lambda path: parents[Path(path)]), \
+                patch("pwd.getpwuid", return_value=account), \
+                patch("grp.getgrgid", return_value=group):
+            return transport._trusted_ancestors(Path("/fixture/state"))
+
+    def test_group_writable_ancestor_with_private_primary_group_is_trusted(self):
+        for members in ((), ("fixture-user",)):
+            with self.subTest(members=members):
+                self.assertTrue(self.trusted(members=members))
+
+    def test_group_writable_ancestor_with_shared_group_is_not_trusted(self):
+        self.assertFalse(self.trusted(group_name="shared"))
+
+    def test_group_writable_ancestor_with_non_primary_group_is_not_trusted(self):
+        self.assertFalse(self.trusted(directory_gid=2001))
+
+    def test_group_writable_ancestor_with_another_member_is_not_trusted(self):
+        self.assertFalse(self.trusted(members=("fixture-user", "another-user")))
+
+    def test_world_writable_ancestor_without_sticky_bit_is_not_trusted(self):
+        self.assertFalse(self.trusted(mode=0o777))
 
 
 class ReadOnlyAttachTests(AttachFixture):
@@ -179,6 +214,12 @@ class TrustBoundaryTests(AttachFixture):
         self.assert_rejected_by_validation()
         self.assert_falls_back_to_cold_start()
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
+
+    def test_group_writable_state_directory_is_not_trusted_even_with_private_group(self):
+        self.directory.chmod(0o770)
+        with patch.object(transport, "_private_primary_group", return_value=True) as group:
+            self.assert_rejected_by_validation()
+        group.assert_not_called()
 
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)
