@@ -1201,7 +1201,6 @@ class BoardStore:
             },
             "task.cancel",
         )
-        schemas.reject_untrusted_override(params)
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                 if params.get("note") is not None else None)
         actor = {"role": "service" if initiator == "service" else "host",
@@ -1282,7 +1281,6 @@ class BoardStore:
             },
             "task.retry",
         )
-        schemas.reject_untrusted_override(params)
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                 if params.get("note") is not None else None)
         request = {
@@ -1391,7 +1389,6 @@ class BoardStore:
             },
             "task.acknowledge",
         )
-        schemas.reject_untrusted_override(params)
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
         verdict = schemas.optional_string(params, "verdict") or "accepted"
         if verdict not in ("accepted", "rejected"):
