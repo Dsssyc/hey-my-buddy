@@ -123,46 +123,47 @@ def export_sample(source: Path, output: Path) -> Path:
         raise ValueError('Source and output must be separate directory trees')
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise ValueError(f'Refusing nonempty output: {output}')
-    # Keep the source transaction open through session collection. No product
-    # store is opened against the source, and no write/WAL pragma is issued.
+    # One short SQLite snapshot covers all selected rows and session identities.
+    # Close it before building the destination or copying immutable finished sessions.
+    # No product store is opened against the source; no write/WAL pragma is issued.
     with closing(sqlite3.connect((source / DB_FILE).as_uri() + '?mode=ro', uri=True)) as reader:
         reader.row_factory = sqlite3.Row
         reader.execute('BEGIN')
         records, sessions = _select(reader)
-        with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
-            stage = Path(temporary) / 'state'
-            database = Database(stage)
+    with tempfile.TemporaryDirectory(prefix='.board-sample-', dir=output.parent) as temporary:
+        stage = Path(temporary) / 'state'
+        database = Database(stage)
+        try:
             database.initialize()
-            try:
-                with database.write() as writer:
-                    writer.execute('PRAGMA defer_foreign_keys=ON')
-                    for table, rows in records.items():
-                        for row in rows:
-                            columns = ','.join(f'"{key}"' for key in row)
-                            writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
-                                           f'({",".join("?" for _ in row)})', tuple(row.values()))
-                    # The surviving lineage determines each destination session's
-                    # group; source group identity still locates the original file.
-                    target_groups = {row['task_id']: row['group_id'] for row in writer.execute(
-                        f'SELECT task_id,group_id FROM ({MEMBERS_SQL})')}
-                    for task, attempt, group in sessions:
-                        origin = private_dirs.session_record_path(source, group, attempt)
-                        try:
-                            fd = private_dirs.open_regular_fd(origin, os.O_RDONLY)
-                        except FileNotFoundError:
-                            continue  # Historical attempts may never have recorded a session.
-                        with os.fdopen(fd, 'rb') as stream:
-                            target = private_dirs.session_record_path(stage, target_groups[task], attempt)
-                            private_dirs.ensure_private_dir(target.parent)
-                            with os.fdopen(private_dirs.open_regular_fd(
-                                    target, os.O_WRONLY | os.O_CREAT | os.O_EXCL), 'wb') as destination:
-                                shutil.copyfileobj(stream, destination)
-                    _validate(writer)
-            finally:
-                database.close()
-            if output.exists():
-                output.rmdir()  # Only an empty destination can be replaced.
-            stage.rename(output)
+            with database.write() as writer:
+                writer.execute('PRAGMA defer_foreign_keys=ON')
+                for table, rows in records.items():
+                    for row in rows:
+                        columns = ','.join(f'"{key}"' for key in row)
+                        writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
+                                       f'({",".join("?" for _ in row)})', tuple(row.values()))
+                # The surviving lineage determines each destination session's
+                # group; source group identity still locates the original file.
+                target_groups = {row['task_id']: row['group_id'] for row in writer.execute(
+                    f'SELECT task_id,group_id FROM ({MEMBERS_SQL})')}
+                for task, attempt, group in sessions:
+                    origin = private_dirs.session_record_path(source, group, attempt)
+                    try:
+                        fd = private_dirs.open_regular_fd(origin, os.O_RDONLY)
+                    except FileNotFoundError:
+                        continue  # Historical attempts may never have recorded a session.
+                    with os.fdopen(fd, 'rb') as stream:
+                        target = private_dirs.session_record_path(stage, target_groups[task], attempt)
+                        private_dirs.ensure_private_dir(target.parent)
+                        with os.fdopen(private_dirs.open_regular_fd(
+                                target, os.O_WRONLY | os.O_CREAT | os.O_EXCL), 'wb') as destination:
+                            shutil.copyfileobj(stream, destination)
+                _validate(writer)
+        finally:
+            database.close()
+        if output.exists():
+            output.rmdir()  # Only an empty destination can be replaced.
+        stage.rename(output)
     return output
 
 

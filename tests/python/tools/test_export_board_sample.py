@@ -1,15 +1,16 @@
 """Disposable samples use only private synthetic boards, never daily state."""
 from contextlib import closing
-import json
+import os
 from pathlib import Path
 import runpy
 import sqlite3
 import subprocess
 import sys
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from console.test_console import Browser
-from support import InProcessBoard, write_catalog_fixture
+from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -27,8 +28,13 @@ def files(root):
 
 class ExportBoardSampleTests(WorkflowTestCase):
     def assert_source_unchanged(self, before, after):
-        changed = [name for name in before.keys() | after.keys() if before.get(name) != after.get(name)]
-        self.assertEqual(sorted(changed), [], 'Source files changed during mode=ro export')
+        auxiliary = {DB_FILE + '-shm', DB_FILE + '-wal'}
+        changed = [name for name in before.keys() | after.keys()
+                   if name not in auxiliary and before.get(name) != after.get(name)]
+        self.assertEqual(sorted(changed), [], 'Source database or non-SQLite files changed')
+        wal = DB_FILE + '-wal'
+        self.assertEqual(after.get(wal, b''), before.get(wal, b''),
+                         'Existing WAL bytes must not change; a new WAL must be empty')
 
     def source_board(self):
         board = InProcessBoard(self.directory / 'source')
@@ -169,11 +175,94 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with self.assertRaisesRegex(ValueError, 'separate directory trees'):
             export_sample(board.directory, board.directory / 'sample')
 
-    def test_live_wal_read_preserves_every_source_file(self):
+    def test_live_wal_read_preserves_database_wal_and_non_sqlite_files(self):
         board = self.source_board()
         self.accepted(board, 'accepted')
         before = files(board.directory)
         export_sample(board.directory, self.directory / 'sample')
         after = files(board.directory)
-        changed = [name for name in before if before[name] != after.get(name)]
-        self.assertEqual(changed, [], 'Read-only WAL must not alter any source file')
+        self.assert_source_unchanged(before, after)
+
+    def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
+        board = self.source_board()
+        run, _ = self.accepted(board, 'accepted')
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET acceptance_note='fixture-version-0'")
+            connection.execute("UPDATE workflow_runs SET title='fixture-version-0'")
+        # Retire every in-process resource while retaining the synthetic board.
+        board._resources.close()
+        control = self.directory / 'writer-control'
+        control.mkdir(mode=0o700)
+        catalog = write_catalog_fixture(board.directory)
+        environment = _child_environment(board.directory, {
+            'HMB_MODEL_CATALOG_FILE': str(catalog),
+            'HMB_TEST_WRITE_CONTROL': str(control),
+            'PYTHONPATH': os.pathsep.join((str(TOOL.parents[1] / 'src'), str(TOOL.parents[1] / 'tests/python'))),
+        })
+        command = [sys.executable, str(Path(__file__).parent / 'fixtures/writing_daemon.py')]
+        with (self.directory / 'writer-daemon.log').open('wb') as log:
+            process = subprocess.Popen(command, env=environment, stdin=subprocess.DEVNULL,
+                                       stdout=log, stderr=log, start_new_session=True)
+            self.children = getattr(self, 'children', [])
+            self.children.append(process)
+            try:
+                self.assertTrue(wait_for(lambda: (control / 'ready').exists()
+                                         and _read_endpoint(board.directory) is not None, 15),
+                                'Private writing service did not start')
+                endpoint = _read_endpoint(board.directory)
+                _request(endpoint, 'health', {}, state_dir=board.directory)
+                namespace = export_sample.__globals__
+                original_rows = namespace['_rows']
+                original_select = namespace['_select']
+                original_initialize = Database.initialize
+                readers = []
+
+                def wait_commit(version):
+                    (control / f'write-{version}').touch()
+                    self.assertTrue(wait_for(lambda: (control / f'committed-{version}').exists()
+                                             or (control / 'error').exists(), 10),
+                                    'Service writer was blocked by the exporter')
+                    self.assertFalse((control / 'error').exists(),
+                                     (control / 'error').read_text() if (control / 'error').exists() else '')
+
+                def interleave_rows(connection, table, column, values):
+                    rows = original_rows(connection, table, column, values)
+                    if table == 'tasks':
+                        # The task row is already read, but the events query has
+                        # not run. Commit across that gap to expose torn reads.
+                        wait_commit(1)
+                    return rows
+
+                def capture_reader(reader):
+                    readers.append(reader)
+                    return original_select(reader)
+
+                def initialize_destination(database):
+                    self.assertEqual(len(readers), 1)
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        readers[0].execute('SELECT 1')
+                    wait_commit(2)
+                    original_initialize(database)
+
+                with patch.dict(namespace, {'_rows': interleave_rows, '_select': capture_reader}), \
+                        patch.object(Database, 'initialize', initialize_destination):
+                    output = export_sample(board.directory, self.directory / 'sample')
+                with closing(sqlite3.connect(output / DB_FILE)) as connection:
+                    self.assertEqual(connection.execute('SELECT acceptance_note FROM tasks').fetchone()[0],
+                                     'fixture-version-0')
+                    self.assertEqual(connection.execute('SELECT title FROM workflow_runs').fetchone()[0],
+                                     'fixture-version-0')
+                    self.assertEqual(connection.execute(
+                        "SELECT COUNT(*) FROM events WHERE kind='fixture.concurrent_write'").fetchone()[0], 0)
+                    self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+                    self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+                with closing(sqlite3.connect((board.directory / DB_FILE).as_uri() + '?mode=ro', uri=True)) as connection:
+                    self.assertEqual(connection.execute('SELECT acceptance_note FROM tasks').fetchone()[0],
+                                     'fixture-version-2')
+                    self.assertEqual(connection.execute(
+                        "SELECT COUNT(*) FROM events WHERE kind='fixture.concurrent_write'").fetchone()[0], 2)
+                self.assertEqual(_request(endpoint, 'task_get', {'runId': run['runId']},
+                                          state_dir=board.directory)['task']['runId'], run['runId'])
+            finally:
+                process.terminate()
+                process.wait(timeout=20)
