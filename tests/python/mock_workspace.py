@@ -36,6 +36,10 @@ class MockWorkspace:
         for candidate in [path, *path.parents]:
             if (candidate / ".git").exists():
                 return str(candidate)
+            # Fixtures under a source checkout must not inherit its repository
+            # identity; every simulated repository belongs to this private root.
+            if candidate == self.root:
+                break
         return str(path)
 
     def _checkout_identity(self, cwd: str) -> dict:

@@ -13,7 +13,7 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         connection = Mock()
         connection.execute.return_value.fetchone.return_value = None
         coordinator = DecisionCoordinator.__new__(DecisionCoordinator)
-        spec = {"task": "work", "requiredCapabilities": ["input:text", "permission:full"]}
+        spec = {"task": "work", "expectedSeconds": 1800, "requiredCapabilities": ["input:text", "permission:full"]}
         with patch.object(DecisionCoordinator, "_create", return_value={}) as create:
             coordinator.route_workflow(connection, run_id="run-1", sequence=1, spec=spec,
                                        manifest={"access": "read"})
@@ -27,7 +27,7 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
         coordinator = DecisionCoordinator.__new__(DecisionCoordinator)
         with patch.object(DecisionCoordinator, "_create", return_value={}) as create:
             coordinator.route_workflow(connection, run_id="run-1", sequence=1,
-                                       spec={"task": "work"}, manifest={"access": "full"})
+                                       spec={"task": "work", "expectedSeconds": 1800}, manifest={"access": "full"})
         self.assertEqual(create.call_args.args[1]["requiredCapabilities"], ["permission:full"])
 
 

@@ -403,7 +403,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
                 (run_id, "host-1", "host-1", "verifier", "request-digest",
                  canonical_json({"kind": "existing"}), canonical_json({"kind": "existing"}), "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
-                db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities)}, manifest=None)
+                db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities), "expectedSeconds": 60}, manifest=None)
         return response
 
     def attach_pending_link(self, decision_id, run_id="run-1"):

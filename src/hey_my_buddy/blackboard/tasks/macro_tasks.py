@@ -22,6 +22,7 @@ from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_macro_task
 from ..routing import router, router_sequence
 from ...protocol import schemas
+from ...protocol.turn_input import turn_buddy
 from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
 
@@ -707,17 +708,6 @@ def _attempt_state(attempt) -> tuple[str, bool, bool]:
     return attempt["execution_state"], confirmed, uncertain
 
 
-def _turn_buddy(input_json: Any) -> dict | None:
-    try:
-        payload = json.loads(input_json) if isinstance(input_json, str) else None
-    except ValueError:
-        return None
-    buddy = payload.get("buddy") if isinstance(payload, dict) else None
-    if not isinstance(buddy, dict):
-        return None
-    return {key: buddy.get(key) for key in micro_task.BUDDY_FIELDS if buddy.get(key)}
-
-
 def _run_spans(store, connection, row) -> list[dict]:
     """Queue, execution and waiting-Host spans of one micro-task run, from recorded rows."""
     run_id = row["task_id"]
@@ -759,7 +749,7 @@ def _run_spans(store, connection, row) -> list[dict]:
             spans.append(_span("queue", f"queue:{attempt['attempt_id']}", run_id, queue_start, admitted, "admitted",
                                attempt_id=attempt["attempt_id"]))
         state, confirmed, uncertain = _attempt_state(attempt)
-        buddy = _turn_buddy(attempt["input_json"]) or (
+        buddy = turn_buddy(attempt["input_json"]) or (
             {"harness": attempt["model_harness"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
             if attempt["model_harness"] else None
         )

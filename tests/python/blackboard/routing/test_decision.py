@@ -128,6 +128,31 @@ class DecisionTestCase(BoardTestCase):
 
 
 class SelectionRequestTests(DecisionTestCase):
+    def test_candidate_facts_are_frozen_once_for_the_router(self):
+        board = self.board()
+        self.seed(board)
+        facts = {"billing": {"kind": "metered", "source": "fixture", "observedAt": "now"},
+                 "load": {"active": 1, "limit": 2, "queued": 0,
+                          "wait": {"seconds": 0, "atLeast": False, "overdue": 0}},
+                 "statistics": {"samples": 1, "successes": 1, "failures": 0,
+                                "firstPasses": 1, "firstPassRate": 1.0, "failureRate": 0.0,
+                                "reworkRounds": 0, "medianDeliverySeconds": 30},
+                 "infrastructureFailures": {"count": 0, "lastAt": None}}
+        with patch("hey_my_buddy.blackboard.routing.decision.evidence.candidate_facts",
+                   return_value={BUDDY_ID: facts, SECOND_BUDDY_ID: facts}) as gather:
+            request = self.request(board)
+        gather.assert_called_once()
+        frozen = self.decision(board, request["decisionId"])["input"]
+        self.assertEqual(frozen["expectedSeconds"], 1800)
+        self.assertEqual([buddy["statistics"] for buddy in frozen["buddies"]],
+                         [facts["statistics"], facts["statistics"]])
+        self.assertEqual([buddy["billing"] for buddy in frozen["buddies"]],
+                         [facts["billing"], facts["billing"]])
+        with board.store.db.read() as connection:
+            from hey_my_buddy.blackboard.routing.router_sequence import request_snapshot
+            self.assertEqual(request_snapshot(connection, request["decisionId"])["baseInput"]["buddies"],
+                             frozen["buddies"])
+
     def test_unclaimed_router_cancellation_notifies_its_task_after_commit(self):
         from unittest.mock import Mock
         board = self.board()
@@ -253,6 +278,8 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(task["state"], "completed")
         self.assertTrue(task["shutdownConfirmed"])
         self.assertEqual(task["spec"]["decision"]["kind"], "select")
+        self.assertEqual(Path(task["spec"]["cwd"]), board.directory / "attempts" / request["runId"])
+        self.assertTrue(Path(task["spec"]["cwd"]).is_dir())
 
     def test_pins_and_excludes_are_enforced_in_python_before_and_after_the_call(self):
         board = self.board()

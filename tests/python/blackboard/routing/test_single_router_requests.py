@@ -297,6 +297,16 @@ class SingleRouterWorkflowRequestTests(WorkflowTestCase):
         self.catalog_fixture()
         mock_readonly.install(self)
 
+    def test_workflow_expected_duration_reaches_frozen_router_input(self):
+        from hey_my_buddy.blackboard.routing.router_sequence import request_snapshot
+        board = self.board()
+        self.seed(board)
+        view = self.routed(board, expectedSeconds=900)
+        with board.store.db.read() as connection:
+            frozen = request_snapshot(connection, view["routing"]["decisionId"])["baseInput"]
+        self.assertEqual(frozen["expectedSeconds"], 900)
+        self.assertEqual(frozen["task"], "Produce a verified implementation")
+
     def test_router_unavailable_opens_same_micro_task_attention_and_complete_host_buddy_recovers(self):
         board = self.board()
         self.seed(board, decision_buddy=None)
