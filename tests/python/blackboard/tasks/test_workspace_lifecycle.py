@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from support import BoardTestCase, FakeClock
@@ -31,6 +32,7 @@ from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles import router_input, turn_io
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import transport
 
 
 def git(path, *arguments: str) -> str:
@@ -110,7 +112,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         attempt = claim["attempt"]
         return board.call("worker_result", {
             "workerId": worker_id or self.worker, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": nonce, "status": "ok",
+            "nonce": nonce, "status": "ok", "terminationReason": "completed",
             "result": {"status": "ok", "processState": {"shutdownConfirmed": True},
                        "turn": self.turn_record(claim, disposition=disposition),
                        "turnResultPath": "/tmp/turn-result.json", "workspaceSeal": seal},
@@ -627,6 +629,90 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(repeat["removed"])
         self.assertEqual(repeat["alreadyRemoved"], applied["alreadyRemoved"])
 
+    def test_failed_execution_evidence_survives_continuation_acceptance_and_storage_reclaims_it(self):
+        board = self.board()
+        self.register(board)
+        submitted = board.call('workflow_submit', {
+            **BUDDY, 'requestId': 'failed-evidence', 'hostId': 'host-1',
+            'task': 'retry after an invalid native result', 'cwd': str(self.repo),
+            'submissionToken': 't' * 32,
+            'executionWorkspace': {'kind': 'worktree', 'access': 'write', 'writeScope': ['.']},
+        })
+        run_id = submitted['runId']
+        self.controls[run_id] = submitted['control']
+        first = self.claim(board, run_id, request_id='failed-evidence-first')['claim']
+        attempt = first['attempt']
+        manifest = first['turn']['input']['executionWorkspace']
+        checkout = Path(manifest['path'])
+        failed_root = private_dirs.ensure_private_dir(
+            private_dirs.attempt_root(board.directory, 'dsh', run_id, attempt['attemptId']))
+        refs = [str(failed_root / name) for name in ('unknown-events.json', 'thread-notifications.json')]
+        for ref in refs:
+            Path(ref).write_text('failure evidence')
+        native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', run_id))
+        (native / 'session.json').write_text('native continuation state')
+        seal = workspace_module.seal(self.directory, manifest, run_id, attempt['attemptId'])
+        board.call('worker_result', {
+            'workerId': self.worker, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
+            'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error',
+            'shutdownConfirmed': True, 'exitCode': 1,
+            'result': {'status': 'invalid-result', 'evidenceRefs': refs, 'workspaceSeal': seal,
+                       'processState': {'shutdownConfirmed': True}},
+        })
+        recorded = board.call('task_result', {'runId': run_id})['result']
+        self.assertEqual(recorded['evidenceRefs'], refs)
+        failed = self.view(board, run_id)
+        board.call('workflow_continue', {
+            'runId': run_id, 'commandId': 'retry-failed-evidence', 'expectedRevision': failed['revision'],
+            'input': 'finish with a valid result', **self.control(failed),
+        })
+        second = self.claim(board, run_id, request_id='failed-evidence-second', nonce='q' * 16)
+        second_id = second['claim']['attempt']['attemptId']
+        second_manifest = second['claim']['turn']['input']['executionWorkspace']
+        successful_root = private_dirs.ensure_private_dir(
+            private_dirs.attempt_root(board.directory, 'dsh', run_id, second_id))
+        (successful_root / 'thread-notifications.json').write_text('successful evidence')
+        (checkout / 'tracked.txt').write_text('completed after retry\n')
+        second_seal = workspace_module.seal(self.directory, second_manifest, run_id, second_id)
+        self.finish_turn(board, second, second_seal, nonce='q' * 16)
+        delivered = self.view(board, run_id)
+        artifact = next(row for row in delivered['artifacts'] if row['kind'] == 'output')
+        target = self.target_with_artifact(artifact)
+        accepted = self.accept(board, delivered, artifact, target=target)
+        self.assertEqual(accepted['state'], 'accepted')
+        self.assertFalse(checkout.exists())
+        self.assertFalse(native.exists())
+        self.assertFalse(successful_root.exists())
+        self.assertEqual([Path(ref).read_text() for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
+        with board.store.db.write() as connection:
+            stored = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                                   (attempt['attemptId'],)).fetchone()['result_json'])
+            self.assertEqual(stored['result'], recorded)
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        board.console.close()
+        board.store.db.close()
+        # Exercise the existing inventory and guarded deletion through a real private daemon.
+        with self.daemon():
+            endpoint = transport._read_endpoint(self.directory)
+            service = SimpleNamespace(call=lambda operation, params: transport._request(
+                endpoint, operation, params, state_dir=self.directory))
+            planned = service.call('storage_plan', {})
+            root = failed_root.parent.parent
+            candidate = next(row for row in planned['candidates'] if row['path'] == str(root))
+            self.assertEqual(candidate['runId'], run_id)
+            self.assertEqual(candidate['retentionReason'], 'failed-attempt-evidence')
+            self.assertEqual(candidate['description'], '失败执行的证据')
+            self.assertEqual(candidate['failedAttemptIds'], [attempt['attemptId']])
+            self.assertTrue(candidate['eligible'], candidate)
+            result = service.call('storage_apply', {
+                'planId': planned['planId'], 'commandId': 'remove-failed-evidence', 'confirm': True,
+            })
+            self.assertTrue(result['complete'], result)
+            self.assertTrue(any(row['path'] == str(root) for row in result['removed']), result)
+            self.assertFalse(root.exists())
+            after = service.call('storage_plan', {})
+            self.assertFalse(any(row['path'] == str(root) for row in after['candidates']))
+
     def test_reclaim_reports_a_checkout_that_vanished_before_the_delete(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanished")
         shutil.rmtree(checkout)
@@ -750,6 +836,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     def test_cleanup_is_blocked_by_unsealed_changes(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-dirty")
+        native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', submitted['runId']))
+        session = native / 'session.json'
+        session.write_text('retain until reclaim is authorized')
         (checkout / "tracked.txt").write_text("edited after the seal\n")
         with self.assertRaises(BoardError) as raised:
             self.reclaim(board, view)
@@ -759,11 +848,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(blocked_view["cleanup"]["state"], "blocked")
         self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
+        self.assertEqual(session.read_text(), 'retain until reclaim is authorized')
         # Returning the site to the sealed state makes the same workspace eligible.
         (checkout / "tracked.txt").write_text("sealed output\n")
         recovered = self.reclaim(board, blocked_view)
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
+        self.assertFalse(native.exists())
 
     def test_matching_seal_fingerprint_needs_no_git_object_writes_for_cleanup_proof(self):
         board = self.board()

@@ -139,9 +139,12 @@ def ensure_private_dir(path: Path) -> Path:
     return path
 
 
-def remove_tree(path: Path) -> bool:
-    """Remove one real tree without traversing links or reparse points."""
+def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
+    """Remove one real tree, retaining exact subtrees without traversing links."""
     path = _absolute(path)
+    keep = frozenset(_absolute(item) for item in keep)
+    if any('..' in item.parts or not item.is_relative_to(path) for item in keep):
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Retained private path is outside the removal tree', path=str(path))
     _guard_parents(path.parent)
     if not path.exists() and not linked(path):
         return False
@@ -149,24 +152,30 @@ def remove_tree(path: Path) -> bool:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Refusing to remove a linked private root', path=str(path))
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private removal target is not a directory', path=str(path))
-    def descend(directory: Path) -> None:
+    def descend(directory: Path) -> bool:
         _guard_parents(directory)
+        if directory in keep:
+            return False
         with os.scandir(directory) as entries:
             children = [Path(entry.path) for entry in entries]
+        retained = False
         for child in children:
-            if linked(child):
+            if child in keep:
+                retained = True
+            elif linked(child):
                 if child.is_junction():
                     child.rmdir()
                 else:
                     child.unlink()
             elif child.is_dir():
-                descend(child)
+                retained = not descend(child) or retained
             else:
                 child.unlink()
-        directory.rmdir()
+        if not retained:
+            directory.rmdir()
+        return not retained
 
-    descend(path)
-    return True
+    return descend(path)
 
 
 def inquiry_fallback(path: Path, attempt_id: str) -> Path | None:

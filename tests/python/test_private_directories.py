@@ -13,6 +13,30 @@ from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_remove_tree_retains_exact_evidence_subtree_and_existing_link_guards(self):
+        root = private_dirs.ensure_private_dir(self.directory / 'private')
+        failed = private_dirs.ensure_private_dir(root / 'attempts' / 'failed')
+        (failed / 'unknown-events.json').write_text('failure evidence')
+        native = private_dirs.ensure_private_dir(root / 'native')
+        (native / 'session.json').write_text('native state')
+        successful = private_dirs.ensure_private_dir(root / 'attempts' / 'completed')
+        (successful / 'result.json').write_text('success evidence')
+        outside = private_dirs.ensure_private_dir(self.directory / 'outside')
+        (outside / 'sentinel').write_text('safe')
+        (root / 'linked').symlink_to(outside, target_is_directory=True)
+        self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({failed})))
+        self.assertEqual((failed / 'unknown-events.json').read_text(), 'failure evidence')
+        self.assertEqual(list(root.iterdir()), [root / 'attempts'])
+        self.assertEqual(list((root / 'attempts').iterdir()), [failed])
+        self.assertEqual((outside / 'sentinel').read_text(), 'safe')
+        with self.assertRaises(BoardError):
+            private_dirs.remove_tree(root, keep=frozenset({outside}))
+        alias = self.directory / 'alias'
+        alias.symlink_to(root, target_is_directory=True)
+        with self.assertRaises(BoardError):
+            private_dirs.remove_tree(alias, keep=frozenset({alias / 'attempts' / 'failed'}))
+        self.assertTrue(failed.exists())
+
     def test_role_control_cleanup_matches_exact_private_filenames(self):
         state = self.directory.resolve()
         root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'microTask', 'attempt'))

@@ -434,14 +434,18 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
     native_owners = {}
+    failed_attempts = {}
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
             task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
             reasons = _zcode_reasons(store, connection, run, task, now)
-            native_owners[hashlib.sha256(run['run_id'].encode()).hexdigest()] = (run['run_id'], reasons)
-            for routed in store.workflow._routing_tasks(connection, run['run_id']):
-                native_owners[hashlib.sha256(routed['task_id'].encode()).hexdigest()] = (run['run_id'], reasons)
+            micro_task_ids = [run['run_id'], *(routed['task_id'] for routed in
+                                             store.workflow._routing_tasks(connection, run['run_id']))]
+            for micro_task_id in micro_task_ids:
+                digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
+                native_owners[digest] = (run['run_id'], reasons)
+                failed_attempts[digest] = store.workflow._failed_attempt_ids(connection, micro_task_id)
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
@@ -474,7 +478,17 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
+                    evidence = {}
+                    attempts_root = path / 'attempts'
+                    if (private_dirs.linked_component(path) is None and path.is_dir()
+                            and private_dirs.linked_component(attempts_root) is None and attempts_root.is_dir()):
+                        attempt_ids = sorted(attempt_id for attempt_id in failed_attempts.get(path.name, ())
+                                             if not private_dirs.linked(attempts_root / attempt_id)
+                                             and (attempts_root / attempt_id).is_dir())
+                        if attempt_ids:
+                            evidence = {'retentionReason': 'failed-attempt-evidence',
+                                        'description': '失败执行的证据', 'failedAttemptIds': attempt_ids}
+                    add('harnesses', path, reasons, runId=run_id, adapter=adapter, **evidence)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
                     if path.name != 'micro-tasks':
