@@ -33,7 +33,7 @@ class DshAdapter:
         """A ready installed dsh command is this harness's only carrier.
 
         A service-selected record decides as pinned. Without one, the same
-        bounded discovery that ``command_for`` falls back to refreshes the
+        bounded discovery that ``launch_for`` falls back to refreshes the
         selection and its verdict decides — the pre-existing unbound
         confirmation path, minus the retired Node runner requirement. A bound
         but unhealthy selection is still refused; nothing here sends a prompt

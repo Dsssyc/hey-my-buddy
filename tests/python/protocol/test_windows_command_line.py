@@ -146,9 +146,7 @@ class WindowsCommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             owned = []
-            with mock.patch.object(zcode_run, "environment_for", return_value={}), \
-                 mock.patch.object(zcode_run, "cli_command", return_value=["zcode.exe"]), \
-                 mock.patch.object(discovery, "native_environment", return_value={}), \
+            with mock.patch.object(zcode_run, "launch", return_value=(["zcode.exe"], {})), \
                  mock.patch.object(zcode_run, "provider_paths", return_value=(root / "builtin.json", None)), \
                  mock.patch.object(zcode_run, "load_runtime_preferences", return_value={}), \
                  mock.patch.object(zcode_run, "probe_version", return_value="fixture"), \

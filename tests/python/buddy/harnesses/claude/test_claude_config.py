@@ -11,7 +11,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     WRITABLE_TOOLS,
     discovery_args,
     execution_args,
-    native_environment,
+    launch,
     provider_from_account,
     permission_sandbox_settings,
 )
@@ -175,7 +175,7 @@ class ClaudeConfigTests(unittest.TestCase):
                "HMB_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
                "HMB_CLAUDE_FIXTURE_CASE": "ok"}
         with mock.patch('hey_my_buddy.buddy.harnesses.runtime_selection.launch_for', return_value=([], {})):
-            result = native_environment(env)
+            _command, result = launch(env)
         self.assertEqual(result["PATH"], "/bin")
         self.assertEqual(result["HOME"], "/users/fixture")
         self.assertEqual(result["TMPDIR"], "/tmp/fixture")

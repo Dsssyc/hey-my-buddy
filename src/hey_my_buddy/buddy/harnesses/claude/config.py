@@ -48,19 +48,29 @@ def provider_from_account(account: object) -> str:
     return "anthropic" if provider == "firstParty" else provider
 
 
-def cli_command(environment: dict | None = None) -> list[str]:
-    from ..runtime_selection import launch_for
+def launch(environment: dict | None = None) -> tuple[list[str], dict]:
+    """Resolve the native argv and its environment from one selected entry."""
+    from ..runtime_selection import launch_with_environment
     from ..discovery import EntryUnavailable
     from ....errors import BoardError
 
     try:
-        return launch_for("claude", environment)[0]
+        command, result = launch_with_environment("claude", environment)
     except BoardError as error:
         raise ClaudeUnavailable(error.message) from None
     except EntryUnavailable as error:
         failure = ClaudeUnavailable(str(error))
         failure.reason = error.reason
         raise failure from None
+    if environment is not None and os.environ.get("HMB_DEV_SOURCE") == "1":
+        for key in ("HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"):
+            if key in environment:
+                result[key] = environment[key]
+    return command, result
+
+
+def cli_command(environment: dict | None = None) -> list[str]:
+    return launch(environment)[0]
 
 
 def base_args() -> list[str]:
@@ -126,14 +136,3 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--mcp-config", mcp_config_path, "--allowedTools", ",".join(inquiry_tools)]
     args += ["--json-schema", canonical_json(output_schema)]
     return args
-
-
-def native_environment(environment: dict) -> dict:
-    """Use the shared service allowlist; Claude reads its own configuration files."""
-    from ..runtime_selection import native_environment as clean
-    result = clean(environment, harness="claude")
-    if os.environ.get("HMB_DEV_SOURCE") == "1":
-        for key in ("HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"):
-            if key in environment:
-                result[key] = environment[key]
-    return result

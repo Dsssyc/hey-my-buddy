@@ -101,7 +101,7 @@ from .config import (
     cli_command,
     discovery_args,
     execution_args,
-    native_environment,
+    launch,
     provider_from_account,
     permission_sandbox_settings,
 )
@@ -281,8 +281,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
                                   "a reconstructed claude turn must allocate a fresh session id")
     deadline = execution_deadline(request.budget.timeout_seconds)
     incoming = dict(environment_for())
-    command = cli_command(incoming)
-    environment = native_environment(incoming)
+    command, environment = launch(incoming)
     settings = permission_sandbox_settings(request.permission)
     private_json(native_root / _SETTINGS_FILE, settings)
     mcp_config_path = None
@@ -1276,8 +1275,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     ensure_private_dir(Path(native_root))
     incoming = dict(os.environ)
     try:
-        command = cli_command(incoming)
-        environment = native_environment(incoming)
+        command, environment = launch(incoming)
     except ClaudeUnavailable as error:
         raise _with_stop_fact(error, True) from None
     owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]

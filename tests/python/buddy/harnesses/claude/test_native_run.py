@@ -1089,7 +1089,7 @@ class DiscoveryTests(NativeRunCase):
     def test_discovery_failures_carry_the_actual_native_stop_fact(self):
         # A pre-spawn refusal never started anything: the known never-started
         # fact, not a guess from the error code — and no native child exists.
-        with mock.patch.object(native_run, "cli_command", side_effect=native_run.ClaudeUnavailable("missing CLI")):
+        with mock.patch.object(native_run, "launch", side_effect=native_run.ClaudeUnavailable("missing CLI")):
             with self.assertRaises(native_run.ClaudeUnavailable) as caught:
                 run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-pre",
                               native_root=self.base / "ds-pre-n", timeout_seconds=25, cancelled=lambda: False)

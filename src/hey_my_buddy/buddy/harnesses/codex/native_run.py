@@ -101,7 +101,7 @@ from ..run_contract import (
 from .config import (
     CodexUnavailable,
     cli_command,
-    native_environment,
+    launch,
     native_provider,
 )
 from .protocol import (
@@ -451,12 +451,11 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     from ..runtime_selection import environment_for
     incoming = dict(environment_for())
     try:
-        command = cli_command(incoming)
+        command, environment = launch(incoming)
     except CodexUnavailable as error:
         if getattr(error, "reason", None):
             raise CodexProtocolError(error.reason["code"], str(error)) from None
         raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
-    environment = native_environment(incoming)
     if mode == "fast":
         policy = {"web_search": "disabled", "approval_policy": "never"}
         for key, value in policy.items():
@@ -1936,11 +1935,10 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
         native_root = ensure_private_dir(Path(native_root))
         incoming = dict(os.environ)
         try:
-            command = cli_command(incoming)
+            command, environment = launch(incoming)
         except CodexUnavailable as error:
             raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex",
                              reason=getattr(error, "reason", None)) from None
-        environment = native_environment(incoming)
         try:
             version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
             prep = _Preparation(command=command, environment=environment, native_root=native_root,

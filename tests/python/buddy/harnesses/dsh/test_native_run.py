@@ -1171,7 +1171,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
         record = {"status": "ready", "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=record):
             self.assertIsNone(native_run.check_preparation({}, {}))
-        # The unbound path reuses the same bounded discovery command_for falls
+        # The unbound path reuses the same bounded discovery launch_for falls
         # back to: a discoverable installed command keeps the harness usable
         # without a pinned selection, and a failed scan still refuses here.
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}

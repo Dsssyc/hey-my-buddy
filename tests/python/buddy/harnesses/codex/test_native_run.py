@@ -1827,7 +1827,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
 
     def test_native_environment_failure_proves_no_native_child(self):
         error = ValueError('fixture native environment refused')
-        with mock.patch.object(native_run, 'native_environment', side_effect=error), \
+        with mock.patch.object(native_run, 'launch', side_effect=error), \
              mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe') as probe, \
              mock.patch.object(native_run, 'owned_popen') as create:
             with self.assertRaises(ValueError) as caught:
