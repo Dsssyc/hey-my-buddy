@@ -105,7 +105,9 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
       expect(pointerFocus).toEqual({ visible: false, shadow: "none" });
       const [anchor, floating] = await Promise.all([basis.boundingBox(), popup.boundingBox()]);
       expect(floating!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height);
-      expect(floating!.x + floating!.width).toBeCloseTo(anchor!.x + anchor!.width, 0);
+      // At the 288px sidebar minimum, Radix shifts the right-aligned popup to
+      // the viewport edge instead of clipping its left side.
+      expect(floating!.x).toBeCloseTo(Math.max(0, anchor!.x + anchor!.width - floating!.width), 0);
       await page.mouse.move(1000, 700);
       await page.screenshot({ path: testInfo.outputPath(`macro-sort-popover-${locale}-${theme}.png`), clip: {
         x: frame.x, y: frame.y, width: frame.width, height: floating!.y + floating!.height - frame.y + 8,

@@ -34,7 +34,7 @@ export function MacroListHeading({ count }: { count: number }) {
 }
 function FilterTab({ value, label, full, count, tone, busy }: { value: MacroTaskFilter; label: string; full: string; count?: number; tone?: "hand"; busy?: boolean }) {
   const text = useFadingText(label);
-  return <Hint text={(text.hint || label !== full) ? full : undefined}><TabsTrigger value={value} className={cn("min-w-0 flex-initial", busy && "state-breathe")} aria-busy={busy || undefined} aria-label={count === undefined ? full : `${full} ${formatNumber(count)}`}>
+  return <Hint text={(text.hint || label !== full) ? full : undefined}><TabsTrigger value={value} className={cn("min-w-0 flex-initial gap-0.5 px-0 text-[13px]", busy && "state-breathe")} aria-busy={busy || undefined} aria-label={count === undefined ? full : `${full} ${formatNumber(count)}`}>
     <span ref={text.ref} data-slot="macro-filter-name" className={cn("min-w-0", text.className)}>{label}</span>
     {count !== undefined && <span data-slot="macro-filter-count" className={cn("shrink-0 tabular-nums", tone === "hand" ? "text-hand" : "text-ink3")}>{formatNumber(count)}</span>}
   </TabsTrigger></Hint>;
@@ -113,7 +113,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
   useEffect(idle, [props.reorder, visible]);
   const groups = props.groups;
   const empty = !groups.length && !props.loading && !props.error;
-  return <section data-slot="macro-list" className="flex h-full min-h-0 w-full flex-col border-r bg-card text-sm max-[760px]:w-full" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
+  return <section data-slot="macro-list" className="flex h-full min-h-0 w-full flex-col bg-card text-sm" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
     <div className="shrink-0 px-4 pt-3.5">
       <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2"><MacroListHeading count={props.totals.all}/>
         {props.reorder && <Hint text={t("update")}><Button data-slot="macro-update" variant="ghost" size="icon-sm" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><RefreshCw aria-hidden="true"/></Button></Hint>}
@@ -141,7 +141,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
         <GroupHeading label={group.project?.label ?? t("standalone")} count={group.total} open={!collapsed.has(group.id)} standalone={group.id === "standalone"}/>
         <CollapsibleContent>
           <GroupEntries key={`${props.sort}:${props.filter}:${props.query}`} rows={group.macroTasks} basis={basis} selected={props.selected} onSelect={onSelect}/>
-          {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-[26px] w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span className="flex justify-center"><ChevronDown aria-hidden="true" className="size-3"/></span><span>{t("showMore")}</span></button>}
+          {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-[26px] w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span className="flex justify-center"><ChevronDown aria-hidden="true" className="size-3 text-ink3"/></span><span>{t("showMore")}</span></button>}
         </CollapsibleContent>
       </Collapsible>)}
       {empty && <p className="p-4 text-xs text-ink3">{t(props.query || props.filter !== "all" ? "noMatch" : "noTasks")}</p>}

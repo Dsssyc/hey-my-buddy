@@ -68,7 +68,10 @@ describe("macro task navigation", () => {
   it("removes the whole list column when collapsed and retains its query and pagination after expansion", async () => {
     const f = harness(true);
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    await f.user.type(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号"), "设计");
+    // jsdom has no geometry: pointer hit-testing belongs to the browser checks.
+    within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号").focus();
+    await f.user.keyboard("设计");
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();

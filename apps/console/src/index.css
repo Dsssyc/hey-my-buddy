@@ -229,8 +229,11 @@
 /* Only sidebar labels lose their trailing glyphs; short labels retain solid ink. */
 .sidebar-label { overflow: hidden; white-space: nowrap; }
 .sidebar-label-fade { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
-.sidebar-resize { position: relative; z-index: 2; width: 0; outline: none; }
-.sidebar-resize::after { content: ""; position: absolute; left: -1px; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.sidebar-resize { position: relative; z-index: 2; outline: none; }
+.sidebar-resize::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: var(--line); }
 .sidebar-resize[data-separator="hover"]::after,
 .sidebar-resize[data-separator="active"]::after,
+.sidebar-resize[data-separator="focus"]::after,
 .sidebar-resize:focus-visible::after { background: var(--ink3); }
+/* Overlay the boundary so the visible line adds no width to the two columns. */
+.sidebar-resize:not(.invisible) { margin-left: -1px; }

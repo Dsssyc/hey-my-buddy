@@ -729,7 +729,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
           height: node.getBoundingClientRect().height, font: style.fontSize };
       }));
       let measured = await styles();
-      expect(measured.every(row => row.border === "0px" && row.height === 32 && row.font === "13px")).toBe(true);
+      expect(measured.every(row => row.border === "0px" && row.height === 28 && row.font === "13px")).toBe(true);
       await assertListGeometry(page, width);
       await photograph(page, "edges-list", "zh-CN", width, theme);
       await rows.nth(1).click();
