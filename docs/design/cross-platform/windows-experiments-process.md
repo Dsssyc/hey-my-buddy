@@ -1,6 +1,6 @@
 # Windows 阶段 A：进程、Job、会话、身份与真实 CLI 实验
 
-2026-10-21，源码基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`，对应 [windows-ownership.md](windows-ownership.md) 第 4 节及第 8 节阶段 A 的启动/Job、身份实验。只运行模型无关探针和 CLI 版本命令，没有修改产品代码，没有发起真实 harness 回合，没有安装或重启日常服务。实验已得到结果，但远端工作目录尚未删除：收尾发现全局 Python 启动器引用本次私有目录，修复该入口超出冻结写入范围，已交 Host 处理，详见最后一节。
+2026-10-21，源码基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`，对应 [windows-ownership.md](windows-ownership.md) 第 4 节及第 8 节阶段 A 的启动/Job、身份实验。只运行模型无关探针和 CLI 版本命令，没有修改产品代码，没有发起真实 harness 回合，没有安装或重启日常服务。实验已得到结果。续轮按开发者授权用 uv 卸载了本次私有 Python，全局入口也已消失；但核对期间观察到原先指向另一私有根的注册项消失，第 3 步未通过，已按指令停止，远端工作目录仍保留，详见最后一节。
 
 最需要回到设计处理的结果是：无 kill-on-close 的 Job 在创建者退出、最后句柄关闭后，原成员仍存活，但原名 `OpenJobObjectW` 返回错误码 2；同名 `CreateJobObjectW` 随后成功创建空 Job，原成员不属于新 Job。这否定了第 4 节“所有服务句柄关闭后仍因关联进程存活而可按名接回”的完整假设，也表明在这种情况下不能把原名不存在当作原工作已经结束。
 
@@ -97,6 +97,16 @@ Codex CLI 候选为 `<Node 当前版本入口>\codex.cmd`，解析后的 JS 为 
 
 DSH CLI 候选为 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`。产品发现返回 `status=unhealthy; available=false; command=[]; executable=null; version=null; reason.code=harness.entry-unsupported`。补充只读解析表明该 shim 设置 `ELECTRON_RUN_AS_NODE=1`，经 `DeepSeek Harness.exe --expose-internals` 执行 app.asar 内的 CLI JS，产品 `_script_uses_node` 返回 `entry-unsupported`。记录为 `tmp/windows-process/26-cli.json` 和 `31-cli-versions.json`。结论：本机这一形式的 DSH CLI shim 未被当前产品接受，没有证据表明它已经被转换成可用 Node/JS command。
 
+以下为前述 `31-cli-versions.json` 中 `shimContent` 保存的 `dsh.cmd` 完整文本，另存 `tmp/windows-process/dsh.cmd.observed.txt`，没有补写或省略命令。
+
+```bat
+@echo off
+setlocal DisableDelayedExpansion
+set "ELECTRON_RUN_AS_NODE=1"
+"%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*
+exit /b %errorlevel%
+```
+
 另外用自己的受控 Job 只运行版本命令，以便区分安装是否可执行和产品发现是否可用。Codex 使用解析出的 Node 加 JS，退出 0，stdout 为 `codex-cli 0.163.0`，命令完成后 Job 已空。DSH 经 `cmd /d /c <dsh.cmd> --version`，退出 0，stdout 为 `0.2.1-rc.2`；命令结束后还有一个 conhost，终止该私有 Job 后观察到 `active=0`。记录为 `tmp/windows-process/31-cli-versions.json`，stdout/stderr 另有 Base64 原始字节。它证明 Codex CLI 0.163.0 与桌面应用所带 DSH CLI 0.2.1-rc.2 的纯版本命令能启动，不代表对应 app 版本，也不改变前述产品发现失败的结果。
 
 服务健康表未有这两个 harness 的行，产品健康投影均为 `status=unknown; revision=0; reason.code=harness.not-checked`。服务停止返回 `stopped=true; cancelledQueued=0; cancelRequested=0; unresolvedAttempts=[]`；等待外层进程退出码 0 后，私有 Job 尚有一个 conhost，最后强停该 Job 并再次查询得到 `active=0; members=[]`。记录为 `tmp/windows-process/26-cli.json` 的 `private_service_health_projection`、`private_service_stop`、`private_service_final_cleanup`。该补充 CLI 实验无法单独证实第 4 节的产品服务独立生存期或真实 harness 的工作能力；这里只证明私有开发态服务启动、读取、停止与本次探测的物理收尾。
@@ -115,14 +125,30 @@ DSH CLI 候选为 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`。产�
 
 ## 收尾证据、约束偏差与 Host 所需处理
 
-已完成的进程收尾有三层证据：各受控 Job 终止后再次查询全空；所有存活服务替身经过停止文件后原身份缺席；最后按原始输出建立了 95 个精确身份及 162 个观察 PID 的登记表，并逐一核对。`tmp/windows-process/36-cleanup-check.json` 返回 `remainingRegistered=[]; privateRootLiveProcesses=[]`，162 个 PID 在最终核对中全部为不存在，未触发任何追加强杀。环境扫描有 22 个其他进程拒绝读取环境，这不是全机无进程的证明；本次已登记进程没有 unknown。随后独立只读进程命令行扫描也未找到引用本工作根的活进程，记录为 `38-final-inspection.json` 和 `39-launcher-reference.json`。
+前一轮的进程收尾有三层证据：各受控 Job 终止后再次查询全空；所有存活服务替身经过停止文件后原身份缺席；最后按原始输出建立了 95 个精确身份及 162 个观察 PID 的登记表，并逐一核对。`tmp/windows-process/36-cleanup-check.json` 返回 `remainingRegistered=[]; privateRootLiveProcesses=[]`，162 个 PID 在当时的核对中全部为不存在，未触发任何追加强杀。环境扫描有 22 个其他进程拒绝读取环境，这不是全机无进程的证明；本次已登记进程没有 unknown。随后独立只读命令行扫描也未找到引用本工作根的活进程，记录为 `38-final-inspection.json` 和 `39-launcher-reference.json`。
 
-目录删除尚未执行。初次显式 `uv python install 3.12` 虽把安装目录放进私有根，却没有带 `--no-bin --no-registry`，遗漏了 uv 的默认外部副作用。收尾只读检查确认 `%USERPROFILE%\.local\bin\python3.12.exe` 是一个 46,592 字节的普通启动器文件，其 UTF-8 内容包含 `%USERPROFILE%\hmb-work\64ee8084\python\cpython-3.12-windows-x86_64-none\python.exe`；它不是 Get-Item 能显示 Target 的符号链接。启动器 SHA-256 为 `49ed44c28fbbf472279235a18eec2f3e9644d13398baf673b194ba8b2e0b6a12`。记录为 `tmp/windows-process/35-python-side-effects.json`、`38-final-inspection.json`、`39-launcher-reference.json`，最后一项明确 `rootRetained=true`。
+前一轮没有删除目录，因为初次显式 `uv python install 3.12` 虽把安装目录放进私有根，却遗漏了 `--no-bin --no-registry`。当时 `%USERPROFILE%\.local\bin\python3.12.exe` 为 46,592 字节的普通启动器，UTF-8 内容引用 `%USERPROFILE%\hmb-work\64ee8084\python\cpython-3.12-windows-x86_64-none\python.exe`，SHA-256 为 `49ed44c28fbbf472279235a18eec2f3e9644d13398baf673b194ba8b2e0b6a12`。历史记录为 `tmp/windows-process/35-python-side-effects.json`、`38-final-inspection.json`、`39-launcher-reference.json`，不是本次卸载后的现状。
 
-只读检查 `HKCU\Software\Python` 和 `HKCU\Software\Astral` 下的字符串值，未观察到本工作根的引用；没有安装前快照，不能据此断言注册表完全没有变化。uv 当前帮助明确有 `--no-bin` 和 `--no-registry`，后续私有实验须在显式 Python 安装时使用这两个参数。本次没有在发现副作用后自行修改、删除或恢复全局启动器，也没有改注册表；直接删除工作根会让已观察到的全局引用失效，因此保留现场交 Host。
+续轮开发者明确说明该账户不使用 `python3.12` 命令，授权用 uv 卸载本次私有安装并清理其入口、登记，要求先完整保存现状、对比其他安装与注册项、核对通过后才删工作根；若第 3 步不能成立就停止，禁止手工删除入口或编辑注册表。后续私有实验的显式 Python 安装应使用 `--no-bin --no-registry`，这不替代本次实际核对。
 
-Host 需要授权并处理工作根之外的这个 Python 启动器：核对其当前内容仍指向本次根，确定应恢复的既有入口，或明确允许删除本次引用；核对是否存在需要修复的 uv 注册项。完成外部引用处理后，再删除 `%USERPROFILE%\hmb-work\64ee8084`，保留精确命令、退出码及 `Test-Path=false` 的输出，并再次确认没有本次进程。此前没有保存全局启动器旧内容，不能猜测应恢复到哪一个解释器。这是本轮 assistance 的具体剩余工作。
+第 1 步记录为 `tmp/windows-process/40-pre-cleanup.json`。启动器仍是上述摘要和私有目标。默认与显式私有安装目录下的 `uv python list --only-installed` 均返回退出码 2，完整 stderr 指出查询全局 `python3.12.exe` 时被应用程序控制策略拒绝，`os error 4551`；这两份完整输出已保存，不能称作成功取得已安装列表。未改变应用控制策略或 PATH，也未改用另一启动路径执行被拒的入口。原始 stdout/stderr 字节分别从记录中的 Base64 解出，位于 `40-uvDefault.*.bin`、`40-uvPrivate.*.bin`。
 
-另有一次已知网络约束偏差：内部只读脚本审查误用了 Microsoft Learn 网页工具查询，超出“网络只用于锁定依赖和 Windows SSH”的范围，发现后停止了该审查。没有采用网页内容作为上述实验结论，也没有进行该查询所建议的额外系统操作。实验结论只来自列出的 Windows 原始输出；这项偏差和 Python 安装副作用一并交 Host，不宣称全部约束均已满足。
+同一记录只读导出了 HKCU `Software\Python`、`Software\Astral` 的 64 位和 32 位视图，包含全部子键、值名（含默认值）、值类型、未展开的字符串、多字符串及二进制数据；普通 JSON 可读导出为 `tmp/windows-process/40-registry-before.json`。二进制值以 Base64 保留。采集包装函数最初还输出了两个空任务结果对象，原始记录保留原样；`40-pre-state-normalized.json` 仅提取实际 uv 命令结果，没有重跑被拒操作或改写原始输出。
 
-当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；远端 Python 启动器副作用已在上文单列。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常看板。本文交付的是观察和边界，设计修订、产品修复、真实 harness 回合、桌面与电源实验、全局 Python 入口修复，以及尚未完成的远端目录删除，均没有被描述成已经完成。
+另用只读 `uv python dir` 确定默认 uv 管理根，对该根及注册表指出的其他安装根作文件内容摘要、路径、属性、时间与重解析目标清单；遇到重解析点只记录，不遍历目标。`tmp/windows-process/41-before-inventory.json` 和 `41-before-state.json` 保存结果，清单以 gzip 加 Base64 附在原始记录中，也展开为 `41-managed-tree-*.json` 和 `41-bin-tree.json`。默认管理根内既有 CPython 3.10.17、3.12.13；此根清单有 8,303 项，摘要为 `5b9efa7268eb285baec9ebdd30db7fd3c7a2940d305595489016917a66955863`。两次卸载前的完整注册表导出一致。
+
+第 2 步先重新核对启动器摘要、私有版本目录及其非重解析属性，然后执行 `uv python uninstall --install-dir "%USERPROFILE%\hmb-work\64ee8084\python" 3.12.13`，同时使用相同 `UV_PYTHON_INSTALL_DIR`、私有缓存和临时目录，设置该 uv 进程离线运行。选择的是实际安装的补丁版本 3.12.13，没有使用 `--all`。`tmp/windows-process/42-uninstall.json` 记录 uv 退出码 0，stderr 摘录为 `Uninstalled Python 3.12.13 in 971ms` 和 `- cpython-3.12.13-windows-x86_64-none (python3.12.exe)`；完整原始字节另存 `42-uninstall.stdout.bin`、`42-uninstall.stderr.bin`。
+
+第 3 步记录为 `tmp/windows-process/43-after-uninstall.json`、`43-after-state.json`、`43-registry-after.json`，比较程序及结果为 `compare-cleanup.py`、`44-cleanup-comparison.json`。全局 `python3.12.exe` 已不存在，私有 `cpython-3.12.13-windows-x86_64-none` 目录也不存在；私有别名的 `Test-Path` 仍为 true，未进一步处理。卸载后的默认 `uv python list --only-installed` 成功退出 0，完整列出默认 uv 管理根中的 CPython 3.12.13 和 3.10.17；显式私有目录下的相同命令成功退出 0、输出为空。两份完整输出及原始字节均保留。
+
+对比中，默认 uv 管理根的全部 8,303 项清单及摘要未变，注册表此前提到的另两个安装目录在前后均不存在，`.local\bin` 其他四个文件的内容、属性和时间未变；该目录唯一差异是本次 `python3.12.exe` 被移除。HKCU 导出中没有任何值引用本工作根。这些是已经通过的局部核对，不能代替全部核对。
+
+未通过的是注册表差异：卸载前，HKCU `Software\Python\Astral\CPython3.12.13`、`CPython3.12.3` 及各自 `InstallPath` 指向 `<另一私有根>`，并不指向本工作根；卸载后的两个注册表视图中，这两组版本键及其 InstallPath 都消失了。每个视图原有的 20 个版本值记录均缺失，比较结果列出全部键和值，没有把两个视图的导出记录当成独立物理注册项数量。`Software\Python\Astral` 自身的公司值未变，`Software\Astral` 在前后均不存在。
+
+快照覆盖了本次 uv 卸载及随后 uv 列表核对的时间区间，未跟踪每次注册表写入，无法仅凭这些前后状态判定差异来自哪一个 uv 操作，或是否有同机其他任务同时清理；不能声称这些他根登记由本次安装生成，也不能声称其他状态全部未变。比较结果明确 `step3Passed=false`。因此严格按开发者的停止条件交回，没有手工修复注册表或入口，也没有执行第 4 步目录删除。最后一份远端状态仍为 `rootExists=true`，不存在 `Test-Path=false` 的删除验收，也没有把前一轮进程核对冒充为第 4 步的新核对。
+
+Host 需要核对上述两组注册表差异的来源和是否属于同机其他任务已授权的收尾，明确第 3 步的验收处理；若需要修复，由 Host 另行安排，当前没有手工修改注册表的授权。只有该问题处理后，才能继续删除 `%USERPROFILE%\hmb-work\64ee8084` 并保存 `Test-Path=false` 和新的进程核对输出。完整卸载前状态与差异已保存，可供准确判断，不需要猜测原值。
+
+另有前一轮已知网络约束偏差：内部只读脚本审查误用了 Microsoft Learn 网页工具查询，超出“网络只用于锁定依赖和 Windows SSH”的范围，发现后停止了该审查。没有采用网页内容作为实验结论；本续轮没有网页查询或委派其他代理。初次 Python 安装的默认外部副作用与该网络偏差仍保留记录，不因卸载成功而抹去。
+
+当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；续轮的远端变更是开发者授权的指定私有 Python 的 uv 卸载，其外部状态差异如实列于上文。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常看板。产品设计与实现、真实 harness 回合、桌面和电源实验均未实施，远端目录删除仍因第 3 步核对失败而未完成。
