@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS "tasks" (
     task_id                 TEXT PRIMARY KEY,
     request_id              TEXT NOT NULL UNIQUE,
     owner                   TEXT,
@@ -135,11 +135,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     input_fingerprint       TEXT NOT NULL,
     fingerprint_version     INTEGER NOT NULL,
     adapter                 TEXT NOT NULL,
-    required_capabilities   TEXT NOT NULL DEFAULT '[]',
     cwd                     TEXT NOT NULL,
-    exclusive_resources     TEXT NOT NULL DEFAULT '[]',
-    expected_seconds        INTEGER CHECK (expected_seconds > 0),
-    router_budget_seconds   INTEGER CHECK (router_budget_seconds > 0),
     state                   TEXT NOT NULL
         CHECK (state IN ('queued','running','cancelling','completed','concluded','failed','cancelled','reconciliation-needed')),
     queue_reason            TEXT,
@@ -152,8 +148,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     acceptance_note         TEXT,
     review_rejected_at      TEXT,
     review_rejection_note   TEXT,
-    CHECK ((adapter='decision' AND expected_seconds IS NULL AND router_budget_seconds IS NOT NULL)
-        OR (adapter!='decision' AND expected_seconds IS NOT NULL AND router_budget_seconds IS NULL))
+    CHECK ((adapter='decision' AND json_extract(spec_json,'$.expectedSeconds') IS NULL)
+        OR (adapter!='decision' AND json_type(spec_json,'$.expectedSeconds') IS 'integer'
+            AND json_extract(spec_json,'$.expectedSeconds') > 0))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
 
@@ -946,7 +943,7 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
 );
 """
 
-# Shared verbatim with the additive upgrade so fresh and upgraded schemas agree.
+# Current Router settings; frozen upgrades carry their own definitions.
 ROUTER_MAINTENANCE_COLUMNS = (
     "maintenance_buddy_id TEXT",
     "maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)",

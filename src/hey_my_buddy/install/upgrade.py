@@ -22,7 +22,7 @@ from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
-from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
+from ..blackboard.store.upgrade import supported_schema, upgrade_state
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -65,8 +65,7 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
+    version = supported_schema(schema[0] if schema is not None else None)
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -83,7 +82,7 @@ def _idle_board(connection: sqlite3.Connection) -> int:
     if active or unresolved:
         raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
                          active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
-    return int(schema[0])
+    return version
 
 
 def ensure_idle(state: Path) -> int:
@@ -516,7 +515,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
                     expected = before
-                    if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA:
+                    if contract_changed and before['schema'] < SCHEMA_VERSION:
                         migration = upgrade_state(state)
                         expected = {**idle_snapshot(state), 'runtimeSettings': runtime_settings}
                         journal['schemaUpgrade'] = migration

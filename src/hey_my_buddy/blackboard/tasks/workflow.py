@@ -2720,8 +2720,8 @@ class WorkflowCoordinator:
             )
         connection.execute(
             "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
-            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
-            " state, queue_reason, revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            " fingerprint_version, adapter, cwd,"
+            " state, queue_reason, revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (
                 helper_task_id,
                 request_id,
@@ -2730,10 +2730,7 @@ class WorkflowCoordinator:
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
                 spec.get("harness") or "unresolved",
-                canonical_json(spec.get("requiredCapabilities", [])),
                 effective_cwd,
-                canonical_json(spec.get("exclusiveResources", [])),
-                spec["expectedSeconds"],
                 "queued",
                 blocker or "awaiting-execution",
                 now,
@@ -6222,7 +6219,7 @@ class WorkflowCoordinator:
                 input_json,
                 execution_workspace["access"],
                 json.loads(run_row["execution_workspace_json"]).get("accessNote"),
-                task["expected_seconds"],
+                json.loads(task["spec_json"])["expectedSeconds"],
                 now,
                 now,
             ),

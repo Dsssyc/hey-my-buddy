@@ -15,7 +15,7 @@ from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
 from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -137,9 +137,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 identifier = f'run-{number:03d}'
                 time = f'2026-01-01T00:{number // 60:02d}:{number % 60:02d}.000Z'
                 connection.execute(
-                    'INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,'
-                    'adapter,cwd,expected_seconds,state,revision,created_at,updated_at,accepted_at) '
-                    'VALUES(?,?,\'{}\',\'hash\',1,\'dsh\',\'fixture\',10,\'completed\',1,?,?,?)',
+                    "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at,accepted_at) VALUES(?,?,json_set('{}','$.expectedSeconds',10),'hash',1,'dsh','fixture','completed',1,?,?,?)",
                     (identifier, identifier, time, time, time))
                 connection.execute(
                     'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at) '
@@ -230,13 +228,13 @@ class ExportBoardSampleTests(WorkflowTestCase):
     def test_unsupported_schema_preserves_source_and_publishes_no_sample(self):
         board = self.source_board()
         board.store.db.close()
-        for schema in (29, 32):
+        for schema in (UPGRADE_FLOOR_SCHEMA - 1, SCHEMA_VERSION + 1):
             with self.subTest(schema=schema):
                 with closing(sqlite3.connect(board.directory / DB_FILE)) as connection, connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(schema),))
                 before = files(board.directory)
                 output = self.directory / f'unsupported-{schema}'
-                with self.assertRaisesRegex(ValueError, f'Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}'):
+                with self.assertRaisesRegex(ValueError, f'Source must use schema {UPGRADE_FLOOR_SCHEMA} through {SCHEMA_VERSION}'):
                     export_sample(board.directory, output)
                 self.assertFalse(output.exists())
                 self.assert_source_unchanged(before, files(board.directory))
@@ -293,11 +291,27 @@ class ExportBoardSampleTests(WorkflowTestCase):
             relative = Path('attempts') / task / attempt / 'inquiry.results.jsonl'
             self.assertEqual(native_path(output / relative).read_bytes(), native_path(source / relative).read_bytes())
         self.assertEqual(upgrade_state(output),
-                         {'sourceSchema': UPGRADE_BASE_SCHEMA, 'targetSchema': SCHEMA_VERSION})
+                         {'sourceSchema': UPGRADE_FLOOR_SCHEMA, 'targetSchema': SCHEMA_VERSION})
         current = Database(output)
         self.addCleanup(current.close)
         current.initialize()
         self.assert_source_unchanged(before, files(source))
+
+    def test_schema31_sample_keeps_source_form_and_can_upgrade(self):
+        from hey_my_buddy.blackboard.store import schema_30_31
+        fixture = load_fixture(self.directory / 'source31')
+        with closing(sqlite3.connect(fixture['state'] / DB_FILE)) as connection:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                schema_30_31.upgrade(connection)
+                connection.execute("UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,cleanup_pending=0")
+                connection.execute("UPDATE tasks SET state='completed',active_attempt_id=NULL")
+        before = files(fixture['state'])
+        sample = export_sample(fixture['state'], self.directory / 'sample31')
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '31')
+        self.assertEqual(upgrade_state(sample), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
+        self.assert_source_unchanged(before, files(fixture['state']))
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
         board = self.source_board()

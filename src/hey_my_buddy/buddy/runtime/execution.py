@@ -176,13 +176,15 @@ def validate_claim_turn(claim: dict) -> None:
         if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review")
                 or not isinstance(decision.get("buddy"), dict)
                 or not isinstance(decision["buddy"].get("harness"), str)
-                or not decision["buddy"]["harness"] or not isinstance(decision.get("budget"), dict)):
+                or not decision["buddy"]["harness"]):
             raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
         if task["spec"].get("decision", {}).get("kind") == "maintain":
             if (decision.get("kind") != "maintain" or decision["routingMode"] != "fast"
                     or decision.get("maintenanceRunId") != task["spec"]["decision"]["decisionId"]
                     or not isinstance(decision.get("input"), dict)):
                 raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid maintenance input")
+        elif not isinstance(decision.get("budget"), dict):
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid routing budget")
     if "turn" not in claim:
         return
     turn = claim["turn"]

@@ -18,7 +18,7 @@ import tempfile
 
 from hey_my_buddy.blackboard.tasks.workspace import _git_command
 
-FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-base"
+FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-floor"
 
 
 def _sha(data: bytes) -> str:

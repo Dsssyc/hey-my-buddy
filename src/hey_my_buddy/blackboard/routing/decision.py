@@ -428,7 +428,7 @@ class DecisionCoordinator:
         }
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection)
 
-    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
+    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int | None, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
 
         Each dispatched Router item owns its own internal task; ``request_key``
@@ -445,18 +445,20 @@ class DecisionCoordinator:
             "cwd": str(self.board.directory / "attempts" / task_id),
             "task": ("Maintain domains, task classifications and buddy kind summaries."
                      if kind == "maintain" else "Bounded selection decision over the current evaluation table."),
-            "routerBudgetSeconds": router_budget_seconds + TIMEOUT_GRACE_SECONDS,
             "requiredCapabilities": [DECISION_ADAPTER],
-            "decision": {"decisionId": decision_id, "kind": kind, "routerBudgetSeconds": router_budget_seconds,
+            "decision": {"decisionId": decision_id, "kind": kind,
                          **({"document": document} if kind == "maintain" else {})},
         }
+        if router_budget_seconds is not None:
+            spec["routerBudgetSeconds"] = router_budget_seconds + TIMEOUT_GRACE_SECONDS
+            spec["decision"]["routerBudgetSeconds"] = router_budget_seconds
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(
             "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
-            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, router_budget_seconds,"
+            " fingerprint_version, adapter, cwd,"
             " state, queue_reason, revision, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 request_key,
@@ -465,10 +467,7 @@ class DecisionCoordinator:
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
                 DECISION_ADAPTER,
-                canonical_json(spec["requiredCapabilities"]),
                 spec["cwd"],
-                canonical_json([]),
-                spec["routerBudgetSeconds"],
                 "queued",
                 blocker or "awaiting-execution",
                 1,

@@ -114,12 +114,11 @@ class Maintenance:
         reference = files.publish(self.store.directory, run_id, {
             "packet": packet, "outputSchema": maintenance_data.answer_schema(packet)})
         identity = {key: buddy[key] for key in schemas.BUDDY_FIELDS}
-        budget = router.configured_budget(connection)
         document = {"kind": "maintain", "maintenanceRunId": run_id, "buddyId": buddy_id,
-                    "buddy": identity, "routingMode": "fast", "budget": budget, "input": reference}
+                    "buddy": identity, "routingMode": "fast", "input": reference}
         task_id = self.store.decisions._create_task(
             connection, decision_id=run_id, request_id=run_id,
-            router_budget_seconds=budget["timeoutSeconds"], now=now,
+            router_budget_seconds=None, now=now,
             kind="maintain", document=document)
         connection.execute("INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,state,started_at)"
                            " VALUES(?,?,?,?,'running',?)", (run_id, trigger_type, buddy_id, task_id, now))

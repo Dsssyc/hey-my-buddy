@@ -15,7 +15,7 @@ from unittest import mock
 from process_observation import wait_for_unreaped_child
 
 from hey_my_buddy.buddy.runtime.execution import Execution, _ExecutionLive, validate_claim_turn
-from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import execution as launch_protocol
@@ -82,6 +82,64 @@ class ExecutionEndpointTests(unittest.TestCase):
             with self.subTest(decision=bad), self.assertRaises(BoardError) as caught:
                 validate_claim_turn({**base, "decisionInput": bad})
             self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_maintenance_claim_has_no_budget_and_keeps_its_identity_checks(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision",
+                "decision": {"decisionId": "maint-1", "kind": "maintain"}}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+        document = {"kind": "maintain", "maintenanceRunId": "maint-1", "routingMode": "fast",
+                    "buddy": {"harness": "dsh"}, "input": {"sha256": "a" * 64}}
+        validate_claim_turn({**base, "decisionInput": document})
+        for change in ({"maintenanceRunId": "wrong"}, {"routingMode": "review"}, {"input": None}):
+            with self.subTest(change=change), self.assertRaises(BoardError):
+                validate_claim_turn({**base, "decisionInput": {**document, **change}})
+
+    def test_virtual_slow_maintenance_finishes_while_fast_and_review_keep_their_deadlines(self):
+        from hey_my_buddy.buddy.runtime import execution as module
+        from hey_my_buddy.buddy.roles import controller
+        from hey_my_buddy.install import runtime
+        for kind, timeout in (("maintain", None), ("select-fast", 70), ("select-review", 310)):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(prefix='virtual-router-') as directory:
+                state = Path(directory)
+                spec = {"adapter": "decision", "cwd": directory,
+                        "decision": {"kind": "maintain" if kind == "maintain" else "select"}}
+                if timeout is not None:
+                    spec['routerBudgetSeconds'] = timeout
+                claim = {"task": {"taskId": "task", "spec": spec},
+                         "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                         "decisionInput": {"kind": spec['decision']['kind'], "buddy": {"harness": "dsh"}}}
+                execution = Execution(claim, state, 'n' * 32, client=mock.Mock())
+                execution.directory.mkdir(parents=True, mode=0o700)
+                execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+                clock = [0.0]
+                waits = []
+                def wait(timeout):
+                    waits.append(timeout)
+                    clock[0] = 10_000.0  # Past every routing preset, without sleeping.
+                    return None if len(waits) == 1 else 0
+                handle = SimpleNamespace(wait=wait, grace_deadline=None, force_stop_requested=False,
+                                         cancel_requested=False, stop_initiator=None, grace_expired=False,
+                                         result=None)
+                outcome = AdapterOutcome(status='ok', shutdown_confirmed=True)
+                with mock.patch.object(runtime, 'resolve_runtime', return_value={}), \
+                     mock.patch.object(controller, 'worker_executor', return_value=object()), \
+                     mock.patch.object(controller, 'prepare_worker_run', return_value=controller.WorkerPreparation(True)), \
+                     mock.patch.object(controller, 'worker_start', return_value=handle), \
+                     mock.patch.object(controller, 'worker_collect', return_value=outcome), \
+                     mock.patch.object(controller, 'worker_cancel') as cancel, \
+                     mock.patch.object(module, 'time', SimpleNamespace(monotonic=lambda: clock[0])):
+                    receipt = execution._execute_selected(claim, claim['task'], spec, claim['attempt'],
+                                                          execution.directory, {'preflightControl': mock.Mock()})
+                report = receipt['report']
+                self.assertEqual(report['elapsedSeconds'], 10_000)
+                self.assertEqual((execution.directory / module.BUDGET).exists(), timeout is not None)
+                if timeout is None:
+                    cancel.assert_not_called()
+                    self.assertEqual((report['status'], report['terminationReason']), ('ok', 'completed'))
+                else:
+                    cancel.assert_called_once()
+                    self.assertEqual(report['terminationReason'], 'deadline')
+                    self.assertEqual(report['result']['code'], 'router-budget-exhausted')
 
     def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
         identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,

@@ -45,7 +45,7 @@ Only cite that kind's citationRunIds or its existing summary's citations. Do not
 sample counts or rates into prose: the program calculates and displays them.
 Return the supplied JSON Schema. The blackboard saves valid entries immediately;
 it may return concrete errors for up to two corrections in this execution.
-Preserve entries already accepted. Stay within the supplied total time budget."""
+Preserve entries already accepted."""
 
 
 def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
@@ -63,7 +63,7 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
     prompt = (MAINTENANCE_INSTRUCTIONS + "\n\n" + canonical_json(document["packet"]) if maintain
               else router.render_prompt(document))
     request = NoToolStructuredRequest(str(root), router_prompt(prompt), document["outputSchema"],
-                                      timeout_seconds=document["budget"]["timeoutSeconds"] if maintain else 60,
+                                      timeout_seconds=None if maintain else 60,
                                       capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.FastPreparation(harness=native.name, request=request, context=child_context,
@@ -181,13 +181,15 @@ class DecisionAdapter(Adapter):
             **({"nativeError": native_result["error"]} if outcome.status != "ok"
                and isinstance(native_result.get("error"), str) else {}),
             "correctionCount": native_result.get("correctionCount"),
-            "budget": document["budget"], "inputVerification": verification,
-            **router.routing_facts(document),
+            "inputVerification": verification,
+            **(router.routing_facts(document) if document.get("kind") != "maintain" else {}),
             "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                              "native": native_result.get("processState"),
                              "nativeInterruptRequested": native_result.get("nativeInterruptRequested"),
                              "nativeInterruptAcknowledged": native_result.get("nativeInterruptAcknowledged")},
         }
+        if document.get("kind") != "maintain":
+            result["budget"] = document["budget"]
         code = native_result.get("code")
         if code in ("deadline", "timeout", "readonly-budget-exhausted"):
             code = "router-budget-exhausted"

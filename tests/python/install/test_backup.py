@@ -12,7 +12,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA, upgrade_state
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.errors import BoardError
@@ -49,15 +49,29 @@ class BackupTests(BoardTestCase):
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(backup.verify(current)['schema'], fixture['schemaVersion'])
-        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_FLOOR_SCHEMA)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
         upgrade_state(self.directory)
-        self.assertEqual(backup.verify(current)['schema'], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(backup.verify(current)['schema'], UPGRADE_FLOOR_SCHEMA)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None,
                                      contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
+
+    def test_schema31_backup_keeps_raw_form_without_running_a_migration(self):
+        from hey_my_buddy.blackboard.store import schema_30_31
+        fixture = load_fixture(self.directory)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            schema_30_31.upgrade(connection)
+        before = (self.directory / 'board.sqlite3').read_bytes()
+        with mock.patch('hey_my_buddy.blackboard.store.upgrade.upgrade_state', side_effect=AssertionError('must not migrate')):
+            current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None,
+                                        contract_version=CONTRACT_VERSION)['path'])
+            self.assertEqual(backup.verify(current)['schema'], 31)
+        self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
+        self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
     def test_roundtrip_contains_board_and_existing_state_files_only(self):
         board = self.board()
@@ -168,7 +182,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for version in (None, True, 0, -1, 28, 29, 32, "30"):
+        for version in (None, True, 0, -1, 28, 29, SCHEMA_VERSION + 1, "30"):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")

@@ -656,16 +656,14 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertIsNone(execution['reminders'])
         self.assertEqual(execution['inquiries'][0]['inquiryId'], 'during-turn')
 
-        # A later turn may freeze a different expectation. The earlier span keeps
-        # its own turn's value, and a turn with no questions has an empty list.
-        with board.store.db.write() as connection:
-            connection.execute('UPDATE tasks SET expected_seconds=59 WHERE task_id=?', (run_id,))
+        # Continuation freezes the unchanged task expectation; each turn keeps
+        # its own inquiry history, including the empty later history.
         view = board.call('workflow_get', {'runId': run_id})
         self.continue_run(board, view, note='review the output again')
         self.claim(board, claim_request_id='c2', run_id=run_id)
         timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
         executions = [span for span in timeline['spans'] if span['kind'] == 'execution']
-        self.assertEqual([span['expectedSeconds'] for span in executions], [37, 59])
+        self.assertEqual([span['expectedSeconds'] for span in executions], [37, 37])
         self.assertEqual([span['inquiries'] for span in executions], [execution['inquiries'], []])
         self.assertIsNone(executions[0]['reminders'])
         self.assertEqual(executions[1]['reminders'],

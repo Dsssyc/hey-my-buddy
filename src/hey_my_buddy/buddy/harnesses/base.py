@@ -121,7 +121,7 @@ class NoToolStructuredRequest:
     cwd: str
     prompt: str
     output_schema: dict
-    timeout_seconds: int = 60
+    timeout_seconds: int | None = 60
     capture_evidence: bool = False
 
 

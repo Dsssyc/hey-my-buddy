@@ -189,7 +189,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES(?,?,?,?,?)", (decision_id, owner["runId"], 1, "resolved", now))
             for index, task_id in enumerate(("route-earlier", "route-latest")):
                 row = {**original, "task_id": task_id, "request_id": f"route-request-{index}",
-                       "adapter": "decision", "expected_seconds": None, "router_budget_seconds": 60,
+                       "adapter": "decision", "spec_json": json.dumps({"adapter": "decision", "routerBudgetSeconds": 60}),
                        "selected_attempt_id": None, "active_attempt_id": None}
                 columns = tuple(row)
                 db.execute(f"INSERT INTO tasks({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
@@ -370,9 +370,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         router_id = 'tree-router-task'
         with board.store.db.write() as db:
             spec = json.dumps({'adapter': 'decision', 'cwd': str(self.workdir('tree-router')), 'task': 'route'})
-            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,"
-                       "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
-                       " VALUES(?,?,?,?,2,'decision',?,30,'cancelled',1,?,?)",
+            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,json_set(?,'$.routerBudgetSeconds',30),?,2,'decision',?,'cancelled',1,?,?)",
                        (router_id, 'tree-router-request', spec, 'router-fixture',
                         str(self.workdir('tree-router')), now, now))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"

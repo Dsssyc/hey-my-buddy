@@ -290,7 +290,7 @@ class ExpectedDurationTests(BoardTestCase):
         self.assertNotIn("timeoutSeconds", default)
         self.assertNotIn("routerBudgetSeconds", explicit)
         with board.store.db.read() as connection:
-            rows = connection.execute("SELECT expected_seconds,router_budget_seconds FROM tasks ORDER BY request_id").fetchall()
+            rows = connection.execute("SELECT json_extract(spec_json,'$.expectedSeconds'),json_extract(spec_json,'$.routerBudgetSeconds') FROM tasks ORDER BY request_id").fetchall()
             self.assertEqual([tuple(row) for row in rows], [(1800, None), (1, None)])
         self.assertEqual(board.call("task_get", {"runId": explicit["runId"]})["task"]["expectedSeconds"], 1)
 
@@ -308,7 +308,9 @@ class ExpectedDurationTests(BoardTestCase):
     def test_storage_rejects_a_mixed_duration_meaning(self):
         board = self.board()
         task = self.submit(board, "duration-storage")
-        for update in ("expected_seconds=0", "router_budget_seconds=60", "expected_seconds=NULL"):
+        for update in ("spec_json=json_set(spec_json,'$.expectedSeconds',0)",
+                       "spec_json=json_set(spec_json,'$.expectedSeconds','60')",
+                       "spec_json=json_remove(spec_json,'$.expectedSeconds')"):
             with self.subTest(update=update), self.assertRaises(sqlite3.IntegrityError):
                 with board.store.db.write() as connection:
                     connection.execute(f"UPDATE tasks SET {update} WHERE task_id=?", (task["runId"],))

@@ -168,6 +168,27 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             "commandId": "maintenance-clear", "configuration": {"maintenanceBuddyId": None}})
         self.assertIsNone(self.board_.call("console_snapshot", {})["configuration"]["maintenanceBuddyId"])
 
+    def test_unknown_maintenance_load_in_queue_and_in_flight_is_a_lower_bound(self):
+        from hey_my_buddy.blackboard.routing.evidence import _loads
+        from hey_my_buddy.cli.cli_views import task_brief
+        self.configure()
+        started = self.start()
+        identity = ('dsh', 'fixture', 'maintenance')
+        def load():
+            with self.board_.store.db.read() as db:
+                return _loads(self.board_.store, db, {identity}, now=self.clock.value)[identity]
+        queued = load()
+        self.assertEqual((queued['active'], queued['queued']), (0, 1))
+        self.assertEqual(queued['wait'], {'seconds': 0, 'atLeast': True, 'overdue': 0})
+        task = self.board_.call('task_get', {'runId': started['runId']})['task']
+        self.assertIsNone(task_brief(task)['routerBudgetSeconds'])
+        self.assertIsNone(self.board_.call('inquiry_observe', {'runId': started['runId']})['routerBudgetSeconds'])
+        self.claim_maintenance(started['runId'])
+        self.clock.advance(10_000)
+        running = load()
+        self.assertEqual((running['active'], running['queued']), (1, 0))
+        self.assertEqual(running['wait'], {'seconds': 0, 'atLeast': True, 'overdue': 0})
+
     def test_domain_operations_require_console_and_preserve_merge_invariants(self):
         for operation, params in (("domain_rename", {"nodeId": "x", "name": "Name", "definition": "Meaning"}),
                                   ("domain_merge", {"sourceId": "x", "targetId": "y"})):
@@ -243,7 +264,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
                          {"pendingMicroTaskCount": 3})
 
-    def test_start_claim_frozen_packet_budget_and_no_router_table_pollution(self):
+    def test_start_claim_unlimited_frozen_packet_and_no_router_table_pollution(self):
         self.configure(preset="deep")
         started = self.start()
         self.assertEqual(started["status"], "running")
@@ -251,8 +272,10 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         claim = self.claim_maintenance(started["runId"])
         document = claim["decisionInput"]
         self.assertEqual(document["routingMode"], "fast")
-        self.assertEqual(document["budget"]["preset"], "deep")
-        self.assertGreater(document["budget"]["timeoutSeconds"], 60)
+        self.assertNotIn("budget", document)
+        self.assertNotIn("routerBudgetSeconds", claim["task"]["spec"])
+        self.assertNotIn("routerBudgetSeconds", claim["task"]["spec"]["decision"])
+        self.assertIsNone(self.board_.call("task_get", {"runId": started["runId"]})["task"]["routerBudgetSeconds"])
         self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
         self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
         self.assertEqual(self.packet(claim)["kinds"][0]["unreadRunIds"], [self.evidence_id])
@@ -841,7 +864,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
 
         def fake_run(request, *, observer, services, cancelled):
             self.assertEqual(request.permission, "none")
-            self.assertEqual(request.budget.timeout_seconds, 300)
+            self.assertIsNone(request.budget.timeout_seconds)
             self.assertFalse(cancelled())
             session = native_path(request.private_state.native_root) / "dsh-home" / "sessions" / "session.jsonl"
             session.parent.mkdir(parents=True, exist_ok=True)

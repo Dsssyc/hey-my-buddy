@@ -17,7 +17,7 @@ from unittest import mock
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
 from hey_my_buddy.blackboard.routing import evidence
 from hey_my_buddy.blackboard.store.upgrade import upgrade_state
-from hey_my_buddy.blackboard.store import upgrade
+from hey_my_buddy.blackboard.store import schema_30_31
 
 
 ORACLE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-statistics.json"
@@ -72,7 +72,7 @@ def _write_oracle():
             "sha256": hashlib.sha256(source).hexdigest(),
         },
         "fixture": {
-            "path": "tests/fixtures/upgrade-base",
+            "path": "tests/fixtures/upgrade-floor",
             "sourceCommit": fixture["sourceCommit"],
             "sha256": fixture_hashes,
         },
@@ -118,7 +118,7 @@ class UpgradeStatisticsTests(unittest.TestCase):
             fixture = load_fixture(Path(scratch) / "state")
             with closing(sqlite3.connect(fixture["state"] / "board.sqlite3")) as connection:
                 before = list(connection.iterdump())
-                original = upgrade.backfill
+                original = schema_30_31.backfill
 
                 def fail_after_writes(writer):
                     original(writer)
@@ -126,7 +126,7 @@ class UpgradeStatisticsTests(unittest.TestCase):
                     self.assertGreater(writer.execute("SELECT SUM(count) FROM buddy_infrastructure_failures").fetchone()[0], 0)
                     raise RuntimeError("after-backfill")
 
-                with mock.patch.object(upgrade, "backfill", side_effect=fail_after_writes):
+                with mock.patch.object(schema_30_31, "backfill", side_effect=fail_after_writes):
                     with self.assertRaisesRegex(RuntimeError, "after-backfill"):
                         upgrade_state(fixture["state"])
                 self.assertEqual(list(connection.iterdump()), before)

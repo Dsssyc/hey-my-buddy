@@ -83,7 +83,7 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
     changed = False
     silence_seconds = connection.execute('SELECT silence_seconds FROM reminder_settings WHERE id=1').fetchone()[0]
     attempts = connection.execute(
-        "SELECT a.*, t.expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
+        "SELECT a.*, json_extract(t.spec_json,'$.expectedSeconds') AS expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
         " WHERE a.execution_state IN ('starting','executing','uncertain')"
         " AND a.result_json IS NULL AND t.active_attempt_id=a.attempt_id AND t.adapter!='decision'"
     ).fetchall()

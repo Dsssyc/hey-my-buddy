@@ -563,7 +563,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
     if control["maintenance"]:
         document = context.spec["decision"]["document"]
         audit_request = {"kind": "maintain", "maintenanceRunId": document["maintenanceRunId"],
-                         "input": document["input"], "budget": document["budget"]}
+                         "input": document["input"]}
     handle.no_tool_evidence = _NoToolEvidence(
         name, context.task_id, context.attempt_id, context.generation, directory,
         invocation, directory / invocation_name, canonical_json(audit_request))
