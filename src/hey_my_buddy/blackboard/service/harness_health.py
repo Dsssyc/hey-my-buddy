@@ -68,13 +68,10 @@ def read_health(connection, harness):
         from ...protocol.billing import fact
         catalog = connection.execute("SELECT d.payload_json,c.updated_at FROM catalog_current c JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.harness='dsh' AND c.status='complete'").fetchone()
         if catalog:
-            try:
-                entries = json.loads(catalog["payload_json"])["providers"]
-            except (ValueError, TypeError, KeyError):
-                entries = []
+            entries = json.loads(catalog["payload_json"])["providers"]
             billing = {entry["provider"]: fact("metered" if entry.get("packageName") == "@deepseek-ai/dsh-llm-deepseek" else "unknown",
                                                 "dsh/deepseek-api-key", catalog["updated_at"])
-                       for entry in entries if entry.get("harness") == harness and isinstance(entry.get("provider"), str)}
+                       for entry in entries if entry.get("harness") == harness}
     status = row['status']
     record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
             'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
@@ -133,7 +130,7 @@ class HarnessHealth:
                      if account_read_failure is not None else make_reason('harness.launch-failed', operation='probe'))
         with self.board.db.write() as db:
             row = read_health(db, _name(name))
-            if account_read_failure is not None and (self._closed or (self.board.directory / 'upgrade.json').exists()):
+            if account_read_failure is not None and (self._closed or self.board.upgrading()):
                 return row
             if row['revision'] != revision:
                 if account_read_failure is None:
@@ -177,7 +174,7 @@ class HarnessHealth:
         name = _name(name)
         with self._locks[name]:
             old = self.get(name)
-            if (self.board.directory / 'upgrade.json').exists():
+            if self.board.upgrading():
                 return old
             now = utc_now()
             if (not force and (old.get('lastProbe') or {}).get('status') == 'unknown'
@@ -204,7 +201,7 @@ class HarnessHealth:
                         self._shared_stale_catalog_read(name, current)
                 return self.get(name)
             with self.board.db.write() as db:
-                if self._closed or (self.board.directory / 'upgrade.json').exists():
+                if self._closed or self.board.upgrading():
                     return read_health(db, name)
                 current = read_health(db, name)
                 if current['revision'] != old['revision']:
@@ -215,12 +212,13 @@ class HarnessHealth:
                            (name, generation, canonical_json({'reason': _not_checked()})))
             try:
                 record = _discover(name, old['manualPath'], environment)
-            except Exception:
+            except Exception as error:
+                self.board.record_service_issue(f'harness-discovery:{name}', error)
                 record = {'harness': name, 'status': 'unhealthy',
                           'reason': make_reason('harness.probe-failed', operation='probe')}
             if record.get('status') == 'unknown':
                 with self.board.db.write() as db:
-                    if self._closed or (self.board.directory / 'upgrade.json').exists():
+                    if self._closed or self.board.upgrading():
                         return read_health(db, name)
                     current = db.execute('SELECT revision,record_json FROM harness_health WHERE harness=?', (name,)).fetchone()
                     if current['revision'] != generation:
@@ -253,7 +251,7 @@ class HarnessHealth:
             stored_record = canonical_json({key: value for key, value in record.items()
                                             if key not in ('harness', 'status', 'available')})
             with self.board.db.write() as db:
-                if (self.board.directory / 'upgrade.json').exists():
+                if self.board.upgrading():
                     return read_health(db, name)
                 if read_health(db, name)['revision'] != generation:
                     return read_health(db, name)
@@ -354,7 +352,7 @@ class HarnessHealth:
         stop_unconfirmed = (health.get('accountReadFailure', {}).get('reason') or {}).get('code') == 'harness.shutdown-unverified'
         if (health.get('status') != 'ready' and not stop_unconfirmed) or not health.get('command'):
             return
-        if self._closed or (self.board.directory / 'upgrade.json').exists():
+        if self._closed or self.board.upgrading():
             return
         from ..routing.quota_routing import _time
         with self.board.db.write() as db:
@@ -383,7 +381,7 @@ class HarnessHealth:
                 return
         account_observed = failure is None or billing is not None
         with self.board.db.write() as db:
-            if self._closed or (self.board.directory / 'upgrade.json').exists():
+            if self._closed or self.board.upgrading():
                 return
             row = db.execute("SELECT record_json,revision FROM harness_health WHERE harness='codex'").fetchone()
             if row is None:
@@ -431,8 +429,8 @@ class HarnessHealth:
                         break
                     try:
                         self.refresh(name)
-                    except (BoardError, OSError):
-                        pass
+                    except (BoardError, OSError) as error:
+                        self.board.record_service_issue(f'harness-scan:{name}', error)
             finally:
                 self._pending.release()
         self._thread = threading.Thread(target=run, name='harness-discovery', daemon=True)

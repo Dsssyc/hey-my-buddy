@@ -2,7 +2,7 @@
 
 ADR-011 removed the separate business/decision lanes. These unit tests pin the
 model service rule (exact harness/provider/model tuple, no effort dimension), the shared
-limit bounds and the stable managed-pool IDs that the daemon records.
+queue reasons.
 """
 from __future__ import annotations
 
@@ -46,23 +46,6 @@ class ModelServiceTests(unittest.TestCase):
 
 
 class LimitBoundsTests(unittest.TestCase):
-    def test_total_ceiling_defaults_to_eight_and_clamps_one_to_thirty_two(self):
-        self.assertEqual(scheduling.TOTAL_CONCURRENCY_DEFAULT, 8)
-        self.assertEqual(scheduling.clamp_total(0), 1)
-        self.assertEqual(scheduling.clamp_total(1), 1)
-        self.assertEqual(scheduling.clamp_total(8), 8)
-        self.assertEqual(scheduling.clamp_total(32), 32)
-        self.assertEqual(scheduling.clamp_total(33), 32)
-        self.assertEqual(scheduling.clamp_total(-5), 1)
-
-    def test_model_limit_defaults_to_two_and_clamps_one_to_thirty_two(self):
-        self.assertEqual(scheduling.MODEL_LIMIT_DEFAULT, 2)
-        self.assertEqual(scheduling.clamp_model_limit(1), 1)
-        self.assertEqual(scheduling.clamp_model_limit(2), 2)
-        self.assertEqual(scheduling.clamp_model_limit(32), 32)
-        self.assertEqual(scheduling.clamp_model_limit(33), 32)
-        self.assertEqual(scheduling.clamp_model_limit(0), 1)
-
     def test_queue_reasons_name_the_limit_that_holds_work(self):
         self.assertEqual(scheduling.REASON_TOTAL_CAPACITY, "capacity")
         self.assertEqual(scheduling.REASON_MODEL_CAPACITY, "model-capacity")

@@ -71,3 +71,14 @@ class LivenessTests(BoardTestCase):
         reply = board.call("ping", {})
         self.assertEqual(reply["persistenceError"], "fixture unavailable")
         self.assertNotIn("integrity", reply)
+
+    def test_internal_failure_reports_bounded_detail_and_logs_traceback(self):
+        board = self.board()
+        detail = "fixture failure " + "x" * 5000
+        with patch.object(board.store, "task_list", side_effect=RuntimeError(detail)), self.assertLogs(level="ERROR") as logs:
+            reply = json.loads(board.service.task_list(json.dumps({"token": board.service.token})))
+        self.assertEqual(reply["error"]["code"], "INTERNAL_ERROR")
+        self.assertIn("RuntimeError: fixture failure", reply["error"]["message"])
+        self.assertLess(len(reply["error"]["message"]), 4200)
+        self.assertIn("Traceback", logs.output[0])
+        self.assertIn(detail, logs.output[0])

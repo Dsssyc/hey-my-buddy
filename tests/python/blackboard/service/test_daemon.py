@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import os
+import io
+import json
 from unittest.mock import Mock, patch
 
 from support import BoardTestCase
-from hey_my_buddy.blackboard.service.daemon import Daemon
+from hey_my_buddy.blackboard.service.daemon import Daemon, _env_int, main
+from hey_my_buddy.errors import BoardError
 
 
 class DaemonAdmissionTests(BoardTestCase):
@@ -50,3 +53,52 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertEqual(order, ["sent", "drain"])
         self.assertTrue(reply["stopped"])
         self.assertTrue(daemon.stopping.is_set())
+
+    def test_invalid_environment_values_are_refused_instead_of_defaulted_or_clamped(self):
+        for name in ("HMB_MAX_CONCURRENT", "HMB_WAIT_CAPACITY"):
+            with self.subTest(name=name), patch.dict(os.environ, {name: "invalid"}):
+                with self.assertRaises(BoardError) as caught:
+                    _env_int(name, 8)
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+        for value in ("0", "33", "-1"):
+            with self.subTest(value=value), patch.dict(os.environ, {"HMB_MAX_CONCURRENT": value}):
+                with self.assertRaises(BoardError) as caught:
+                    Daemon(self.directory / "state")
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_workspace_cleanup_failure_is_visible_and_other_work_continues(self):
+        daemon = Daemon(self.directory / "state")
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        daemon.queue_workspace_cleanup("one")
+        daemon.queue_workspace_cleanup("two")
+        with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace",
+                   side_effect=[OSError("fixture cleanup refused"), None]) as cleanup:
+            daemon._cleanup_accepted_workspaces()
+        self.assertEqual(cleanup.call_count, 2)
+        issue = daemon.store.service_issues()[0]
+        self.assertEqual((issue["stage"], issue["code"], issue["message"]),
+                         ("workspace-cleanup", "OSError", "fixture cleanup refused"))
+
+    def test_cancel_failure_is_visible_and_remaining_tasks_are_cancelled(self):
+        daemon = Daemon(self.directory / "state")
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        work = {"queuedTasks": [{"taskId": "one"}, {"taskId": "two"}],
+                "attempts": [{"taskId": "three"}, {"taskId": "four"}]}
+        for method, stage in ((daemon.cancel_queued, "cancel-queued"), (daemon.cancel_active, "cancel-active")):
+            with self.subTest(stage=stage), patch.object(daemon.store, "active_work", return_value=work), \
+                 patch.object(daemon.store, "task_cancel", side_effect=[BoardError("CONFLICT", "fixture cancellation refused"), {}]) as cancel:
+                self.assertEqual(method(None), 1)
+                self.assertEqual(cancel.call_count, 2)
+            issue = next(item for item in daemon.store.service_issues() if item["stage"] == stage)
+            self.assertEqual(issue["code"], "CONFLICT")
+
+    def test_invalid_startup_setting_uses_the_existing_startup_error_record(self):
+        with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory), "HMB_MAX_CONCURRENT": "invalid"}), \
+             patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(), 2)
+        error = json.loads((self.directory / "startup-error.json").read_text(encoding="utf-8"))
+        self.assertEqual(error["code"], "INVALID_ARGUMENT")
+        self.assertIn("HMB_MAX_CONCURRENT", error["message"])
+        self.assertIn("INVALID_ARGUMENT", stderr.getvalue())

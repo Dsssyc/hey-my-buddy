@@ -34,7 +34,8 @@ from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
 from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
-from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, dispatch_local  # noqa: E402
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION  # noqa: E402
+from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, call_operation  # noqa: E402
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
@@ -350,7 +351,6 @@ class InProcessBoard:
         self.store = BoardStore(
             self.directory,
             max_concurrent=options.get("max_concurrent", 2),
-            wait_capacity=options.get("wait_capacity", 4),
             **({"clock": clock} if clock is not None else {}),
         )
         self._resources.callback(self.store.db.close)
@@ -369,7 +369,7 @@ class InProcessBoard:
                 db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
                            (name, json.dumps({"reason": None})))
         self.admission = WaitAdmission(options.get("wait_capacity", 4))
-        self.control: dict = {"wait_admission": self.admission}
+        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION}
         self.stopped: list[dict] = []
         self.restarted: list[dict] = []
         self.evaluation = self.store.evaluation
@@ -383,7 +383,6 @@ class InProcessBoard:
             control=self.control,
             on_stop=lambda params: self.stopped.append(params) or {"action": "stop", "stopped": True},
             on_restart=lambda params: self.restarted.append(params) or {"action": "restart", "restarting": True},
-            evaluation=self.evaluation,
             console_factory=self.console_action,
         )
         self._resources.callback(self.service.harnesses.close)
@@ -413,16 +412,16 @@ class InProcessBoard:
         if operation == "execution_result" and "receipt" not in params:
             cleanup = {}
             params = publish_result_receipt(self.directory, params, cleanup=cleanup)
-            response = dispatch_local(service, operation, params)
+            response = call_operation(service, operation, params)
             _ack_fixture_receipt(cleanup)
             return response
-        return dispatch_local(service, operation, params)
+        return call_operation(service, operation, params)
 
     def console_call(self, operation: str, params: dict) -> dict:
         """Exercise an authenticated private console session in process."""
         session = "test-console-session"
         self.service.register_console_authority(session)
-        return self.call(operation, {**params, "consoleAuthority": session})
+        return self.call(operation, {**params, "consoleAuthority": {"sessionId": session}})
 
     def client(self, **kwargs) -> BoardClient:
         return FixtureBoardClient(self, **kwargs)

@@ -95,9 +95,9 @@ class ResultReferenceTests(BoardTestCase):
             self.submit(reference)
 
     def test_inline_result_is_not_a_wire_format(self):
-        from hey_my_buddy.blackboard.service.service import dispatch_local
+        from hey_my_buddy.blackboard.service.service import call_operation
         with self.assertRaises(BoardError) as caught:
-            dispatch_local(self.board_fixture.service, "execution_result", {
+            call_operation(self.board_fixture.service, "execution_result", {
                 "attemptId": self.attempt["attemptId"], "generation": self.attempt["generation"],
                 "nonce": self.nonce, "status": "ok", "shutdownConfirmed": True})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")

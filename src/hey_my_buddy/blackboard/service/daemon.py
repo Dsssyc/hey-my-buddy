@@ -17,7 +17,7 @@ import uuid
 import c_two as cc
 
 from ...protocol import rpc_config
-from ...install import runtime
+from ...install import launcher, runtime
 from ..tasks import scheduling
 from ...console.server import Console
 from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
@@ -52,9 +52,11 @@ class Daemon:
         self._admission_lock = threading.RLock()
         self._cleanup_lock = threading.Lock()
         self._cleanup_pending: set[str] = set()
-        self.store = BoardStore(
-            self.directory, max_concurrent=_env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
-        )
+        max_concurrent = _env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
+        minimum, maximum = launcher.LAUNCH_KEYS["HMB_MAX_CONCURRENT"]
+        if not minimum <= max_concurrent <= maximum:
+            raise BoardError("INVALID_ARGUMENT", f"HMB_MAX_CONCURRENT must be between {minimum} and {maximum}")
+        self.store = BoardStore(self.directory, max_concurrent=max_concurrent)
         self.live_registry = LiveRegistry()
         self.control = {
             "service_id": self.service_id,
@@ -92,7 +94,7 @@ class Daemon:
             self._cleanup_pending.add(run_id)
 
     def _cleanup_accepted_workspaces(self) -> None:
-        if (self.directory / "upgrade.json").exists():
+        if self.store.upgrading():
             return
         from ..tasks.storage import cleanup_accepted_workspace
         with self._cleanup_lock:
@@ -101,9 +103,9 @@ class Daemon:
         for run_id in pending:
             try:
                 cleanup_accepted_workspace(self.store, run_id)
-            except (BoardError, OSError):
+            except (BoardError, OSError) as error:
                 # Guard refusals preserve the workspace and its durable plan.
-                pass
+                self.store.record_service_issue("workspace-cleanup", error)
 
     def service(self) -> BoardService:
         return BoardService(
@@ -196,8 +198,6 @@ class Daemon:
                 "resumeFile": str(self.resume_path)}
 
     def on_console(self, params: dict) -> dict:
-        if self.console is None:  # pragma: no cover - the console exists once run() registered the resource
-            raise ServiceError("SERVICE_UNAVAILABLE", "The console is not available in this service state")
         if params["action"] == "close":
             return self.console.close(expected_console_id=params.get("expectedConsoleId"))
         if params["action"] == "status":
@@ -213,7 +213,8 @@ class Daemon:
                 self.store.task_cancel({"runId": task["taskId"], **({"note": note} if note else {})},
                                        initiator="service")
                 count += 1
-            except BoardError:
+            except BoardError as error:
+                self.store.record_service_issue("cancel-queued", error)
                 continue
         return count
 
@@ -226,7 +227,8 @@ class Daemon:
                 self.store.task_cancel({"runId": attempt["taskId"], **({"note": note} if note else {})},
                                        initiator="service")
                 count += 1
-            except BoardError:
+            except BoardError as error:
+                self.store.record_service_issue("cancel-active", error)
                 continue
         return count
 
@@ -287,8 +289,8 @@ class Daemon:
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
+    except (TypeError, ValueError) as error:
+        raise BoardError("INVALID_ARGUMENT", f"{name} must be an integer") from error
 
 
 def main() -> int:
@@ -300,10 +302,10 @@ def main() -> int:
         sys.stderr.write("hey-my-buddy daemon: HMB_STATE_DIR is required\n")
         return 2
     directory = Path(selected)
-    daemon = Daemon(directory)
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT}))
     try:
+        daemon = Daemon(directory)
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, lambda *_args: daemon.on_stop({"drainSeconds": DRAIN_SECONDS_DEFAULT}))
         return daemon.run()
     except BoardError as error:
         atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})

@@ -8,6 +8,7 @@ a generic ``dispatch(method, JSON)`` entry point.
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import nullcontext
 import os
 import threading
@@ -21,10 +22,8 @@ from ...protocol import schemas
 from ..tasks import macro_tasks, micro_task, workflow as workflow_module
 from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report
-from ...protocol.contracts import CONTRACT_VERSION
 from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
-from ..evaluation.evaluation import EvaluationStore
 from ..store.store import BoardStore
 from .live_registry import LiveRegistry
 
@@ -142,7 +141,7 @@ class _BaseResource:
                 )
             workflow_module.set_request_scope(scope)
             try:
-                if (self.store.directory / "upgrade.json").exists():
+                if self.store.upgrading():
                     permitted = operation in {"ping", "health", "runtime.info", "capabilities"}
                     if operation == 'capabilities' and params.get('refresh'):
                         permitted = False
@@ -165,13 +164,11 @@ class _BaseResource:
             return schemas.encode({"error": error.payload()})
         except RecursionError:
             return schemas.encode({"error": {"code": "INVALID_ARGUMENT", "message": "Request is too deeply nested"}})
-        except Exception as error:  # pragma: no cover - defensive boundary
-            detail = ""
-            if os.environ.get("HMB_DEBUG"):
-                # Never leak internals by default; an operator can opt in explicitly.
-                detail = f": {type(error).__name__}: {error}"
+        except Exception as error:
+            logging.exception("%s failed inside the service", operation)
+            detail = f"{type(error).__name__}: {str(error)[:4000]}"
             return schemas.encode(
-                {"error": {"code": "INTERNAL_ERROR", "message": f"{operation} failed inside the service{detail}"}}
+                {"error": {"code": "INTERNAL_ERROR", "message": f"{operation} failed inside the service: {detail}"}}
             )
 
     def _waiting_for_host(self, params: dict) -> dict:
@@ -225,9 +222,7 @@ class _BaseResource:
         authority = params.pop(schemas.CONSOLE_AUTHORITY_FIELD, None)
         scope: dict = {"kind": workflow_module.SERVICE_KIND}
         if authority is not None:
-            session_id = authority if isinstance(authority, str) else (
-                authority.get("sessionId") if isinstance(authority, dict) else None
-            )
+            session_id = authority.get("sessionId") if isinstance(authority, dict) else None
             public_id = self.console_public_identity(session_id) if isinstance(session_id, str) else None
             if public_id is None:
                 raise BoardError(
@@ -258,7 +253,6 @@ class BoardService(_BaseResource):
         console_factory: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
         on_accepted: Callable[[str], None] | None = None,
-        evaluation: EvaluationStore | None = None,
         automatic_discovery: bool = False,
         admission_lock: threading.RLock | None = None,
     ):
@@ -271,9 +265,7 @@ class BoardService(_BaseResource):
         self.console_factory = console_factory
         self.runtime_directory = runtime_directory
         self.on_accepted = on_accepted
-        # All evaluation and decision state is durable; a lazily composed store keeps
-        # every existing in-process harness working without a second authority.
-        self.evaluation = evaluation or store.evaluation
+        self.evaluation = store.evaluation
         self.decisions = store.decisions
         from .harness_health import HarnessHealth
         self.automatic_discovery = automatic_discovery
@@ -291,10 +283,6 @@ class BoardService(_BaseResource):
         # present it, so a caller-controlled JSON field can never bypass Host control.
         self._console_sessions: dict[str, str] = {}
         self._console_lock = threading.Lock()
-        if evaluation is not None:
-            # One coordinator, one evaluation store: the store hooks (claim, result,
-            # cancel, recovery) and this resource must fence the same gate.
-            store.decisions.evaluation = evaluation
         self.execution_scheduler = None
         self.started_at = utc_now()
 
@@ -306,7 +294,7 @@ class BoardService(_BaseResource):
             return {
                 "status": "ok",
                 "protocol": PROTOCOL_VERSION,
-                "contractVersion": self.control.get("contract_version", CONTRACT_VERSION),
+                "contractVersion": self.control["contract_version"],
                 "schemaVersion": SCHEMA_VERSION,
                 "serviceId": self.control.get("service_id"),
                 "pid": os.getpid(),
@@ -357,7 +345,7 @@ class BoardService(_BaseResource):
             if schemas.optional_bool(params, 'refresh', False):
                 for name in [params['harness']] if params.get('harness') else HARNESSES:
                     self.harnesses.refresh(name, force=True)
-            elif self.automatic_discovery and not (self.store.directory / 'upgrade.json').exists():
+            elif self.automatic_discovery and not self.store.upgrading():
                 self.harnesses.kick()
             records = self.harnesses.all()
             with bound(records) if self.automatic_discovery or params.get('refresh') else nullcontext():
@@ -492,10 +480,13 @@ class BoardService(_BaseResource):
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
         try:
             with bound([record], environment=self.harnesses.environment()):
-                payload = catalog.discovery_payload(adapter(name).discover_models(), harness=name)
-            native_fact = next((item for item in payload['discoveries'] if item['harness'] == name), None)
-            payload['discoveries'] = [native_fact or {'harness': name, 'status': 'complete',
-                                                     'accountStatus': 'unknown', 'reason': None, 'content': None}]
+                native = adapter(name).discover_models()
+                payload = catalog.discovery_payload(native, harness=name)
+            native_fact = (next((item for item in payload['discoveries'] if item['harness'] == name), None)
+                           if 'discoveries' in native else None)
+            if native_fact is None:
+                raise BoardError('CATALOG_INVALID', 'Native discovery omitted its harness observation', harness=name)
+            payload['discoveries'] = [native_fact]
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
@@ -969,8 +960,3 @@ def call_operation(service: Any, operation: str, params: dict) -> dict:
         details = error.get("details") if isinstance(error.get("details"), dict) else {}
         raise BoardError(error.get("code", "SERVICE_ERROR"), error.get("message", "operation failed"), **details)
     return value
-
-
-def dispatch_local(service: Any, operation: str, params: dict) -> dict:
-    """Invoke a named current operation for local callers and tests."""
-    return call_operation(service, operation, params)
