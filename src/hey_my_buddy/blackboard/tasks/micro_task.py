@@ -1,9 +1,9 @@
-"""Read-only delegation provenance and keyset history for task reads.
+"""Read-only micro task provenance and keyset history for task reads.
 
 This module is a pure derivation over existing authoritative facts. It owns no
 state, writes nothing and adds no lifecycle: the C-Two ``task_list``,
 ``console_snapshot`` and task views all read the same relation below, and the
-ordinary governed workflow keeps ``workflow.task_extension``.
+ordinary micro-task workflow keeps ``workflow.task_extension``.
 
 Everything here is grounded in durable rows:
 
@@ -14,9 +14,9 @@ Everything here is grounded in durable rows:
   row. Helpers use their own creation evidence, and routing decisions use their
   owning run's evidence. Missing historical evidence stays ``null``; owner/actor
   labels and a helper's root Host are never substitutes for its original source;
-* the current Host is the root of the task's delegation tree, because a takeover
+* the current Host is the root of the task's micro task tree, because a takeover
   fences the whole owned graph rather than one row;
-* the project is the source Goal's immutable original ``cwd`` and the saved
+* the project is the source Micro task's immutable original ``cwd`` and the saved
   repository identity (pinned input manifest, then the run's manifest, then the
   checkout reservation); a temporary execution worktree is never the project.
 
@@ -36,7 +36,7 @@ from typing import Any, Sequence
 from ...errors import BoardError
 
 #: Task kinds derived from durable relations, never from a label.
-DELEGATION_KINDS = ("goal", "helper", "decision", "execution")
+MICRO_TASK_KINDS = ("micro-task", "helper", "decision", "execution")
 
 #: The four fields of a complete resolved buddy.
 BUDDY_FIELDS = ("harness", "provider", "model", "effort")
@@ -73,7 +73,7 @@ QUERY_COLUMNS = (
 #: ``filter`` semantics, applied in SQL before any LIMIT:
 FILTER_SQL = {
     "all": None,
-    # Work that is still in flight: an open task, or a governed run between turns.
+    # Work that is still in flight: an open task, or a micro-task run between turns.
     "active": (
         "(state IN ('queued','running','cancelling','reconciliation-needed')"
         " OR run_state IN ('executing','awaiting-host','waiting-helpers'))"
@@ -82,18 +82,18 @@ FILTER_SQL = {
     "host": "(run_state = 'awaiting-host')",
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
-    # Governed review_ready also proves stop for every owned child and router.
+    # Micro-task review_ready also proves stop for every owned child and router.
     "review": (
         "(accepted_at IS NULL AND state IN ('completed','failed','cancelled')"
         " AND decision_id IS NULL AND adapter <> 'decision'"
-        " AND (governed_run_id IS NULL OR run_state = 'delivered') AND review_ready = 1)"
+        " AND (micro_task_run_id IS NULL OR run_state = 'delivered') AND review_ready = 1)"
     ),
 }
 
-#: One row per task: the full task row plus its derived delegation facts.
+#: One row per task: the full task row plus its derived micro task facts.
 #:
 #: ``roots`` walks ``workflow_children`` upward; the terminal row of a lineage is the
-#: root of that delegation tree. A routing decision points at its owning run through
+#: root of that micro task tree. A routing decision points at its owning run through
 #: ``workflow_routes``, and that run's root is used for the decision's project and
 #: Host, so a decision is never misattributed to its own private decision directory.
 RELATION_SQL = """
@@ -114,14 +114,14 @@ source_hosts AS (
     SELECT source.run_id,
            COALESCE(
                (SELECT CASE event.kind
-                           WHEN 'task.submitted' THEN json_extract(event.payload_json, '$.governed.sourceHostId')
+                           WHEN 'task.submitted' THEN json_extract(event.payload_json, '$.microTask.sourceHostId')
                            ELSE json_extract(event.payload_json, '$.sourceHostId')
                        END
                   FROM events event
                  WHERE event.task_id = source.run_id AND (
                      (event.kind = 'task.submitted'
-                      AND json_type(event.payload_json, '$.governed.sourceHostId') = 'text'
-                      AND length(json_extract(event.payload_json, '$.governed.sourceHostId')) > 0)
+                      AND json_type(event.payload_json, '$.microTask.sourceHostId') = 'text'
+                      AND length(json_extract(event.payload_json, '$.microTask.sourceHostId')) > 0)
                      OR (event.kind = 'workflow.helper_admitted'
                          AND json_type(event.payload_json, '$.sourceHostId') = 'text'
                          AND length(json_extract(event.payload_json, '$.sourceHostId')) > 0)
@@ -168,7 +168,7 @@ unconfirmed_stops AS (
 )
 SELECT
     t.*,
-    r.run_id AS governed_run_id,
+    r.run_id AS micro_task_run_id,
     r.state AS run_state,
     r.buddy_json AS run_buddy_json,
     c.parent_run_id AS child_parent_run_id,
@@ -205,7 +205,7 @@ SELECT
           ORDER BY artifact.rowid LIMIT 1),
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
-    COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
+    COALESCE(json_extract(r.micro_task_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
     COALESCE(json_extract(r.buddy_json, '$.harness'), t.adapter) AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
@@ -269,10 +269,10 @@ def project_label(path: str | None, repository_path: str | None, fallback: str) 
 
 
 def metadata_from_row(row: sqlite3.Row) -> dict:
-    """Derive one task's delegation metadata from a resolved relation row."""
-    governed = row["governed_run_id"] is not None
-    if governed:
-        kind = "helper" if row["child_parent_run_id"] else "goal"
+    """Derive one task's micro task metadata from a resolved relation row."""
+    micro_task = row["micro_task_run_id"] is not None
+    if micro_task:
+        kind = "helper" if row["child_parent_run_id"] else "micro-task"
     elif row["decision_id"] is not None or row["adapter"] == "decision":
         kind = "decision"
     else:
@@ -283,7 +283,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
     current_host = row["current_host_id"] if isinstance(row["current_host_id"], str) and row["current_host_id"] else None
     parent_run = row["delegated_parent_run_id"] if isinstance(row["delegated_parent_run_id"], str) else None
     root_run = row["root_run_id"] if isinstance(row["root_run_id"], str) else None
-    buddy = _complete_buddy(row["run_buddy_json"] if governed else row["spec_json"])
+    buddy = _complete_buddy(row["run_buddy_json"] if micro_task else row["spec_json"])
     result = {
         "kind": kind,
         "sourceHostId": source_host if root_run else None,
@@ -302,7 +302,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
 
 
 def resolve(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
-    """Delegation metadata for one task row, read from the authoritative relations."""
+    """Micro task metadata for one task row, read from the authoritative relations."""
     row = connection.execute(
         f"{TASK_HISTORY_SQL} WHERE task_id = ?", (task["task_id"],)
     ).fetchone()
@@ -312,7 +312,7 @@ def resolve(connection: sqlite3.Connection, task: sqlite3.Row) -> dict:
 
 
 def resolve_many(connection: sqlite3.Connection, task_ids: Sequence[str]) -> dict[str, dict]:
-    """Delegation metadata for a bounded set of task ids, in one relation query."""
+    """Micro task metadata for a bounded set of task ids, in one relation query."""
     identifiers = [task_id for task_id in dict.fromkeys(task_ids) if isinstance(task_id, str) and task_id]
     if not identifiers:
         return {}
@@ -339,9 +339,9 @@ def history_where(
     clauses: list[str] = []
     values: list[Any] = []
     if roots_only:
-        # Main governed goals only: helpers (a workflow child) and internal decision
-        # tasks (no governed run) are excluded.
-        clauses.append("governed_run_id IS NOT NULL AND child_parent_run_id IS NULL")
+        # Main micro tasks only: helpers (a workflow child) and internal decision
+        # tasks (no micro-task run) are excluded.
+        clauses.append("micro_task_run_id IS NOT NULL AND child_parent_run_id IS NULL")
     if project_id:
         clauses.append("project_id = ?")
         values.append(project_id)

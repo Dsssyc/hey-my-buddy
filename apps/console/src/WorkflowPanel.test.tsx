@@ -26,11 +26,13 @@ function fixture() {
   const task: Task = {
     runId: "parent", task: "完成状态内核", status: "waiting-host", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent",
+      project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host-a", ownerGeneration: 2, revision: 7 },
   };
   const workflow: Workflow = {
-    governed: true, runId: task.runId, hostId: "host-a", ownerGeneration: 2, revision: 7,
+    runId: task.runId, hostId: "host-a", ownerGeneration: 2, revision: 7,
     state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "commit-a", manifestSha256: "manifest-a" },
@@ -61,7 +63,7 @@ const REMOVED_CONTROLS = [
   "填入已启用配置", "使用此配置接续", "重试同一目标的路由",
 ];
 
-describe("governed workflow console (0.15.1 read-only)", () => {
+describe("micro task workflow console (0.15.1 read-only)", () => {
   it("shows the recorded turn count without deriving a model-call count", async () => {
     const f = fixture();
     Object.assign(f.workflow, { counts: { turns: 3, openRequests: 1 }, continuationCount: 3 });
@@ -113,7 +115,7 @@ describe("governed workflow console (0.15.1 read-only)", () => {
     expect(view.textContent).toContain("未在原生 App 中列出");
   });
 
-  it("absent Host controls: no write form anywhere in the delegation detail", async () => {
+  it("absent Host controls: no write form anywhere in the microTask detail", async () => {
     const f = fixture();
     const user = userEvent.setup();
     render(<WorkflowPanel {...f.props} />);

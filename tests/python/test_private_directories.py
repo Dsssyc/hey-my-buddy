@@ -15,12 +15,12 @@ from support import BoardTestCase
 class PrivateDirectoryTests(BoardTestCase):
     def test_role_control_cleanup_matches_exact_private_filenames(self):
         state = self.directory.resolve()
-        root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'goal', 'attempt'))
+        root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'zcode', 'microTask', 'attempt'))
         names = ('role-run-control.json', 'role-run-request.json', 'role-run-verdict.json')
         for name in names:
             (root / name).write_text('private')
         (root / 'role-run-results.json').write_text('retain unknown filename')
-        removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'goal', 'attempt')
+        removed = private_dirs.cleanup_attempt_credentials(state, 'zcode', 'microTask', 'attempt')
         self.assertEqual(removed['count'], len(names))
         for name in names:
             self.assertFalse((root / name).exists())
@@ -28,9 +28,9 @@ class PrivateDirectoryTests(BoardTestCase):
 
     def test_explicit_state_and_reparse_guard(self):
         context = SimpleNamespace(environment={'BUDDY_STATE_DIR': str(self.directory.resolve())},
-                                  spec={'adapter': 'codex'}, task_id='goal', attempt_id='attempt')
+                                  spec={'adapter': 'codex'}, task_id='microTask', attempt_id='attempt')
         root = private_dirs.context_root(context)
-        self.assertEqual(root, private_dirs.attempt_root(self.directory, 'codex', 'goal', 'attempt'))
+        self.assertEqual(root, private_dirs.attempt_root(self.directory, 'codex', 'microTask', 'attempt'))
         marker = SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400)
         with mock.patch.object(Path, 'lstat', return_value=marker), mock.patch.object(Path, 'is_junction', return_value=False):
             self.assertTrue(private_dirs.linked(root))
@@ -81,7 +81,7 @@ class PrivateDirectoryTests(BoardTestCase):
 
     def test_cleanup_removes_credentials_and_exact_fallback_socket_only(self):
         state = self.directory.resolve()
-        root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'dsh', 'goal', 'fixture-attempt'))
+        root = private_dirs.ensure_private_dir(private_dirs.attempt_root(state, 'dsh', 'microTask', 'fixture-attempt'))
         outside = state / 'outside-auth'
         outside.write_text('secret')
         home = private_dirs.ensure_private_dir(root / 'native/codex-home')
@@ -92,7 +92,7 @@ class PrivateDirectoryTests(BoardTestCase):
         fallback.mkdir(parents=True, exist_ok=True)
         (fallback / 'inquiry.sock').write_text('socket')
         (root / 'inquiry.json').write_text(json.dumps({'socketPath': str(fallback / 'inquiry.sock'), 'token': 'secret'}))
-        result = private_dirs.cleanup_attempt_credentials(state, 'dsh', 'goal', 'fixture-attempt')
+        result = private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
         self.assertGreaterEqual(result['count'], 4)
         self.assertFalse(fallback.exists())
         self.assertFalse((home / 'auth.json').is_symlink())
@@ -102,5 +102,5 @@ class PrivateDirectoryTests(BoardTestCase):
         unrelated.mkdir(parents=True)
         (unrelated / 'inquiry.sock').write_text('outside')
         (root / 'inquiry.json').write_text(json.dumps({'socketPath':str(unrelated / 'inquiry.sock')}))
-        private_dirs.cleanup_attempt_credentials(state, 'dsh', 'goal', 'fixture-attempt')
+        private_dirs.cleanup_attempt_credentials(state, 'dsh', 'microTask', 'fixture-attempt')
         self.assertEqual((unrelated / 'inquiry.sock').read_text(), 'outside')

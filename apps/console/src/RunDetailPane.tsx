@@ -23,7 +23,7 @@ export type DetailTarget = {
 
 /**
  * Right pane, layer two: the locator bar plus the existing read-only
- * TaskDetails for the delegation opened from the timeline. No control set is
+ * TaskDetails for the micro task opened from the timeline. No control set is
  * duplicated here, and nothing locks navigation: record browsing is free even
  * while an macro-task-level stop has an unconfirmed reply. In dock mode the
  * timeline stays visible beside or above this pane, so the return control
@@ -63,11 +63,11 @@ export function RunDetailPane({ mode = "layer", macroTaskTitle, target, snapshot
     }).catch(reason => { if (current) setError(errorText(reason)); });
     return () => { current = false; controller.abort(); };
   }, [api, target.runId, attempt]);
-  const delegationTitle = remote
+  const microTaskTitle = remote
     ? { text: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text, full: rowTitleFor?.(remote.runId) ?? titleTooltip(taskTitle(remote)) }
     : { text: target.runId, full: target.runId };
-  const crumbs = { macroTask: macroTaskTitle, delegation: delegationTitle.text };
-  const crumbsTitle = `${crumbs.macroTask} › ${delegationTitle.full}`;
+  const crumbs = { macroTask: macroTaskTitle, microTask: microTaskTitle.text };
+  const crumbsTitle = `${crumbs.macroTask} › ${microTaskTitle.full}`;
   return <div className="run-view">
     <div className="locator">
       <button type="button" className="button small-button" aria-label={mode === "dock" ? "关闭详情" : "返回时间轴"}
@@ -75,7 +75,7 @@ export function RunDetailPane({ mode = "layer", macroTaskTitle, target, snapshot
       <span className="crumbs" title={crumbsTitle}>
         <span className="crumb">{crumbs.macroTask}</span>
         <span className="crumb-sep" aria-hidden="true">›</span>
-        <span className="crumb">{crumbs.delegation}</span>
+        <span className="crumb">{crumbs.microTask}</span>
       </span>
       {target.locator && <span className="from" title={`来自时间轴：${target.locator}`}>来自时间轴：{target.locator}</span>}
     </div>

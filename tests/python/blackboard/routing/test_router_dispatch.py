@@ -409,8 +409,8 @@ class ClaimTests(RouterDispatchTestCase):
 
 
 class WorkflowWiringTests(RouterDispatchTestCase):
-    def route_goal(self, run_id="run-1"):
-        """One governed Goal admitted through the coordinator's workflow entry."""
+    def route_micro_task(self, run_id="run-1"):
+        """One micro task admitted through the coordinator's workflow entry."""
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
@@ -419,17 +419,17 @@ class WorkflowWiringTests(RouterDispatchTestCase):
                 "'awaiting-model-selection',1,?,?)",
                 (run_id, run_id, T0, T0))
             db.execute(
-                "INSERT INTO workflow_runs(run_id,host_id,control_verifier,goal_json,goal_fingerprint,"
+                "INSERT INTO workflow_runs(run_id,host_id,control_verifier,micro_task_json,micro_task_fingerprint,"
                 " request_fingerprint,execution_workspace_json,state,created_at,updated_at)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (run_id, "host-1", "verifier", canonical_json({"task": "do the thing"}),
-                 "goal-digest", "request-digest", canonical_json({"kind": "existing"}), "executing", T0, T0))
+                 "micro-task-digest", "request-digest", canonical_json({"kind": "existing"}), "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
                 db, run_id=run_id, sequence=1, spec={"task": "do the thing"}, manifest=None)
         return response
 
     def attach_pending_link(self, decision_id, run_id="run-1"):
-        """The Goal's owning transaction inserts its pending route link."""
+        """The Micro task's owning transaction inserts its pending route link."""
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
@@ -438,16 +438,16 @@ class WorkflowWiringTests(RouterDispatchTestCase):
             db.execute("UPDATE workflow_runs SET current_routing_id=? WHERE run_id=?", (decision_id, run_id))
 
     def test_first_dispatch_needs_no_link_and_the_pending_route_follows_the_pointer(self):
-        response = self.route_goal()
+        response = self.route_micro_task()
         decision_id = response["decisionId"]
         first_task = response["runId"]
         # The first dispatch queued before the route link existed; nothing was
-        # fabricated for it and the Goal keeps waiting for routing.
+        # fabricated for it and the Micro task keeps waiting for routing.
         with self.board_.store.db.read() as db:
             links = db.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (decision_id,)).fetchall()
-            goal = db.execute("SELECT state,adapter FROM tasks WHERE task_id='run-1'").fetchone()
+            micro_task = db.execute("SELECT state,adapter FROM tasks WHERE task_id='run-1'").fetchone()
         self.assertEqual(links, [])
-        self.assertEqual((goal["state"], goal["adapter"]), ("queued", "unresolved"))
+        self.assertEqual((micro_task["state"], micro_task["adapter"]), ("queued", "unresolved"))
         self.assertIsNotNone(self.dispatch_of(first_task))
         self.attach_pending_link(decision_id)
         # An advance re-points the internal task and records it on the pending
@@ -471,7 +471,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         self.assertEqual(committed["claim"]["decisionInput"]["routerBuddyId"], B)
 
     def test_resolved_and_fenced_routes_are_not_touched_by_a_dispatch(self):
-        response = self.route_goal()
+        response = self.route_micro_task()
         decision_id = response["decisionId"]
         self.attach_pending_link(decision_id)
         with self.board_.store.db.write() as db:

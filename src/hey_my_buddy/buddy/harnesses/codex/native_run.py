@@ -6,7 +6,7 @@ handshake, the account/catalog initialization, the per-carrier thread
 configuration, turn admission and the event pump, the fast EOF drain and the
 conservative group stop each exist exactly once here, driven only by the
 frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`. What
-differs between the governed Worker turn (``write`` scope), the fast no-tool
+differs between the micro task Worker turn (``write`` scope), the fast no-tool
 call (``none``) and the read-only review call (``read``) is expressed by the
 request and by the role observer's feedback — never by a second native path
 and never by re-entering the legacy ``runner`` branches.
@@ -609,7 +609,7 @@ def _read_binding(root: Path, thread_id: str) -> dict:
         return value
     except (OSError, ValueError):
         raise CodexProtocolError("native-resume-unavailable",
-                                 "the Codex thread has no private goal binding") from None
+                                 "the Codex thread has no private micro task binding") from None
 
 
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
@@ -647,7 +647,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                 or {key: binding.get(key) for key in expected} != expected \
                 or not isinstance(binding.get("lastTurnId"), str):
             raise CodexProtocolError("native-resume-unavailable",
-                                     "the Codex thread binding differs from this goal, checkout or buddy")
+                                     "the Codex thread binding differs from this micro task, checkout or buddy")
         checkpoint = request.continuation.checkpoint
         if checkpoint is not None and any(
                 binding.get(key) != getattr(checkpoint, field) for key, field in (
@@ -1035,7 +1035,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     owned_spawn: list = [{"created": False, "shutdown": True, "exit_code": None}]
     connection: Connection | None = None
     # Every carrier projects its real native tool facts on the one collector;
-    # the governed turn's own frames are evidence like the structured calls',
+    # the micro task turn's own frames are evidence like the structured calls',
     # without adopting any read-only policy here.
     projector = CodexToolEventProjector({"harness": "codex", "taskId": request.identity.task_id,
                                          "attemptId": request.identity.attempt_id,
@@ -1130,7 +1130,7 @@ def _take_feedback(feedback: Any, mode: str, *, settled: bool) -> RunFeedback:
         if not settled:
             raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
         if mode == "worker":
-            raise BoardError("INVALID_ARGUMENT", "the governed codex turn takes no format correction")
+            raise BoardError("INVALID_ARGUMENT", "the micro task codex turn takes no format correction")
         return feedback
     if feedback.action == "stop":
         raise ObserverInterrupt()
@@ -1140,7 +1140,7 @@ def _take_feedback(feedback: Any, mode: str, *, settled: bool) -> RunFeedback:
 def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest,
                  state: _RunState, thread_id: str,
                  observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
-    """The governed turn: one admission, settlement, usage, quota, checkpoint."""
+    """The micro task turn: one admission, settlement, usage, quota, checkpoint."""
     state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
     turn = response.get("turn")
@@ -1188,7 +1188,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     if native_turn.get("status") != "completed" or not evidence.started:
         raise CodexProtocolError("native-turn-failed", "Codex turn did not complete successfully")
     item = evidence.final_item
-    # The native half of the governed turn's provenance, exactly as the legacy
+    # The native half of the micro task turn's provenance, exactly as the legacy
     # record carried it; the role's completion policy adds its own verdict keys
     # on top and decides over these facts.
     state.native_turn_facts = {
@@ -1629,7 +1629,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
     tool_package = None
     if projector is not None and (state.thread_opened or mode == "review"):
         # Stream facts record the observed ends — the completed root turns
-        # (worker: the governed turn's own native receipt; review: every
+        # (worker: the micro task turn's own native receipt; review: every
         # observed round) and the real EOF (fast) — never the run's business
         # status and never the group's stop, which a conservative halt must
         # not overwrite. The review carrier keeps its incomplete package even
@@ -1776,7 +1776,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
     """Confirm the native command without selecting a provider or account.
 
     This is the harness's own share of Worker and fast preparation. Every
-    governed-turn, resume-mode and private-state rule belongs to the shared
+    micro task-turn, resume-mode and private-state rule belongs to the shared
     role executor and is not repeated here.
     """
     try:
@@ -1791,7 +1791,7 @@ def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
 
 
 def validate_turn_provenance(record: dict) -> str | None:
-    """The governed turn record's native-source checks, and nothing else.
+    """The micro task turn record's native-source checks, and nothing else.
 
     Only the native provenance is validated here: whether the record's claimed
     native completion, identity correlation and resume identity hold. The
@@ -1924,7 +1924,7 @@ def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
 
 
 #: The request controls this driver really consumes. The resume checkpoint's
-#: three binding facts are compared against the private goal binding before any
+#: three binding facts are compared against the private micro task binding before any
 #: thread/read; declaring it only confirms the capability exists (ADR-023),
 #: the registry's check never proves more.
 supported_request_controls = ("resume_checkpoint",)

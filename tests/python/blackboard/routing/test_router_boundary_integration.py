@@ -1,7 +1,7 @@
 """Read frozen Host routing evidence on private boards, without a native call.
 
 The sealed publication fixtures exercise the production completion transaction.
-Only the local catalog and workspace seam are substituted for governed commands.
+Only the local catalog and workspace seam are substituted for micro-task commands.
 """
 import copy
 import json
@@ -130,7 +130,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.router_events("router.answered"), [])
 
     def test_completed_recommendation_with_changed_execution_context_uses_program_route_reason(self):
-        request, first = self.start(governed=True)
+        request, first = self.start(micro_task=True)
         self.report(first, self.answer(first))
         with self.board_.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='needs-host',reason='Cached execution validation changed' WHERE decision_id=?",
@@ -346,7 +346,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertIsNone(first["attemptId"])
         self.assertIsNone(first["usage"])
 
-    def test_unknown_stop_blocks_governed_commands_and_does_not_claim_prior_output(self):
+    def test_unknown_stop_blocks_micro_task_commands_and_does_not_claim_prior_output(self):
         request, first = self.start()
         self.report(first, self.failure(first), status="failed", shutdown=False)
         result = self.boundary(request["decisionId"], run_id="run-1", revision=3)
@@ -425,7 +425,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.boundary(request["decisionId"]), before)
 
 
-class GovernedBoundaryTests(WorkflowTestCase):
+class MicroTaskBoundaryTests(WorkflowTestCase):
     answer = failover.FailoverTests.answer
 
     def setUp(self):
@@ -440,7 +440,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
                            (buddy_id, buddy_id, model, canonical_json(permission_capabilities("dsh"))))
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
-    def routed(self, request_id="goal-1", *, access="write", kind="existing"):
+    def routed(self, request_id="micro-task-1", *, access="write", kind="existing"):
         response = self.board_.call("workflow_submit", {"requestId": request_id, "hostId": "host-1",
             "submissionToken": "private-submission-token", "task": "Private routed implementation",
             "cwd": str(self.workdir(request_id)), "executionWorkspace": {"kind": kind, "access": access}})
@@ -453,7 +453,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         params.update(self.control(view))
         return params
 
-    def test_governed_boundary_has_post_attention_revision_and_real_continue_tuple(self):
+    def test_micro_task_boundary_has_post_attention_revision_and_real_continue_tuple(self):
         view = self.routed()
         boundary = view["routing"]["routingBoundary"]
         self.assertEqual(view["activeRequest"]["routingBoundary"], boundary)
@@ -541,11 +541,11 @@ class GovernedBoundaryTests(WorkflowTestCase):
         view = self.routed()
         original = view["routing"]["routingBoundary"]
         with self.board_.store.db.write() as db:
-            row = db.execute("SELECT goal_json FROM workflow_runs WHERE run_id=?", (view["runId"],)).fetchone()
-            goal = json.loads(row[0])
-            goal.update({"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
-            db.execute("UPDATE workflow_runs SET goal_json=?,buddy_locked=1 WHERE run_id=?",
-                       (canonical_json(goal), view["runId"]))
+            row = db.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?", (view["runId"],)).fetchone()
+            micro_task = json.loads(row[0])
+            micro_task.update({"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
+            db.execute("UPDATE workflow_runs SET micro_task_json=?,buddy_locked=1 WHERE run_id=?",
+                       (canonical_json(micro_task), view["runId"]))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
         self.assertEqual(latest["candidates"], original["candidates"])
         other = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
@@ -616,7 +616,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
                             for item in awaited["nextCommands"] if "buddy" in item.get("params", {})))
 
 
-    def test_governed_valid_abstention_payload_has_program_nature_before_answered_notification(self):
+    def test_micro_task_valid_abstention_payload_has_program_nature_before_answered_notification(self):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()
@@ -643,7 +643,7 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.assertEqual(payload["routingBoundary"]["kind"], "router-abstained")
         self.assertEqual(payload["routingBoundary"]["reason"], reason)
 
-    def test_explicit_reroute_after_known_retry_time_continues_same_goal_without_model(self):
+    def test_explicit_reroute_after_known_retry_time_continues_same_micro_task_without_model(self):
         with self.board_.store.db.write() as db:
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": [A, B]})
         view = self.routed()

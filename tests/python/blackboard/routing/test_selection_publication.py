@@ -42,7 +42,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
                     db.execute(f"UPDATE buddies SET {field}=0 WHERE buddy_id=?", (buddy,))
 
     def assert_retry(self, kind, reason):
-        request, first = self.start(three=True, governed=True)
+        request, first = self.start(three=True, micro_task=True)
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
         original_snapshot = self.snapshot_of(request["decisionId"])
         self.invalidate(B, kind)
@@ -81,7 +81,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         self.assert_retry("quota", "quota limits")
 
     def test_invalid_selection_with_unconfirmed_outer_stop_does_not_reroute(self):
-        request, first = self.start(three=True, governed=True)
+        request, first = self.start(three=True, micro_task=True)
         self.invalidate(B, "disabled")
         response = self.report(first, self.answer(first, buddy_id=B), shutdown=False)
         self.assertEqual(response["decision"]["outcome"], "changed", response)
@@ -94,7 +94,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
                                         (first["attempt"]["attemptId"],)).fetchone()[0], 0)
 
     def test_second_invalid_selection_reaches_host_with_reason(self):
-        request, first = self.start(three=True, governed=True)
+        request, first = self.start(three=True, micro_task=True)
         self.invalidate(B, "disabled")
         response = self.report(first, self.answer(first, buddy_id=B))
         self.assertIn("outcome", response["decision"], response["decision"])

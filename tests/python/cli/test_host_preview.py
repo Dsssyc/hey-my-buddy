@@ -199,8 +199,8 @@ class PreviewFixtureTest(unittest.TestCase):
                      if outcome["kind"] == "workflow-get" and outcome["accepted"]}
         self.assertTrue(workflows)
         locked = {facts["buddyLocked"] for facts in workflows.values()}
-        self.assertIn(True, locked, "one goal must record the user-locked buddy")
-        self.assertIn(False, locked, "one goal must record a Host-supplied buddy")
+        self.assertIn(True, locked, "one micro task must record the user-locked buddy")
+        self.assertIn(False, locked, "one micro task must record a Host-supplied buddy")
         for facts in workflows.values():
             self.assertIn("hostConclusion", facts)
 
@@ -211,7 +211,7 @@ class PreviewFixtureTest(unittest.TestCase):
             self.assertIn(conclusion["statusLabel"], {"失败", "已取消"})
             self.assertTrue(conclusion["evidence"])
         # A quota failure keeps its real failure label and its partial output: the
-        # conclusion records the outcome and never turns the goal into a success.
+        # conclusion records the outcome and never turns the micro task into a success.
         failed_path, failed_conclusion = next(
             (path, conclusion) for path, conclusion in conclusions if conclusion["statusLabel"] == "失败")
         self.assertTrue(failed_conclusion["failed"])
@@ -237,7 +237,7 @@ class PreviewFixtureTest(unittest.TestCase):
                          "no usage line may be a session cumulative total")
 
         # Partial outputs are marked unverified and non-final, and never become the
-        # goal's final artifact; cumulative patches keep their fixed base commit.
+        # micro task's final artifact; cumulative patches keep their fixed base commit.
         artifacts = [item for facts in workflows.values() for item in facts["artifacts"]]
         partial = [item for item in artifacts if item["state"]["partial"]]
         self.assertTrue(partial, "the preview must record a partial output")
@@ -261,7 +261,7 @@ class PreviewFixtureTest(unittest.TestCase):
                 patch = item.get("cumulativePatch")
                 if patch:
                     self.assertEqual(base, patch["baseCommit"],
-                                     f"{path}: cumulative base must be the goal input commit")
+                                     f"{path}: cumulative base must be the micro task input commit")
 
         host_paths = [entry for facts in workflows.values() for entry in facts["hostPaths"]]
         self.assertTrue(any(host_paths), "the preview must record one integration with Host paths")

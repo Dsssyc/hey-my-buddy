@@ -254,14 +254,14 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(decision["runId"])
         self.assertEqual(decision["taskReference"]["bytes"], len(task.encode()))
         with board.store.db.read() as connection:
-            goal = json.loads(connection.execute("SELECT goal_json FROM workflow_runs").fetchone()[0])
-            self.assertEqual(goal["task"], task)
+            micro_task = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
+            self.assertEqual(micro_task["task"], task)
 
     def test_unlocked_reroute_freezes_its_own_candidate_basis(self):
         # The retired scenario narrowed the first route with a partial `effort`
         # constraint and watched an unlocked reroute drop it; a partial tuple is
         # rejected input now, so the surviving essence is per-route freezing: a
-        # goal that named no buddy routes with empty constraints, and a later
+        # micro task that named no buddy routes with empty constraints, and a later
         # table change never rewrites the frozen basis of the earlier route.
         board = self.board()
         self.seed(board)

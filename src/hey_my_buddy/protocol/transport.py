@@ -33,7 +33,7 @@ PROTOCOL_VERSION = 2
 #: CLI method -> (resource, C-Two operation). The CLI names are the only public
 #: surface; the C-Two operation names never change here. ``await`` is a CLI-level
 #: read-only wait implemented on top of these in ``blocking.py`` and never appears
-#: here. The single governed goal lifecycle keeps the bare names; the advanced
+#: here. The single micro task lifecycle keeps the bare names; the advanced
 #: ``execution-*`` names reach the ordinary task records that the command/external
 #: adapters and the internal decision infrastructure own.
 METHOD_MAP: dict[str, tuple[str, str]] = {
@@ -49,7 +49,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "storage-plan": ("control", "storage_plan"),
     "storage-apply": ("control", "storage_apply"),
     "worker-sessions": ("control", "worker_sessions"),
-    # -- single governed goal lifecycle ------------------------------------
+    # -- single micro task lifecycle ------------------------------------
     "submit": ("control", "workflow_submit"),
     "get": ("control", "workflow_get"),
     "decide": ("control", "workflow_decide"),
@@ -62,7 +62,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "scope-amend": ("control", "workflow_scope_amend"),
     "workspace-resolve": ("control", "workflow_workspace_resolve"),
     "suggest": ("control", "workflow_suggest"),
-    # -- work macro tasks: read-only browsing of grouped delegations ----------
+    # -- work macro tasks: read-only browsing of grouped micro tasks ----------
     "macro-task-list": ("control", "macro_task_list"),
     "macro-task-timeline": ("control", "macro_task_timeline"),
     # -- execution records for command/external/decision infrastructure -----

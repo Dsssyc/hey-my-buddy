@@ -61,7 +61,7 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
         if schema is None or str(schema[0]) not in (str(SCHEMA_VERSION), str(PREVIOUS_SCHEMA_VERSION)):
             raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
-        # A governed Host boundary has no autonomous next turn. A recorded or
+        # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
         # independently below through the complete task inventory.

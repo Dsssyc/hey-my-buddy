@@ -1,6 +1,6 @@
 """Codex worker and review lifecycle through the registered role seam, with no model calls.
 
-The governed Worker turn runs through the shared role controller and the
+The micro task Worker turn runs through the shared role controller and the
 registered Codex run module (``worker_executor("codex")``); the review calls go
 through ``start_router_preparation`` exactly as the Router's DecisionAdapter
 starts them. The offline ``mock_codex.py`` App Server stands in for the native
@@ -51,10 +51,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.adapter = worker_executor("codex")
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8):
-        turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
+        turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -132,7 +132,7 @@ class CodexAdapterTests(unittest.TestCase):
         frame = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes().strip())
         self.assertEqual(frame.identity.attempt_id, context.attempt_id)
         self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
-        self.assertEqual(frame.identity.task_id, "goal-1")
+        self.assertEqual(frame.identity.task_id, "micro-task-1")
         activity = frame.activity.value
         self.assertEqual(activity["phase"], "finishing")
         self.assertEqual(activity["nativeSessionId"], turn["sessionId"])
@@ -146,7 +146,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
 
     def test_an_unlisted_model_reaches_the_native_turn_and_its_public_fact_reaches_the_receipt(self):
-        # The full governed chain: the relaxed check hands the selected name to
+        # The full micro task chain: the relaxed check hands the selected name to
         # the native turn, the native rejection (message retained) is the
         # failure, and the absence fact lands on the coding receipt beside the
         # selected identity.
@@ -160,7 +160,7 @@ class CodexAdapterTests(unittest.TestCase):
                          {"provider": "openai", "model": "fixture-model", "effort": "low"})
 
     def test_a_long_multibyte_native_error_keeps_its_reason_in_the_public_receipt(self):
-        # The governed receipt carries the native reason past the public byte
+        # The micro task receipt carries the native reason past the public byte
         # budget: cut on UTF-8 byte safety, prefix and readable CJK intact,
         # never erased — with the absence fact still beside it.
         outcome = self.execute(self.context("long-native-error"))
@@ -216,7 +216,7 @@ class CodexAdapterTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.codex.native_run import _binding_path
         first = self.execute(self.context())
         self.assertEqual(first.status, 'ok', first.to_report())
-        path = _binding_path(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'goal-1'),
+        path = _binding_path(native_root(Path(self.environment['BUDDY_STATE_DIR']), 'codex', 'micro-task-1'),
                              first.result['sessionId'])
         binding = json.loads(path.read_text())
         self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'buddy',

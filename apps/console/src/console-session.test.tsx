@@ -29,24 +29,24 @@ function catalog(): Buddy[] {
 const flashOff = "dsh:deepseek-official:deepseek-flash:off";
 const FLASH = "dsh / deepseek-official / deepseek-flash";
 
-function goal(runId: string, task: string, extra: Partial<Task> = {}): Task {
+function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
-    delegation: { kind: "goal", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
+    lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
 }
 
-/** A finished ungoverned task with no claimed attempt: retry is offered. */
+/** A finished ordinary task with no claimed attempt: retry is offered. */
 function retryable(runId: string, task: string): Task {
-  return goal(runId, task, { status: "cancelled", revision: 2, workflow: undefined,
+  return microTask(runId, task, { status: "cancelled", revision: 2, workflow: undefined,
     selectedAttemptId: null, activeAttemptId: null, shutdownConfirmed: false });
 }
 
 function workflow(task: Task, overrides: Partial<Workflow> = {}): Workflow {
-  return { governed: true, runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
+  return { runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
     state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
@@ -54,7 +54,7 @@ function workflow(task: Task, overrides: Partial<Workflow> = {}): Workflow {
     activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open",
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
     children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null,
-    task: { runId: task.runId, revision: task.revision, status: task.status },
+    task: { runId: task.runId, revision: task.revision, status: task.status, lineage: task.lineage },
     ...overrides };
 }
 
@@ -118,7 +118,7 @@ function fixture(options: {
   });
   const records = options.records ?? [];
   const tasks = vi.fn(async (query: TaskQuery) => {
-    const runs = records.filter(row => (!query.rootsOnly || row.delegation?.kind === "goal")
+    const runs = records.filter(row => (!query.rootsOnly || row.lineage?.kind === "micro-task")
       && (!query.query || row.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
@@ -326,7 +326,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("pauses discovery and saving once the login lapses (401), without any takeover copy", async () => {
-    const record = goal("readonly-task", "只读普通任务", { workflow: undefined });
+    const record = microTask("readonly-task", "只读普通任务", { workflow: undefined });
     const f = fixture({ records: [record] });
     const user = userEvent.setup();
     window.location.hash = "#buddies";
@@ -463,14 +463,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
       it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
-    const plain = goal("plain-task", "普通待执行任务", { workflow: undefined });
+    const plain = microTask("plain-task", "普通待执行任务", { workflow: undefined });
     const failed = retryable("failed-task", "可重试任务");
-    const awaiting = goal("governed-task", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
-    const delivered = goal("delivered-task", "已交付目标", { status: "completed", shutdownConfirmed: true,
+    const awaiting = microTask("micro-task-awaiting", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const delivered = microTask("delivered-task", "已交付目标", { status: "completed", shutdownConfirmed: true,
       workflow: { state: "delivered", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 3 },
       workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false } });
     const workflows = new Map<string, Workflow>([
-      ["governed-task", workflow(awaiting)],
+      ["micro-task-awaiting", workflow(awaiting)],
       ["delivered-task", workflow(delivered, { state: "delivered", awaitingHost: false, activeRequest: null, revision: 3,
         finalArtifactId: "artifact-1",
         artifacts: [{ artifactId: "artifact-1", attemptId: "attempt-1", sourceTaskId: "delivered-task", kind: "output",
@@ -504,12 +504,12 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("button", { name: /已交付目标/ }));
     await user.click(await screen.findByRole("tab", { name: "产物与验收" }));
     expect(within(detail).queryByRole("group", { name: "最终验收" })).toBeNull();
-    // Reading the governed record is allowed; no mutation reached the board.
+    // Reading the micro task record is allowed; no mutation reached the board.
     expect(first.operations.every(operation => operation === "workflow_get")).toBe(true);
     cleanup();
 
     // A second session renders the same read-only detail: no browser control
-    // writes to a delegation (0.15.1 U4).
+    // writes to a micro task (0.15.1 U4).
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
@@ -526,7 +526,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
-    const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const awaiting = microTask("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
       buddyRevision: 2,
@@ -559,9 +559,9 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   ];
 
   it.each(failedPolls)("keeps details readable with no writes after a failed poll (%s)", async (_label, failure) => {
-    const plain = goal("gated-plain", "断线可取消任务", { workflow: undefined });
-    const awaiting = goal("gated-governed", "断线待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
-    const workflows = new Map<string, Workflow>([["gated-governed", workflow(awaiting)]]);
+    const plain = microTask("gated-plain", "断线可取消任务", { workflow: undefined });
+    const awaiting = microTask("gated-micro-task", "断线待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
+    const workflows = new Map<string, Workflow>([["gated-micro-task", workflow(awaiting)]]);
     const f = fixture({ records: [plain, awaiting], workflows, failAfter: 1, failWith: failure });
     const user = userEvent.setup();
     window.location.hash = "#buddies";

@@ -23,8 +23,8 @@ OUTPUT_FULL = "full"
 OUTPUT_BRIEF = "brief"
 OUTPUT_MODES = frozenset({OUTPUT_FULL, OUTPUT_BRIEF})
 
-#: Governed mutations that return the governed view plus operation fields.
-GOVERNED_RECEIPTS = frozenset(
+#: Micro-task mutations that return the micro-task view plus operation fields.
+MICRO_TASK_RECEIPTS = frozenset(
     {
         "decide",
         "continue",
@@ -109,7 +109,7 @@ def _nonzero(mapping: Any) -> dict:
     return {key: value for key, value in mapping.items() if value}
 
 
-# -- governed goal views -----------------------------------------------------
+# -- micro task views -----------------------------------------------------
 
 _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "outcomeTruncated")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
@@ -178,10 +178,10 @@ def _request_brief(request: Any) -> Any:
     return {key: value for key, value in request.items() if value is not None and value != []}
 
 
-def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
-    """Brief projection of the compact governed view."""
-    if view.get("governed") is False:
-        brief = {"governed": False, "runId": view.get("runId")}
+def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
+    """Brief projection of the compact micro-task view."""
+    if view["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
+        brief = {"runId": view.get("runId")}
         if isinstance(view.get("task"), dict):
             brief["task"] = task_brief(view["task"])
         for key in ("routingHistory",):
@@ -279,11 +279,11 @@ def governed_brief(view: dict, *, turn_summary: bool = True) -> dict:
     return brief
 
 
-def governed_receipt(response: dict) -> dict:
+def micro_task_receipt(response: dict) -> dict:
     """A mutation receipt: the resulting state plus the operation's own result."""
-    if response.get("governed") is not True:
+    if response.get("task", {}).get("lineage", {}).get("kind") not in ("micro-task", "helper"):
         return response
-    receipt = governed_brief(response, turn_summary=False)
+    receipt = micro_task_brief(response, turn_summary=False)
     receipt["view"] = "receipt"
     if response.get("duplicate"):
         receipt["duplicate"] = True
@@ -306,7 +306,7 @@ def governed_receipt(response: dict) -> dict:
     if target_run is not None and target_run != response.get("runId"):
         receipt["targetRunId"] = target_run
         receipt["targetRevision"] = response.get("targetRevision")
-    extra = sorted(set(response) - _KNOWN_GOVERNED_FIELDS - set(receipt))
+    extra = sorted(set(response) - _KNOWN_MICRO_TASK_FIELDS - set(receipt))
     for key in extra:
         # A new operation field is never silently dropped from a receipt.
         if _present(response[key]):
@@ -314,9 +314,8 @@ def governed_receipt(response: dict) -> dict:
     return receipt
 
 
-_KNOWN_GOVERNED_FIELDS = frozenset(
+_KNOWN_MICRO_TASK_FIELDS = frozenset(
     {
-        "governed",
         "runId",
         "taskId",
         "requestId",
@@ -328,7 +327,7 @@ _KNOWN_GOVERNED_FIELDS = frozenset(
         "queueReason",
         "awaitingHost",
         "waitReason",
-        "goal",
+        "microTask",
         "revision",
         "continuationCount",
         "workspace",
@@ -373,7 +372,7 @@ _KNOWN_GOVERNED_FIELDS = frozenset(
 
 
 def submit_receipt(response: dict) -> dict:
-    receipt = governed_receipt(response)
+    receipt = micro_task_receipt(response)
     receipt["view"] = "receipt"
     if "controlFile" in response:
         receipt["controlFile"] = response["controlFile"]
@@ -419,12 +418,12 @@ _TASK_BRIEF = (
 def task_brief(view: dict) -> dict:
     """Brief projection of one execution task view (no spec, task text or runner payload)."""
     brief = _pick(view, _TASK_BRIEF)
-    delegation = view.get("delegation")
-    if isinstance(delegation, dict):
-        buddy = delegation.get("buddy")
+    lineage = view.get("lineage")
+    if isinstance(lineage, dict):
+        buddy = lineage.get("buddy")
         if isinstance(buddy, dict):
             brief["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort"))
-        brief.update(_pick(delegation, ("kind", "parentRunId")))
+        brief.update(_pick(lineage, ("kind", "parentRunId")))
     workflow = view.get("workflow")
     if isinstance(workflow, dict):
         brief["workflow"] = _pick(
@@ -457,12 +456,12 @@ def list_brief(response: dict) -> dict:
         if not isinstance(row, dict):
             continue
         entry = _pick(row, ("runId", "requestId", "adapter", "status", "workflowState", "awaitingHost", "createdAt"))
-        delegation = row.get("delegation")
-        if isinstance(delegation, dict):
-            buddy = delegation.get("buddy")
+        lineage = row.get("lineage")
+        if isinstance(lineage, dict):
+            buddy = lineage.get("buddy")
             if isinstance(buddy, dict) and buddy.get("model"):
                 entry["model"] = buddy["model"]
-            entry.update(_pick(delegation, ("kind", "parentRunId", "currentHostId")))
+            entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId")))
         workflow = row.get("workflow") if isinstance(row.get("workflow"), dict) else {}
         title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))
         explicit = workflow.get("title")
@@ -493,11 +492,11 @@ def result_brief(response: dict) -> dict:
         if isinstance(meta.get("artifacts"), list):
             brief["resultMeta"]["artifactCount"] = len(meta["artifacts"])
     if response.get("workflowState") is not None:
-        from .blocking import _governed_result_view
+        from .blocking import _micro_task_result_view
 
-        governed = _governed_result_view(response, response.get("runId"))
-        if governed is not None:
-            brief["result"] = _await_result(governed)
+        micro_task = _micro_task_result_view(response, response.get("runId"))
+        if micro_task is not None:
+            brief["result"] = _await_result(micro_task)
             return brief
     brief["result"] = response.get("result")
     return brief
@@ -542,7 +541,7 @@ def await_brief(envelope: dict) -> dict:
     if "result" in brief:
         result = _await_result(brief["result"])
         if isinstance(result, dict):
-            # A governed envelope lifts turn, artifacts and the result command to the
+            # A micro-task envelope lifts turn, artifacts and the result command to the
             # top level; the nested copies are identical and printed once.
             for key in ("turn", "artifacts", "resultCommand"):
                 if key in result and key in envelope and _await_result({key: envelope[key]}).get(key) == result[key]:
@@ -565,9 +564,9 @@ def _task_response(response: dict) -> dict:
 
 
 _PROJECTORS: dict[str, Callable[[dict], Any]] = {
-    "get": governed_brief,
+    "get": micro_task_brief,
     "submit": submit_receipt,
-    **{method: governed_receipt for method in GOVERNED_RECEIPTS},
+    **{method: micro_task_receipt for method in MICRO_TASK_RECEIPTS},
     **{method: _task_response for method in TASK_VIEWS},
     "list": list_brief,
     "result": result_brief,

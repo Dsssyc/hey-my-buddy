@@ -73,12 +73,12 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             _, after_page = probe.request("identity",query=second_query)
             self.assertTrue(after_page["changed"])
             with store.db.write() as connection:
-                connection.execute("UPDATE workflow_runs SET goal_json=json_set(goal_json,'$.task','fictional-http-needle') WHERE run_id=?",(root,))
+                connection.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-http-needle') WHERE run_id=?",(root,))
             _, matched = probe.request("identity",query="limit=50&query=fictional-http-needle")
             self.assertEqual(matched["total"],1)
             self.assertEqual(matched["macroTasks"][0]["matchingRuns"],1)
             with store.db.write() as connection:
-                connection.execute("UPDATE workflow_runs SET goal_json=json_set(goal_json,'$.task','fictional-http-removed') WHERE run_id=?",(root,))
+                connection.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-http-removed') WHERE run_id=?",(root,))
             _, removed = probe.request("identity",query="limit=50&query=fictional-http-needle")
             self.assertEqual(removed["total"],0)
 
@@ -179,7 +179,7 @@ class MacroTaskReadCacheIntegrationTests(unittest.TestCase):
         root=self.fixture.roots[0]
         group=self.fixture.macros[0]
         with self.store.db.write() as writer:
-            writer.execute("UPDATE workflow_runs SET goal_json=json_set(goal_json,'$.task','fictional-cache-needle') WHERE run_id=?",(root,))
+            writer.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-cache-needle') WHERE run_id=?",(root,))
         first=self.read(params={"query":"fictional-cache-needle","limit":1})
         with self.store.db.write() as writer:
             writer.execute("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?",(root,))

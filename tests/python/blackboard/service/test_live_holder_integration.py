@@ -21,7 +21,7 @@ class ServiceHolderIntegrationTests(StoreConcurrencyTestCase):
         board = self.board()
         client = board.client()
         client.register_worker("worker-test", adapter="dsh", capabilities=["dsh"])
-        run_id = self.submit_governed(board, "live-service-holder")
+        run_id = self.submit_micro_task(board, "live-service-holder")
         granted = client.claim("worker-test", "holder-claim", "n"*32,
                                worker_instance="worker-process-test")["claim"]
         turn, attempt = granted["turn"], granted["attempt"]

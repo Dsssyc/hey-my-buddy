@@ -169,7 +169,7 @@ class BuddyControl:
     def buddy_list(self, request_json: str) -> str:
         ...
 
-    # -- governed workflow --------------------------------------------------
+    # -- micro-task workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
         ...
 

@@ -364,7 +364,7 @@ class BoardService(_BaseResource):
                 else None,
                 "limitations": {
                     "steer": "an active attempt cannot be re-scoped; submit authorized continuation input after its turn ends",
-                    "resume": "governed continuation creates a new owned attempt; native session support is declared per harness",
+                    "resume": "micro-task continuation creates a new owned attempt; native session support is declared per harness",
                     "nativeAppWakeup": "not provided: notifications are post-commit hints for clients",
                     "postgres": "not provided: SQLite is the deliberate local database",
                     "remoteTenancy": "not provided: same-user local service only",
@@ -658,7 +658,7 @@ class BoardService(_BaseResource):
             return catalog_store.buddies(self.evaluation, params)
         return self._guard("buddy.list", request_json, handler)
 
-    # -- governed workflow --------------------------------------------------
+    # -- micro-task workflow --------------------------------------------------
     def workflow_submit(self, request_json: str) -> str:
         def handler(params):
             self._touch_harnesses(params, explicit=True)

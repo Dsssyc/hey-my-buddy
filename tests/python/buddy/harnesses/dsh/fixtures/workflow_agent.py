@@ -1,7 +1,7 @@
-"""Offline governed DSH agent for the real blackboard Worker workflow tests.
+"""Offline micro task DSH agent for the real blackboard Worker workflow tests.
 
 A thin extension of the shared fake ACP agent (``../acp/fake_agent.py``): the
-wire behavior, the governed carrier and the private-home tripwire are the shared
+wire behavior, the micro task carrier and the private-home tripwire are the shared
 agent's own; this module adds only the test-specific facts the two blackboard
 workflow modules need from a native harness - the workspace edits, one offline
 quota death, and the continuation-context capture. The final value still comes
@@ -14,9 +14,9 @@ installed DSH sees it: from the ``session/new`` mount description (the private
 MCP server's name and the ``--config`` bridge path of the session-MCP command).
 It never reads the controller's control files and never hardcodes a tool name.
 
-Modes: the governed carrier is always the shared agent's; the workflow behavior
+Modes: the micro task carrier is always the shared agent's; the workflow behavior
 follows the turn itself. Every turn of index 2 or later captures the rebuilt
-continuation context and completes through the governed finish. Turn 1 dies the
+continuation context and completes through the micro task finish. Turn 1 dies the
 offline quota death (real edit, one message chunk, no finish call, ``refusal``
 stop, machine ``QUOTA`` turn end in this run's private session record) exactly
 when the task is the quota fixture's; any other turn 1 completes.
@@ -101,9 +101,9 @@ class WorkflowAgent(fake_agent.FakeAgent):
                                            "finishTool": self.finish_tool})
         return payload
 
-    # -- the governed turn ------------------------------------------------------
+    # -- the micro task turn ------------------------------------------------------
 
-    def run_governed_prompt(self, message: dict) -> None:
+    def run_micro_task_prompt(self, message: dict) -> None:
         turn_input = self.turn_input(message)
         index = (turn_input.get("context") or {}).get("turnIndex")
         quota = self.workflow_mode == "quota" or (
@@ -113,7 +113,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
             self.run_quota_turn(message, turn_input)
             return
         self.prepare_workspace(message, turn_input)
-        super().run_governed_prompt(message)
+        super().run_micro_task_prompt(message)
 
     def prepare_workspace(self, message: dict, turn_input: dict) -> None:
         cwd = self.session_cwd.get((message.get("params") or {}).get("sessionId"))
@@ -132,7 +132,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         The native failure lives only in this run's private session record - the
         machine turn-end code the driver's bounded record reader folds into the
         run's failure fact; the prompt itself ends with the native refusal stop,
-        so the governed turn fails for its missing accepted finish.
+        so the micro task turn fails for its missing accepted finish.
         """
         request_id = message["id"]
         session_id = (message.get("params") or {}).get("sessionId")
@@ -161,7 +161,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
              "cwd": os.getcwd(), "isSeeded": False, "origin": "acp", "delegationDepth": 0},
             {"type": "user/message", "seq": 4, "data": {
                 "id": f"user-{session_id}", "role": "user",
-                "content": [{"type": "text", "text": "the governed fixture turn"}],
+                "content": [{"type": "text", "text": "the micro task fixture turn"}],
                 "source": {"kind": "user"}}},
             {"type": "turn/start", "seq": 5, "data": {"turn": 1}},
             {"type": "step/start", "seq": 6, "data": {"turn": 1, "step": 1}},
@@ -186,7 +186,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     @staticmethod
     def turn_input(message: dict) -> dict:
-        """The frozen turn input the governed prompt carries as its last JSON
+        """The frozen turn input the micro task prompt carries as its last JSON
         object: the identity and context this fixture's behavior keys on."""
         text = fake_agent.FakeAgent.prompt_text(message.get("params") or {})
         for line in reversed(text.splitlines()):
@@ -210,9 +210,9 @@ def main() -> int:
     parser = fake_agent.build_parser(log_required=False)
     parser.add_argument("--workflow-mode", default="auto", choices=["auto", "completed", "quota"])
     parser.add_argument("--native-error-code", default="QUOTA")
-    # The governed carrier with no checkpoint call: the mount binding is
+    # The micro task carrier with no checkpoint call: the mount binding is
     # derived from session/new instead.
-    parser.set_defaults(prompt_mode="governed")
+    parser.set_defaults(prompt_mode="micro-task")
     args = parser.parse_args()
     if not args.log:
         args.log = str(Path(args.patch).parent / "fixture-agent.log")

@@ -15,7 +15,7 @@ import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metr
  * result line. The intent title is the detail heading's job and never repeats
  * here.
  */
-export function DelegationDetailRows({ taskSummary, resultSummary }: {
+export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
   taskSummary: string | null | undefined;
   resultSummary: string | null | undefined;
 }) {
@@ -33,13 +33,13 @@ export function DelegationDetailRows({ taskSummary, resultSummary }: {
 }
 
 /**
- * The delegation card (0.16 T3): a bold two-line intent title, the status at
+ * The micro task card (0.16 T3): a bold two-line intent title, the status at
  * the top right, one single-line result with a small Worker 自述 label, and a
  * weak meta row only when it has content. The card's minimum height covers two
  * title lines plus the result line, so one-line titles never make the strip
  * jump. No visible index; screen readers get “第 n 个委派，共 m 个”.
  */
-function DelegationCard({ rollup, index, total, selected, tabbable, onFocus, onSelect, onOpen }: {
+function MicroTaskCard({ rollup, index, total, selected, tabbable, onFocus, onSelect, onOpen }: {
   rollup: RunRollup; index: number; total: number; selected: boolean; tabbable: boolean;
   onFocus: () => void; onSelect: (runId: string) => void; onOpen: (runId: string) => void;
 }) {
@@ -49,34 +49,34 @@ function DelegationCard({ rollup, index, total, selected, tabbable, onFocus, onS
   const meta: string[] = [];
   if (title.fromTask) meta.push(TASK_SOURCE_NOTE);
   if (rollup.helpers.length) meta.push(`协助 ${rollup.helpers.length}`);
-  return <button type="button" className={"delegation-card" + (selected ? " selected" : "")}
+  return <button type="button" className={"micro-task-card" + (selected ? " selected" : "")}
     aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
     aria-label={`第 ${index + 1} 个委派，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
     title={titleLineTooltip(title)} onFocus={onFocus}
     onClick={() => onSelect(rollup.row.runId)}
     onDoubleClick={() => onOpen(rollup.row.runId)}>
-    <span className="delegation-card-top">
-      <span className="delegation-card-title">{title.text}</span>
-      <span className="delegation-card-state">
+    <span className="micro-task-card-top">
+      <span className="micro-task-card-title">{title.text}</span>
+      <span className="micro-task-card-state">
         <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
         {state.label}
       </span>
     </span>
-    <span className="delegation-card-result">
-      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
+    <span className="micro-task-card-result">
+      <span className="micro-task-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
       {summary && <span className="worker-note">Worker 自述</span>}
     </span>
-    {meta.length > 0 && <span className="delegation-card-meta">{meta.join(" · ")}</span>}
+    {meta.length > 0 && <span className="micro-task-card-meta">{meta.join(" · ")}</span>}
   </button>;
 }
 
 /**
  * The single-root macroTask keeps one compact card: the same T3 layout plus an
  * explicit 打开详情 action below the status. The full fact set lives in the
- * delegation detail and the pinned inspector, not here.
+ * micro task detail and the pinned inspector, not here.
  */
-function SingleDelegationCard({ rollup, onOpen }: {
+function SingleMicroTaskCard({ rollup, onOpen }: {
   rollup: RunRollup; onOpen: (runId: string) => void;
 }) {
   const state = rowStateInfo(rollup.row);
@@ -85,29 +85,29 @@ function SingleDelegationCard({ rollup, onOpen }: {
   const meta: string[] = [];
   if (title.fromTask) meta.push(TASK_SOURCE_NOTE);
   if (rollup.helpers.length) meta.push(`协助 ${rollup.helpers.length}`);
-  return <div className="delegation-card single expanded">
-    <div className="delegation-card-top">
-      <span className="delegation-card-title">{title.text}</span>
-      <span className="delegation-card-state">
+  return <div className="micro-task-card single expanded">
+    <div className="micro-task-card-top">
+      <span className="micro-task-card-title">{title.text}</span>
+      <span className="micro-task-card-state">
         <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
         {state.label}
         <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
       </span>
     </div>
-    <div className="delegation-card-result">
-      <span className="delegation-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
+    <div className="micro-task-card-result">
+      <span className="micro-task-card-result-text" title={summary ?? undefined}>{summary ? `结果：${summary}` : "结果未知"}</span>
       {summary && <span className="worker-note">Worker 自述</span>}
     </div>
-    {meta.length > 0 && <div className="delegation-card-meta">{meta.join(" · ")}</div>}
+    {meta.length > 0 && <div className="micro-task-card-meta">{meta.join(" · ")}</div>}
   </div>;
 }
 
 /**
- * The collapsible delegation-card band (0.16 P2.1): “▾ 委派（n）” toggles the
+ * The collapsible micro-task-card band (0.16 P2.1): “▾ 委派（n）” toggles the
  * whole strip; collapsed it is one 28px row. Cards wrap into at most two rows
  * until the user reveals the full set.
  */
-export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCollapsed, onSelectRun, onOpenRun }: {
+export function MicroTaskStrip({ timeline, selectedRunId, collapsed, onToggleCollapsed, onSelectRun, onOpenRun }: {
   timeline: MacroTaskTimelineData;
   selectedRunId: string | null;
   collapsed: boolean;
@@ -123,7 +123,7 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
   const [singleColumn, setSingleColumn] = useState(false);
   const [showAll, setShowAll] = useState(false);
   useEffect(() => { setShowAll(false); setCardFocus(0); }, [timeline.macroTask.macroTaskId]);
-  const stripId = "delegation-strip-region";
+  const stripId = "micro-task-strip-region";
   // The strip has 20px inline padding on each side and 8px between cards.
   const cardsPerRow = singleColumn ? 1 : Math.max(1, Math.floor((stripWidth - 40 + 8) / 270));
   const firstTwoRows = cardsPerRow * 2;
@@ -185,13 +185,13 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
     timeline.filtered, timeline.truncated.rows, timeline.truncated.spans, timeline.truncated.events]);
   useEffect(() => {
     if (collapsed || selectedRunId === null) return;
-    const frame = requestAnimationFrame(() => stripRoot.current?.querySelector<HTMLButtonElement>(".delegation-card.selected")
+    const frame = requestAnimationFrame(() => stripRoot.current?.querySelector<HTMLButtonElement>(".micro-task-card.selected")
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" }));
     return () => cancelAnimationFrame(frame);
   }, [collapsed, selectedRunId, showAll]);
   if (!roots.length) return null;
   function focusCard(index: number) {
-    const card = stripRoot.current?.querySelectorAll<HTMLButtonElement>(".delegation-card")[index];
+    const card = stripRoot.current?.querySelectorAll<HTMLButtonElement>(".micro-task-card")[index];
     card?.focus({ preventScroll: true });
     card?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }
@@ -201,7 +201,7 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
     requestAnimationFrame(() => focusCard(index));
   }
   function onStripKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (!(event.target as HTMLElement).closest(".delegation-card")) return;
+    if (!(event.target as HTMLElement).closest(".micro-task-card")) return;
     let next = Math.min(cardFocus, roots.length - 1);
     if (event.key === "ArrowRight") next = Math.min(next + 1, roots.length - 1);
     else if (event.key === "ArrowLeft") next = Math.max(next - 1, 0);
@@ -215,13 +215,13 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
       requestAnimationFrame(() => focusCard(next));
     } else focusCard(next);
   }
-  return <div ref={bandRoot} className={"delegation-band" + (collapsed ? " collapsed" : "")}>
-    <div className="delegation-band-head">
-    <button type="button" className="delegation-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
+  return <div ref={bandRoot} className={"micro-task-band" + (collapsed ? " collapsed" : "")}>
+    <div className="micro-task-band-head">
+    <button type="button" className="micro-task-band-toggle" aria-expanded={!collapsed} aria-controls={stripId}
       onClick={onToggleCollapsed}>
       <span aria-hidden="true">{collapsed ? "▸" : "▾"}</span> 委派（{roots.length}）
     </button>
-    {!collapsed && roots.length > firstTwoRows && <button type="button" className="button small-button delegation-show-all"
+    {!collapsed && roots.length > firstTwoRows && <button type="button" className="button small-button micro-task-show-all"
       aria-expanded={showAll} aria-controls={stripId}
       onClick={() => {
         if (showAll && stripRoot.current) stripRoot.current.scrollTop = 0;
@@ -229,18 +229,18 @@ export function DelegationStrip({ timeline, selectedRunId, collapsed, onToggleCo
       }}>{showAll ? "收起" : `展开全部 ${roots.length} 个`}</button>}
     </div>
     {!collapsed && (roots.length === 1
-      ? <div ref={stripRoot} className="delegation-strip single-root"><SingleDelegationCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
-      : <div className="delegation-strip" id={stripId} ref={stripRoot} role="group"
+      ? <div ref={stripRoot} className="micro-task-strip single-root"><SingleMicroTaskCard rollup={roots[0]!} onOpen={onOpenRun} /></div>
+      : <div className="micro-task-strip" id={stripId} ref={stripRoot} role="group"
         aria-label="委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
-        {roots.slice(0, visibleCount).map((rollup, index) => <DelegationCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
+        {roots.slice(0, visibleCount).map((rollup, index) => <MicroTaskCard key={rollup.row.runId} rollup={rollup} index={index} total={roots.length}
           selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, visibleCount - 1)}
           onFocus={() => setCardFocus(index)} onSelect={onSelectRun} onOpen={onOpenRun} />)}
         {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
           显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
         </span>}
       </div>)}
-    {!collapsed && hiddenIndices.length > 0 && <div className="delegation-current">
-      {hiddenIndices.map(hiddenIndex => <button key={hiddenIndex} type="button" className="button small-button delegation-hidden-current"
+    {!collapsed && hiddenIndices.length > 0 && <div className="micro-task-current">
+      {hiddenIndices.map(hiddenIndex => <button key={hiddenIndex} type="button" className="button small-button micro-task-hidden-current"
           onClick={() => revealCard(hiddenIndex)}>
           {selectedIndex === hiddenIndex ? "已选中" : "键盘位置"}：第 {hiddenIndex + 1} 个 · {displayTitle(roots[hiddenIndex]!.row.titleSource, roots[hiddenIndex]!.row.title).text} · 返回卡片
         </button>)}

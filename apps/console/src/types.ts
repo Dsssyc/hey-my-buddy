@@ -168,8 +168,8 @@ export type Decision = {
   updatedAt?: string;
   routingMode?: RoutingMode | null;
 };
-export type Delegation = {
-  kind: "goal" | "helper" | "decision" | "execution";
+export type Lineage = {
+  kind: "micro-task" | "helper" | "decision" | "execution";
   sourceHostId: string | null;
   currentHostId: string | null;
   parentRunId: string | null;
@@ -199,7 +199,7 @@ export type Task = {
   reviewRejectedAt: string | null;
   reviewRejectionNote: string | null;
   queueReason?: string | null;
-  delegation?: Delegation;
+  lineage?: Lineage;
   spec?: Record<string, unknown>;
   /** Bounded per-attempt activity projection; null or absent means unknown. */
   activity?: TaskActivity | null;
@@ -218,7 +218,7 @@ export type Task = {
     ownerGeneration: number;
     revision: number;
     requestSummary?: string;
-    /** Host-authored explicit delegation title; null or absent means fallback. */
+    /** Host-authored explicit micro task title; null or absent means fallback. */
     title?: string | null;
     /**
      * Read-only newest concluded own turn outcome summary (ADR-012 X title
@@ -421,7 +421,7 @@ export type Snapshot = {
    */
   modelServiceConcurrency: ModelServiceConcurrencyEntry[];
   /**
-   * The board-wide count of delegation roots awaiting their Host, computed by
+   * The board-wide count of micro task roots awaiting their Host, computed by
    * the service over every run. It is never inferred from a page of recent
    * rows; the full execution records stay on the paginated `tasks` read.
    */

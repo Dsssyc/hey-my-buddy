@@ -35,7 +35,7 @@ def enrich(context, outcome):
     if not outcome.shutdown_confirmed or not context.turn_input:
         return
     manifest = getattr(context, "effective_workspace", None) or context.turn_input.get("executionWorkspace")
-    original = context.turn_input.get("context", {}).get("goalInputCommit")
+    original = context.turn_input.get("context", {}).get("microTaskInputCommit")
     seal = outcome.result.get("workspaceSeal") or outcome.result.get("partialWorkspaceSeal")
     if not manifest or not original or not seal:
         return

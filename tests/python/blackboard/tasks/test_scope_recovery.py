@@ -1,7 +1,7 @@
 """Real-Git scope recovery: failure evidence, compare-and-swap and resealing.
 
 These tests drive the real ``hey_my_buddy.blackboard.tasks.workspace`` module, real Git checkouts and the
-real governed workflow transactions. Only the model process is absent: the scope
+real micro-task workflow transactions. Only the model process is absent: the scope
 failure, its durable evidence, the conflict record, the restore/adopt/abandon
 decision and the resealed handoff are all real. A failed site is never promoted
 to an authorized baseline, and a mechanical resolution never needs a model turn.
@@ -34,11 +34,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def _restore_workspace(self) -> None:
         workflow_module._workspace_module = self._previous_workspace
 
-    # -- governed helpers ----------------------------------------------------
+    # -- micro-task helpers ----------------------------------------------------
     def register(self, board, worker_id=None):
         return board.call("worker_register", {"workerId": worker_id or self.worker, "capabilities": ["dsh"]})
 
-    def governed_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
+    def micro_task_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
         response = board.call("workflow_submit", {
             **BUDDY,
             "requestId": request_id,
@@ -90,7 +90,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         })
 
     def turn_record(self, claim, *, disposition="completed"):
-        """A synthetic governed turn record in the current provenance format.
+        """A synthetic micro-task turn record in the current provenance format.
 
         The record passes the board's real import validator; no harness ran, so
         it is not real native verification (``protocol.fixtures.native_turn``).
@@ -159,10 +159,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
 
     # -- scenarios -----------------------------------------------------------
     def scoped_failure(self, *, request_id="scope-run", scope=("src",), kind="existing"):
-        """One governed run whose seal refused tracked and untracked outside changes."""
+        """One micro-task run whose seal refused tracked and untracked outside changes."""
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id=request_id, scope=scope, kind=kind)
+        submitted = self.micro_task_submit(board, request_id=request_id, scope=scope, kind=kind)
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
         self.assertIsNotNone(claimed["claim"], claimed)
@@ -185,7 +185,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         """A scope-only failure whose attempt still carries its native turn outcome."""
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id=request_id, scope=("src",))
+        submitted = self.micro_task_submit(board, request_id=request_id, scope=("src",))
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
@@ -453,7 +453,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def test_scope_amendment_is_versioned_and_fenced_by_an_active_attempt(self):
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id="amend-run", scope=("src",))
+        submitted = self.micro_task_submit(board, request_id="amend-run", scope=("src",))
         run_id = submitted["runId"]
         first = self.claim(board, run_id, request_id="claim-amend-first")
         manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
@@ -484,7 +484,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def test_amended_scope_applies_only_to_the_next_prepared_stage(self):
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id="amend-stage", scope=("src",))
+        submitted = self.micro_task_submit(board, request_id="amend-stage", scope=("src",))
         run_id = submitted["runId"]
         first = self.claim(board, run_id, request_id="claim-first")
         manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
@@ -675,7 +675,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def test_current_contract_runs_require_a_real_scope_v1_row(self):
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id="scope-row", scope=("src",))
+        submitted = self.micro_task_submit(board, request_id="scope-row", scope=("src",))
         run_id = submitted["runId"]
         view = self.view(board, run_id)
         self.assertEqual(view["scope"]["scopeVersion"], 1)
@@ -699,7 +699,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def test_helper_admission_records_its_own_scope_v1(self):
         board = self.board()
         self.register(board)
-        submitted = self.governed_submit(board, request_id="helper-scope", scope=("src",))
+        submitted = self.micro_task_submit(board, request_id="helper-scope", scope=("src",))
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id, request_id="helper-scope-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]

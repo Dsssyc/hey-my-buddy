@@ -126,7 +126,7 @@ describe("command receipts", () => {
   });
 });
 
-describe("delegation history reads", () => {
+describe("microTask history reads", () => {
   it("sends filters and the opaque cursor through GET with the caller's abort signal", async () => {
     const page = { runs: [], total: 120, nextCursor: "next-page" };
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(page)));

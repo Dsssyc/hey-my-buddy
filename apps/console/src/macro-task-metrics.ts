@@ -213,12 +213,12 @@ export function relatedEventsForSpan(span: TimelineSpan, events: readonly Timeli
     && (sameKey(event.attemptId, span.attemptId) || sameKey(event.requestId, span.requestId)));
 }
 
-/** Events recorded on one delegation's own run identity. */
+/** Events recorded on one micro task's own run identity. */
 export function relatedEventsForRun(runId: string, events: readonly TimelineEvent[]): TimelineEvent[] {
   return events.filter(event => event.runId === runId);
 }
 
-/* ---- per-delegation rollups for whole-run selection and overview cards ---- */
+/* ---- per-micro-task rollups for whole-run selection and overview cards ---- */
 
 export type RunRollup = {
   row: TimelineRow;
@@ -249,7 +249,7 @@ function runExecutionMs(spans: readonly TimelineSpan[], observedAtMs: number | n
 }
 
 /**
- * Rolls up one delegation from the same bounded read: rounds, helpers, the
+ * Rolls up one micro task from the same bounded read: rounds, helpers, the
  * result of the latest execution span, acceptance fields and pending Host
  * requests. Read-scope limitations propagate so a truncated card can never
  * claim definitive absence; a null result is never turned into a success.
@@ -277,7 +277,7 @@ export function runRollup(row: TimelineRow, timeline: MacroTaskTimeline): RunRol
   return { row, executions, pending, helpers, executionMs: ms, limitations: [...new Set([...scope, ...limitations])] };
 }
 
-/** Root delegations in recorded creation order — the overview card order. */
+/** Root micro tasks in recorded creation order — the overview card order. */
 export function rootRollups(timeline: MacroTaskTimeline): RunRollup[] {
   const roots = timeline.rows.filter(row => row.parentRunId === null);
   const withOrder = roots.map(row => ({ row, createdAtMs: parseTimelineInstant(row.createdAt) ?? Number.POSITIVE_INFINITY }));
@@ -286,7 +286,7 @@ export function rootRollups(timeline: MacroTaskTimeline): RunRollup[] {
 }
 
 /**
- * Honest text of one delegation's latest execution result; null only when no
+ * Honest text of one micro task's latest execution result; null only when no
  * execution was recorded at all. Ordering prefers recorded turn indices, then
  * usable start times; when neither can identify the latest attempt the label
  * stays 未记录 instead of resurrecting an older span's outcome.

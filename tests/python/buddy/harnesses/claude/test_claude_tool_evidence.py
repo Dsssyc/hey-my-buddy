@@ -503,7 +503,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.adapter = ClaudeAdapter()
 
     def context(self, case):
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
                                 spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
@@ -529,7 +529,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
         self.assertEqual(evidence["version"], 1)
-        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "goal-1",
+        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
         self.assertTrue(evidence["streamComplete"])

@@ -24,7 +24,7 @@ function taskFixture(runId: string): Task {
   const base: Task = { runId, task: `目标 ${runId}`, status: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
     revision: 1, createdAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
-    delegation: { kind: runId === "r3" ? "helper" : "goal", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
+    lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
       buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
@@ -35,7 +35,7 @@ function taskFixture(runId: string): Task {
 }
 
 function workflowFixture(task: Task): Workflow {
-  return { governed: true, runId: task.runId, hostId: "codex-desktop", ownerGeneration: 2, revision: 1,
+  return { runId: task.runId, hostId: "codex-desktop", ownerGeneration: 2, revision: 1,
     state: "awaiting-host", awaitingHost: true, waitReason: "等待 Host 决定", continuationCount: 0,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
@@ -145,7 +145,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     await waitFor(() => expect(within(document.querySelector(".run-view")!).getByRole("tab", { name: "执行记录" })
       .getAttribute("aria-selected")).toBe("true"));
     expect(f.api.task).toHaveBeenCalledWith("r2", expect.any(AbortSignal));
-    // The delegation detail carries no Host write form anymore (U4).
+    // The micro task detail carries no Host write form anymore (U4).
     expect(document.querySelector(".workflow-controls")).toBeNull();
   });
 
@@ -229,7 +229,7 @@ describe("macroTask detail navigation (layer mode, ≤760px viewport)", () => {
     expect(f.api.command).not.toHaveBeenCalled();
   });
 
-  it("opens the routed delegation and locates the exact decision in its routing tab", async () => {
+  it("opens the routed microTask and locates the exact decision in its routing tab", async () => {
     stubViewport(true);
     const f = harness();
     await openMacroTask(f);
@@ -599,7 +599,7 @@ describe("macroTask detail docking (0.15.1 U1)", () => {
       if (!node) throw new Error("drawer not open");
       return node;
     });
-    // The unarchived delegation is folded by default; expand it inside the drawer.
+    // The unarchived micro task is folded by default; expand it inside the drawer.
     await f.user.click(within(drawerAgain).getByRole("button", { name: /历史独立委派（1）/ }));
     await f.user.click(within(drawerAgain).getAllByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })[0]!);
     await waitFor(() => expect(document.querySelector(".run-view")).toBeNull());

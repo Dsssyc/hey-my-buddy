@@ -125,7 +125,7 @@ class SeamCase(unittest.TestCase):
                 native: str | None = None, permission=None) -> RunRequest:
         marker = uuid.uuid4().hex[:8]
         return RunRequest(
-            identity=RunIdentity(task_id="goal-1", attempt_id=f"attempt-{marker}",
+            identity=RunIdentity(task_id="micro-task-1", attempt_id=f"attempt-{marker}",
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=turn_id, input_sha256=input_sha256),
             harness="codex",
@@ -552,10 +552,10 @@ class CodexSeamCase(SeamCase):
         os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
-                   observer=None, input_text: str = "fixture governed task", live=None, level="write"):
+                   observer=None, input_text: str = "fixture micro task task", live=None, level="write"):
         permission = worker_permission("codex", level)
         self.set_case(case)
-        turn_input = {"taskId": "goal-1", "attemptId": "attempt-check", "generation": 7,
+        turn_input = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
                       "turnId": "turn-check"}
         return run(self.request(tool_scope=permission.tool_scope, permission=permission, output_schema=OUTCOME_SCHEMA,
                                 prompt=input_text, timeout=timeout, continuation=continuation,
@@ -723,7 +723,7 @@ class ReviewSeamTests(CodexSeamCase):
         for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
             self.assertNotIn(name, thread["start"])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["binding"]["taskId"], "goal-1")
+        self.assertEqual(package["binding"]["taskId"], "micro-task-1")
 
     def test_review_tool_facts_stop_through_the_observer_and_interrupt_natively(self):
         rule = ReviewCorrection(REVIEW_SCHEMA, "Select from the frozen packet")
@@ -1125,7 +1125,7 @@ class WorkerSeamTests(CodexSeamCase):
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(package["binding"]["taskId"], "goal-1")
+        self.assertEqual(package["binding"]["taskId"], "micro-task-1")
         self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
         self.assertEqual([event["toolName"] for event in package["events"]],
                          ["commandExecution", "commandExecution"])
@@ -1143,7 +1143,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_native_events_publish_through_the_shared_endpoint_callback(self):
         self.set_case("worker-tool")
         request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture governed task", timeout=12,
+                               prompt="fixture micro task task", timeout=12,
                                input_sha256=input_hash({"fixture": "live"}), turn_id="turn-live",
                                native="worker-native")
         endpoint = activity_endpoint(request.identity)
@@ -1344,8 +1344,8 @@ class WorkerSeamTests(CodexSeamCase):
             return RunFeedback(action="correct", input_text="retry")
 
         request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture governed task", timeout=12,
-                               input_sha256=input_hash({"taskId": "goal-1", "attemptId": "x",
+                               prompt="fixture micro task task", timeout=12,
+                               input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "x",
                                                         "generation": 1, "turnId": "t"}),
                                turn_id="t", native="worker-native")
         with self.assertRaises(BoardError):
@@ -1365,7 +1365,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown")
-        # The governed turn's observed completion is a stream fact of its own;
+        # The micro task turn's observed completion is a stream fact of its own;
         # the unknown group must not overwrite it — and still never saves a
         # resumable binding. (The halt's real handle below shows the leader
         # reaped: the reappearance is that handle's fact.)
@@ -1384,8 +1384,8 @@ class WorkerSeamTests(CodexSeamCase):
 
         self.set_case("hang")
         result = run(self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
-                                  prompt="fixture governed task", timeout=12,
-                                  input_sha256=input_hash({"taskId": "goal-1", "attemptId": "attempt-check",
+                                  prompt="fixture micro task task", timeout=12,
+                                  input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "attempt-check",
                                                            "generation": 7, "turnId": "turn-check"}),
                                   turn_id="turn-check", native="worker-native"),
                      observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -1768,10 +1768,10 @@ class CatalogTrustTests(CodexSeamCase):
         # The fixture catalog lists fixture-model with low/high only: a listed
         # model whose effort the reading does not list keeps its refusal.
         marker = uuid.uuid4().hex[:8]
-        turn_input = {"taskId": "goal-1", "attemptId": "attempt-check", "generation": 7,
+        turn_input = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
                       "turnId": "turn-check"}
         result = run(RunRequest(
-            identity=RunIdentity(task_id="goal-1", attempt_id=f"attempt-{marker}",
+            identity=RunIdentity(task_id="micro-task-1", attempt_id=f"attempt-{marker}",
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id="turn-check", input_sha256=input_hash(turn_input)),
             harness="codex",
@@ -1780,7 +1780,7 @@ class CatalogTrustTests(CodexSeamCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / "worker-native")),
-            input_text="fixture governed task", tool_scope="write", output_schema=OUTCOME_SCHEMA,
+            input_text="fixture micro task task", tool_scope="write", output_schema=OUTCOME_SCHEMA,
             worker_permission=worker_permission("codex", "write"),
             budget=RunBudget(timeout_seconds=12)),
             observer=lambda _facts: FEEDBACK_CONTINUE,

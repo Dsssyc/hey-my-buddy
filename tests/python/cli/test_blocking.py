@@ -427,7 +427,7 @@ class ResultTruthTests(unittest.TestCase):
         self.assertIsNotNone(envelope["recovery"])
 
 
-class GovernedBoundaryTests(unittest.TestCase):
+class MicroTaskBoundaryTests(unittest.TestCase):
     def test_routing_boundary_without_a_turn_has_actionable_resume_commands(self):
         clock = VirtualClock()
         service = FakeService(clock)
@@ -439,7 +439,7 @@ class GovernedBoundaryTests(unittest.TestCase):
         )
         envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "waiting-host")
-        self.assertFalse(envelope["goalComplete"])
+        self.assertFalse(envelope["microTaskComplete"])
         self.assertIsNone(envelope["turn"])
         self.assertIsNone(envelope["error"])
         self.assertNotIn("result", service.calls)
@@ -490,7 +490,7 @@ class GovernedBoundaryTests(unittest.TestCase):
         envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["BUDDY_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "waiting-host")
         self.assertFalse(envelope["ok"])
-        self.assertFalse(envelope["goalComplete"])
+        self.assertFalse(envelope["microTaskComplete"])
         self.assertEqual(envelope["turn"]["turnId"], "turn-1")
         self.assertEqual(envelope["request"]["requestId"], "req-1")
         self.assertEqual(envelope["workflowState"], "awaiting-host")
@@ -530,8 +530,8 @@ class GovernedBoundaryTests(unittest.TestCase):
         self.assertGreaterEqual(service.calls.count("wait"), 1)
 
 
-class CompactGovernedEnvelopeTests(unittest.TestCase):
-    def test_governed_final_envelope_is_compact_and_points_at_the_full_result(self):
+class CompactMicroTaskEnvelopeTests(unittest.TestCase):
+    def test_micro_task_final_envelope_is_compact_and_points_at_the_full_result(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
         huge = "x" * 200_000
@@ -570,7 +570,7 @@ class CompactGovernedEnvelopeTests(unittest.TestCase):
         self.assertEqual(envelope["outcome"], "completed")
         self.assertTrue(envelope["ok"])
         self.assertTrue(envelope["resultCompact"])
-        self.assertLess(len(json.dumps(envelope)), 8000, "the governed envelope must stay bounded")
+        self.assertLess(len(json.dumps(envelope)), 8000, "the micro-task envelope must stay bounded")
         self.assertEqual(envelope["turn"]["turnId"], "turn-1")
         self.assertEqual(envelope["artifacts"][0]["commit"], "c" * 40)
         self.assertIn("buddy result", envelope["resultCommand"])

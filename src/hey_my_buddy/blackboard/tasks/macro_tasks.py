@@ -1,6 +1,6 @@
 """Human macro task metadata and bounded read projections, never execution input.
 
-A macro task groups governed delegations for browsing and archival. It owns a
+A macro task groups micro tasks for browsing and archival. It owns a
 title, optional description and original source attribution: it schedules no work,
 grants no control and is never part of an execution spec, Worker turn input or
 selector packet. The timeline is derived on every read from the recorded task,
@@ -17,7 +17,7 @@ import re
 import uuid
 from typing import Any
 
-from . import delegation
+from . import micro_task
 from ..routing import router
 from ...protocol import schemas
 from ...errors import BoardError
@@ -29,7 +29,7 @@ TIMELINE_MAX_LIMIT = 200
 MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
-#: Display fallback when a delegation recorded no intent title or task line.
+#: Display fallback when a micro task recorded no intent title or task line.
 UNTITLED = "未命名委派"
 TITLE_LIMIT = 200
 CURSOR_VERSION = 1
@@ -41,21 +41,21 @@ _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 
-#: Every task of a governed delegation tree with its group key. A helper inherits
+#: Every task of a micro task tree with its group key. A helper inherits
 #: its root's macro task, a routing decision belongs to the run it routed, and a root
 #: without a macro task forms its own ``run:<rootRunId>`` group. Plain execution
-#: records (no governed root) belong to no group.
+#: records (no micro-task root) belong to no group.
 MEMBERS_SQL = f"""
 SELECT h.*,
        COALESCE(root_group.macro_task_id, 'run:' || h.root_run_id) AS group_id
-  FROM ({delegation.TASK_HISTORY_SQL}) AS h
+  FROM ({micro_task.TASK_HISTORY_SQL}) AS h
   JOIN workflow_runs root_group ON root_group.run_id = h.root_run_id
 """
 
-#: Disjoint delegation states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
-_HOST_SQL = delegation.FILTER_SQL["host"]
-_ACTIVE_SQL = f"({delegation.FILTER_SQL['active']} AND NOT {_HOST_SQL})"
-_REVIEW_SQL = delegation.FILTER_SQL["review"]
+#: Disjoint micro task states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
+_HOST_SQL = micro_task.FILTER_SQL["host"]
+_ACTIVE_SQL = f"({micro_task.FILTER_SQL['active']} AND NOT {_HOST_SQL})"
+_REVIEW_SQL = micro_task.FILTER_SQL["review"]
 
 #: Event kinds shown as Host markers, with the display kind each one becomes.
 HOST_MARKERS = {
@@ -80,9 +80,9 @@ MARKER_LABELS = {
 # -- admission and activity ----------------------------------------------------
 
 
-#: The console top bar's pending count: distinct delegation-tree roots that
+#: The console top bar's pending count: distinct micro-task-tree roots that
 #: currently have a run parked on its Host. It reuses the same lineage walk as
-#: the history relation (``delegation.RELATION_SQL``) but selects nothing beyond
+#: the history relation (``micro_task.RELATION_SQL``) but selects nothing beyond
 #: the root of each awaiting-host run, so it stays a bounded aggregate over the
 #: whole board instead of decorating the latest page of tasks.
 PENDING_ROOTS_SQL = """
@@ -107,10 +107,10 @@ SELECT COUNT(DISTINCT COALESCE(roots.root_run_id, tasks.task_id)) AS pending
 
 
 def pending_root_count(store) -> int:
-    """Delegation roots with at least one run awaiting its Host, board-wide.
+    """Micro task roots with at least one run awaiting its Host, board-wide.
 
     The console's old client-side count deduplicated the latest snapshot page
-    by ``delegation.rootRunId || runId``; this is the same semantics computed
+    by ``lineage.rootRunId || runId``; this is the same semantics computed
     over every run, so it stays correct past any page boundary.
     """
     with store.db.read() as connection:
@@ -173,13 +173,13 @@ def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
 
 def _filters(params: dict) -> tuple[dict, list[str], list[Any]]:
     """Validated member filters and their SQL predicates over ``MEMBERS_SQL`` rows."""
-    query = schemas.optional_string(params, "query", max_length=delegation.QUERY_MAX_LENGTH)
-    project_id = schemas.optional_string(params, "projectId", max_length=delegation.PROJECT_ID_MAX_LENGTH)
-    host_id = schemas.optional_string(params, "hostId", max_length=delegation.HOST_ID_MAX_LENGTH)
+    query = schemas.optional_string(params, "query", max_length=micro_task.QUERY_MAX_LENGTH)
+    project_id = schemas.optional_string(params, "projectId", max_length=micro_task.PROJECT_ID_MAX_LENGTH)
+    host_id = schemas.optional_string(params, "hostId", max_length=micro_task.HOST_ID_MAX_LENGTH)
     filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
-    if filter_name not in delegation.HISTORY_FILTERS:
+    if filter_name not in micro_task.HISTORY_FILTERS:
         raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
-    clauses, values = delegation.history_where(
+    clauses, values = micro_task.history_where(
         project_id=project_id, host_id=host_id, query=query, filter_name=filter_name
     )
     applied = {key: value for key, value in (("query", query), ("projectId", project_id), ("hostId", host_id))
@@ -241,7 +241,7 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
         "  THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
         "  WHERE t.run_id=r.run_id AND t.state='concluded' AND t.outcome_json IS NOT NULL"
         "  ORDER BY t.turn_index DESC LIMIT 1) AS summary,"
-        " json_extract(r.goal_json,'$.task') AS task"
+        " json_extract(r.micro_task_json,'$.task') AS task"
         " FROM workflow_runs r WHERE r.run_id=?",
         (run_id,),
     ).fetchone()
@@ -270,7 +270,7 @@ def _state(row) -> str:
         and state in ("completed", "failed", "cancelled")
         and row["decision_id"] is None
         and row["adapter"] != "decision"
-        and (row["governed_run_id"] is None or run_state == "delivered")
+        and (row["micro_task_run_id"] is None or run_state == "delivered")
         and row["review_ready"] == 1
     ):
         return "review"
@@ -287,7 +287,7 @@ def macro_task_list(store, params: dict) -> dict:
     applied, clauses, values = _filters(params)
     before_value = schemas.optional_string(params, "before", max_length=512)
     before = _decode_cursor(before_value, applied) if before_value is not None else None
-    match = " AND ".join(["governed_run_id IS NOT NULL", *clauses])
+    match = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
     from . import macro_task_summary_cache as memo
 
     # The materialized relation carries only scalars consumed by the summary and
@@ -362,10 +362,10 @@ def _members(connection, group_id: str) -> list:
 def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -> dict:
     result_summary = None
     description = None
-    members = [row for row in _members(connection, group_id) if row["governed_run_id"] is not None]
+    members = [row for row in _members(connection, group_id) if row["micro_task_run_id"] is not None]
     matching = connection.execute(
         f"SELECT COUNT(*) AS count FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
-        + " AND ".join(["governed_run_id IS NOT NULL", *clauses]),
+        + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
         [group_id, *values],
     ).fetchone()["count"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0}
@@ -380,7 +380,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         repository_path = next((row["project_repository_path"] for row in members
                                 if row["project_repository_path"]), None)
         project = {"id": macro_task["project_id"], "path": macro_task["project_path"],
-                   "label": delegation.project_label(macro_task["project_path"], repository_path, "未记录项目")}
+                   "label": micro_task.project_label(macro_task["project_path"], repository_path, "未记录项目")}
         source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
@@ -399,7 +399,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
         title, title_source, result_summary = _run_presentation(connection, root_id)
-        metadata = delegation.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
+        metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
         project, source_host = metadata["project"], metadata["sourceHostId"]
         created_at = root["created_at"] if root is not None else None
         run = connection.execute("SELECT activity_seq, activity_at FROM workflow_runs WHERE run_id=?", (root_id,)).fetchone()
@@ -432,7 +432,7 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
 
 
 def macro_task_timeline(store, params: dict) -> dict:
-    """The bounded, read-only timeline of one macro task or standalone delegation tree."""
+    """The bounded, read-only timeline of one macro task or standalone micro task tree."""
     schemas.reject_unknown(params, TIMELINE_PARAMETERS, "macro_task.timeline")
     group_id = schemas.required_string(params, "macroTaskId", max_length=134)
     if not (MACRO_TASK_PATTERN.match(group_id) or STANDALONE_PATTERN.match(group_id)):
@@ -451,16 +451,16 @@ def macro_task_timeline(store, params: dict) -> dict:
             ).fetchone()
             if root is None or root["macro_task_id"] is not None:
                 # A root that belongs to a macro task is read through that macro task.
-                raise BoardError("NOT_FOUND", "Unknown standalone delegation", macroTaskId=group_id)
+                raise BoardError("NOT_FOUND", "Unknown standalone micro task", macroTaskId=group_id)
         members = _members(connection, group_id)
         if not members:
-            raise BoardError("NOT_FOUND", "The group has no readable delegations", macroTaskId=group_id)
+            raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
         summary = _summary(connection, group_id, clauses, values)
-        runs = [row for row in members if row["governed_run_id"] is not None]
+        runs = [row for row in members if row["micro_task_run_id"] is not None]
         matching_ids = {
             row["task_id"] for row in connection.execute(
                 f"SELECT task_id FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
-                + " AND ".join(["governed_run_id IS NOT NULL", *clauses]),
+                + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
                 [group_id, *values],
             ).fetchall()
         }
@@ -474,7 +474,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         for row in shown:
             spans.extend(_run_spans(connection, row))
         routing_owner = {row["task_id"]: row["delegated_parent_run_id"] for row in members
-                         if row["governed_run_id"] is None and row["decision_id"] is not None}
+                         if row["micro_task_run_id"] is None and row["decision_id"] is not None}
         for decision_task_id, owner in routing_owner.items():
             if owner in shown_ids:
                 spans.extend(_routing_spans(connection, decision_task_id, owner))
@@ -495,7 +495,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         "rows": rows,
         "spans": spans,
         "events": markers,
-        # Totals count the (filtered) scope; allRows counts every delegation of the group.
+        # Totals count the (filtered) scope; allRows counts every micro task of the group.
         "totals": {"rows": len(selected), "spans": span_total, "events": marker_total, "allRows": len(runs)},
         "truncated": truncated,
         "filtered": filtered,
@@ -525,9 +525,9 @@ def _tree_order(runs: list) -> list:
 
 
 def _timeline_row(connection, row, depth: int) -> dict:
-    metadata = delegation.metadata_from_row(row)
+    metadata = micro_task.metadata_from_row(row)
     title, title_source, result_summary = _run_presentation(connection, row["task_id"])
-    task_text = connection.execute("SELECT json_extract(goal_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
+    task_text = connection.execute("SELECT json_extract(micro_task_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
     shutdown = connection.execute(
         "SELECT COUNT(*) AS attempts,"
         " SUM(CASE WHEN execution_state='finished' AND shutdown_confirmed=1 THEN 1 ELSE 0 END) AS confirmed"
@@ -564,7 +564,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
 def _full_buddy(value: dict | None) -> dict | None:
     if not isinstance(value, dict) or not value:
         return None
-    return {key: value.get(key) or None for key in delegation.BUDDY_FIELDS}
+    return {key: value.get(key) or None for key in micro_task.BUDDY_FIELDS}
 
 
 def _reversed(start: Any, end: Any) -> bool:
@@ -621,11 +621,11 @@ def _turn_buddy(input_json: Any) -> dict | None:
     buddy = payload.get("buddy") if isinstance(payload, dict) else None
     if not isinstance(buddy, dict):
         return None
-    return {key: buddy.get(key) for key in delegation.BUDDY_FIELDS if buddy.get(key)}
+    return {key: buddy.get(key) for key in micro_task.BUDDY_FIELDS if buddy.get(key)}
 
 
 def _run_spans(connection, row) -> list[dict]:
-    """Queue, execution and waiting-Host spans of one governed run, from recorded rows."""
+    """Queue, execution and waiting-Host spans of one micro-task run, from recorded rows."""
     run_id = row["task_id"]
     spans: list[dict] = []
     attempts = connection.execute(
@@ -781,9 +781,9 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
             value = payload.get(key)
             return value[:SUMMARY_LIMIT] if isinstance(value, str) and value else None
 
-        governed = payload.get("governed") if isinstance(payload.get("governed"), dict) else {}
+        micro_task = payload.get("microTask") if isinstance(payload.get("microTask"), dict) else {}
         actor = text("actor") or text("newHostId") or (
-            governed.get("sourceHostId") if isinstance(governed.get("sourceHostId"), str) else None)
+            micro_task.get("sourceHostId") if isinstance(micro_task.get("sourceHostId"), str) else None)
         details = [part for part in (text("decision"), text("verdict"), text("state"), text("strategy"),
                                      text("reason")) if part]
         markers.append({

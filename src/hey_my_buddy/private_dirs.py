@@ -104,20 +104,20 @@ def _adapter(adapter: str) -> str:
     return adapter
 
 
-def goal_root(state: Path, adapter: str, task_id: str) -> Path:
+def micro_task_root(state: Path, adapter: str, task_id: str) -> Path:
     if not isinstance(task_id, str) or not task_id or '\0' in task_id:
-        raise BoardError('INVALID_ARGUMENT', 'Private goal requires a task identity')
-    return _absolute(state) / 'harnesses' / _adapter(adapter) / 'goals' / hashlib.sha256(task_id.encode()).hexdigest()
+        raise BoardError('INVALID_ARGUMENT', 'Private micro task requires a task identity')
+    return _absolute(state) / 'harnesses' / _adapter(adapter) / 'micro-tasks' / hashlib.sha256(task_id.encode()).hexdigest()
 
 
 def native_root(state: Path, adapter: str, task_id: str) -> Path:
-    return goal_root(state, adapter, task_id) / 'native'
+    return micro_task_root(state, adapter, task_id) / 'native'
 
 
 def attempt_root(state: Path, adapter: str, task_id: str, attempt_id: str) -> Path:
     if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None or attempt_id in ('.', '..'):
         raise BoardError('INVALID_ARGUMENT', 'Private attempt requires a safe attempt identity')
-    return goal_root(state, adapter, task_id) / 'attempts' / attempt_id
+    return micro_task_root(state, adapter, task_id) / 'attempts' / attempt_id
 
 
 def context_root(context, adapter: str | None = None) -> Path:

@@ -1,4 +1,4 @@
-"""Deterministic in-process workspace double for governed workflow tests.
+"""Deterministic in-process workspace double for micro-task workflow tests.
 
 It implements exactly the ``hey_my_buddy.blackboard.tasks.workspace`` interface from the productivity
 contract (``inspect``/``prepare``/``verify``/``seal``) with observable calls and

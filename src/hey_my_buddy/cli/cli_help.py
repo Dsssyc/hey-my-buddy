@@ -10,7 +10,7 @@ the source files that ship with this package, on every invocation, so a changed
 validator constant changes the next answer.
 
 The static reader understands the validation vocabulary of :mod:`hey_my_buddy.protocol.schemas`,
-follows the delegation chain from a C-Two operation to the module that validates it,
+follows the micro task chain from a C-Two operation to the module that validates it,
 and keeps nested objects and the documented flat-or-nested ``spec`` spelling. A
 condition it cannot reduce to one bound (a hash comparison, a duplicate-key check, a
 cross-field conflict) is reported as the readable condition with its source location;
@@ -54,20 +54,20 @@ SUMMARIES: dict[str, str] = {
     "storage-plan": "Read-only storage reclamation plan.",
     "storage-apply": "Apply one confirmed storage plan.",
     "worker-sessions": "List board-proven Worker native sessions (Codex history, read-only).",
-    "submit": "Admit one governed goal, prepare its execution workspace and route its buddy.",
-    "get": "Compact owner view of one governed goal; includeAudit adds the immutable record.",
+    "submit": "Admit one micro task, prepare its execution workspace and route its buddy.",
+    "get": "Compact owner view of one micro task; includeAudit adds the immutable record.",
     "decide": "Record Host authority on the active request and authorize concrete helpers.",
-    "continue": "Record new input for a governed goal and invalidate older unconsumed continuations.",
+    "continue": "Record new input for a micro task and invalidate older unconsumed continuations.",
     "takeover": "Rotate the Host control capability and owner generation without restarting work.",
-    "cancel": "Fence a governed goal and complete its owned descendant graph.",
+    "cancel": "Fence a micro task and complete its owned descendant graph.",
     "accept": "Accept one delivered artifact: verify its integration, record acceptance and reclaim the checkout.",
-    "conclude": "End a failed, cancelled or delivered-unaccepted goal with an independent conclusion and terminal concluded state, then reclaim.",
-    "reclaim": "Reclaim this goal's own registered managed checkout after a blocked or kept removal.",
+    "conclude": "End a failed, cancelled or delivered-unaccepted micro task with an independent conclusion and terminal concluded state, then reclaim.",
+    "reclaim": "Reclaim this micro task's own registered managed checkout after a blocked or kept removal.",
     "scope-amend": "Append one authorized write-scope version for the next stage.",
     "workspace-resolve": "Settle one recorded out-of-scope failure site by restore, adopt or abandon.",
     "await": "Wait for one existing run without starting, resuming, retrying or cancelling work.",
     "suggest": "Record one bounded suggestion on the caller's own run.",
-    "macro-task-list": "Bounded work-macro-task and standalone-delegation summaries by latest activity.",
+    "macro-task-list": "Bounded work-macro-task and standalone-micro-task summaries by latest activity.",
     "macro-task-timeline": "One work macro task's bounded timeline with spans and Host markers.",
     "execution-submit": "Admit one ordinary execution record for the command/external adapters.",
     "execution-cancel": "Cancel one ordinary execution: queued work now, durable intent for an active attempt.",
@@ -144,7 +144,7 @@ METHOD_NOTES: dict[str, tuple[str, ...]] = {
 #: Fields the CLI accepts locally on every method, ahead of (or beside) the RPC.
 CLI_LOCAL_LINES: tuple[str, ...] = (
     'output is CLI-local: "brief" (default) or "full"; console always keeps its complete response.',
-    "controlFile (governed mutations) names a private 0600 file holding the Host control triple; the CLI removes it before the RPC and never prints the token.",
+    "controlFile (micro-task mutations) names a private 0600 file holding the Host control triple; the CLI removes it before the RPC and never prints the token.",
 )
 
 #: The control methods whose request actually requires the Host control triple.

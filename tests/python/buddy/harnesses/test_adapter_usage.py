@@ -53,10 +53,10 @@ class CodexUsageContractTests(unittest.TestCase):
         self.adapter = worker_executor("codex")
 
     def context(self, case: str, *, index: int = 1, previous: str | None = None) -> ExecutionContext:
-        turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
+        turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": "native-session" if previous else "initial",
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": 8,
                                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -152,8 +152,8 @@ class DshUsageContractTests(DshRoleCase):
         self.record_mode = "usage"
         self.variant = None
 
-    def governed_record(self, context, **kwargs):
-        super().governed_record(context, **kwargs)
+    def micro_task_record(self, context, **kwargs):
+        super().micro_task_record(context, **kwargs)
         selection = json.loads(self.record.read_text())
         command = selection["dsh"]["command"]
         if self.record_mode is not None:
@@ -257,13 +257,13 @@ class DshUsageContractTests(DshRoleCase):
         self.assertEqual(usage["completeness"], "partial")
         self.assertNotIn("reasoningOutputTokens", usage)
 
-    def test_an_ungoverned_context_cannot_publish_worker_usage(self):
+    def test_an_unmicro_task_context_cannot_publish_worker_usage(self):
         context = self.context()
         context.turn = None
-        self.governed_record(context)
+        self.micro_task_record(context)
         with self.assertRaises(BoardError):
             worker_executor("dsh").start(context)
-        self.assertFalse(self.log.exists(), "a native child must not start without the governed input")
+        self.assertFalse(self.log.exists(), "a native child must not start without the micro task input")
 
 
 if __name__ == "__main__":

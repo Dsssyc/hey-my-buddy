@@ -226,7 +226,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.assertEqual(report["skipped"]["count"], 0, report)
         self.assertEqual(report["rejected"]["count"], 0, report)
 
-    def test_governed_mock_codex_zcode_claude_and_native_continuation(self):
+    def test_micro_task_mock_codex_zcode_claude_and_native_continuation(self):
         for kind, harness in ((codex_tests.CodexAdapterTests, "codex"), (zcode_tests.ZcodeFixtureCase, "zcode"),
                               (claude_tests.ClaudeAdapterTests, "claude")):
             with self.subTest(harness=harness):
@@ -383,13 +383,13 @@ class PrivateAdapterInvariants(unittest.TestCase):
 
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
         fixture = self.fixture(dsh_coding_tests.DshRoleCase)
-        original_record = fixture.governed_record
+        original_record = fixture.micro_task_record
         def with_session_record(context, **kwargs):
             original_record(context, **kwargs)
             selection = json.loads(fixture.record.read_text())
             selection["dsh"]["command"] += ["--session-record", "usage"]
             fixture.record.write_text(json.dumps(selection))
-        fixture.governed_record = with_session_record
+        fixture.micro_task_record = with_session_record
         for index in (1, 2):
             with self.subTest(adapter="dsh", attempt=index):
                 context = fixture.context(index=index, attempt=f"attempt-{index}")

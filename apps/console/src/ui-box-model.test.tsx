@@ -31,7 +31,7 @@ function timeline(kinds: Array<Partial<TimelineSpan>>): MacroTaskTimelineData {
   const base: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "短记录与盒模型", titleSource: "title",
     taskSummary: null, summary: null, createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running",
-    category: "active", shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null,
+    category: "active", shutdownConfirmed: false, depth: 0, kind: "micro-task", buddy: null,
     acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const spans = kinds.map((overrides, index) => ({

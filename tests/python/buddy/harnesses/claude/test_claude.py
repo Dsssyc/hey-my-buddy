@@ -1,6 +1,6 @@
 """Claude role wiring against a private stream-json fixture, with no model calls.
 
-The governed Worker turn drives the shared role executor over the registered
+The micro task Worker turn drives the shared role executor over the registered
 claude native run; the read-only structured call drives the shared review
 entry. Only the native CLI is simulated. The availability cases run anywhere;
 the execution cases need the Host activation patch that registers the claude
@@ -74,10 +74,10 @@ class ClaudeFixtureCase(unittest.TestCase):
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8,
                 model="claude-opus-5-5[1m]", access=None):
-        turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
+        turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -124,7 +124,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
 @unittest.skipUnless(_claude_registered(),
                      "the claude run seam is registered only in the activated verification copy")
 class ClaudeAdapterTests(ClaudeFixtureCase):
-    """The governed turn and the read-only call through the registered run."""
+    """The micro task turn and the read-only call through the registered run."""
 
     def setUp(self):
         super().setUp()
@@ -448,7 +448,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
                 self.assertNotIn("authStatusRuns", state)
 
-    def test_governed_turn_leaves_unknown_login_to_the_native_cli(self):
+    def test_micro_task_turn_leaves_unknown_login_to_the_native_cli(self):
         context = self.context("empty-account")
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -619,7 +619,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         # The unified receipt: a quiet tool-free stream still binds the frozen
         # attempt identity to a complete zero-tool evidence package.
         evidence = result.result["toolEvidence"]
-        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "goal-1",
+        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"],
                          [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])

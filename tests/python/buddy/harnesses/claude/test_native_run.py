@@ -5,7 +5,7 @@ directly — a real spawned native CLI (the private stream-json fixtures), a
 real frozen :class:`RunRequest`, the role observer contract and one factual
 :class:`RunResult`. Nothing here wraps the old controller entry: the request
 goes through the same initialize, user-message boundary, send/wait/drain
-settlement and conservative stop the governed turn and the read-only call
+settlement and conservative stop the micro task turn and the read-only call
 always shared, and the legacy adapter path is exercised by its own suites.
 """
 from __future__ import annotations
@@ -102,7 +102,7 @@ class NativeRunCase(unittest.TestCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                 native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
-            input_text="fixture governed prompt", tool_scope=scope,
+            input_text="fixture micro task prompt", tool_scope=scope,
             output_schema=schema if schema is not None else WORKER_SCHEMA,
             budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
             network_allowed_domains=network, additional_denied_tools=denied)

@@ -1,7 +1,7 @@
 """Real-Git acceptance and checkout reclaim over real temp checkouts.
 
 These tests exercise the Host-owned lifecycle operations against real Git
-repositories, real isolated worktrees and the real governed transactions: one
+repositories, real isolated worktrees and the real micro-task transactions: one
 ``accept`` derives and verifies the integration itself (or records an explicit
 not-required decision) for the exact final artifact and then reclaims the
 checkout, and ``conclude``/``reclaim`` remove exactly one registered disposable
@@ -79,7 +79,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def _restore_workspace(self) -> None:
         workflow_module._workspace_module = self._previous_workspace
 
-    # -- governed helpers ----------------------------------------------------
+    # -- micro-task helpers ----------------------------------------------------
     def register(self, board, worker_id=None):
         return board.call("worker_register", {"workerId": worker_id or self.worker, "capabilities": ["dsh"]})
 
@@ -92,7 +92,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
 
     def turn_record(self, claim, *, disposition="completed"):
-        """A synthetic governed turn record in the current provenance format.
+        """A synthetic micro-task turn record in the current provenance format.
 
         The record passes the board's real import validator; no harness ran, so
         it is not real native verification (``protocol.fixtures.native_turn``).
@@ -236,7 +236,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # The Host continues; a second turn seals the new final output.
         continued = board.call("workflow_continue", {
             "runId": run_id, "commandId": "continue-two", "expectedRevision": yielded["revision"],
-            "input": "finish the goal", **self.control(yielded),
+            "input": "finish the micro task", **self.control(yielded),
         })
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id="two-turns-claim-2", nonce="q" * 16)
@@ -407,7 +407,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertIn("sealed-output-invalid", blocked.exception.details["reasons"])
         self.assertTrue(checkout.exists())
 
-    def test_final_noop_continuation_still_requires_earlier_goal_change(self):
+    def test_final_noop_continuation_still_requires_earlier_micro_task_change(self):
         board = self.board()
         self.register(board)
         submitted, first_claim, first_manifest, checkout, first_seal, yielded, first = self.run_worktree(
@@ -445,7 +445,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # blank target, with the exact adjusted paths recorded.
         adjusted = self.accept(board, self.view(board, submitted["runId"]), final,
                                target={"path": blank, "before": before}, adjusted=True,
-                               reason="the whole-goal change is already the Host's own edit")
+                               reason="the whole-micro-task change is already the Host's own edit")
         self.assertEqual(adjusted["state"], "accepted")
         self.assertEqual(adjusted["integration"]["verification"]["adjustments"], ["tracked.txt"])
         self.assertEqual(adjusted["integration"]["verification"]["unrecordedPaths"], [])
@@ -508,7 +508,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         run_id = submitted['runId']
         with board.store.db.write() as connection:
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
-        native = private_dirs.goal_root(board.directory, 'zcode', run_id)
+        native = private_dirs.micro_task_root(board.directory, 'zcode', run_id)
         session = private_dirs.ensure_private_dir(native / 'native') / 'sessions.sqlite'
         session.write_bytes(b'private session fixture')
         with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
@@ -573,7 +573,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(yielded["state"], "awaiting-host")
         continued = board.call("workflow_continue", {
             "runId": run_id, "commandId": f"{request_id}-continue", "expectedRevision": yielded["revision"],
-            "input": "finish the goal", **self.control(yielded),
+            "input": "finish the micro task", **self.control(yielded),
         })
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id=f"{request_id}-claim-2", nonce="q" * 16)
@@ -600,13 +600,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted["runId"]
-        private_goal = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
-        (private_goal / 'session.json').write_text('private native binding')
+        private_micro_task = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
+        (private_micro_task / 'session.json').write_text('private native binding')
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
-        self.assertFalse(private_goal.exists())
+        self.assertFalse(private_micro_task.exists())
         # Only the checkout was removed: manifests, patches and Git refs stay readable.
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())
@@ -1488,7 +1488,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             if not generation["done"]:
                 # Exactly the documented window: the acceptance is committed, the
                 # automatic reclaim has not planned its removal yet, and another
-                # Host takes over the controlling goal.
+                # Host takes over the controlling micro task.
                 generation["done"] = True
                 current = self.view(board, submitted["runId"])
                 current_control = dict(self.control(current))
@@ -1934,7 +1934,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertFalse(checkout.exists())
         self.assertTrue(Path(target["path"]).exists())
         target_view = board.call("task_get", {"runId": target_run["runId"]})["task"]
-        self.assertEqual(target_view["delegation"]["project"]["id"],
+        self.assertEqual(target_view["lineage"]["project"]["id"],
                          workspace_module.inspect(str(target["path"]))["repositoryId"])
         for path, raw in files.items():
             self.assertEqual((self.directory / path).read_bytes(), raw, path)

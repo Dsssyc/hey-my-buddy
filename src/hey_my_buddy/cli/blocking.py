@@ -19,7 +19,7 @@ deadline, never to this wait. Reaching the window returns an honest
   ``runId`` (bounded reconnects), never by replaying a submission;
 * stopping this wait (Ctrl-C, a closed terminal, a killed client, ``waitSeconds``
   expiry) only stops the *wait*. The named run ends through ``buddy cancel``
-  (governed goals, with the owner's control file), ``execution-cancel`` (execution
+  (micro tasks, with the owner's control file), ``execution-cancel`` (execution
   records), its own runner deadline, or a service stop (``buddy stop``/owner
   shutdown).
 """
@@ -109,16 +109,16 @@ def _recovery(request_id: str | None, run_id: str | None, reason: str) -> dict:
     if run_id:
         action = (
             "Inspect the SAME existing run with the commands below; `buddy status` reads the execution record and "
-            "`buddy get` the governed goal view. Re-run `buddy await` with this runId to keep waiting on the same "
-            "run: the wait never starts, resumes or cancels work. A governed goal ends only through `buddy cancel` "
+            "`buddy get` the micro task view. Re-run `buddy await` with this runId to keep waiting on the same "
+            "run: the wait never starts, resumes or cancels work. A micro task ends only through `buddy cancel` "
             "with the current owner's saved controlFile; an infrastructure execution record ends through "
             "`execution-cancel`."
         )
     else:
         action = (
             "Read the runId from the commands below, then inspect it. `buddy await` by this requestId waits on an "
-            "existing run and never starts work (NOT_FOUND means this requestId was never admitted; admit a governed "
-            "goal with `buddy submit`, or an execution record with `execution-submit`, then await the same "
+            "existing run and never starts work (NOT_FOUND means this requestId was never admitted; admit a micro-task "
+            "micro task with `buddy submit`, or an execution record with `execution-submit`, then await the same "
             "requestId). `status`/`get`/`result`/`cancel` need a runId."
         )
     return {
@@ -165,7 +165,7 @@ def _envelope(
         "ok": success,
         "resultAvailable": bool(run.get("resultAvailable")),
         "resultDelivered": result_delivered,
-        # For a governed goal, cancellation/completion never implies that a
+        # For a micro task, cancellation/completion never implies that a
         # still-running descendant is stopped just because the parent is idle.
         "shutdownConfirmed": (
             run["workflowShutdown"].get("selfConfirmed") is True
@@ -257,7 +257,7 @@ def _result_command(run_id: str) -> str:
     return f"buddy result {shlex.quote(json.dumps({'runId': run_id}, ensure_ascii=False))}"
 
 
-def _governed_get_command(run_id: str) -> str:
+def _micro_task_get_command(run_id: str) -> str:
     return f"buddy get {shlex.quote(json.dumps({'runId': run_id, 'includeAudit': True}, ensure_ascii=False))}"
 
 
@@ -267,8 +267,8 @@ def _head_text(value, limit: int) -> str | None:
     return value if len(value) <= limit else value[:limit]
 
 
-def _governed_result_view(full: dict, run_id: str) -> dict | None:
-    """The bounded default view of one governed result.
+def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
+    """The bounded default view of one micro-task result.
 
     The durable result keeps the whole runner payload, the effective manifest and the
     sealed output; normal await callers get this compact view plus the exact
@@ -323,7 +323,7 @@ def _governed_result_view(full: dict, run_id: str) -> dict | None:
         "logPaths": result.get("logPaths"),
         "processState": {"shutdownConfirmed": bool(full.get("shutdownConfirmed", (result.get("processState") or {}).get("shutdownConfirmed")))},
         "resultCommand": _result_command(run_id),
-        "note": "Compact governed result; the full payload, manifests and sealed output stay durable.",
+        "note": "Compact micro-task result; the full payload, manifests and sealed output stay durable.",
     }
 
 
@@ -342,9 +342,9 @@ def _host_boundary(
     state_dir: Path,
     reconnects: int,
 ) -> dict:
-    """Return one governed Host decision boundary as a structured checkpoint.
+    """Return one micro-task Host decision boundary as a structured checkpoint.
 
-    A normal structured yield is neither goal completion nor an execution failure:
+    A normal structured yield is neither micro task completion nor an execution failure:
     the original task is unfinished and a Host decision (or continuation) is
     required. The wait ends here instead of blocking forever on a success-only
     event, and it reads the actual persisted turn result rather than inventing one.
@@ -416,7 +416,7 @@ def _host_boundary(
             commands.append(_boundary_command("continue", {
                 "runId": run_id, "commandId": f"{run_id}:{mode}:{revision}",
                 "controlFile": "<saved-controlFile>", "expectedRevision": revision,
-                "input": "Host has checked the buddy; continue the authorized goal.",
+                "input": "Host has checked the buddy; continue the authorized micro task.",
                 **target_params, **choice,
             }))
     else:
@@ -425,31 +425,31 @@ def _host_boundary(
             "controlFile": "<saved-controlFile>", "expectedRevision": revision,
             "input": "...", "helperPolicy": "keep",
         }))
-    governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
+    micro_task_view = _micro_task_result_view(full, run_id) if isinstance(full, dict) else None
     envelope = _envelope(
         run,
         request_id=request_id,
         outcome="waiting-host",
         waited_seconds=waited_seconds,
         wait_seconds=wait_seconds,
-        result=governed_view if governed_view is not None else result,
+        result=micro_task_view if micro_task_view is not None else result,
         error=error,
         reconnects=reconnects,
     )
     envelope.update(
         {
             "ok": False,
-            "goalComplete": False,
-            "resultCompact": governed_view is not None,
+            "microTaskComplete": False,
+            "resultCompact": micro_task_view is not None,
             "resultCommand": _result_command(run_id),
             "workflowState": run.get("workflowState"),
             "workflow": workflow,
-            "turn": (governed_view or {}).get("turn") if governed_view is not None else turn,
-            "artifacts": (governed_view or {}).get("artifacts", []) if governed_view is not None else [],
+            "turn": (micro_task_view or {}).get("turn") if micro_task_view is not None else turn,
+            "artifacts": (micro_task_view or {}).get("artifacts", []) if micro_task_view is not None else [],
             "request": request_view,
             "nextCommands": commands,
             "note": (
-                "The original goal needs Host input. Inspect its sealed artifacts with get: an integrated current turn may be acknowledged directly, while partial work stays unverified. A routing boundary may have no "
+                "The original micro task needs Host input. Inspect its sealed artifacts with get: an integrated current turn may be acknowledged directly, while partial work stays unverified. A routing boundary may have no "
                 "coding turn or result yet. Use the current owner's saved controlFile with an applicable "
                 "decision or continuation, then await the same runId."
             ),
@@ -634,29 +634,29 @@ def _wait_until_terminal(
             error=malformed,
             reconnects=reconnects,
         )
-    governed_view = _governed_result_view(full, run_id) if isinstance(full, dict) else None
-    if governed_view is not None:
-        # A late execution completion does not undo the Host's goal cancellation.
-        goal_state = full.get("workflowState", run.get("workflowState"))
-        outcome = goal_state if goal_state in ("cancelled", "failed") else full.get("status", run.get("status", "unknown"))
+    micro_task_view = _micro_task_result_view(full, run_id) if isinstance(full, dict) else None
+    if micro_task_view is not None:
+        # A late execution completion does not undo the Host's micro task cancellation.
+        micro_task_state = full.get("workflowState", run.get("workflowState"))
+        outcome = micro_task_state if micro_task_state in ("cancelled", "failed") else full.get("status", run.get("status", "unknown"))
         envelope = _envelope(
             full,
             request_id=request_id,
             outcome=outcome,
             waited_seconds=clock() - started,
             wait_seconds=wait_seconds,
-            result=governed_view,
+            result=micro_task_view,
             reconnects=reconnects,
         )
         envelope.update(
             {
                 "resultCompact": True,
                 "resultCommand": _result_command(run_id),
-                "turn": governed_view["turn"],
-                "artifacts": governed_view["artifacts"],
+                "turn": micro_task_view["turn"],
+                "artifacts": micro_task_view["artifacts"],
                 "note": (
                     "The durable result keeps the full runner payload, manifests and sealed output; read it with "
-                    f"{_result_command(run_id)} or {_governed_get_command(run_id)}."
+                    f"{_result_command(run_id)} or {_micro_task_get_command(run_id)}."
                 ),
             }
         )
@@ -717,7 +717,7 @@ def await_run(
             if run is None:
                 raise ServiceError(
                     "NOT_FOUND",
-                    "No existing run has this requestId; await never starts work. Admit a governed goal with "
+                    "No existing run has this requestId; await never starts work. Admit a micro task with "
                     "`buddy submit`, or an execution record with `execution-submit`, then await the same requestId.",
                 )
         run_id = run["runId"]

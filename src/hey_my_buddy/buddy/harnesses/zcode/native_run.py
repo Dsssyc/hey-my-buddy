@@ -282,7 +282,7 @@ class SessionServiceMount:
 
 @dataclasses.dataclass(frozen=True)
 class SessionServices:
-    """The role-held service instance of one governed run (the seam's ``services``).
+    """The role-held service instance of one micro task run (the seam's ``services``).
 
     The driver sees only this narrow binding: the mechanical mount, the role's
     outcome validator for finish-receipt verification, the inquiry bridge
@@ -306,7 +306,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
 
     The naming is the mechanical rule the native driver and the role share: one
     private MCP server per attempt, whose bare session tools become the fully
-    qualified native names the governed prompt cites. The caller — the role —
+    qualified native names the micro task prompt cites. The caller — the role —
     supplies this run's own narrow materials: the session tools exactly as the
     MCP carrier publishes them (name and input schema each), which of them is
     the completion tool, and which carry the inquiry channel. The bridge
@@ -402,11 +402,11 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json") if session_id else None
     return {
         "harness": "zcode", "sessionId": session_id, "captured": session_id is not None,
-        "storageScope": "task-private", "storageOwner": "buddy-goal",
+        "storageScope": "task-private", "storageOwner": "buddy-micro-task",
         "nativeAppVisibility": "not-listed-in-native-app",
         "bindingPresent": binding is not None and binding.is_file(),
         "note": (
-            "the root session is stored in this goal's private ZCode native root (ZCODE_SESSION_DB_PATH/"
+            "the root session is stored in this micro task's private ZCode native root (ZCODE_SESSION_DB_PATH/"
             "ZCODE_STORAGE_DIR); the installed ZCode app lists only sessions in its own user home, so the "
             "checkable entrypoint is this attempt's activity, tool summary and fixed artifacts"),
     }
@@ -1125,7 +1125,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                   classifier=classifier, state=state, tools=tools,
                                   notify=notify, outcome=outcome)
         else:
-            _governed_turn(connection=connection, request=request, services=services, spawn=spawn,
+            _micro_task_turn(connection=connection, request=request, services=services, spawn=spawn,
                            workspace=workspace, invocation_root=invocation_root, native_root=native_root,
                            facts=facts, classifier=classifier, state=state, tools=tools,
                            notify=notify, outcome=outcome)
@@ -1270,12 +1270,12 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
         break
 
 
-def _governed_turn(*, connection: NativeConnection, request: RunRequest, services: SessionServices,
+def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, services: SessionServices,
                    spawn: _Spawn, workspace: dict, invocation_root: Path, native_root: Path,
                    facts: _RunFacts, classifier: _Classifier, state: _RunState,
                    tools: ZcodeToolFacts, notify: Callable[..., RunFeedback],
                    outcome: _CarrierOutcome) -> None:
-    """The governed completion-tool turn: the same lifecycle sites, with a
+    """The micro task completion-tool turn: the same lifecycle sites, with a
     mounted session service, a continuation and live observers."""
     mount = services.mount
     _check_service_descriptions(request, mount)
@@ -1288,10 +1288,10 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
         try:
             binding = decode_strict_json(outcome.binding_path.read_bytes())
         except (OSError, ValueError):
-            raise NativeError("native-resume-unavailable", "the previous native session has no private goal binding") from None
+            raise NativeError("native-resume-unavailable", "the previous native session has no private micro task binding") from None
         if binding != {"taskId": request.identity.task_id, "sessionId": previous,
                        "cwd": request.cwd, "buddy": buddy_spec(request)}:
-            raise NativeError("native-resume-unavailable", "the previous native session does not match this goal, checkout and buddy")
+            raise NativeError("native-resume-unavailable", "the previous native session does not match this micro task, checkout and buddy")
         snapshot = _open_root(connection, workspace, create_params=create_params, resume=previous)
     else:
         snapshot = _open_root(connection, workspace, create_params=create_params)
@@ -1412,7 +1412,7 @@ def _governed_turn(*, connection: NativeConnection, request: RunRequest, service
     outcome.turn_id = outcome.evidence.turn_id
     state.status = "ok"
     notify(settled=True)
-    # Only the governed turn is closed here; a final-message loop closes
+    # Only the micro task turn is closed here; a final-message loop closes
     # every session itself, including a corrected one.
     _close_root_session(connection, outcome.session_id, None)
     outcome.record = {"outcome": outcome.verified_outcome, "provenance": None}
@@ -1491,7 +1491,7 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
                                 sha256=hashlib.sha256(raw).hexdigest()))
 
     if record is not None and record.get("provenance") is not None:
-        # The governed turn record is a role document; the driver contributes
+        # The micro task turn record is a role document; the driver contributes
         # only these two native evidence parts (the verified outcome and the
         # ordered provenance), and the role assembles the record it publishes.
         retain("turn-provenance", "native-provenance.json", record["provenance"])

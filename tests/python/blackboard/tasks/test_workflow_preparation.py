@@ -223,7 +223,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertNotIn("tests/cache/state.json", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
         after = self.rows(board, helper_id, continued["continuationId"])
         self.assertEqual(after[3]["state"], "held")
-        for key in ("goal_json", "goal_fingerprint", "request_fingerprint", "execution_workspace_json"):
+        for key in ("micro_task_json", "micro_task_fingerprint", "request_fingerprint", "execution_workspace_json"):
             self.assertEqual(after[0][key], original[key])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT state FROM workflow_turns WHERE attempt_id=?", (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], "failed")
@@ -319,7 +319,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(manifest["checkoutId"], json.loads(before[0]["workspace_manifest_json"])["checkoutId"])
         self.assertEqual(after[3]["manifest_sha256"], manifest["manifestSha256"])
         self.assertEqual(after[3]["workspace_id"], manifest["workspaceId"])
-        for key in ("goal_json", "goal_fingerprint", "request_fingerprint", "execution_workspace_json"):
+        for key in ("micro_task_json", "micro_task_fingerprint", "request_fingerprint", "execution_workspace_json"):
             self.assertEqual(after[0][key], before[0][key])
         self.assertEqual(after[1]["cwd"], before[1]["cwd"])
         self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
@@ -349,7 +349,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(json.loads(event[0])["errorCode"], "WORKSPACE_BASE_MISMATCH")
         self.assertTrue(list((self.directory / "workspaces").glob("*/request.json")))
         # The attention boundary is actionable: after an explicit repair and new
-        # Host input the same goal can run, with the failed preparation preserved.
+        # Host input the same micro task can run, with the failed preparation preserved.
         (self.repo / "tracked.txt").write_text("sealed first output\n")
         self.continue_run(board, view, command_id="recover-preparation", input="Use the repaired fixed output")
         self.register(board, worker_id="recovery-worker")
@@ -459,7 +459,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(after[0]["workspace_manifest_json"], canonical_json(replacement) if replacement else before[0]["workspace_manifest_json"])
         self.assertEqual(after[1]["cwd"], replacement["path"] if replacement else before[1]["cwd"])
         self.assertEqual(after[2]["input_text"], before[2]["input_text"])
-        self.assertEqual(after[0]["goal_json"], before[0]["goal_json"])
+        self.assertEqual(after[0]["micro_task_json"], before[0]["micro_task_json"])
         self.assertTrue((self.directory / "workspaces" / prepared[0]["workspaceId"] / "manifest.json").exists(), "fenced preparation remains recoverable")
         with board.store.db.read() as connection:
             self.assertIsNotNone(board.store.workflow.claim_blocker(connection, connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()))
@@ -618,7 +618,7 @@ class RestartPreparationTests(WorkflowTestCase):
             connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (str(other), run["runId"]))
         board = self.board()
         task = board.call("task_get", {"runId": run["runId"]})["task"]
-        self.assertEqual(task["delegation"]["project"]["id"], project)
+        self.assertEqual(task["lineage"]["project"]["id"], project)
         listed = board.call("task_list", {"projectId": project})
         self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
         foreign_list = board.call("task_list", {"projectId": foreign_manifest["repositoryId"]})

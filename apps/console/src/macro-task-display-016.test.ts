@@ -63,14 +63,14 @@ describe("0.16 Host event sentences and cluster glyphs (P1.7)", () => {
   const row = (title: string): TimelineRow => ({
     runId: "r1", parentRunId: null, rootRunId: "r1", title, titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   });
   const event = (kind: string, at = "2026-09-26T05:20:00Z", extra: Partial<TimelineEvent> = {}): TimelineEvent => ({
     seq: 1, runId: "r1", kind, at, label: "", summary: "", actor: null,
     attemptId: null, requestId: null, artifactId: null, ...extra,
   });
 
-  it("writes one natural-language sentence per kind with the delegation's short title", () => {
+  it("writes one natural-language sentence per kind with the microTask's short title", () => {
     expect(eventSentence(event("dispatch"), row("修复标题"))).toMatch(/^\d{2}:\d{2} Host 派发「修复标题」$/);
     expect(eventSentence(event("decide"), row("修复标题"))).toContain("Host 批准 / 拒绝了「修复标题」的请求");
     expect(eventSentence(event("decide", "2026-09-26T05:20:00Z", { eventKind: "workflow.request_approved" }), row("修复标题")))
@@ -98,7 +98,7 @@ describe("0.16 span-facts locator (T4)", () => {
   const row: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "delivered", status: "completed", category: "review",
-    shutdownConfirmed: true, depth: 0, kind: "goal",
+    shutdownConfirmed: true, depth: 0, kind: "micro-task",
     buddy: { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
     acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   };
@@ -123,7 +123,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
   const row: TimelineRow = {
     runId: "r1", parentRunId: null, rootRunId: "r1", title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
-    shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null,
+    shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
     acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted", reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({

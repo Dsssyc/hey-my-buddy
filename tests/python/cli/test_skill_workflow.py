@@ -1,7 +1,7 @@
 """ADR-018 item 11: the shared skill keeps only the long-lived Host workflow.
 
 SKILL.md must stay near 4 KB, carry no version or installation status, keep the
-core delegation workflow (routing health, one work macro task per agenda, waiting
+core micro task workflow (routing health, one work macro task per agenda, waiting
 pointers, Host acceptance) and route every detail into the shipped references. The
 tests read the source and the packaging rewrite only; they install nothing and
 change no user setting.
@@ -98,7 +98,7 @@ class HostGuideTests(unittest.TestCase):
 
     MARKERS = {
         "host-codex.md": (
-            "monitoring-only native subagent",  # one monitor per running delegation
+            "monitoring-only native subagent",  # one monitor per running micro task
             "fork_turns",  # the monitor spawns with an empty history
             "wait-timeout",  # the three separate wait limits
             "not a monitor failure",  # slow work keeps its monitor instead of moving to the foreground
@@ -107,7 +107,7 @@ class HostGuideTests(unittest.TestCase):
             "not wake a closed Host session",  # the turn-end limit
         ),
         "host-claude-code.md": (
-            "background `await`",  # one background wait per running goal
+            "background `await`",  # one background wait per running micro task
             "run_in_background: true",
             "wait-timeout",
             "sandbox.excludedCommands",  # launcher sandbox allowance

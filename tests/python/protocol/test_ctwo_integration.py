@@ -152,7 +152,7 @@ class CTwoIntegrationTests(unittest.TestCase):
     def assert_same_connection_survives_expiry(self):
         # The ready descriptor/request are role outputs, not invented wire data.
         from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request
-        requests = list(self.state.glob("harnesses/dsh/goals/*/attempts/*/role-run-request.json"))
+        requests = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/role-run-request.json"))
         self.assertEqual(len(requests), 1)
         request = decode_run_request(requests[0].read_bytes())
         controls = json.loads(requests[0].with_name("role-run-control.json").read_text())
@@ -187,7 +187,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.assertTrue(observation["bridge"]["observed"], "service -> Worker -> controller must return a commit")
         self.assertEqual(observation["inquiry"]["state"], "queued")
         self.assertEqual(observation["journal"]["entries"], 1)
-        journals = list(self.state.glob("harnesses/dsh/goals/*/attempts/*/native-journal.jsonl"))
+        journals = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-journal.jsonl"))
         self.assertEqual(len(journals), 1)
         committed = json.loads(journals[0].read_text())
         self.assertEqual(committed["requestId"], "through-service")

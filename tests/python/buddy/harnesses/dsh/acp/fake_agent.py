@@ -116,7 +116,7 @@ class FakeAgent:
         self.bridge_config = args.bridge_config
         self.finish_tool = args.finish_tool
         self.checkpoint_tool = args.checkpoint_tool
-        self.governed_permission = args.governed_permission
+        self.micro_task_permission = args.micro_task_permission
         self.permission_command = args.permission_command
         self.permission_path = args.permission_path
         self.finish_fail_then_retry = args.finish_fail_then_retry
@@ -369,8 +369,8 @@ class FakeAgent:
                 if method in self.respond_then_exit:
                     os._exit(0)
                 return
-            if self.prompt_mode == "governed":
-                self.run_governed_prompt(message)
+            if self.prompt_mode == "micro-task":
+                self.run_micro_task_prompt(message)
                 if method in self.respond_then_exit:
                     os._exit(0)
                 return
@@ -564,8 +564,8 @@ class FakeAgent:
                    "result": {} if self.stop_reason_unread
                    else {"stopReason": self.stop_reason or "end_turn"}})
 
-    def run_governed_prompt(self, message: dict) -> None:
-        """The governed carrier: real session tools through the role's own rules.
+    def run_micro_task_prompt(self, message: dict) -> None:
+        """The micro task carrier: real session tools through the role's own rules.
 
         The tool results are minted by ``hey_my_buddy.buddy.roles.worker_services``
         with this run's real bridge configuration — exactly what the stdio MCP
@@ -582,7 +582,7 @@ class FakeAgent:
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
         # The same unknown-kind probes the final-message carrier emits; the
-        # governed carrier counts them from the same update pump.
+        # micro task carrier counts them from the same update pump.
         for index in range(self.spam_unknown_kinds):
             self.notify_client("session/update", {"sessionId": frame_id,
                                                   "update": {"sessionUpdate": f"future-{index}"}})
@@ -598,14 +598,14 @@ class FakeAgent:
             return
         from hey_my_buddy.buddy.roles import worker_services
         configuration = json.loads(Path(self.bridge_config).read_text())
-        if self.governed_permission:
+        if self.micro_task_permission:
             answer = self.request_client("session/request_permission", {
                 "sessionId": session_id,
                 "toolCall": {"toolCallId": "call_upgrade_1", "kind": "edit",
                              "title": "escalate-write", "rawInput": {"path": self.permission_path}},
                 "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
                             {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
-            log(self.log_path, {"event": "governed-permission-answer", "answer": answer})
+            log(self.log_path, {"event": "micro-task-permission-answer", "answer": answer})
 
         def tool_frame(call_id: str, title: str, status: str, content=None) -> None:
             update = {"sessionUpdate": "tool_call", "toolCallId": call_id, "kind": "other",
@@ -1028,17 +1028,17 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--survive-eof", type=float, default=0.0)
     parser.add_argument("--allowed-title", default=None)
     # -- native-run driver modes
-    parser.add_argument("--prompt-mode", default="legacy", choices=["legacy", "final", "governed"])
+    parser.add_argument("--prompt-mode", default="legacy", choices=["legacy", "final", "micro-task"])
     parser.add_argument("--final-answer", action="append", default=[],
                         help="the Nth prompt's message text; the last one repeats")
     parser.add_argument("--emit-unknown-update", action="store_true",
                         help="emit one unknown sessionUpdate kind before the answer")
     parser.add_argument("--bridge-config", default=None,
-                        help="the finish-bridge.json the governed session tools read")
-    parser.add_argument("--finish-tool", default=None, help="the governed completion tool's qualified name")
-    parser.add_argument("--checkpoint-tool", default=None, help="the governed checkpoint tool's qualified name")
-    parser.add_argument("--governed-permission", action="store_true",
-                        help="request one upgrade permission before the governed tool calls")
+                        help="the finish-bridge.json the micro task session tools read")
+    parser.add_argument("--finish-tool", default=None, help="the micro task completion tool's qualified name")
+    parser.add_argument("--checkpoint-tool", default=None, help="the micro task checkpoint tool's qualified name")
+    parser.add_argument("--micro-task-permission", action="store_true",
+                        help="request one upgrade permission before the micro task tool calls")
     parser.add_argument("--permission-command", default="printf native-command")
     parser.add_argument("--permission-path", default="/outside/native.txt")
     parser.add_argument("--hang-prompt", action="store_true",
@@ -1052,7 +1052,7 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--finish-fail-then-retry", action="store_true",
                         help="the first finish call fails natively and the root retries")
     parser.add_argument("--no-finish", action="store_true",
-                        help="end the governed prompt without ever calling the finish tool")
+                        help="end the micro task prompt without ever calling the finish tool")
     parser.add_argument("--forge-receipt", action="store_true",
                         help="tamper with the finish receipt so its signature fails")
     parser.add_argument("--session-record", default=None,
@@ -1071,7 +1071,7 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--late-tool-update", action="store_true",
                         help="emit one same-root completed tool pair while the client drains at EOF")
     parser.add_argument("--wait-for-inquiry", type=float, default=0.0,
-                        help="hold the governed turn until a Host question is queued (bounded seconds)")
+                        help="hold the micro task turn until a Host question is queued (bounded seconds)")
     parser.add_argument("--answer-inquiry", action="store_true",
                         help="answer the first delivered question through the real session-tool rules")
     parser.add_argument("--forge-checkpoint", action="store_true",

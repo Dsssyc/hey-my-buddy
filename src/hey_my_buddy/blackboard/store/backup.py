@@ -224,7 +224,7 @@ def preflight_entries(state: Path):
         return
     # Online backup reads SQLite itself; the database path must still be regular.
     yield from _single(state / 'board.sqlite3')
-    # Root -> goal -> attempt -> declared relative evidence.
+    # Root -> micro task -> attempt -> declared relative evidence.
     yield from _scan(state / 'attempts', attempt_depth=2)
     for name in ('controls', 'submissions'):
         yield from _scan(state / name)

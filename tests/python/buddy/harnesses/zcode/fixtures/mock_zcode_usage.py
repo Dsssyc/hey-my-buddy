@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic ZCode app-server fixture for the ADR-018 native usage records.
 
-It speaks the documented app-server methods the controller uses for one governed
+It speaks the documented app-server methods the controller uses for one micro task
 turn and serves the desensitized records of ``native-usage-zcode.json``: bounded
 ``session/messages`` pages (with the native ``afterMessageId`` cursor),
 ``v4/telemetry/event`` ``usage.delta`` notifications including a replay and

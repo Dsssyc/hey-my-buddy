@@ -67,12 +67,12 @@ describe("console grouping and recorded attribution", () => {
   });
 
   it("uses backend source metadata and never guesses a project or Host from execution cwd or owner", () => {
-    const task = { runId: "goal", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as Task;
+    const task = { runId: "micro-task", cwd: "/runtime/worktrees/generated", owner: "worker:guess" } as Task;
     expect(taskProject(task)).toMatchObject({ id: "unknown", label: "未记录项目", path: null });
     expect(taskHost(task)).toBe("未记录委派方");
-    task.delegation = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
+    task.lineage = { kind: "helper", sourceHostId: "codex-original", currentHostId: "codex-new",
       parentRunId: "parent", rootRunId: "root", project: { id: "repo-id", path: "/source/project", label: "Project" }, buddy: null };
-    expect(taskProject(task)).toEqual(task.delegation.project);
+    expect(taskProject(task)).toEqual(task.lineage.project);
     expect(taskHost(task)).toBe("codex-original");
   });
 });

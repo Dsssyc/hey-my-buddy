@@ -94,7 +94,7 @@ class LiveRegistry:
 
         The actor proof (worker, generation, nonce, effective attempt) and the
         recorded worker instance are the existing store verifications; the
-        frame's execution identity must be the same run's, and a governed turn
+        frame's execution identity must be the same run's, and a micro-task turn
         identity must be the recorded turn of this very attempt and generation.
         The identical binding again is an idempotent replay; a changed binding
         for the same attempt replaces the old one and closes the channel this
@@ -246,12 +246,12 @@ class LiveRegistry:
                 attemptId=attempt["attempt_id"],
             )
         identity = frame.identity
-        # The authoritative governed turn of this attempt is the run's current
+        # The authoritative micro-task turn of this attempt is the run's current
         # turn bound to it — never just any workflow_turns row of the run. While
         # it exists, the identity must carry exactly its id and the digest of the
         # input the service wrote (sha256 over the canonical input_json text; the
         # stored receipt-time column, once filled, must agree with it). A run
-        # without a governed turn keeps the both-null rule.
+        # without a micro-task turn keeps the both-null rule.
         turn = connection.execute(
             "SELECT r.current_turn_id, r.current_attempt_id, t.turn_id, t.attempt_id,"
             " t.generation, t.input_json, t.input_sha256 FROM workflow_runs r"
@@ -263,7 +263,7 @@ class LiveRegistry:
             if identity.turn_id is not None or identity.input_sha256 is not None:
                 raise BoardError(
                     "UNAUTHORIZED",
-                    "this attempt has no governed turn; its live identity may not carry a turn id or input digest",
+                    "this attempt has no micro-task turn; its live identity may not carry a turn id or input digest",
                     attemptId=attempt["attempt_id"],
                 )
             return
@@ -272,13 +272,13 @@ class LiveRegistry:
                 or turn["generation"] != attempt["generation"]):
             raise BoardError(
                 "UNAUTHORIZED",
-                "the current governed turn is not bound to this attempt and generation",
+                "the current micro-task turn is not bound to this attempt and generation",
                 attemptId=attempt["attempt_id"], turnId=turn["turn_id"],
             )
         if turn["turn_id"] != identity.turn_id:
             raise BoardError(
                 "UNAUTHORIZED",
-                "the live identity must carry the attempt's current governed turn",
+                "the live identity must carry the attempt's current micro-task turn",
                 attemptId=attempt["attempt_id"], turnId=turn["turn_id"],
             )
         computed = sha256_text(turn["input_json"])

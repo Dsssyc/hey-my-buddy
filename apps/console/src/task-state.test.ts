@@ -24,7 +24,7 @@ describe("awaiting review", () => {
   });
 });
 
-describe("delegation title rule (0.16 T1)", () => {
+describe("micro task title rule (0.16 T1)", () => {
   it("prefers the explicit workflow title over everything else", () => {
     const title = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 3, title: "修复标题", resultSummary: "已验证的整合结果" } }));
     expect(title.text).toBe("修复标题");
@@ -62,7 +62,7 @@ describe("delegation title rule (0.16 T1)", () => {
     expect(title.text).toBe("a b c d e");
   });
 
-  it("names an unnamed delegation only when the title and first line are empty", () => {
+  it("names an unnamed microTask only when the title and first line are empty", () => {
     expect(taskTitle(task({ task: "   \n\t ", workflow: { state: "queued", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 0, resultSummary: null } })).text)
       .toBe("未命名委派");
     expect(taskTitle(task({ task: "", workflow: undefined })).source).toBe("none");

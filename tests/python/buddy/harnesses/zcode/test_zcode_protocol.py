@@ -40,7 +40,7 @@ FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
 
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
 
@@ -245,7 +245,7 @@ class ReceiptTests(unittest.TestCase):
         finish = "mcp__buddy_x__buddy_finish_turn"
         for content in (json.dumps({"kind": "tool-refusal", "detail": "unsigned prose"}),
                         json.dumps(self._signed_refusal(tool="buddy_checkpoint")),
-                        json.dumps(self._signed_refusal(identity={"taskId": "goal", "attemptId": "other",
+                        json.dumps(self._signed_refusal(identity={"taskId": "micro-task", "attemptId": "other",
                                                                  "generation": 1, "turnId": "logical"}))):
             with self.subTest(content=content[:60]):
                 tracker = RootTurnEvidence("sess-root", "input-root", finish, self.bridge,
@@ -306,7 +306,7 @@ class ReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__buddy_finish_turn"
@@ -343,7 +343,7 @@ class InquiryEvidenceTests(unittest.TestCase):
     """The root-turn tracker owns inquiry authority; relays and forgeries fail."""
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.deliveries: list[tuple[dict, str]] = []
         self.answers: list[tuple[dict, str]] = []

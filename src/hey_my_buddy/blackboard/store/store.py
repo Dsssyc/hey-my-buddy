@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ...protocol import activity as activity_module
-from ..tasks import delegation
+from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
 from .db import (
@@ -35,7 +35,7 @@ from ...errors import BoardError
 #: Documented task transition table. A transition outside this map is rejected.
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "cancelling", "cancelled", "reconciliation-needed"}),
-    # ``running -> queued`` is the governed yield: a turn concluded with a structured
+    # ``running -> queued`` is the micro-task yield: a turn concluded with a structured
     # assistance/attention outcome, the attempt stopped with confirmed shutdown and
     # the same logical task waits for the Host instead of pretending to be complete.
     "running": frozenset(
@@ -113,7 +113,7 @@ class BoardStore:
 
         self.evaluation = EvaluationStore(self, clock=self._clock)
         self.decisions = DecisionCoordinator(self, self.evaluation)
-        # The governed workflow layer wraps this same store: it opens no second
+        # The micro-task workflow layer wraps this same store: it opens no second
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
 
@@ -253,7 +253,7 @@ class BoardStore:
         return f"{worker_id}:{self.db.nonce_verifier(nonce)}:{attempt_id or '-'}"
 
     def _attach_agent_credential(self, connection: sqlite3.Connection, claim: dict) -> dict:
-        """Re-derive the attempt-scoped credential of a replayed governed claim.
+        """Re-derive the attempt-scoped credential of a replayed micro-task claim.
 
         The token is deterministic in (secret, run, attempt, generation) and stays
         out of the stored receipt; it is returned only while the credential is still
@@ -488,7 +488,7 @@ class BoardStore:
             return None
         return connection.execute("SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
 
-    def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row, *, delegation_result: dict | None = None) -> dict:
+    def _decorate(self, connection: sqlite3.Connection, task: sqlite3.Row, *, lineage_result: dict | None = None) -> dict:
         view = self._task_view(task)
         if task["state"] in ("cancelled", "cancelling"):
             from ..tasks.cancellation import for_run
@@ -520,10 +520,10 @@ class BoardStore:
             "SELECT state, COUNT(*) AS count FROM messages WHERE task_id = ? GROUP BY state", (task["task_id"],)
         ).fetchall()
         view["inquiries"] = {row["state"]: row["count"] for row in messages}
-        # Read-only delegation provenance (source/current Host, lineage and project)
+        # Read-only micro task provenance (source/current Host, lineage and project)
         # derived from existing authoritative rows; a caller that already resolved the
         # page passes it in so one page costs one relation read.
-        view["delegation"] = delegation_result if delegation_result is not None else delegation.resolve(connection, task)
+        view["lineage"] = lineage_result if lineage_result is not None else micro_task.resolve(connection, task)
         workflow = self.workflow.task_extension(connection, task)
         if workflow is not None:
             view["workflowShutdown"] = self.workflow.shutdown_summary(connection, task["task_id"])
@@ -553,7 +553,7 @@ class BoardStore:
 
     #: The queued-task model service as one SQL expression. It mirrors
     #: :func:`scheduling.model_service` over the task's effective specification: a
-    #: governed run's resolved buddy wins over the immutable
+    #: micro-task run's resolved buddy wins over the immutable
     #: original request, and tasks without a complete harness/provider/model triple
     #: have no model service.
     _QUEUED_MODEL_SERVICE_PROVIDER = (
@@ -852,17 +852,17 @@ class BoardStore:
         *,
         command_id: str | None = None,
         task_id: str | None = None,
-        governed: dict | None = None,
+        micro_task: dict | None = None,
     ) -> dict:
         """Admit one ordinary task.
 
-        ``governed`` is the coordinator's hook: when present, the workflow run and its
+        ``micro_task`` is the coordinator's hook: when present, the workflow run and its
         workspace reservation commit in the same transaction as the task row, so a
-        governed task can never exist without its governance record.
+        micro-task task can never exist without its governance record.
         """
-        spec = governed["spec"] if governed is not None else schemas.normalize_spec(params)
-        if governed is None and spec["adapter"] in schemas.CODING_HARNESSES:
-            raise BoardError("GOVERNED_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain governed")
+        spec = micro_task["spec"] if micro_task is not None else schemas.normalize_spec(params)
+        if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
+            raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
         owner = schemas.optional_string(params, "owner") or "cli"
         fingerprint = schemas.spec_fingerprint(spec)
@@ -875,10 +875,10 @@ class BoardStore:
                     return receipt
             existing = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
             if existing is not None:
-                if governed is not None:
+                if micro_task is not None:
                     run = self.workflow._run_optional(connection, existing["task_id"])
-                    if run is None or run["request_fingerprint"] != governed["requestFingerprint"]:
-                        raise BoardError("CONFLICT", "requestId already belongs to a different governed request")
+                    if run is None or run["request_fingerprint"] != micro_task["requestFingerprint"]:
+                        raise BoardError("CONFLICT", "requestId already belongs to a different micro-task request")
                 if existing["input_fingerprint"] == fingerprint:
                     response = {"task": self._decorate(connection, existing), "duplicate": True}
                 else:
@@ -935,12 +935,12 @@ class BoardStore:
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-worker",
                         "inputFingerprint": fingerprint,
-                        **({"governed": {"sourceHostId": governed["hostId"]}} if governed is not None else {}),
+                        **({"microTask": {"sourceHostId": micro_task["hostId"]}} if micro_task is not None else {}),
                     },
                 )
                 row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
-                if governed is not None:
-                    self.workflow.attach_governed_task(connection, row, now=now, **governed)
+                if micro_task is not None:
+                    self.workflow.attach_micro_task(connection, row, now=now, **micro_task)
                     row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
                 response = {"task": self._decorate(connection, row), "duplicate": False}
                 if command_id:
@@ -958,8 +958,8 @@ class BoardStore:
     def task_list(self, params: dict) -> dict:
         """Bounded task history with explicit filters and stable keyset paging.
 
-        Every filter is one SQL predicate over the read-only delegation relation
-        (:mod:`hey_my_buddy.blackboard.tasks.delegation`), so it applies *before* LIMIT and ``total`` counts
+        Every filter is one SQL predicate over the read-only micro task relation
+        (:mod:`hey_my_buddy.blackboard.tasks.micro_task`), so it applies *before* LIMIT and ``total`` counts
         exactly the filtered set. ``before`` is a keyset cursor over
         ``(created_at DESC, task_id DESC)`` and is mutually exclusive with a nonzero
         ``offset``: a page never loads the board into Python to slice it, and a row
@@ -990,19 +990,19 @@ class BoardStore:
         adapter = params.get("adapter")
         if adapter is not None and adapter not in schemas.ADAPTERS:
             raise BoardError("INVALID_ARGUMENT", "Unknown adapter filter")
-        before_value = schemas.optional_string(params, "before", max_length=delegation.CURSOR_MAX_LENGTH)
-        before = delegation.decode_cursor(before_value) if before_value is not None else None
+        before_value = schemas.optional_string(params, "before", max_length=micro_task.CURSOR_MAX_LENGTH)
+        before = micro_task.decode_cursor(before_value) if before_value is not None else None
         if before is not None and offset:
             raise BoardError(
                 "INVALID_ARGUMENT",
                 "before and a nonzero offset are mutually exclusive; use one paging mode",
             )
         roots_only = schemas.optional_bool(params, "rootsOnly", False)
-        query = schemas.optional_string(params, "query", max_length=delegation.QUERY_MAX_LENGTH)
-        project_id = schemas.optional_string(params, "projectId", max_length=delegation.PROJECT_ID_MAX_LENGTH)
-        host_id = schemas.optional_string(params, "hostId", max_length=delegation.HOST_ID_MAX_LENGTH)
+        query = schemas.optional_string(params, "query", max_length=micro_task.QUERY_MAX_LENGTH)
+        project_id = schemas.optional_string(params, "projectId", max_length=micro_task.PROJECT_ID_MAX_LENGTH)
+        host_id = schemas.optional_string(params, "hostId", max_length=micro_task.HOST_ID_MAX_LENGTH)
         filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
-        if filter_name not in delegation.HISTORY_FILTERS:
+        if filter_name not in micro_task.HISTORY_FILTERS:
             raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
         clauses, values = [], []
         if state:
@@ -1011,7 +1011,7 @@ class BoardStore:
         if adapter:
             clauses.append("adapter = ?")
             values.append(adapter)
-        history_clauses, history_values = delegation.history_where(
+        history_clauses, history_values = micro_task.history_where(
             roots_only=roots_only,
             project_id=project_id,
             host_id=host_id,
@@ -1023,15 +1023,15 @@ class BoardStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.db.read() as connection:
             total = connection.execute(
-                f"SELECT COUNT(*) AS count FROM ({delegation.TASK_HISTORY_SQL}) AS history {where}", values
+                f"SELECT COUNT(*) AS count FROM ({micro_task.TASK_HISTORY_SQL}) AS history {where}", values
             ).fetchone()["count"]
             page_clauses, parameters = list(clauses), list(values)
             if before is not None:
-                keyset, keyset_values = delegation.keyset_where(*before)
+                keyset, keyset_values = micro_task.keyset_where(*before)
                 page_clauses.append(keyset)
                 parameters.extend(keyset_values)
             page_where = f"WHERE {' AND '.join(page_clauses)}" if page_clauses else ""
-            statement = f"{delegation.TASK_HISTORY_SQL} {page_where} ORDER BY created_at DESC, task_id DESC LIMIT ?"
+            statement = f"{micro_task.TASK_HISTORY_SQL} {page_where} ORDER BY created_at DESC, task_id DESC LIMIT ?"
             parameters.append(limit + 1)
             if before is None:
                 statement += " OFFSET ?"
@@ -1042,10 +1042,10 @@ class BoardStore:
             has_more = len(rows) > limit
             page = rows[:limit]
             tasks = [
-                self._decorate(connection, row, delegation_result=delegation.metadata_from_row(row)) for row in page
+                self._decorate(connection, row, lineage_result=micro_task.metadata_from_row(row)) for row in page
             ]
             next_cursor = (
-                delegation.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None
+                micro_task.encode_cursor(page[-1]["created_at"], page[-1]["task_id"]) if page and has_more else None
             )
             head = self._head_of(connection)
         return {"runs": tasks, "tasks": tasks, "total": int(total), "cursor": head, "nextCursor": next_cursor}
@@ -1635,7 +1635,7 @@ class BoardStore:
                 if not set(json.loads(task["required_capabilities"])).issubset(capabilities):
                     blocker = "capability-mismatch"
                     continue
-                # A governed worktree runs in its allocated checkout, so its admission
+                # A micro-task worktree runs in its allocated checkout, so its admission
                 # and claims use tasks.cwd (the effective path), never the source cwd
                 # recorded in the immutable spec_json.
                 effective_spec = {**spec, "cwd": task["cwd"]} if task["cwd"] != spec["cwd"] else spec
@@ -1676,7 +1676,7 @@ class BoardStore:
                 # model service of its own in its specification: the current dispatch's
                 # Router resolves one here, its quota is checked before the claim
                 # commits, and the same tuple is frozen onto the attempt. Business
-                # work uses the effective specification's model service, which a governed
+                # work uses the effective specification's model service, which a micro-task
                 # run has already resolved and validated.
                 model_service = scheduling.model_service(effective_spec)
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
@@ -2311,17 +2311,17 @@ class BoardStore:
         # and other result writers for its whole duration, so the files are
         # validated and hashed first, outside any transaction.
         verified_artifacts = self._verify_artifacts(artifacts)
-        # A governed turn's sealed output manifest is verified outside the transaction
+        # A micro-task turn's sealed output manifest is verified outside the transaction
         # too; a manifest that cannot be verified fails the attempt honestly instead
         # of publishing an unverified success.
         try:
             self.workflow.precheck_result(params)
         except BoardError as error:
             status = "failed"
-            error_text = f"the governed result could not be imported: {error.message}"
+            error_text = f"the micro-task result could not be imported: {error.message}"
             result = {
                 **(result or {}),
-                "governedError": {"code": error.code, "message": error.message},
+                "microTaskError": {"code": error.code, "message": error.message},
             }
         # The seal-side shared-stash observation of this attempt's repository is
         # read here, outside the result transaction; the turn's pinned fact binds
@@ -2428,16 +2428,16 @@ class BoardStore:
                 task_state = "reconciliation-needed"
             elif status == "ok" and shutdown_confirmed:
                 # A completion that beat a cancel request is the one legal durable
-                # outcome; the race is recorded rather than re-labelled. A governed
+                # outcome; the race is recorded rather than re-labelled. A micro-task
                 # yield with a validated structured outcome requeues the same logical
-                # task instead of pretending the original goal completed.
-                governed_yield = (
+                # task instead of pretending the original micro task completed.
+                micro_task_yield = (
                     self.workflow._run_optional(connection, task["task_id"]) is not None
                     and self.workflow.yield_disposition(result) is not None
                 )
-                # A normal yielded turn is not a completed goal that can beat a
+                # A normal yielded turn is not a completed micro task that can beat a
                 # cancellation. Preserve its raw receipt, but do not requeue it.
-                task_state = ("cancelled" if cancel_requested else "queued") if governed_yield else "completed"
+                task_state = ("cancelled" if cancel_requested else "queued") if micro_task_yield else "completed"
             elif status == "ok" and not shutdown_confirmed:
                 task_state = "reconciliation-needed"
             else:
@@ -2525,10 +2525,10 @@ class BoardStore:
                 if decision.get("preflightFallback"):
                     task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
                     response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
-            # Governed import and helper fan-in commit with the result: the validated
+            # Micro-task import and helper fan-in commit with the result: the validated
             # turn outcome, the assistance request and the workspace seal are one
             # durable fact with the attempt that produced them.
-            governed = self.workflow.turn_concluded(
+            micro_task = self.workflow.turn_concluded(
                 connection,
                 task=task_row,
                 attempt=attempt_row,
@@ -2537,8 +2537,8 @@ class BoardStore:
                 now=now,
                 seal_stash=seal_stash,
             )
-            if governed is not None:
-                response["workflow"] = governed
+            if micro_task is not None:
+                response["workflow"] = micro_task
             self.workflow.child_settled(
                 connection,
                 task=task_row,
@@ -2608,9 +2608,9 @@ class BoardStore:
                 (now, now, reason, attempt["attempt_id"]),
             )
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-            governed = self.workflow._run_optional(connection, task["task_id"])
-            cancelled_goal = governed is not None and (governed["state"] == "cancelled" or task["state"] == "cancelling")
-            self._transition_task(connection, task, "cancelled" if cancelled_goal else "failed")
+            micro_task = self.workflow._run_optional(connection, task["task_id"])
+            cancelled_micro_task = micro_task is not None and (micro_task["state"] == "cancelled" or task["state"] == "cancelling")
+            self._transition_task(connection, task, "cancelled" if cancelled_micro_task else "failed")
             connection.execute(
                 "UPDATE tasks SET active_attempt_id=NULL, queue_reason=NULL, updated_at=? WHERE task_id=?",
                 (now, attempt["task_id"]),

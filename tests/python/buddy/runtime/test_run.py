@@ -5,7 +5,7 @@ real local worker supervisor and the real ``command`` adapter; no model is calle
 The CLI is invoked exactly as a user invokes it from an unrelated working directory.
 
 ``execution-*`` is the advanced surface the command/external adapters and internal
-decision infrastructure own; the governed goal lifecycle is covered by the workflow
+decision infrastructure own; the micro task micro task lifecycle is covered by the workflow
 tests. ``await`` is read-only: these tests pin that it never starts, retries or
 cancels a run, including when its own wait window ends.
 """
@@ -136,18 +136,18 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(page["total"], 1)
             self.assertEqual(page["runs"][0]["runId"], task["runId"])
 
-    def test_governed_get_and_execution_status_stay_distinct(self):
+    def test_micro_task_get_and_execution_status_stay_distinct(self):
         with self.daemon():
             task = self.command_task("exec-distinct-1", ["/bin/true"])
-            # The governed view answers for an ordinary execution record too, but it
-            # says so instead of inventing goal state.
+            # The micro task view answers for an ordinary execution record too, but it
+            # says so instead of inventing micro task state.
             view = self.cli("get", json.dumps({"runId": task["runId"]}))[1]
-            self.assertFalse(view["governed"])
+            self.assertNotIn("microTask", view)
             self.assertEqual(view["runId"], task["runId"])
             self.assertIn("task", view)
             status = self.cli("status", json.dumps({"runId": task["runId"]}))[1]
             self.assertEqual(status["runId"], task["runId"])
-            self.assertNotIn("governed", status)
+            self.assertNotIn("microTask", status)
 
     def test_execution_cancel_then_acknowledge_records_a_reviewed_outcome(self):
         with self.daemon():

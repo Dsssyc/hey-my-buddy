@@ -2,7 +2,7 @@
 
 The real worker_result/release transactions retain immutable receipts and own
 capacity. The coordinator checks program evidence, then either settles once or
-queues a distinct frozen dispatch while the governed Goal remains pending.
+queues a distinct frozen dispatch while the micro task remains pending.
 """
 import copy
 import json
@@ -25,7 +25,7 @@ class FailoverTests(RouterDispatchTestCase):
             result["claim"]["nonce"] = NONCE + suffix
         return result
 
-    def start(self, *, three=False, review=False, governed=False):
+    def start(self, *, three=False, review=False, micro_task=False):
         if three:
             self.add_buddy(C, model="charlie")
             self.set_settings(ids=[A, B, C])
@@ -39,8 +39,8 @@ class FailoverTests(RouterDispatchTestCase):
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": True, "reasonCode": None, "reason": "private fixture",
                 "systemSandbox": False, "sameAttemptContinuation": True}):
-            request = (dispatch_fixtures.WorkflowWiringTests.route_goal(self) if governed else self.request())
-            if governed:
+            request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self) if micro_task else self.request())
+            if micro_task:
                 dispatch_fixtures.WorkflowWiringTests.attach_pending_link(self, request["decisionId"])
             claimed = self.claim("first", task_id=request["runId"])["claim"]
         self.assertIsNotNone(claimed)
@@ -152,7 +152,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes()[0][1]["code"], "router-no-answer")
 
     def test_three_items_stop_at_first_valid_answer_and_keep_parent_pending_between(self):
-        request, first = self.start(three=True, governed=True)
+        request, first = self.start(three=True, micro_task=True)
         self.assert_switch(request, first, self.failure(first))
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT state FROM workflow_routes").fetchone()[0], "pending")
@@ -406,7 +406,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assert_boundary(request, first, output, outcome="stop-unconfirmed", status="failed")
 
     def test_release_cancelled_parent_never_advances_despite_never_spawned_proof(self):
-        request, first = self.start(governed=True)
+        request, first = self.start(micro_task=True)
         with self.board_.store.db.write() as db:
             db.execute("UPDATE workflow_runs SET state='cancelled'")
         self.board_.call("worker_release", {"workerId": "w-route", "attemptId": first["attempt"]["attemptId"],
@@ -556,9 +556,9 @@ install_no_answer_case("review_time_budget", lambda self, claim, o: {**o, "usage
                       "router-budget-exhausted", review=True)
 
 
-def install_change_case(name, mutate, *, review=False, governed=False, outcome="changed"):
+def install_change_case(name, mutate, *, review=False, micro_task=False, outcome="changed"):
     def test(self):
-        request, first = self.start(review=review, governed=governed)
+        request, first = self.start(review=review, micro_task=micro_task)
         output = self.failure(first)
         mutate(self, request, first, output)
         self.assert_boundary(request, first, output, outcome=outcome)
@@ -586,9 +586,9 @@ for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
 install_unfenced_edit_case("identity", execute_change("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,)))
 
 
-install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), governed=True)
-install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), governed=True)
-install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), governed=True, outcome="cancelled")
+install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), micro_task=True)
+install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), micro_task=True)
+install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
 install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
 install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
 install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)

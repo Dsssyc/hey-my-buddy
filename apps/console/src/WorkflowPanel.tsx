@@ -15,7 +15,7 @@ import { TaskActivityView } from "./task-activity";
 import { finalArtifact, finalIntegration, recordedIntegrations } from "./integration";
 import { formatDate } from "./ui";
 import { NativeSessionView } from "./native-session";
-import { DelegationDetailRows } from "./MacroTaskOverview";
+import { MicroTaskDetailRows } from "./MacroTaskOverview";
 import {
   artifactKindLabel, artifactStateView, buddyLockText, cumulativePatchView,
   hostConclusionView, integrationHostPaths, tokenUsageView,
@@ -25,8 +25,8 @@ const integrationLabel = (record: IntegrationRecord) =>
   record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
 
 /**
- * Governed delegation detail (0.15.1 U4): read-only facts over the recorded
- * workflow — goal and turns, routing basis, requests and helpers, artifacts
+ * Micro task detail (0.15.1 U4): read-only facts over the recorded
+ * workflow — micro task and turns, routing basis, requests and helpers, artifacts
  * and acceptance evidence, execution records. Every Host write form, the
  * helper composer and the record drafts are gone; browsing needs no Host
  * credential and locks nothing.
@@ -97,7 +97,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {/* T4: the overview never repeats the detail heading's title; only the
             task summary and the Worker's own result line remain. The timeline's
             own row is authoritative when available. */}
-        <DelegationDetailRows
+        <MicroTaskDetailRows
           taskSummary={overviewRow ? overviewRow.taskSummary : (task.task.replace(/\s+/g, " ").trim().slice(0, 120) || null)}
           resultSummary={overviewRow ? overviewRow.summary : (value.currentTurn?.summary || task.workflow?.resultSummary || null)} />
         {stopStatusNode}
@@ -122,7 +122,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           <div className="record-facts-body">
             <Status status={value.state} />
             <dl className="facts">
-              <dt>当前 Host</dt><dd>{value.task.delegation?.currentHostId || value.hostId}</dd>
+              <dt>当前 Host</dt><dd>{value.task.lineage?.currentHostId || value.hostId}</dd>
               <dt>协作版本</dt><dd>V{value.revision}</dd>
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>

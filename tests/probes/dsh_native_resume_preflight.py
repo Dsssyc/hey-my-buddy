@@ -408,7 +408,7 @@ class Probe:
 
         The wrapper evidence and the group observation are the same native
         process layer; this free probe proves that layer only. The roles or
-        controller outer stop layer is a governed-run fact and stays with the
+        controller outer stop layer is a micro task run fact and stays with the
         later Worker smoke verification, not this probe.
         """
         from hey_my_buddy.buddy.harnesses.dsh.acp.connection import group_observation, stop_evidence

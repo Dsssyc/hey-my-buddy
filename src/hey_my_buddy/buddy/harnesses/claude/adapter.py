@@ -5,7 +5,7 @@ permission requests converted to controller attention, and a freshly allocated
 ``--session-id`` per attempt with no native resume. Availability reports the
 native initialize metadata; bounded native metadata failures are cached
 briefly so repeated
-capability reads do not respawn the CLI. The governed Worker turn, the
+capability reads do not respawn the CLI. The micro task Worker turn, the
 read-only structured call and model discovery all execute through the
 registered :mod:`~hey_my_buddy.buddy.harnesses.claude.native_run` under the
 shared role controller; this description carries no execution entries of its

@@ -142,7 +142,7 @@ describe("recorded harness quota (ADR-018 §23)", () => {
   });
 });
 
-describe("Host conclusion of a failed or cancelled goal (ADR-018 §16)", () => {
+describe("Host conclusion of a failed or cancelled micro task (ADR-018 §16)", () => {
   it("labels the recorded outcome without turning it into an acceptance", () => {
     const view = hostConclusionView({
       conclusionId: "concl-1", attemptId: "att-1", executionStatus: "cancelled",

@@ -160,7 +160,7 @@ class HostCutoverTests(RealWorkspaceTestCase):
 
     def submit_params(self, request_id):
         return {**BUDDY, "requestId": request_id, "submissionToken": "t" * 32, "hostId": "host-1",
-                "task": "private upgrade goal", "cwd": str(self.repo),
+                "task": "private upgrade micro task", "cwd": str(self.repo),
                 "executionWorkspace": {"kind": "worktree", "access": "write"}}
 
     def test_same_schema_upgrade_preserves_host_boundary_receipts_and_retriable_wait(self):
@@ -226,8 +226,8 @@ class HostCutoverTests(RealWorkspaceTestCase):
                     self.finish(client, claim, nonce="n" * 16, session="root-session")
                     finished_root = True
                     self.assertTrue(wait_replied.wait(10), "Server wait did not observe the finished turn")
-                    # A second stopped goal supplies the commandId retry without
-                    # consuming the first goal's still-open Host boundary.
+                    # A second stopped micro task supplies the commandId retry without
+                    # consuming the first micro task's still-open Host boundary.
                     other = client.call("workflow_submit", self.submit_params("cancel-after-upgrade"))
                     claimed = client.call("worker_claim", {"workerId": "fixture-worker", "runId": other["runId"],
                         "claimRequestId": "claim-other", "nonce": "m" * 16})

@@ -21,7 +21,7 @@ function snapshotFixture(): Snapshot {
 
 const rawRecord = (): Task => ({ runId: "cmd-9", task: "外部命令记录", status: "completed", owner: "fixture",
   cwd: "/worktrees/cmd-9", revision: 1, createdAt: "2026-09-26T05:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  delegation: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9",
+  lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: "cmd-9",
     project: { id: "px", label: "外部", path: null }, buddy: null } });
 
 function harness(paged = false) {
@@ -44,7 +44,7 @@ function harness(paged = false) {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 
-const preference = VIEW_PREFERENCE_PREFIX + "delegation-list-collapsed";
+const preference = VIEW_PREFERENCE_PREFIX + "micro-task-list-collapsed";
 const macroTaskRow = () => screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
 function macroTaskRail() {
   expect(screen.queryByRole("region", { name: "工作目标列表（已收起）" })).not.toBeNull();
@@ -62,7 +62,7 @@ async function openDetail(f: ReturnType<typeof harness>) {
   await waitFor(() => expect(document.querySelector(".run-view")).toBeTruthy());
 }
 
-describe("U08 delegation navigation", () => {
+describe("U08 microTask navigation", () => {
   it("keeps title-left switches and command records accessible by keyboard without a top switch row", async () => {
     const f = harness();
     await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });

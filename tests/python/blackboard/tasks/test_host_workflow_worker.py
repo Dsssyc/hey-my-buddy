@@ -3,13 +3,13 @@ import json
 import subprocess
 from pathlib import Path
 
-from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase, BUDDY
+from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase, BUDDY
 
 
-class HostQuotaRecoveryTests(GovernedWorkerTestCase):
+class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
     """The shared harness environment already selects the offline quota agent:
     the fixture dies the quota death on a first turn whose task is this
-    scenario's, and completes every later turn through the governed finish."""
+    scenario's, and completes every later turn through the micro-task finish."""
 
     def setUp(self):
         super().setUp()
@@ -28,7 +28,7 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
         submitted = self.call("submit", {**BUDDY, "requestId": "quota-recovery", "hostId": "host-1",
             "task": "Implement the fixture change", "cwd": str(self.repo), "buddyLocked": locked,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
-        # A terminal failed goal is an await outcome, not a CLI transport error.
+        # A terminal failed micro task is an await outcome, not a CLI transport error.
         _code, stopped = self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)
         current = self.call("get", {"runId": submitted["runId"]})
         self.assertEqual(current["state"], "failed", (current, stopped))
@@ -77,7 +77,7 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
             self.assertIn("tracked.txt", final["cumulativePatch"]["changedPaths"])
             self.assertNotIn("tracked.txt", final["changedPaths"])
             self.assertTrue(Path(final["cumulativePatch"]["path"]).is_file())
-            # The cumulative patch applies independently to the original goal input.
+            # The cumulative patch applies independently to the original micro task input.
             target = self.directory / "integration"
             subprocess.run(["git", "clone", "-q", str(self.repo), str(target)], check=True)
             subprocess.run(["git", "-C", str(target), "apply", "--binary", final["cumulativePatch"]["path"]], check=True)
@@ -95,7 +95,7 @@ class HostQuotaRecoveryTests(GovernedWorkerTestCase):
             self.assertEqual(refused["error"]["code"], "BUDDY_CONFLICT")
             self.assertEqual(self.call("get", {"runId": failed["runId"]})["counts"]["turns"], 1)
 
-    def test_failed_goal_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
+    def test_failed_micro_task_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
         with self.daemon(env=self.env()):
             submitted, failed, partial = self.quota_failure()
             common = {"runId": failed["runId"], "controlFile": submitted["controlFile"]}

@@ -414,7 +414,7 @@ class WorkerEndpointClosureTests(unittest.TestCase):
             cwd=str(self.work),
             private_state=PrivateStatePaths(invocation_root=str(directory),
                                             native_root=str(directory / "native")),
-            input_text="the governed turn input", tool_scope="write",
+            input_text="the micro task turn input", tool_scope="write",
             output_schema=FrozenJson({"type": "object"}),
             budget=RunBudget(timeout_seconds=600))
         worker_module.fsync_json(request_file, json.loads(encode_run_request(request)))

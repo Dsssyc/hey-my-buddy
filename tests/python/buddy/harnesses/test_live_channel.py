@@ -542,12 +542,12 @@ class ObserveSelectionTests(LiveSeamCase):
     def test_a_bound_record_keeps_its_limitation_for_the_public_reason(self):
         note = "Host questions are queued by the bridge and delivered only at the root's next checkpoint"
         journal = [{"inquiryId": "question-1", "state": "unavailable",
-                    "reason": "the governed root turn ended before this inquiry was answered", "limitation": note}]
+                    "reason": "the micro task root turn ended before this inquiry was answered", "limitation": note}]
         self.publish_records(journal)
         entry = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500,
                                       fields=("inquiries",)).inquiries[0]
         self.assertEqual((entry.status, entry.reason, entry.limitation),
-                         ("unavailable", "the governed root turn ended before this inquiry was answered", note))
+                         ("unavailable", "the micro task root turn ended before this inquiry was answered", note))
 
     def test_failed_owner_observation_keeps_its_facts_without_clearing_activity(self):
         self.endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 6})

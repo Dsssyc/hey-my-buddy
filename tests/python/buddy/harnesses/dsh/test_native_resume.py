@@ -1,6 +1,6 @@
 """The DSH native continuation: two real processes over one shared sessions root.
 
-These cases drive the governed Worker carrier of
+These cases drive the micro task Worker carrier of
 :func:`hey_my_buddy.buddy.harnesses.dsh.native_run.run` twice — a first turn
 that opens a fresh root session in this task's native root, and a second turn
 in its own invocation that resumes the exact same session through the public
@@ -44,11 +44,11 @@ def _provenance(result) -> dict:
 
 
 class NativeResumeCase(NativeRunCase):
-    """Two governed turns: the first opens the root, the second resumes it."""
+    """Two micro task turns: the first opens the root, the second resumes it."""
 
     def first_turn(self, *, record="usage", extra=(), inquiry=False, level="write"):
         request, bound, mount = self.worker_request(inquiry=inquiry, level=level)
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         self.extra_agent_args += ["--session-record", record, *extra]
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -58,7 +58,7 @@ class NativeResumeCase(NativeRunCase):
         request, bound, mount = self.worker_request(
             inquiry=inquiry, level=level,
             continuation=RunContinuation(mode="native-session", previous_session_id=previous))
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         self.extra_agent_args += ["--session-record", record, *extra]
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
@@ -227,12 +227,12 @@ class ResumeFailureTests(NativeResumeCase):
         request, bound, mount = self.worker_request(
             continuation=RunContinuation(mode="native-session",
                                          previous_session_id="never-bound-session"))
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
-        self.assertIn("no private goal binding", result.end.message)
+        self.assertIn("no private micro task binding", result.end.message)
         # No process was ever spawned and no session was silently rebuilt.
         self.assertEqual(self.agent_log(), [])
         self.assertIsNone(result.native_identity)
@@ -241,15 +241,15 @@ class ResumeFailureTests(NativeResumeCase):
                          "the spawn never happened; gone is the honest fact")
         self.assertIsNone(result.continuation)
 
-    def test_a_binding_for_another_goal_or_buddy_is_refused(self):
-        # A binding that names this session but a foreign goal: existence
+    def test_a_binding_for_another_micro_task_or_buddy_is_refused(self):
+        # A binding that names this session but a foreign micro task: existence
         # alone is not eligibility.
         request, bound, mount = self.worker_request(
             continuation=RunContinuation(mode="native-session",
-                                         previous_session_id="foreign-goal-session"))
-        self.governed_agent_args(mount)
-        binding = self.root / (hashlib.sha256(b"foreign-goal-session").hexdigest() + ".json")
-        binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-goal-session",
+                                         previous_session_id="foreign-micro-task-session"))
+        self.micro_task_agent_args(mount)
+        binding = self.root / (hashlib.sha256(b"foreign-micro-task-session").hexdigest() + ".json")
+        binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-micro-task-session",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
@@ -257,14 +257,14 @@ class ResumeFailureTests(NativeResumeCase):
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
-        self.assertIn("does not match this goal", result.end.message)
+        self.assertIn("does not match this micro task", result.end.message)
         self.assertEqual(self.agent_log(), [], "no process runs for a foreign binding")
 
     def test_a_native_resume_refusal_fails_without_a_new_session(self):
         request, bound, mount = self.worker_request(
             continuation=RunContinuation(mode="native-session",
                                          previous_session_id="ghost-session"))
-        self.governed_agent_args(mount)
+        self.micro_task_agent_args(mount)
         binding = self.root / (hashlib.sha256(b"ghost-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": request.identity.task_id,
                                        "sessionId": "ghost-session", "cwd": request.cwd,
@@ -373,7 +373,7 @@ class ResumeInquiryTests(NativeResumeCase):
         request2, bound2, mount2 = self.worker_request(
             inquiry=True,
             continuation=RunContinuation(mode="native-session", previous_session_id=previous))
-        self.governed_agent_args(mount2)
+        self.micro_task_agent_args(mount2)
         self.extra_agent_args += ["--session-record", "resume", "--wait-for-inquiry", "12",
                                   "--answer-inquiry", "--replay-history"]
         credentials = bound2.services.inquiry

@@ -166,7 +166,7 @@ class DshReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.bridge = {"identity": {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
+        self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__buddy_finish_turn"

@@ -167,8 +167,7 @@ describe("the catalogue's names", () => {
 describe("read-only routing panel (0.15.1 U4)", () => {
   it("shows the recorded buddy and routing facts without any retry form", () => {
     const workflow: Workflow = {
-      governed: true,
-      runId: "parent",
+            runId: "parent",
       hostId: "host-a",
       ownerGeneration: 2,
       revision: 7,

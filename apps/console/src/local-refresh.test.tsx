@@ -14,6 +14,8 @@ const task = (runId = "command-1", extra: Partial<Task> = {}): Task => ({
   runId, task: `原始任务 ${runId}`, status: "completed", owner: "host", cwd: "~/project",
   revision: 1, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-09T00:00:00Z",
   acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+  lineage: extra.workflow ? { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
+    rootRunId: runId, project: { id: "project", path: "~/project", label: "project" }, buddy: null } : undefined,
   selectedAttempt: { result: { result: { stdout: `结果 ${runId}` } } }, ...extra,
 });
 function deferred<T>() {
@@ -115,12 +117,12 @@ describe("opened microtask local refresh", () => {
     expect(f.refresh).not.toHaveBeenCalled(); expect(f.api.tasks).not.toHaveBeenCalled(); expect(f.api.command).not.toHaveBeenCalled();
   });
 
-  it("refreshes a governed detail at a newer revision while preserving its tab and the workflow read schedule", async () => {
+  it("refreshes a micro task detail at a newer revision while preserving its tab and the workflow read schedule", async () => {
     const f = fixture(); const user = userEvent.setup();
-    const initial = task("governed-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    const initial = task("micro-task-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
     const next = { ...initial, revision: 2, task: "更新后的微任务", workflow: { ...initial.workflow!, revision: 2 } };
     const command = f.api.command as ReturnType<typeof vi.fn>;
-    command.mockResolvedValue({ governed: true, runId: initial.runId, revision: 1, state: "executing", awaitingHost: false,
+    command.mockResolvedValue({ runId: initial.runId, revision: 1, state: "executing", awaitingHost: false,
       hostId: "host", ownerGeneration: 1, continuationCount: 0, currentTurn: null, activeRequest: null,
       children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: initial });
     const reader = f.api.task as ReturnType<typeof vi.fn>; reader.mockResolvedValue(next);
@@ -141,10 +143,10 @@ describe("opened microtask local refresh", () => {
 
   it("does not attach an older task verification time to newer workflow facts", async () => {
     const f = fixture(); const user = userEvent.setup();
-    const original = task("governed-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    const original = task("micro-task-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
     const serverAt = Date.parse("2026-10-03T06:07:08Z");
     (f.api.task as ReturnType<typeof vi.fn>).mockResolvedValue(original);
-    (f.api.command as ReturnType<typeof vi.fn>).mockResolvedValue({ governed: true, runId: original.runId, revision: 1, state: "executing", awaitingHost: false,
+    (f.api.command as ReturnType<typeof vi.fn>).mockResolvedValue({ runId: original.runId, revision: 1, state: "executing", awaitingHost: false,
       hostId: "host", ownerGeneration: 1, continuationCount: 0, currentTurn: null, activeRequest: null,
       children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: original });
     const update = vi.fn();
@@ -161,9 +163,9 @@ describe("opened microtask local refresh", () => {
 
   it("releases busy state when newer workflow facts cancel a pending task refresh", async () => {
     const f = fixture(); const user = userEvent.setup(); const pending = deferred<Task>();
-    const original = task("governed-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    const original = task("micro-task-1", { workflow: { state: "executing", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 } });
     (f.api.task as ReturnType<typeof vi.fn>).mockReturnValue(pending.promise);
-    (f.api.command as ReturnType<typeof vi.fn>).mockResolvedValue({ governed: true, runId: original.runId, revision: 1, state: "executing", awaitingHost: false,
+    (f.api.command as ReturnType<typeof vi.fn>).mockResolvedValue({ runId: original.runId, revision: 1, state: "executing", awaitingHost: false,
       hostId: "host", ownerGeneration: 1, continuationCount: 0, currentTurn: null, activeRequest: null,
       children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null, task: original });
     const update = vi.fn();

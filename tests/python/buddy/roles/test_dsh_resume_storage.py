@@ -9,7 +9,7 @@ exercised. The candidate DshAdapter instance below carries ``native_resume``
 explicitly ``False`` local instance, so no case depends on the product class's
 current declared value; every injecting case captures that declaration before
 and after the injection and compares it instead of pinning it. The storage
-cases reuse this suite's governed-run fixture and the general storage and backup
+cases reuse this suite's micro-task-run fixture and the general storage and backup
 rules; no new reclamation protocol is added. Fine-grained DSH_HOME isolation and
 the per-turn native facts belong to the candidate-native work and the Host's
 native checks, and only this file's own dummy credential bytes appear anywhere.
@@ -40,7 +40,7 @@ ROLLOUT_BYTES = b"fixture rollout bytes"
 
 
 class CandidatePrepareTests(BoardTestCase):
-    """Real prepare over a private state root; the goal native root is shared."""
+    """Real prepare over a private state root; the micro task native root is shared."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -80,7 +80,7 @@ class CandidatePrepareTests(BoardTestCase):
                     "context": {}, "executionWorkspace": {}}
         return ExecutionContext(
             task_id=task_id, attempt_id=attempt_id, generation=1,
-            spec={"cwd": str(self.workdir()), "task": "fixture governed task", "timeoutSeconds": 30,
+            spec={"cwd": str(self.workdir()), "task": "fixture micro task task", "timeoutSeconds": 30,
                   "provider": "fixture-provider", "model": "fixture-model", "effort": "low"},
             directory=self.directory / "turns" / attempt_id, runtime={},
             environment=dict(self.environment), agent_credential=DUMMY_CREDENTIAL,
@@ -94,16 +94,16 @@ class CandidatePrepareTests(BoardTestCase):
     def control(self, context: ExecutionContext) -> dict:
         return decode_strict_json((context_root(context, "dsh") / "role-run-control.json").read_bytes())
 
-    def test_candidate_native_resume_prepares_one_goal_native_root_for_both_attempts(self):
+    def test_candidate_native_resume_prepares_one_micro_task_native_root_for_both_attempts(self):
         before = registry_adapter("dsh").native_resume
-        first = self.context("task-goal", "attempt-a1", mode="initial")
-        second = self.context("task-goal", "attempt-a2", mode="native-session", previous="sess-1")
+        first = self.context("task-micro-task", "attempt-a1", mode="initial")
+        second = self.context("task-micro-task", "attempt-a2", mode="native-session", previous="sess-1")
         executor = self.candidate_executor()
         self.prepare(executor, first)
         self.prepare(executor, second)
         self.assert_declaration_stable(before)
 
-        expected = str(native_root(self.state, "dsh", "task-goal"))
+        expected = str(native_root(self.state, "dsh", "task-micro-task"))
         first_root, second_root = context_root(first, "dsh"), context_root(second, "dsh")
         first_control, second_control = self.control(first), self.control(second)
         self.assertEqual(first_control["nativeRoot"], expected)
@@ -147,8 +147,8 @@ class CandidatePrepareTests(BoardTestCase):
     def test_a_false_capability_instance_keeps_attempt_private_native_paths(self):
         before = registry_adapter("dsh").native_resume
         executor = self.false_capability_executor()
-        first = self.context("task-goal", "attempt-a1", mode="reconstructed-new-session")
-        second = self.context("task-goal", "attempt-a2", mode="reconstructed-new-session")
+        first = self.context("task-micro-task", "attempt-a1", mode="reconstructed-new-session")
+        second = self.context("task-micro-task", "attempt-a2", mode="reconstructed-new-session")
         self.prepare(executor, first)
         self.prepare(executor, second)
         self.assert_declaration_stable(before)
@@ -156,10 +156,10 @@ class CandidatePrepareTests(BoardTestCase):
         self.assertEqual(first_control["nativeRoot"], str(context_root(first, "dsh") / "dsh-private"))
         self.assertEqual(second_control["nativeRoot"], str(context_root(second, "dsh") / "dsh-private"))
         self.assertNotEqual(first_control["nativeRoot"], second_control["nativeRoot"])
-        self.assertNotEqual(first_control["nativeRoot"], str(native_root(self.state, "dsh", "task-goal")))
+        self.assertNotEqual(first_control["nativeRoot"], str(native_root(self.state, "dsh", "task-micro-task")))
 
         # A false-capability executor still refuses a native-session turn.
-        refused = self.context("task-goal", "attempt-a3", mode="native-session", previous="sess-1")
+        refused = self.context("task-micro-task", "attempt-a3", mode="native-session", previous="sess-1")
         with self.assertRaises(BoardError) as caught:
             self.prepare(executor, refused)
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -167,7 +167,7 @@ class CandidatePrepareTests(BoardTestCase):
 
 
 class DshNativeStorageRulesTests(WorkflowTestCase):
-    """The general backup and storage rules over a real governed dsh run's goal."""
+    """The general backup and storage rules over a real micro task dsh run's micro task."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -176,12 +176,12 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         inventory.start()
         self.addCleanup(inventory.stop)
 
-    def goal_row(self, planned: dict, goal_dir: Path) -> dict:
+    def micro_task_row(self, planned: dict, micro_task_dir: Path) -> dict:
         return next(row for row in planned["candidates"]
                     if row["category"] == "harnesses" and row["adapter"] == "dsh"
-                    and row["path"] == str(goal_dir))
+                    and row["path"] == str(micro_task_dir))
 
-    def test_goal_native_state_stays_out_of_the_verified_backup(self):
+    def test_micro_task_native_state_stays_out_of_the_verified_backup(self):
         board = self.board()
         state = board.directory.resolve()
         rollout = native_root(state, "dsh", "task-b") / "sessions" / "session.v3.jsonl.zstd"
@@ -194,13 +194,13 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         self.assertFalse((Path(first["path"]) / "state" / "harnesses").exists())
         self.assertEqual(rollout.read_bytes(), ROLLOUT_BYTES)
 
-    def test_awaiting_and_grace_goals_are_kept_and_reclaim_takes_only_the_qualified_goal(self):
+    def test_awaiting_and_grace_micro_tasks_are_kept_and_reclaim_takes_only_the_qualified_micro_task(self):
         board = self.board()
         state = board.directory.resolve()
         self.register(board)
         submitted = self.submit(board)
         run_id = submitted["runId"]
-        goal_dir = native_root(state, "dsh", run_id).parent
+        micro_task_dir = native_root(state, "dsh", run_id).parent
         rollout = native_root(state, "dsh", run_id) / "sessions" / "session.v3.jsonl.zstd"
         rollout.parent.mkdir(parents=True)
         rollout.write_bytes(ROLLOUT_BYTES)
@@ -209,19 +209,19 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         foreign_binding = foreign_native / "binding.json"
         foreign_binding.write_bytes(b"fixture foreign binding")
 
-        # Awaiting the Host on an open attention request: the goal is retained,
-        # and the unknown-owner goal beside it is never a reclaim candidate.
+        # Awaiting the Host on an open attention request: the micro task is retained,
+        # and the unknown-owner micro task beside it is never a reclaim candidate.
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="dsh-native-1")
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["state"], "awaiting-host")
-        foreign_goal = foreign_native.parent
+        foreign_micro_task = foreign_native.parent
         planned = board.call("storage_plan", {})
-        row = self.goal_row(planned, goal_dir)
+        row = self.micro_task_row(planned, micro_task_dir)
         self.assertFalse(row["eligible"])
         self.assertIn("continuation-supported", row["reasons"])
         foreign_row = next(entry for entry in planned["candidates"]
-                           if entry["category"] == "harnesses" and entry["path"] == str(foreign_goal))
+                           if entry["category"] == "harnesses" and entry["path"] == str(foreign_micro_task))
         self.assertFalse(foreign_row["eligible"])
         self.assertIn("owner-unproven", foreign_row["reasons"])
         board.call("storage_apply", {"planId": planned["planId"], "commandId": "keep-awaiting", "confirm": True})
@@ -235,37 +235,37 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         delivered = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(delivered["state"], "delivered")
         planned = board.call("storage_plan", {})
-        row = self.goal_row(planned, goal_dir)
+        row = self.micro_task_row(planned, micro_task_dir)
         self.assertFalse(row["eligible"])
         self.assertIn("continuation-supported", row["reasons"])
 
         # Accepted but inside the retention grace period: still retained.
         self.accept_run(board, delivered)
         planned = board.call("storage_plan", {})
-        row = self.goal_row(planned, goal_dir)
+        row = self.micro_task_row(planned, micro_task_dir)
         self.assertFalse(row["eligible"])
         self.assertIn("grace-period", row["reasons"])
         board.call("storage_apply", {"planId": planned["planId"], "commandId": "keep-grace", "confirm": True})
         self.assertEqual(rollout.read_bytes(), ROLLOUT_BYTES)
         self.assertEqual(foreign_binding.read_bytes(), b"fixture foreign binding")
 
-        # Past grace with proven stop: exactly this run's own goal reclaims, and
-        # the unknown-owner goal beside it stays untouched.
+        # Past grace with proven stop: exactly this run's own micro task reclaims, and
+        # the unknown-owner micro task beside it stays untouched.
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET accepted_at=? WHERE task_id=?",
                        ((datetime.now(timezone.utc) - timedelta(days=4)).isoformat(), run_id))
         planned = board.call("storage_plan", {})
-        row = self.goal_row(planned, goal_dir)
+        row = self.micro_task_row(planned, micro_task_dir)
         self.assertTrue(row["eligible"])
         self.assertEqual(row["reasons"], [])
         foreign_row = next(entry for entry in planned["candidates"]
-                           if entry["category"] == "harnesses" and entry["path"] == str(foreign_goal))
+                           if entry["category"] == "harnesses" and entry["path"] == str(foreign_micro_task))
         self.assertFalse(foreign_row["eligible"])
         self.assertIn("owner-unproven", foreign_row["reasons"])
         result = board.call("storage_apply",
-                            {"planId": planned["planId"], "commandId": "reclaim-own-goal", "confirm": True})
-        self.assertEqual([entry["path"] for entry in result["removed"]], [str(goal_dir)])
-        self.assertFalse(goal_dir.exists())
+                            {"planId": planned["planId"], "commandId": "reclaim-own-micro-task", "confirm": True})
+        self.assertEqual([entry["path"] for entry in result["removed"]], [str(micro_task_dir)])
+        self.assertFalse(micro_task_dir.exists())
         self.assertEqual(foreign_binding.read_bytes(), b"fixture foreign binding")
 
 

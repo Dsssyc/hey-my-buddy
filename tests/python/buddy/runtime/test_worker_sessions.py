@@ -70,13 +70,13 @@ class WorkerSessionTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
 
     def test_codex_list_uses_board_only_and_never_guesses_other_sessions(self):
-        row = {'harness': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
+        row = {'harness': 'codex', 'task_id': 'micro-task-1', 'attempt_id': 'attempt-1',
                'cwd': '/fixture/work', 'execution_state': 'finished', 'shutdown_confirmed': 1,
                'result_json': json.dumps({'result': {
                    'nativeSession': {'harness': 'codex', 'sessionId': 'thread-1', 'captured': True,
-                                     'storageOwner': 'buddy-goal', 'resumeMode': 'initial',
+                                     'storageOwner': 'buddy-micro-task', 'resumeMode': 'initial',
                                      'nativeAppVisibility': 'unknown'},
-                   'nativeCheckpoint': {'version': 1, 'sessionId': 'thread-1', 'taskId': 'goal-1',
+                   'nativeCheckpoint': {'version': 1, 'sessionId': 'thread-1', 'taskId': 'micro-task-1',
                                         'attemptId': 'attempt-1'}},
                    'shutdownConfirmed': True})}
         result = worker_sessions.handle(FakeStore(self.state, [row]), {'harness': 'codex'})
@@ -99,7 +99,7 @@ class WorkerSessionTests(unittest.TestCase):
                 outcome = fixture.execute(fixture.context())
             self.assertTrue(outcome.shutdown_confirmed)
             receipt = {'result': outcome.result, 'shutdownConfirmed': True}
-            row = {'harness': 'codex', 'task_id': 'goal-1', 'attempt_id': 'attempt-1',
+            row = {'harness': 'codex', 'task_id': 'micro-task-1', 'attempt_id': 'attempt-1',
                    'cwd': str(fixture.cwd), 'execution_state': 'finished', 'shutdown_confirmed': 1,
                    'result_json': json.dumps(receipt)}
             result = worker_sessions.handle(FakeStore(self.state, [row]), {'harness': 'codex'})
@@ -115,7 +115,7 @@ class WorkerSessionTests(unittest.TestCase):
             historical = worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'harness': 'codex'})
             self.assertEqual(historical['count'], 1)
             self.assertEqual(historical['sessions'][0]['storageOwner'], 'harness-user-store')
-            legacy['result']['turn']['taskId'] = 'unrelated-goal'
+            legacy['result']['turn']['taskId'] = 'unrelated-micro-task'
             legacy_row['result_json'] = json.dumps(legacy)
             self.assertEqual(worker_sessions.handle(FakeStore(self.state, [legacy_row]), {'harness': 'codex'})['count'], 0)
             resumed = dict(row)

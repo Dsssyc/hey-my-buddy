@@ -302,7 +302,7 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     expect(hostPaths.some(list => list.length > 0)).toBe(true);
     expect(hostPaths.some(list => list.length === 0)).toBe(true);
 
-    // A partial output is never the recorded final artifact of its goal.
+    // A partial output is never the recorded final artifact of its micro task.
     for (const workflow of workflows) {
       const finalId = workflow.facts.finalArtifactId as string | null;
       const finalRecord = (workflow.facts.artifacts as { artifactId: string; state: { partial: boolean } }[])

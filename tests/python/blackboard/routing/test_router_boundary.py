@@ -24,7 +24,7 @@ class RouterBoundaryTests(unittest.TestCase):
                 self.assertEqual(result["reason"], "原因原文" if kind == "router-abstained" else "原因原文；取消后重新提交没有用。")
                 self.assertEqual(result["userAction"], "settingsChangeOnly")
 
-    def test_templates_keep_the_same_goal_and_complete_identity_with_supported_parameters(self):
+    def test_templates_keep_the_same_micro_task_and_complete_identity_with_supported_parameters(self):
         result = self.build()
         choice = result["commands"]["continue"]["choices"][0]
         params = choice["params"]

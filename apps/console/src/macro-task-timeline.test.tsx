@@ -213,7 +213,7 @@ describe("macroTask timeline rendering", () => {
     // The tooltip carries the complete first line while the label stays short.
     expect(label.getAttribute("title")).toBe(LONG_TASK_LINE);
     // The card title is the clipped line itself.
-    const single = container.querySelector(".delegation-card.single") as HTMLElement;
+    const single = container.querySelector(".micro-task-card.single") as HTMLElement;
     expect(single.textContent).not.toContain("做什么");
     expect(single.textContent).not.toContain(LONG_TASK_LINE);
   });
@@ -287,16 +287,16 @@ describe("macroTask timeline rendering", () => {
   it("keeps compact cards in creation order and expands the remaining cards", () => {
     const timeline = macroTaskTimelineFixture();
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    const strip = container.querySelector(".delegation-strip") as HTMLElement;
-    expect(strip.querySelectorAll(".delegation-card").length).toBe(4);
+    const strip = container.querySelector(".micro-task-strip") as HTMLElement;
+    expect(strip.querySelectorAll(".micro-task-card").length).toBe(4);
     fireEvent.click(screen.getByRole("button", { name: "展开全部 5 个" }));
-    const cards = [...strip.querySelectorAll<HTMLElement>(".delegation-card")];
+    const cards = [...strip.querySelectorAll<HTMLElement>(".micro-task-card")];
     expect(cards.length).toBe(5);
     // T3: bold two-line title, top-right status, one-line result with the
     // Worker 自述 label, and no 做什么/目标摘要 labels.
     const first = cards[0]!;
-    expect(first.querySelector(".delegation-card-title")!.textContent).toBe("设计工作目标时间轴视图与交互规范");
-    expect(first.querySelector(".delegation-card-state")!.textContent).toContain("已验收");
+    expect(first.querySelector(".micro-task-card-title")!.textContent).toBe("设计工作目标时间轴视图与交互规范");
+    expect(first.querySelector(".micro-task-card-state")!.textContent).toContain("已验收");
     expect(first.textContent).toContain("结果：已完成时间轴视图与交互规范设计并交付审阅。");
     expect(within(first).getByText("Worker 自述")).toBeTruthy();
     expect(first.textContent).not.toContain("做什么");
@@ -317,8 +317,8 @@ describe("macroTask timeline rendering", () => {
     timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", depth: 1, kind: "helper" };
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
     // The single root keeps one expanded card inside the collapsible band.
-    expect(container.querySelectorAll(".delegation-strip .delegation-card:not(.single)")).toHaveLength(0);
-    const single = container.querySelector(".delegation-card.single") as HTMLElement;
+    expect(container.querySelectorAll(".micro-task-strip .micro-task-card:not(.single)")).toHaveLength(0);
+    const single = container.querySelector(".micro-task-card.single") as HTMLElement;
     expect(single).toBeTruthy();
     expect(single.textContent).toContain("已验收");
     expect(within(single).getByRole("button", { name: "打开详情" })).toBeTruthy();
@@ -350,7 +350,7 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+        shutdownConfirmed: false, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
       spans: [{
         spanId: "s-r7", runId: "r7", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:20:00Z",
@@ -375,7 +375,7 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+        shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
       spans: [{
         spanId: "s-r8", runId: "r8", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: null,
@@ -564,7 +564,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(item("span:s-r2-w")!.className).toContain("run-member");
     expect(item("span:s-r2-e2")!.className).toContain("run-member");
     expect(item("span:s-r1-e")!.className).not.toContain("run-member");
-    // P1.6: the fixed six-field card for a whole delegation.
+    // P1.6: the fixed six-field card for a whole micro task.
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(inspector.textContent).toContain("类型");
     expect(inspector.textContent).toContain("委派");
@@ -614,7 +614,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(source.get()).toBeNull();
     const rows = [...popover.querySelectorAll(".marker-popover-main")] as HTMLButtonElement[];
     expect(rows.length).toBe(2);
-    // P1.7: natural-language sentences name the delegation.
+    // P1.7: natural-language sentences name the micro task.
     expect(rows[0]!.textContent).toMatch(/Host 批准 \/ 拒绝了「实现 objectives 表、objective_list 与只读时间轴接口」的请求/);
     // A single row click pins that event and the popover stays open.
     await user.click(rows[0]!);

@@ -12,7 +12,7 @@ from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
 from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.cli.cli_views import governed_brief
+from hey_my_buddy.cli.cli_views import micro_task_brief
 
 
 class PermissionLevelsTests(WorkflowTestCase):
@@ -65,9 +65,9 @@ class PermissionLevelsTests(WorkflowTestCase):
                                    cwd=str(self.workdir('read-' + harness)))
                 self.assertEqual(view['access'], 'read')
                 self.assertEqual(view['buddy']['harness'], harness)
-                self.assertEqual(governed_brief(view)['access'], 'read')
+                self.assertEqual(micro_task_brief(view)['access'], 'read')
                 self.assertNotIn('enforcement', view)
-                self.assertNotIn('enforcement', governed_brief(view))
+                self.assertNotIn('enforcement', micro_task_brief(view))
 
     def test_command_and_external_keep_their_permission_gate_before_admission(self):
         board = self.board()
@@ -104,7 +104,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         full = board.call('workflow_get', {'runId': view['runId'], 'includeAudit': True})
         turns = sorted(full['audit']['turns'], key=lambda turn: turn['turnIndex'])
         self.assertEqual([(turn['access'], turn['accessReason']) for turn in turns], expected)
-        self.assertEqual(governed_brief(full)['access'], 'full')
+        self.assertEqual(micro_task_brief(full)['access'], 'full')
         with board.store.db.read() as connection:
             stored = connection.execute('SELECT access,access_reason FROM workflow_turns ORDER BY turn_index').fetchall()
             self.assertEqual([tuple(row) for row in stored], expected)

@@ -45,7 +45,7 @@ class StorageSplitTests(NativeRunCase):
         from hey_my_buddy.buddy.roles.run_observers import worker_observer
         request, bound, mount = self.worker_request()
         checkpoint = f"mcp__{mount.server_name}__buddy_checkpoint"
-        self.extra_agent_args = ["--prompt-mode", "governed",
+        self.extra_agent_args = ["--prompt-mode", "micro-task",
                                  "--bridge-config", mount.bridge_config_path,
                                  "--finish-tool", mount.finish_tool,
                                  "--checkpoint-tool", checkpoint,

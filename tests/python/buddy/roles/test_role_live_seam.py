@@ -48,7 +48,7 @@ def request(*, harness="zcode", invocation_id="invocation-live") -> RunRequest:
         buddy=RunBuddy(provider="fixture-zcode", model="fixture-glm", effort="low"),
         cwd="/private/tmp", private_state=PrivateStatePaths(invocation_root="/private/tmp/invocation",
                                                             native_root="/private/tmp/invocation/native"),
-        input_text="the governed turn input", tool_scope="write",
+        input_text="the micro task turn input", tool_scope="write",
         output_schema=FrozenJson({"type": "object"}),
         budget=RunBudget(timeout_seconds=600))
 

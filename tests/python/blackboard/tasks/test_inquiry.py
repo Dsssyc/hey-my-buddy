@@ -266,7 +266,7 @@ class TestInquiry(BoardTestCase):
             provider=provider, model=model, effort=effort,
             executionWorkspace={"kind": "existing", "access": "read"},
         )
-        self.assertTrue(submitted["governed"])
+        self.assertEqual(submitted["task"]["lineage"]["kind"], "micro-task")
         self._submission_control = submitted["control"]
         return client.get(runId=submitted["runId"])
 
@@ -790,7 +790,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
             provider="fixture-zcode", model="fixture-glm", effort="low",
             executionWorkspace={"kind": "existing", "access": "read"},
         )
-        self.assertTrue(submitted["governed"])
+        self.assertEqual(submitted["task"]["lineage"]["kind"], "micro-task")
         return client.get(runId=submitted["runId"])
 
     def _live_attempt(self, board, client):

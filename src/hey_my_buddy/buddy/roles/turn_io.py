@@ -1,4 +1,4 @@
-"""Private governed-turn files and workspaces shared by coding harnesses."""
+"""Private micro task-turn files and workspaces shared by coding harnesses."""
 from __future__ import annotations
 
 import hashlib
@@ -121,7 +121,7 @@ def write_turn_files(context: ExecutionContext) -> None:
     if context.turn_input is None:
         return
     if len(canonical_json(context.turn_input).encode()) > MAX_INPUT_BYTES:
-        raise BoardError("INVALID_ARGUMENT", "the governed turn input exceeds its byte bound")
+        raise BoardError("INVALID_ARGUMENT", "the micro task turn input exceeds its byte bound")
     private_json(context.turn_input_file(), context.turn_input)
     if context.agent_credential:
         ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
@@ -248,7 +248,7 @@ def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: in
             return None, "the turn record exceeds its byte bound"
         record = json.loads(raw)
     except (OSError, ValueError):
-        return None, "the governed runner wrote no valid JSON turn output"
+        return None, "the micro task runner wrote no valid JSON turn output"
     if not isinstance(record, dict) or record.get("version") != 1:
         return None, "the turn output version is not supported"
     expected = {"taskId": context.task_id, "attemptId": context.attempt_id,

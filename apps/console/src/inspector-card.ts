@@ -1,7 +1,7 @@
 /**
  * Pure card models for the pinned timeline inspector (0.15 C2, restructured
  * 0.16 P1.6). One selection — a span, a Host event, a settlement flag or a
- * whole delegation — becomes one card of at most six labelled fields (类型、
+ * whole micro task — becomes one card of at most six labelled fields (类型、
  * 委派、回合、配置、时间、结果); every value comes from the bounded read and
  * missing facts render as 未记录 rather than guesses. The model keeps the last
  * resolvable facts when a refresh drops the selected record, so the inspector
@@ -32,7 +32,7 @@ export type CardField = {
   tone?: "muted" | "warn";
   /** Tooltip carrying what the two-line clamp may hide. */
   title?: string;
-  /** The 委派 field links to selecting that delegation's row. */
+  /** The 委派 field links to selecting that micro task's row. */
   link?: CardLink;
 };
 
@@ -52,7 +52,7 @@ export type InspectorCard = {
 
 const UNRECORDED = "未记录";
 
-function delegationField(row: TimelineRow): CardField {
+function microTaskField(row: TimelineRow): CardField {
   const title = displayTitle(row.titleSource, row.title);
   return {
     label: "委派",
@@ -106,7 +106,7 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
   const state = rowStateInfo(row);
   const fields: CardField[] = [
     { label: "类型", value: row.kind === "helper" ? "协助任务" : "委派" },
-    delegationField(row),
+    microTaskField(row),
   ];
   const rounds = rollup.executions.length;
   fields.push({
@@ -178,10 +178,10 @@ export function buildInspectorCard(
     const outcome = spanOutcome(span);
     const fields: CardField[] = [];
     if (span.kind === "queue") {
-      fields.push({ label: "类型", value: "排队" }, delegationField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: "类型", value: "排队" }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push({ label: "结果", value: span.endAt ? "已认领" : "仍在排队" });
     } else if (span.kind === "host") {
-      fields.push({ label: "类型", value: "等待 Host" }, delegationField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: "类型", value: "等待 Host" }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push(span.summary
         ? { label: "结果", value: outcomeLabel(span, outcome), title: span.summary }
         : { label: "结果", value: outcomeLabel(span, outcome) });
@@ -195,7 +195,7 @@ export function buildInspectorCard(
       const reason = routing?.reason?.trim() || UNRECORDED;
       const amount = (value: number | null | undefined, unit: string) =>
         value != null && Number.isFinite(value) && value >= 0 ? `${value} ${unit}` : UNRECORDED;
-      fields.push({ label: "类型", value: "路由" }, delegationField(row));
+      fields.push({ label: "类型", value: "路由" }, microTaskField(row));
       fields.push({ label: "实际模式", value: recordedRoutingMode(routing?.routingMode) });
       fields.push({ label: "已选配置", value: routing?.selectedBuddy ? buddyLabel(routing.selectedBuddy, buddies) : UNRECORDED });
       fields.push({ label: "理由", value: reason });
@@ -207,7 +207,7 @@ export function buildInspectorCard(
         { label: "工具调用（toolCalls）", value: amount(routing?.usage?.toolCalls, "次") },
         { label: "读取量（bytesRead）", value: amount(routing?.usage?.bytesRead, "bytes") });
     } else {
-      fields.push({ label: "类型", value: spanHead(span.kind) }, delegationField(row));
+      fields.push({ label: "类型", value: spanHead(span.kind) }, microTaskField(row));
       fields.push({
         label: "回合",
         value: span.turnIndex !== null && span.turnIndex !== undefined ? `第 ${span.turnIndex} 轮` : UNRECORDED,
@@ -237,7 +237,7 @@ export function buildInspectorCard(
     const row = rowsById.get(event.runId);
     const fields: CardField[] = [
       { label: "类型", value: `Host 事件 · ${event.label || event.kind}` },
-      ...(row ? [delegationField(row)] : []),
+      ...(row ? [microTaskField(row)] : []),
       { label: "时间", value: clockTime(event.at) },
       { label: "结果", value: event.summary || UNRECORDED, title: event.summary || undefined },
     ];
@@ -258,7 +258,7 @@ export function buildInspectorCard(
     const rejected = !row.acceptedAt && !!row.reviewRejectedAt;
     const fields: CardField[] = [
       { label: "类型", value: rejected ? "验收问题" : "验收" },
-      delegationField(row),
+      microTaskField(row),
     ];
     const wait = acceptanceWaitText(row, spansByRun.get(runId) ?? []);
     fields.push({
@@ -276,7 +276,7 @@ export function buildInspectorCard(
     };
   }
 
-  // Row labels and any future item kinds select the whole delegation.
+  // Row labels and any future item kinds select the whole micro task.
   const runId = selection.key.startsWith("row:") ? selection.key.slice(4) : item.runId;
   const row = rowsById.get(runId);
   if (!row) return null;

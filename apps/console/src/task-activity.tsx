@@ -186,7 +186,7 @@ export function terminationText(task: Task): string | null {
 }
 
 /**
- * Bounded, read-only activity for one delegation. It reports only what the
+ * Bounded, read-only activity for one micro task. It reports only what the
  * worker recorded: no percentage, no synthesized completion estimate, and no
  * claim that a heartbeat proves model progress.
  */

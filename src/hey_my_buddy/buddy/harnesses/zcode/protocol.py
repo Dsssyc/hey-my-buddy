@@ -766,14 +766,14 @@ class NativeConnection:
                 self.attention_request(message, outcome="denied-with-structured-response")
                 self.send({"id": message["id"], "result": {
                     "decision": "deny",
-                    "reason": "No interactive Host is attached to this governed Buddy turn; report attention in the turn outcome instead.",
+                    "reason": "No interactive Host is attached to this Buddy micro task turn; report attention in the turn outcome instead.",
                 }})
                 return
             if message["method"] == "interaction/requestUserInput":
                 self.attention_request(message, outcome="declined-with-structured-response")
                 self.send({"id": message["id"], "result": {
                     "action": "decline",
-                    "reason": "No interactive Host is attached to this governed Buddy turn; report attention in the turn outcome instead.",
+                    "reason": "No interactive Host is attached to this Buddy micro task turn; report attention in the turn outcome instead.",
                 }})
                 return
             # Anything else (browser, official-MCP auth, future methods): the
@@ -802,7 +802,7 @@ class NativeConnection:
             "nativeSearchEnhancementsEnabled": {
                 "value": result["nativeSearchEnhancementsEnabled"], "source": search["source"],
                 "configuredValue": search["value"], "restrictedByToolScope": self.no_tools},
-            "askUserQuestionAutoResolutionEnabled": {"value": False, "source": "governed-role"},
+            "askUserQuestionAutoResolutionEnabled": {"value": False, "source": "micro-task-role"},
             "modelContextBudgetStrategy": {"value": "preflight-v1", "source": "harness-controller"}}
 
     def attention_request(self, message: dict, *, outcome: str = "refused-with-jsonrpc-error") -> None:

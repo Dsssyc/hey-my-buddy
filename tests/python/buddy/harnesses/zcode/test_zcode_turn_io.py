@@ -1,4 +1,4 @@
-"""Common governed input/receipt boundaries remain independent of each harness.
+"""Common micro task input/receipt boundaries remain independent of each harness.
 
 The turn records here are synthetic native facts in the current provenance
 formats (``protocol.fixtures.native_turn``): they pass the real registered

@@ -1,4 +1,4 @@
-"""Pure ADR-021 Host boundary data and governed continuation templates."""
+"""Pure ADR-021 Host boundary data and micro-task continuation templates."""
 from copy import deepcopy
 import hashlib
 import json

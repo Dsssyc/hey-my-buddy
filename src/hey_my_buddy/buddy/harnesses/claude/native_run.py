@@ -6,7 +6,7 @@ native permission settings, the owned native process, the initialize handshake w
 catalog check, the user-message boundary, the send/wait/drain
 settlement and the two-layer stop evidence happen exactly once here, driven
 only by the frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`.
-What differed between the governed Worker turn and the read-only structured
+What differed between the micro task Worker turn and the read-only structured
 call is expressed by the request (tool scope, output schema) and by the role
 observer's feedback, never by a second native path; both carriers share the
 same send/wait/drain primitive. The CLI's ``--json-schema`` value carrier — the
@@ -20,7 +20,7 @@ the message boundary, the explicit terminal result criteria, background-task
 settling, quota and token usage, the observed model set and costs, and the
 conservative stop evidence. Unknown stays ``None``/``unknown``, a spawned
 process is never a started model, and a handshake never counts as a model
-start. Role material — the governed prompt, the completion rules, the outcome
+start. Role material — the micro task prompt, the completion rules, the outcome
 validation and the attention assembly — stays with the roles; the delivered
 value travels with its own facts and the role re-validates it.
 
@@ -487,7 +487,7 @@ class _TurnCollector:
                 # Its facts are still collected before the boundary rejection.
                 self.tools.observe_frame(message)
                 raise ClaudeProtocolError("native-turn-started-early",
-                                          "Claude emitted model output before the governed user message")
+                                          "Claude emitted model output before the micro task user message")
             self.observe(message)
         self.early_messages.clear()
 
@@ -715,7 +715,7 @@ def _quota_failure(value: object) -> dict:
 
 
 def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str) -> dict:
-    """The native fact parts of the governed turn's provenance.
+    """The native fact parts of the micro task turn's provenance.
 
     The role judgments of the old provenance document — whether the structured
     output was validated, the turn-end wording, the controller attention —

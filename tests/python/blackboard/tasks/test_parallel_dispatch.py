@@ -141,7 +141,7 @@ class CapacityTestCase(BoardTestCase):
 
     def selection(self, board, request_id: str) -> dict:
         return board.call(
-            "selection_request", {"requestId": request_id, "task": "pick a buddy for this goal"}
+            "selection_request", {"requestId": request_id, "task": "pick a buddy for this micro task"}
         )
 
     def business_task(

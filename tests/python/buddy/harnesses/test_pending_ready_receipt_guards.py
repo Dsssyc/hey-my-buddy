@@ -36,7 +36,7 @@ from hey_my_buddy.errors import BoardError
 
 READINESS_BOUND = 16384
 
-FINISH_IDENTITY = {"taskId": "goal", "attemptId": "attempt", "generation": 1, "turnId": "logical"}
+FINISH_IDENTITY = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"}
 FINISH_KEY = "b" * 64
 FINISH_OUTCOME = {"disposition": "completed", "summary": "done", "remaining": [],
                   "decisions": [], "artifacts": [], "request": None}

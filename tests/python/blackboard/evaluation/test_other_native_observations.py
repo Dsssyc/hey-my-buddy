@@ -196,10 +196,10 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
 
     def context(self, case: str, *, index: int = 1, mode: str = "initial", previous=None,
                 timeout: int = 10) -> ExecutionContext:
-        turn_input = {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{index}", "generation": index,
+        turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode, "previousSessionId": previous,
                       "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result",
                                       "timeoutSeconds": timeout, "provider": "anthropic",
                                       "model": CLAUDE_MODEL, "effort": "low"},
@@ -473,7 +473,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.adapter = worker_executor("zcode")
 
     def context(self, case: str, *, index: int = 1, previous=None, mode=None, timeout: int = 12,
-                run_id: str = "goal-1") -> ExecutionContext:
+                run_id: str = "micro-task-1") -> ExecutionContext:
         identity = {"version": 1, "taskId": run_id, "attemptId": f"attempt-{index}", "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}

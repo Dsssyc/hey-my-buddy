@@ -312,7 +312,7 @@ class DshActivity:
         }
 
 
-# -- the governed root-turn evidence ------------------------------------------------
+# -- the micro task root-turn evidence ------------------------------------------------
 
 
 class RootTurnEvidence:

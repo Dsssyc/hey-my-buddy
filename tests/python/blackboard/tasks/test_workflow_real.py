@@ -2,7 +2,7 @@
 
 These tests exercise the merged ``hey_my_buddy.blackboard.tasks.workspace`` implementation and, since ADR-025
 step four, the shared role seams that replaced the per-harness adapter carrier:
-``worker_executor`` preparation, the ``roles.turn_io`` governed-turn import and
+``worker_executor`` preparation, the ``roles.turn_io`` micro-task-turn import and
 seal, and the shared collection over this project's offline fake ACP agent. Git,
 manifests, the turn input file, the provenance validation and the shutdown gate
 are real; only the native harness is the project's own fake program.
@@ -254,7 +254,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
     ``_seal_workspace``/``collect``/``workspace_cwd``) is gone; these cases hold
     the same boundaries on the seams that replaced it: the shared executor's
     preparation (workspace input binding, exact turn-input bytes, credential
-    privacy), the shared governed-turn import (``roles.turn_io.read_turn`` with
+    privacy), the shared micro-task-turn import (``roles.turn_io.read_turn`` with
     the registered DSH validator) and the shared collection over this project's
     offline fake ACP agent, whose finish receipts the real role rules mint.
     The agent declares its own fixture selectors (provider ``fake``, model
@@ -272,12 +272,12 @@ class RealAdapterTests(RealWorkspaceTestCase):
         path.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}))
         return path
 
-    def _governed_record(self, index: int, run_id: str, *extra: str) -> Path:
+    def _micro_task_record(self, index: int, run_id: str, *extra: str) -> Path:
         attempt_id = f"attempt-{index}"
         checkpoint, _answer, finish = self._qualified_tools(attempt_id)
         bridge = attempt_root(self.directory, "dsh", run_id, attempt_id) / "finish-bridge.json"
         return self._agent_record(
-            index, "--prompt-mode", "governed", "--bridge-config", str(bridge),
+            index, "--prompt-mode", "micro-task", "--bridge-config", str(bridge),
             "--finish-tool", finish, "--checkpoint-tool", checkpoint, *extra)
 
     @staticmethod
@@ -379,7 +379,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         # a real immutable output. The record is a synthetic native fact
         # (protocol.fixtures.native_turn), not real native verification.
         service_hash = sha256_text(canonical_json(context.turn_input))
-        complete = native_turn.governed_record(
+        complete = native_turn.micro_task_record(
             harness="dsh", task_id=context.task_id, attempt_id=context.attempt_id,
             generation=context.generation, turn_id="turn-1", resume_mode="initial",
             previous_session_id=None, input_sha256=service_hash,
@@ -400,10 +400,10 @@ class RealAdapterTests(RealWorkspaceTestCase):
         submitted = self.submit(board)
         manifest = self.manifest_for("adapter-2")
         executor = worker_executor("dsh")
-        # The governed fake agent holds its turn open at the cooperative
+        # The micro-task fake agent holds its turn open at the cooperative
         # checkpoint, so a collection while it runs observes an unconfirmed
         # stop: nothing is imported and nothing is sealed.
-        holding = self._governed_record(2, submitted["runId"], "--wait-for-inquiry", "20")
+        holding = self._micro_task_record(2, submitted["runId"], "--wait-for-inquiry", "20")
         held = self._context(submitted["runId"], manifest, index=2, record=holding)
         handle = executor.start(held)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
@@ -416,7 +416,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         self.assertIsNotNone(handle.wait(30))
         # Once the run settles and shutdown is confirmed, the same shared
         # collection imports the minted turn and seals the real workspace.
-        settling = self._governed_record(3, submitted["runId"])
+        settling = self._micro_task_record(3, submitted["runId"])
         settled = self._context(submitted["runId"], manifest, index=3, record=settling)
         finished = executor.start(settled)
         self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if finished.group_alive() else None)

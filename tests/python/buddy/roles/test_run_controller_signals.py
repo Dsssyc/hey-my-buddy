@@ -82,11 +82,11 @@ class ControllerSignalTests(unittest.TestCase):
                                BUDDY_CODEX_CLI=str(native), BUDDY_CODEX_FIXTURE_CASE="ok",
                                BUDDY_CODEX_FIXTURE_STATE=str(root / "fixture.json"),
                                PYTHONPATH=str(SOURCE))
-            turn_input = {"version": 1, "taskId": "goal-1", "attemptId": "attempt-1",
+            turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": "attempt-1",
                           "generation": 1, "turnId": "turn-1", "resumeMode": "initial",
                           "previousSessionId": None, "context": {}, "executionWorkspace": {}}
             context = ExecutionContext(
-                task_id="goal-1", attempt_id="attempt-1", generation=1,
+                task_id="micro-task-1", attempt_id="attempt-1", generation=1,
                 spec={"cwd": str(root), "task": "Write a fixture result", "timeoutSeconds": 8,
                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                 directory=root / "attempt", runtime={}, environment=environment,

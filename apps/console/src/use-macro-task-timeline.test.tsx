@@ -41,7 +41,7 @@ describe("work macro task timeline hook", () => {
     expect([...f.result.current.newRunIds]).toEqual([]);
   });
 
-  it("appends refreshed delegations at the end and labels only them as new", async () => {
+  it("appends refreshed microTasks at the end and labels only them as new", async () => {
     const fixture = macroTaskTimelineFixture();
     const f = harness(fixture);
     await act(async () => f.reads[0]!.resolve(readWith(fixture)));

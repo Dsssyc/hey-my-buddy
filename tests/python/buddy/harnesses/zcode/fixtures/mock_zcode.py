@@ -417,7 +417,7 @@ def request_client(request_id, method, params):
 
 
 def interactive_attention():
-    """Exercise the documented interactive requests a governed turn cannot grant."""
+    """Exercise the documented interactive requests a micro task turn cannot grant."""
     permission = request_client("server-perm-1", "interaction/requestPermission",
                                 {"sessionId": session_id, "toolCallId": "fixture-tool", "toolName": "Bash"})
     user_input = request_client("server-input-1", "interaction/requestUserInput",

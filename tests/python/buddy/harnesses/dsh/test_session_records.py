@@ -5,7 +5,7 @@ unchanged for the fresh-session fold; these cases pin its two halves against
 real files on disk — the plain and zstandard rollouts a fresh session
 produces, and the frozen-boundary projection a resumed turn needs: extension
 of the frozen prefix, the old attempts' records that sit beside the target's
-in a reconstructed goal root being skipped — never folded, never making the
+in a reconstructed micro task root being skipped — never folded, never making the
 boundary unreliable — and the unprovable shapes (a vanished rollout, a
 rewritten prefix, a shortened file, a replayed frozen line, an unreliable
 freeze, a record no header can attribute) that must leave the projection
@@ -244,7 +244,7 @@ class ResumeBoundaryTests(SessionRecordCase):
         self.assertEqual(facts["usage"]["inputTokens"], 40)
 
     def test_foreign_session_records_never_pollute_the_frozen_baseline(self):
-        # A goal-shaped root after a reconstruction: the old attempts' rollouts
+        # A micro-task-shaped root after a reconstruction: the old attempts' rollouts
         # sit beside the native session's own record, in both layouts.
         self.write_rollout(foreign_rollout("old-initial"),
                            name="old-initial.v3.jsonl", compressed=False)
