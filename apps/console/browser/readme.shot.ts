@@ -49,6 +49,10 @@ for (const language of ["en", "zh"] as const) {
         await expect(page.locator("[data-slot=timeline-axis]")).toBeVisible();
         await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(4);
         await expect(page.locator(`[data-slot=macro-entry][aria-pressed=true]`)).toContainText(language === "zh" ? "交付离线搜索" : "Ship offline search");
+        const failure = timeline.rows.find((row: { runId: string }) => row.runId === "readme-ranking");
+        expect([failure.state, failure.status, failure.conclusionStatus]).toEqual(["concluded", "concluded", "failed"]);
+        await expect(page.locator('[data-slot=timeline-row][data-run-id="readme-ranking"] [data-slot=failed-conclusion-mark] circle')).toBeVisible();
+        await expect(page.locator('[data-slot=timeline-row-name][data-run-id="readme-ranking"]:visible')).toHaveAttribute("data-state-tone", "fail");
         await expect(page.locator("[data-slot=timeline-lane]")).toHaveCount(1);
         await expect(page.locator("[data-slot=timeline-row-name]:visible")).toHaveCount(9);
         await expect(page.locator('[data-slot=timeline-row-name][data-fixes="readme-ranking"]:visible')).toHaveCount(1);

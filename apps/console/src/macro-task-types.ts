@@ -37,6 +37,8 @@ const timelineRemindersSchema = z.looseObject({
 });
 const timelineInquirySchema = z.looseObject({ inquiryId: z.string().min(1), createdAt: dateString, state: z.string().min(1) });
 const timelineRowSchema = z.looseObject({
+  /** Recorded Host conclusion; null until the Host closes the micro task. */
+  conclusionStatus: z.enum(["failed", "cancelled", "delivered"]).nullable(),
   delegationAuthority: z.boolean(), title: z.string().nullable(), taskSummary: z.string().nullable(),
   fixes: z.string().min(1).optional(), fixesTitle: z.string().nullable().optional(),
   fixesTitleSource: z.enum(["title", "task", "none"]).optional(), fixedBy: z.array(z.string().min(1)).min(1).optional(),

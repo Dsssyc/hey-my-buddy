@@ -20,6 +20,7 @@ import { MarkerCluster, markerAt, markerHasKey, markerKey } from "./MarkerCluste
 import { ConclusionMark } from "./ConclusionMark";
 import { fragmentHitPath, IdlePattern, WaitingDiamond, TIMELINE_OUTSET_PX as INSET_PX } from "./trackMarks";
 import { eventActions } from "./events";
+import { isFailedRow } from "./failure";
 import { CLUSTER_SELECTION_PADDING_PX, clusterHalfWidth } from "./ClusterMark";
 import type { TimelineMarker } from "./MarkerCluster";
 import type { OwnedWait } from "./lanes";
@@ -189,7 +190,7 @@ const TrackView = memo(function Track({ row, spans, events, scale, nowMs, ongoin
   const wait = acceptanceInterval(row, spans, nowMs);
   const acceptanceOpen = wait?.open ?? false;
   const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDuration(wait.endMs - wait.startMs, "minutes") } : null;
-  const isConclusion = (event: TimelineEvent) => event.kind === "accept" || event.kind === "conclude" && (row.state === "failed" || row.status === "failed");
+  const isConclusion = (event: TimelineEvent) => event.kind === "accept" || event.kind === "conclude" && isFailedRow(row);
   const markers = eventActions(events).map(action => ({ ...action, x: scale.toX(instant(action.event.at)!)! }));
   const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, span, x: scale.toX(instant(inquiry.createdAt)!)! })));
   const allMarkers: TimelineMarker[] = [

@@ -1975,6 +1975,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "taskSummary": task_first_line(entry["task"]),
         "summary": entry.get("timelineSummary", "合成记录：已提交输出，等待按记录核对。") if entry["status"] == "completed" else None,
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
+        "conclusionStatus": entry["hostConclusion"]["executionStatus"] if entry["hostConclusion"] else None,
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
         "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
@@ -2990,7 +2991,7 @@ REQUIRED_KEYS = {
                      "clockSkew", "expectedSeconds", "reminders", "inquiries"},
     "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership", "delegationAuthority",
                     "title", "titleSource", "taskSummary", "summary",
-                    "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
+                    "createdAt", "state", "status", "conclusionStatus", "category", "shutdownConfirmed", "depth", "kind",
                     "buddy", "acceptedAt", "reviewRejectedAt", "reviewRejectionNote"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "decision", "verdict", "state", "strategy", "note", "actor", "attemptId",
                       "requestId", "artifactId"},
