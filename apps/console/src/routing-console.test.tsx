@@ -24,6 +24,7 @@ function snapshot(records: Task[] = []): Snapshot {
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     cards: [], annotations: [], evidence: [], decisions: [], sampleCounts: {},
+    modelConcurrency: [],
     tasks: { runs: records, total: records.length },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };

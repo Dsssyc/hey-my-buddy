@@ -2,11 +2,15 @@ import type {
   Annotation,
   Card,
   Draft,
+  ModelConcurrencyEntry,
+  ModelConcurrencySetting,
+  ModelFamily,
   Preference,
   Profile,
   Snapshot,
   WriterGrant,
 } from "./types";
+import { concurrencyLimit, familyKey } from "./console-data";
 
 /** Retained identity rows the current snapshot no longer lists. */
 export type HistoryEntries = {
@@ -21,6 +25,7 @@ export type HistoryEntries = {
   annotations?: Annotation[];
   cards?: Card[];
   sampleCounts?: Record<string, number>;
+  modelConcurrency?: ModelConcurrencyEntry[];
 };
 
 export function makeDraft(snapshot: Snapshot): Draft {
@@ -30,6 +35,11 @@ export function makeDraft(snapshot: Snapshot): Draft {
     preferences: snapshot.preferences,
     annotations: snapshot.annotations ?? [],
     configuration: snapshot.configuration,
+    // The draft carries the user limit settings only; occupancy is observation
+    // and is dropped here so no publication path can ever emit it.
+    modelConcurrency: snapshot.modelConcurrency.map(
+      ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
+    ),
   });
 }
 
@@ -81,27 +91,44 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | 
   return added.length ? [...current, ...added] : current;
 }
 
+function addMissingFamilies<T extends ModelConcurrencySetting>(
+  current: T[],
+  extra: T[] | undefined,
+): T[] {
+  if (!extra?.length) return current;
+  const known = new Set(current.map(familyKey));
+  const added = extra.filter((entry) => !known.has(familyKey(entry)) && (known.add(familyKey(entry)), true));
+  return added.length ? [...current, ...added] : current;
+}
+
 /**
  * Adds retained history rows the snapshot no longer lists. Live snapshot rows
  * always win; history only fills identities that would otherwise be invisible,
  * and only when the page was read at the source's own revision.
  */
-export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "annotations"> & { tableRevision: number }>(
+export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "annotations">
+  & { tableRevision: number; modelConcurrency?: ModelConcurrencySetting[] }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
   if (!entries || entries.tableRevision !== source.tableRevision) return source;
+  // A draft never carries occupancy, so retained family entries join as settings.
+  const retainedSettings = entries.modelConcurrency?.map(
+    ({ adapter, provider, model, limit }) => ({ adapter, provider, model, limit }),
+  );
   return {
     ...source,
     profiles: addMissing(source.profiles, entries.profiles),
     preferences: addMissing(source.preferences, entries.preferences),
     annotations: addMissing(source.annotations, entries.annotations),
+    modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], retainedSettings),
   };
 }
 
 /** Full console view: human draft (or snapshot) plus retained history rows. */
 export function historyView<T extends Pick<Draft, "profiles" | "preferences" | "annotations">
-  & { tableRevision: number; cards: Card[]; sampleCounts?: Record<string, number> }>(
+  & { tableRevision: number; cards: Card[]; sampleCounts?: Record<string, number>;
+      modelConcurrency?: ModelConcurrencySetting[] }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
@@ -110,7 +137,9 @@ export function historyView<T extends Pick<Draft, "profiles" | "preferences" | "
   const base = withHistory(source, entries);
   // Snapshot cards and counts are authoritative for the identities they cover.
   const counts = { ...(entries.sampleCounts ?? {}), ...(source.sampleCounts ?? {}) };
-  return { ...base, cards: addMissing(source.cards, entries.cards ?? []), sampleCounts: counts };
+  // Retained family entries keep their recorded occupancy for the read-only view.
+  return { ...base, cards: addMissing(source.cards, entries.cards ?? []), sampleCounts: counts,
+    modelConcurrency: addMissingFamilies(source.modelConcurrency ?? [], entries.modelConcurrency) };
 }
 
 /**
@@ -136,11 +165,18 @@ export function retainedAdditions(
     const inBaseline = new Set(known.map((row) => row.profileId));
     return rows.filter((row) => inDraft.has(row.profileId) || !inBaseline.has(row.profileId));
   };
+  const familyIn = (rows: ModelConcurrencySetting[]) => new Set(rows.map(familyKey));
+  const draftFamilies = familyIn(draft.modelConcurrency);
+  const baselineFamilies = familyIn(baseline.modelConcurrency);
   return {
     ...entries,
     profiles: additions(entries.profiles, draft.profiles, baseline.profiles),
     preferences: additions(entries.preferences, draft.preferences, baseline.preferences),
     annotations: additions(entries.annotations, draft.annotations, baseline.annotations),
+    modelConcurrency: entries.modelConcurrency?.filter((entry) => {
+      const key = familyKey(entry);
+      return draftFamilies.has(key) || !baselineFamilies.has(key);
+    }),
   };
 }
 
@@ -155,6 +191,40 @@ export function setPreference(
   );
   if (mode) preferences.push({ profileId, mode, reason });
   return { ...draft, preferences };
+}
+
+/**
+ * Sets one family's concurrent-task limit, identified by the exact
+ * adapter/provider/model tuple of any of its effort variants. The setting
+ * exists independently of availability and is keyed once per family.
+ */
+export function setConcurrencyLimit(
+  draft: Draft,
+  family: ModelFamily,
+  limit: number,
+): Draft {
+  const key = familyKey(family);
+  const exists = draft.modelConcurrency.some((entry) => familyKey(entry) === key);
+  const modelConcurrency = exists
+    ? draft.modelConcurrency.map((entry) => (familyKey(entry) === key ? { ...entry, limit } : entry))
+    : [...draft.modelConcurrency, { adapter: family.adapter, provider: family.provider, model: family.model, limit }];
+  return { ...draft, modelConcurrency };
+}
+
+/** Limit patches, one per family whose user setting changed; never occupancy. */
+export function modelConcurrencyChanges(
+  baseline: Draft,
+  draft: Draft,
+): ModelConcurrencySetting[] {
+  const before = new Map(baseline.modelConcurrency.map((entry) => [familyKey(entry), entry]));
+  const changed: ModelConcurrencySetting[] = [];
+  for (const entry of draft.modelConcurrency) {
+    const limit = concurrencyLimit(entry.limit);
+    const old = before.get(familyKey(entry));
+    if (limit === null || (old && old.limit === limit)) continue;
+    changed.push({ adapter: entry.adapter, provider: entry.provider, model: entry.model, limit });
+  }
+  return changed.sort((a, b) => familyKey(a).localeCompare(familyKey(b)));
 }
 
 /** The only fields a human may publish; program-owned profile/catalog fields stay out. */
@@ -176,11 +246,13 @@ export type UserPolicyPublication = {
   preferenceChanges?: PreferenceChangePatch[];
   annotationChanges?: AnnotationChangePatch[];
   configuration?: { decisionProfileId: string | null };
+  /** Per-family limit patches; the board refuses any `active` occupancy here. */
+  modelConcurrency?: ModelConcurrencySetting[];
 };
 
 type UserEditable = Pick<
   Draft,
-  "profiles" | "preferences" | "annotations" | "configuration"
+  "profiles" | "preferences" | "annotations" | "configuration" | "modelConcurrency"
 >;
 
 const byProfileId = (a: { profileId: string }, b: { profileId: string }) =>
@@ -252,7 +324,8 @@ export function configurationChanged(baseline: Draft, draft: Draft): boolean {
 /**
  * `user_policy_publish` payload: identity, expected revision and only the dirty
  * user patches. An unchanged field is omitted so the board keeps its value; no
- * provider/model/effort/available/catalog field and no card is ever included.
+ * provider/model/effort/available/catalog field, no card and no occupancy is
+ * ever included.
  */
 export function publication(
   baseline: Draft,
@@ -263,6 +336,7 @@ export function publication(
   const settings = profileSettings(baseline, draft);
   const preferences = preferenceChanges(baseline, draft);
   const annotations = annotationChanges(baseline, draft);
+  const concurrency = modelConcurrencyChanges(baseline, draft);
   return {
     commandId,
     writerId: grant.writerId,
@@ -272,6 +346,7 @@ export function publication(
     ...(settings.length ? { profileSettings: settings } : {}),
     ...(preferences.length ? { preferenceChanges: preferences } : {}),
     ...(annotations.length ? { annotationChanges: annotations } : {}),
+    ...(concurrency.length ? { modelConcurrency: concurrency } : {}),
     ...(configurationChanged(baseline, draft)
       ? { configuration: { decisionProfileId: draft.configuration.decisionProfileId } }
       : {}),
@@ -280,8 +355,8 @@ export function publication(
 
 /**
  * Order-independent fingerprint of exactly the human-editable content. Program
- * fields (availability, catalog facts) are not user changes and never make a
- * draft look dirty after a directory refresh.
+ * fields (availability, catalog facts, recorded occupancy) are not user changes
+ * and never make a draft look dirty after a directory refresh.
  */
 function fingerprint(draft: UserEditable): string {
   return JSON.stringify({
@@ -295,6 +370,8 @@ function fingerprint(draft: UserEditable): string {
     configuration: {
       decisionProfileId: draft.configuration.decisionProfileId,
     },
+    modelConcurrency: [...draft.modelConcurrency]
+      .sort((a, b) => familyKey(a).localeCompare(familyKey(b))),
   });
 }
 
@@ -305,20 +382,29 @@ export function draftDiffers(baseline: Draft, draft: Draft): boolean {
 
 /**
  * One tuple per profile over the fields a human owns: its enabled intent, its
- * preference rows and its opinion. A card is program-owned and is not a human
- * change, so it can no longer hide or fabricate a profile edit.
+ * preference rows, its opinion and its family's concurrency limit (shared with
+ * the other effort variants of the same adapter/provider/model tuple). A card
+ * is program-owned and is not a human change, so it can no longer hide or
+ * fabricate a profile edit.
  */
 function profileTuples(draft: UserEditable): Map<string, string> {
-  type Tuple = { enabled?: boolean; preferences: Preference[]; annotation?: string };
+  type Tuple = {
+    enabled?: boolean; preferences: Preference[]; annotation?: string; concurrencyLimit: number | null;
+  };
   const collected = new Map<string, Tuple>();
+  const limits = new Map(draft.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]));
   const tuple = (profileId: string) => {
     const existing = collected.get(profileId);
     if (existing) return existing;
-    const created: Tuple = { preferences: [] };
+    const created: Tuple = { preferences: [], concurrencyLimit: null };
     collected.set(profileId, created);
     return created;
   };
-  for (const profile of draft.profiles) tuple(profile.profileId).enabled = profile.enabled;
+  for (const profile of draft.profiles) {
+    const value = tuple(profile.profileId);
+    value.enabled = profile.enabled;
+    value.concurrencyLimit = limits.get(familyKey(profile)) ?? null;
+  }
   for (const preference of draft.preferences) tuple(preference.profileId).preferences.push(preference);
   for (const annotation of draft.annotations) {
     if (annotation.text) tuple(annotation.profileId).annotation = annotation.text;
@@ -333,6 +419,7 @@ function profileTuples(draft: UserEditable): Map<string, string> {
           (a, b) => a.mode.localeCompare(b.mode) || a.reason.localeCompare(b.reason),
         ),
         annotation: value.annotation ?? "",
+        concurrencyLimit: value.concurrencyLimit,
       }),
     ]),
   );
@@ -358,7 +445,7 @@ export function changedProfileIds(baseline: Draft, draft: Draft): string[] {
 export type RebaseConflictKind = "changed" | "unread";
 export type RebaseConflict = {
   kind: RebaseConflictKind;
-  field: "enabled" | "preference" | "annotation" | "configuration";
+  field: "enabled" | "preference" | "annotation" | "configuration" | "modelConcurrency";
   profileId: string;
   message: string;
 };
@@ -374,6 +461,7 @@ const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
   preference: "用户偏好",
   annotation: "人工意见",
   configuration: "决策模型配置",
+  modelConcurrency: "并发上限",
 };
 
 function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
@@ -508,6 +596,28 @@ export function rebaseDraft(
     else fail("changed", "configuration", wanted ?? "");
   }
 
+  // Family concurrency limits: the key is the exact adapter/provider/model
+  // tuple, so effort variants and occupancy never take part in the comparison.
+  const mergedConcurrency = new Map<string, ModelConcurrencySetting>();
+  const baselineLimits = new Map(
+    baseline.modelConcurrency.map((entry) => [familyKey(entry), entry.limit]),
+  );
+  for (const change of modelConcurrencyChanges(baseline, draft)) {
+    const key = familyKey(change);
+    const subject = `${change.adapter}/${change.provider}/${change.model}`;
+    const freshEntry = nextBaseline.modelConcurrency.find((entry) => familyKey(entry) === key);
+    if (!freshEntry) {
+      fail("unread", "modelConcurrency", subject);
+      continue;
+    }
+    const old = baselineLimits.get(key);
+    if (freshEntry.limit === old || freshEntry.limit === change.limit) {
+      mergedConcurrency.set(key, change);
+    } else {
+      fail("changed", "modelConcurrency", subject, `（现为 ${freshEntry.limit}）`);
+    }
+  }
+
   if (conflicts.length) return { draft, baseline, conflicts };
 
   const preferences = nextBaseline.preferences.filter(
@@ -533,6 +643,8 @@ export function rebaseDraft(
       preferences,
       annotations,
       configuration: { ...nextBaseline.configuration, decisionProfileId },
+      modelConcurrency: nextBaseline.modelConcurrency.map((entry) =>
+        mergedConcurrency.get(familyKey(entry)) ?? entry),
     },
     conflicts,
   };

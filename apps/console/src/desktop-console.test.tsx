@@ -45,6 +45,7 @@ function fixture(records: Task[] = []) {
       summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
     preferences: [], annotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
+    modelConcurrency: [],
     tasks: { runs: records, total: records.length },
     capabilities: { selection: false, maintenance: false, evaluationWriteGate: true } };
   const grant: WriterGrant = { writerId: "writer", generation: 1, writerToken: "private", phase: "writing", tableRevision: 2,

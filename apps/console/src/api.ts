@@ -75,6 +75,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         !Array.isArray(data.profiles) ||
         !Array.isArray(data.cards) ||
         !Array.isArray(data.annotations) ||
+        !Array.isArray(data.modelConcurrency) ||
         !Array.isArray(data.tasks?.runs) ||
         typeof data.csrfToken !== "string"
       ) {

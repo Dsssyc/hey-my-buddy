@@ -1,10 +1,35 @@
-import type { Card, Preference, Profile, Snapshot, Task } from "./types";
+import type { Card, ModelFamily, Preference, Profile, Snapshot, Task } from "./types";
 import { effortText, profileName } from "./profile-display";
 
-export const familyKey = (p: Profile) => JSON.stringify([p.adapter, p.provider, p.model]);
-export type ModelFamily = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
-export function modelFamilies(profiles: Profile[]): ModelFamily[] {
-  const groups = new Map<string, ModelFamily>();
+export const familyKey = (p: ModelFamily) => JSON.stringify([p.adapter, p.provider, p.model]);
+/**
+ * ADR-011 shared model concurrency: one user-owned concurrent-task limit per
+ * exact adapter/provider/model family. All effort variants, routing decisions
+ * and execution attempts of the family share the count; the default is 2 and
+ * the accepted range is the integers 1–32.
+ */
+export const MODEL_CONCURRENCY_DEFAULT = 2;
+export const MODEL_CONCURRENCY_MIN = 1;
+export const MODEL_CONCURRENCY_MAX = 32;
+
+/** The family's entry in a snapshot/page or draft list, or null when absent. */
+export function concurrencyEntryFor<E extends ModelFamily>(
+  entries: E[] | undefined,
+  family: ModelFamily,
+): E | null {
+  return entries?.find((entry) => familyKey(entry) === familyKey(family)) ?? null;
+}
+
+/** Only an integer within 1–32 is a limit setting; anything else is not one. */
+export function concurrencyLimit(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value)
+    && value >= MODEL_CONCURRENCY_MIN && value <= MODEL_CONCURRENCY_MAX
+    ? value
+    : null;
+}
+export type ModelFamilyGroup = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
+export function modelFamilies(profiles: Profile[]): ModelFamilyGroup[] {
+  const groups = new Map<string, ModelFamilyGroup>();
   for (const profile of profiles) {
     const key = familyKey(profile);
     if (!groups.has(key)) groups.set(key, { key, name: profileName(profile), adapter: profile.adapter, provider: profile.provider, profiles: [] });
@@ -19,7 +44,7 @@ export function modelFamilies(profiles: Profile[]): ModelFamily[] {
     || Number(b.profiles.some(p => p.enabled)) - Number(a.profiles.some(p => p.enabled))
     || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
 }
-export function preferredVariant(family: ModelFamily, preferences: Preference[]) {
+export function preferredVariant(family: ModelFamilyGroup, preferences: Preference[]) {
   // An unavailable variant never pre-empts an available one for the initial view.
   const available = family.profiles.filter(p => p.available);
   const pool = available.length ? available : family.profiles;

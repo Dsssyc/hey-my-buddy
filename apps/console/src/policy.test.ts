@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeDraft, publication, setAnnotation, setPreference } from "./draft";
+import { makeDraft, publication, setAnnotation, setConcurrencyLimit, setPreference } from "./draft";
 import {
   attentionIssues,
   blockingIssues,
@@ -56,6 +56,7 @@ function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {})
     evidence: [],
     decisions: [],
     sampleCounts: {},
+    modelConcurrency: [],
     tasks: { runs: [], total: 0 },
     capabilities: { evaluationWriteGate: true },
     ...extra,
@@ -246,5 +247,30 @@ describe("stale settings needing attention", () => {
     }));
     expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
+  });
+});
+
+describe("model concurrency limits", () => {
+  it("blocks an out-of-range limit while every legal limit stays publishable", () => {
+    const baseline = makeDraft(snapshot([worker]));
+    for (const limit of [0, 33, 2.5]) {
+      const invalid = {
+        ...baseline,
+        modelConcurrency: [{ adapter: worker.adapter, provider: worker.provider, model: worker.model, limit }],
+      };
+      const issues = blockingIssues(baseline, invalid);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].message).toContain("1–32");
+      expect(issues[0].profileId).toBe(worker.profileId);
+    }
+    // A limit edit never depends on availability: the retired configuration's
+    // family setting stays publishable within the range.
+    const retiredBase = makeDraft(snapshot([worker, retired]));
+    const raised = setConcurrencyLimit(retiredBase, retired, 32);
+    expect(blockingIssues(retiredBase, raised)).toEqual([]);
+    const patch = publication(retiredBase, raised, grant(), "c");
+    expect(patch.modelConcurrency).toEqual([
+      { adapter: retired.adapter, provider: retired.provider, model: retired.model, limit: 32 },
+    ]);
   });
 });

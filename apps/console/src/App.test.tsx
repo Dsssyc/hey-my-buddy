@@ -46,6 +46,7 @@ const initial = (): Snapshot => ({
   evidence: [],
   decisions: [],
   sampleCounts: { "flash-off": 3 },
+  modelConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 0 }],
   tasks: { runs: [], total: 0 },
   capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
 });

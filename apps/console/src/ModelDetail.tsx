@@ -1,22 +1,73 @@
+import { useEffect, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { annotationText, emptyCard, setAnnotation, setPreference } from "./draft";
+import { annotationText, emptyCard, setAnnotation, setConcurrencyLimit, setPreference } from "./draft";
 import type { Editor } from "./use-editor";
-import type { Snapshot } from "./types";
+import type { ConsoleView, ModelFamily, Snapshot } from "./types";
 import { Badge, formatDate } from "./ui";
 import { effortText, profileName } from "./profile-display";
-import { cardOriginText, familyKey, isMaintenanceCard, modelFamilies, recordedSampleCount } from "./console-data";
+import {
+  MODEL_CONCURRENCY_DEFAULT,
+  MODEL_CONCURRENCY_MAX,
+  MODEL_CONCURRENCY_MIN,
+  cardOriginText,
+  concurrencyEntryFor,
+  familyKey,
+  isMaintenanceCard,
+  modelFamilies,
+  recordedSampleCount,
+} from "./console-data";
 import { DetailTabs } from "./DetailTabs";
 import { EvaluationHistory } from "./EvaluationHistory";
 
 const sections = [["overview", "概览"], ["assessment", "评价与意见"], ["preferences", "偏好与启用"], ["evidence", "证据"]] as const;
 const EMPTY_EVIDENCE = "暂无评价证据。你可以让已配置 hey-my-buddy skill 的 Harness 执行一次模型评价更新，或在该 Harness 中设置定时更新任务。";
 
+/**
+ * The one shared concurrent-task limit of a model family. Only a valid integer
+ * in 1–32 is committed to the draft; anything else stays a visible, unsaved
+ * input. The field is remounted per family (keyed by the caller), so switching
+ * variants never shows a stale typed value, and an external draft change
+ * (rebase or reload) resets the buffer to the committed limit.
+ */
+function ConcurrencyField({ editor, family, draftLimit, occupancy }: {
+  editor: Editor; family: ModelFamily; draftLimit: number; occupancy: number | null;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => { setText(null); }, [draftLimit]);
+  const parsed = text === null ? NaN : Number(text);
+  const committed = text !== null && Number.isInteger(parsed) && parsed === draftLimit;
+  const shown = text === null || committed ? String(draftLimit) : text;
+  const invalid = !Number.isInteger(Number(shown))
+    || Number(shown) < MODEL_CONCURRENCY_MIN || Number(shown) > MODEL_CONCURRENCY_MAX;
+  return <div className="form-pair concurrency-row">
+    <label className="field concurrency-value">
+      <span>并发任务上限</span>
+      <input type="number" inputMode="numeric" min={MODEL_CONCURRENCY_MIN} max={MODEL_CONCURRENCY_MAX}
+        step={1} value={shown} aria-invalid={invalid || undefined} aria-describedby="concurrency-note"
+        onBlur={() => setText(null)}
+        onChange={(event) => {
+          const raw = event.target.value;
+          setText(raw === String(draftLimit) ? null : raw);
+          const value = Number(raw);
+          if (raw !== "" && Number.isInteger(value)
+            && value >= MODEL_CONCURRENCY_MIN && value <= MODEL_CONCURRENCY_MAX
+            && value !== draftLimit) {
+            editor.setDraft((draft) => (draft ? setConcurrencyLimit(draft, family, value) : draft));
+          }
+        }} />
+    </label>
+    <p className="small muted concurrency-occupancy" id="concurrency-note">
+      当前占用 {occupancy ?? "未知"}（只读）{invalid ? " · 需要输入 1–32 的整数，当前修改不会保存" : ""}
+    </p>
+  </div>;
+}
+
 export function ModelDetail({
   data, recorded, editor, api, active = true, historyOpen, section, onSection, profileId, showUnavailable,
   onSelect, onCloseHistory, onCloseList, guard = "", error = "", note = "",
 }: {
   /** Human draft (when editing) merged with retained history rows. */
-  data: Snapshot; /** Recorded snapshot merged with retained history rows. */
+  data: ConsoleView; /** Recorded snapshot merged with retained history rows. */
   recorded: Snapshot; editor: Editor; api: ConsoleApi; active?: boolean;
   historyOpen: boolean; section: string; onSection: (value: string) => void;
   profileId: string | null; showUnavailable: boolean;
@@ -36,6 +87,16 @@ export function ModelDetail({
   const opinion = profile ? annotationText(data, profile.profileId) : "";
   const publishedOpinion = profile ? annotationText(recorded, profile.profileId) : "";
   const preference = data.preferences.find(p => p.profileId === profileId);
+  // One shared concurrency setting per adapter/provider/model family; every
+  // effort variant only inspects or edits that single value. Occupancy comes
+  // from the recorded snapshot: it is observation and never part of the draft.
+  const familyConcurrency = profile ? concurrencyEntryFor(data.modelConcurrency, profile) : null;
+  const recordedConcurrency = profile ? concurrencyEntryFor(recorded.modelConcurrency, profile) : null;
+  const draftLimit = familyConcurrency ? familyConcurrency.limit : MODEL_CONCURRENCY_DEFAULT;
+  const recordedLimit = recordedConcurrency ? recordedConcurrency.limit : null;
+  const occupancy = recordedConcurrency && Number.isInteger(recordedConcurrency.active)
+    ? recordedConcurrency.active : null;
+  const concurrencyUnsaved = editing && recordedLimit !== null && recordedLimit !== draftLimit;
   const variants = profile
     ? family?.profiles.filter(p => showUnavailable || p.available || p.profileId === profile.profileId) ?? []
     : [];
@@ -137,6 +198,9 @@ export function ModelDetail({
               onChange={e => editor.setDraft(d => d ? { ...d, preferences: d.preferences.map(p => p.profileId === profile.profileId ? { ...p, reason: e.target.value } : p) } : d)} /></label>
             <label className="checkbox-field"><input type="checkbox" checked={profile.enabled} disabled={!canEnable}
               onChange={e => editor.setDraft(d => d ? { ...d, profiles: d.profiles.map(p => p.profileId === profile.profileId ? { ...p, enabled: e.target.checked } : p) } : d)} />允许后续选择使用此配置</label>
+            <ConcurrencyField key={familyKey(profile)} editor={editor} family={profile}
+              draftLimit={draftLimit} occupancy={occupancy} />
+            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；保存后立即对后续任务生效，调低上限不会中断正在运行的任务，只会等占用回落后再放行新任务。{concurrencyUnsaved && <span className="unsaved-mark">并发上限未保存</span>}</p>
             {!profile.available && (profile.enabled
               ? <p className="small muted">此配置当前不在目录中。你仍可以停用它、修改意见或偏好依据；重新启用需要它再次被发现。</p>
               : <p className="small muted">此配置当前不在目录中，不能新启用；可以修改意见或保留历史。</p>)}
@@ -145,7 +209,9 @@ export function ModelDetail({
           </> : <>
             <dl className="facts"><dt>用户偏好</dt><dd>{preference ? ({ prefer: "优先考虑", pin: "固定选择", exclude: "排除" })[preference.mode] : "无额外偏好"}</dd>
               <dt>偏好依据</dt><dd>{preference?.reason || "未记录"}</dd>
-              <dt>启用状态</dt><dd>{profile.enabled ? "允许后续选择使用此配置" : "已停用"}</dd></dl>
+              <dt>启用状态</dt><dd>{profile.enabled ? "允许后续选择使用此配置" : "已停用"}</dd>
+              <dt>并发任务上限</dt><dd>{recordedLimit ?? `${MODEL_CONCURRENCY_DEFAULT}（默认）`}{occupancy !== null ? ` · 当前占用 ${occupancy}` : ""}</dd></dl>
+            <p className="small muted">并发上限由同一模型的所有思考档位与路由、执行共用；当前占用是只读观察，调低上限不会中断正在运行的任务。</p>
             <p className="small muted">开启右上角“编辑模式”后可以修改偏好与启用状态；发布不会改变运行中任务的配置。</p>
           </>)}
           {panel === "evidence" && <section className="evidence-readonly" aria-label="评价证据（只读）">

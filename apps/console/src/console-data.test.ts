@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { modelFamilies, preferredVariant, recordedSampleCount, taskHost, taskProject } from "./console-data";
+import {
+  MODEL_CONCURRENCY_DEFAULT,
+  concurrencyEntryFor,
+  concurrencyLimit,
+  modelFamilies,
+  preferredVariant,
+  recordedSampleCount,
+  taskHost,
+  taskProject,
+} from "./console-data";
 import type { Card, Preference, Profile, Snapshot, Task } from "./types";
 
 const profile = (profileId: string, adapter: string, provider: string, effort: string): Profile => ({
@@ -58,5 +67,28 @@ describe("recorded sample counts", () => {
     expect(recordedSampleCount({ ...snapshot({}), cards: [legacyCard] } as Snapshot, "p")).toBe(0);
     // A board that has not shipped the map yet degrades to zero, never crashes.
     expect(recordedSampleCount({} as Snapshot, "p")).toBe(0);
+  });
+});
+
+describe("shared model concurrency", () => {
+  it("accepts only integer limits within 1–32 and defaults to 2", () => {
+    expect(MODEL_CONCURRENCY_DEFAULT).toBe(2);
+    expect(concurrencyLimit(1)).toBe(1);
+    expect(concurrencyLimit(32)).toBe(32);
+    for (const invalid of [0, 33, -2, 2.5, "4", null, undefined]) {
+      expect(concurrencyLimit(invalid)).toBeNull();
+    }
+  });
+
+  it("finds a family entry by the exact adapter/provider/model tuple, ignoring effort", () => {
+    const entries = [
+      { adapter: "dsh", provider: "p", model: "m", limit: 2, active: 1 },
+      { adapter: "dsh", provider: "p", model: "other", limit: 3, active: 0 },
+    ];
+    const withEffort = { adapter: "dsh", provider: "p", model: "m", effort: "high" };
+    expect(concurrencyEntryFor(entries, withEffort)).toBe(entries[0]);
+    expect(concurrencyEntryFor(entries, { adapter: "zcode", provider: "p", model: "m" })).toBeNull();
+    expect(concurrencyEntryFor(entries, { adapter: "dsh", provider: "q", model: "m" })).toBeNull();
+    expect(concurrencyEntryFor(undefined, withEffort)).toBeNull();
   });
 });

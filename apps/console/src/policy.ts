@@ -4,6 +4,7 @@ import {
   preferenceChanges,
   profileSettings,
 } from "./draft";
+import { concurrencyLimit, familyKey } from "./console-data";
 import { profileTitle } from "./profile-display";
 
 /**
@@ -88,7 +89,8 @@ function pinRefusal(profile: Profile | undefined): string | null {
  * Changes that cannot be published at all. Only a *new* enable, a mode that
  * *transitions into* pin or a changed decision selector needs a currently legal
  * model; changing the reason of an existing pin, a disable and every other edit
- * stay independent of current availability.
+ * stay independent of current availability. A family's concurrency limit is
+ * equally independent of availability — it only has to be an integer in 1–32.
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   const profiles = new Map(draft.profiles.map((p) => [p.profileId, p]));
@@ -96,6 +98,16 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     baseline.preferences.map((p) => [p.profileId, p.mode]),
   );
   const issues: PolicyIssue[] = [];
+  for (const entry of draft.modelConcurrency) {
+    if (concurrencyLimit(entry.limit) !== null) continue;
+    const member = draft.profiles.find((profile) => familyKey(profile) === familyKey(entry));
+    const subject = member ? profileTitle(member) : `${entry.adapter}/${entry.provider}/${entry.model}`;
+    issues.push({
+      profileId: member?.profileId ?? `${entry.adapter}/${entry.provider}/${entry.model}`,
+      label: subject,
+      message: `${subject} 的并发上限必须是 1–32 的整数，请改正这项修改后再保存。`,
+    });
+  }
   for (const setting of profileSettings(baseline, draft)) {
     if (!setting.enabled) continue;
     const profile = profiles.get(setting.profileId);

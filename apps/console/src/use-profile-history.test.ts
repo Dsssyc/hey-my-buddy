@@ -39,6 +39,7 @@ function page(
     annotations: [],
     preferences: [],
     sampleCounts: {},
+    modelConcurrency: [],
     tableRevision,
     nextCursor,
   };

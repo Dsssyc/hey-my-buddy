@@ -58,6 +58,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       annotations: annotations.filter(a => ids.has(a.profileId)),
       preferences: preferences.filter(p => ids.has(p.profileId)),
       sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => ids.has(id))),
+      modelConcurrency: [],
       tableRevision: revision,
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
     };
@@ -77,6 +78,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     preferences: preferences.filter(p => live.some(p => p.profileId === p.profileId)),
     evidence: [], decisions: [],
     sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => live.some(p => p.profileId === id))),
+    modelConcurrency: [],
     tasks: { runs: [], total: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };

@@ -158,6 +158,11 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .acceptance-controls .field { margin: 4px 0 8px; }
 .form-pair { display: flex; flex-wrap: wrap; gap: 12px; }
 .form-pair > * { flex: 1 1 190px; min-width: 0; }
+.concurrency-row { align-items: flex-end; margin: 14px 0 4px; }
+.concurrency-row .concurrency-value { flex: 0 1 150px; margin: 0; }
+.concurrency-row .concurrency-value input { width: 100%; }
+.concurrency-row .concurrency-occupancy { flex: 1 1 220px; padding-bottom: 8px; margin: 0; }
+.concurrency-row + p { margin-top: 0; }
 .workflow-children, .artifact-list { display: grid; gap: 10px; }
 .workflow-children li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .workflow-children .button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }

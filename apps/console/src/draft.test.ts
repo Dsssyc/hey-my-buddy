@@ -8,17 +8,19 @@ import {
   draftDiffers,
   historyView,
   makeDraft,
+  modelConcurrencyChanges,
   preferenceChanges,
   profileSettings,
   publication,
   rebaseDraft,
   retainedAdditions,
   setAnnotation,
+  setConcurrencyLimit,
   setPreference,
   withHistory,
 } from "./draft";
 import type { HistoryEntries } from "./draft";
-import type { Profile, Snapshot, WriterGrant } from "./types";
+import type { Draft, Profile, Snapshot, WriterGrant } from "./types";
 
 const flash = {
   profileId: "flash-off",
@@ -73,6 +75,9 @@ const snapshot = {
     decisionProfileId: "flash-off",
   },
   sampleCounts: { "flash-off": 7 },
+  modelConcurrency: [
+    { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
+  ],
 } as unknown as Snapshot;
 
 describe("editing a published snapshot", () => {
@@ -512,6 +517,120 @@ describe("retained additions never resurrect a removal", () => {
       preferences: [{ profileId: "flash-off", mode: "pin", reason: "旧依据" }],
     };
     expect(retainedAdditions(draft, pinned, page)).toBeNull();
+  });
+});
+
+describe("model family concurrency", () => {
+  const flashLimit = (draft: Draft): number | null =>
+    draft.modelConcurrency.find((entry) => entry.model === "deepseek-flash")?.limit ?? null;
+  const entry = (revision: number, limit: number) => ({
+    adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit, active: 0,
+  });
+  const basedAt = (revision: number) => makeDraft({ ...snapshot, tableRevision: revision } as unknown as Snapshot);
+  const tableAt = (revision: number, limit: number) =>
+    ({ ...snapshot, tableRevision: revision, modelConcurrency: [entry(revision, limit)] }) as unknown as Snapshot;
+
+  it("publishes only changed family limits and never the occupancy", () => {
+    const baseline = makeDraft(snapshot);
+    expect(flashLimit(baseline)).toBe(2);
+    expect(modelConcurrencyChanges(baseline, baseline)).toEqual([]);
+    const draft = setConcurrencyLimit(baseline, flash, 6);
+    expect(modelConcurrencyChanges(baseline, draft)).toEqual([
+      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+    ]);
+    const patch = publication(baseline, draft, grant(), "c");
+    expect(patch.modelConcurrency).toEqual([
+      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+    ]);
+    const wire = JSON.stringify(patch);
+    // Occupancy is observation and the profile identity never rides along.
+    expect(wire).not.toContain("active");
+    expect(wire).not.toContain("flash-off");
+    // An unrelated edit keeps the concurrency patch out entirely.
+    expect(publication(baseline, setAnnotation(baseline, "flash-off", "只改意见"), grant(), "c"))
+      .not.toHaveProperty("modelConcurrency");
+  });
+
+  it("never publishes a limit outside the 1–32 integer range", () => {
+    const baseline = makeDraft(snapshot);
+    for (const limit of [0, 33, 2.5]) {
+      const invalid = {
+        ...baseline,
+        modelConcurrency: [{ ...baseline.modelConcurrency[0], limit }],
+      };
+      expect(modelConcurrencyChanges(baseline, invalid)).toEqual([]);
+    }
+  });
+
+  it("treats refreshed occupancy as observation, not a user change", () => {
+    const baseline = basedAt(1);
+    const draft = basedAt(1);
+    const refreshed = {
+      ...snapshot,
+      tableRevision: 3,
+      modelConcurrency: [{ ...entry(3, 2), active: 9 }],
+    } as unknown as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, refreshed);
+    expect(adopted.conflicts).toEqual([]);
+    expect(flashLimit(adopted.draft)).toBe(2);
+    expect(draftDiffers(adopted.baseline, adopted.draft)).toBe(false);
+    // The draft shape drops occupancy, so it can never be published.
+    expect("active" in adopted.draft.modelConcurrency[0]).toBe(false);
+  });
+
+  it("rebases a changed limit three ways against the refreshed table", () => {
+    const baseline = basedAt(1);
+    const draft = setConcurrencyLimit(baseline, flash, 6);
+    // Nobody else touched it: the draft limit applies on top of the fresh table.
+    const clean = rebaseDraft(draft, baseline, tableAt(3, 2));
+    expect(clean.conflicts).toEqual([]);
+    expect(flashLimit(clean.draft)).toBe(6);
+    expect(flashLimit(clean.baseline)).toBe(2);
+    expect(clean.draft.tableRevision).toBe(3);
+    // The fresh table already holds the draft's value.
+    const applied = rebaseDraft(draft, baseline, tableAt(3, 6));
+    expect(applied.conflicts).toEqual([]);
+    expect(flashLimit(applied.draft)).toBe(6);
+    // Another writer published a different limit first: keep our revision.
+    const conflicted = rebaseDraft(draft, baseline, tableAt(3, 4));
+    expect(conflicted.conflicts).toEqual([expect.objectContaining({
+      kind: "changed",
+      field: "modelConcurrency",
+      profileId: "dsh/deepseek-official/deepseek-flash",
+    })]);
+    expect(conflicted.draft).toEqual(draft);
+    expect(conflicted.draft.tableRevision).toBe(1);
+  });
+
+  it("keeps an edited family unresolved until a fresh retained page supplies it", () => {
+    const baseline = basedAt(1);
+    const draft = setConcurrencyLimit(baseline, flash, 6);
+    // The bounded fresh snapshot no longer lists the family at all.
+    const discovered = {
+      ...snapshot, tableRevision: 3, profiles: [], modelConcurrency: [],
+    } as unknown as Snapshot;
+    const unresolved = rebaseDraft(draft, baseline, discovered);
+    expect(unresolved.conflicts[0]).toMatchObject({ kind: "unread", field: "modelConcurrency" });
+    expect(unresolved.draft.tableRevision).toBe(1);
+    // A page cached at the old revision never mints the new baseline.
+    const stale = rebaseDraft(draft, baseline, discovered, {
+      tableRevision: 1,
+      modelConcurrency: [entry(1, 2)],
+    });
+    expect(stale.conflicts[0].kind).toBe("unread");
+    expect(stale.draft.tableRevision).toBe(1);
+    // The fresh retained page resolves it and the edit publishes at V3.
+    const resolved = rebaseDraft(draft, baseline, discovered, {
+      tableRevision: 3,
+      modelConcurrency: [entry(3, 2)],
+    });
+    expect(resolved.conflicts).toEqual([]);
+    expect(resolved.draft.tableRevision).toBe(3);
+    expect(flashLimit(resolved.draft)).toBe(6);
+    const patch = publication(resolved.baseline, resolved.draft, grant(3), "c");
+    expect(patch.modelConcurrency).toEqual([
+      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+    ]);
   });
 });
 

@@ -21,7 +21,7 @@ import {
 } from "./draft";
 import type { HistoryEntries, RebaseConflict } from "./draft";
 import { attentionIssues, blockingIssues } from "./policy";
-import type { Draft, Snapshot, WriterGrant } from "./types";
+import type { ConsoleView, Draft, Snapshot, WriterGrant } from "./types";
 
 /** Queue poll while another writer holds the table; each renew also extends the lease. */
 export const QUEUE_POLL_MS = 750;
@@ -145,9 +145,10 @@ export function useEditor(
     [baseline, draft],
   );
   // One console view: published/loaded program facts, retained history rows and
-  // the local human draft when editing. Cards, samples and evidence stay taken
-  // from the recorded snapshot/history, never from the draft.
-  const view: Snapshot = useMemo(() => {
+  // the local human draft when editing. Cards, samples, evidence and the
+  // recorded occupancy stay taken from the recorded snapshot/history, never
+  // from the draft; the draft supplies only the user-owned fields.
+  const view: ConsoleView = useMemo(() => {
     const recorded = historyView(snapshot, historyEntries);
     return draft
       ? {
@@ -156,6 +157,7 @@ export function useEditor(
           preferences: draft.preferences,
           annotations: draft.annotations,
           configuration: draft.configuration,
+          modelConcurrency: draft.modelConcurrency,
         }
       : recorded;
   }, [snapshot, draft, historyEntries]);

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
-import type { ProfilePage } from "./types";
+import { familyKey } from "./console-data";
+import type { ModelConcurrencyEntry, ProfilePage } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
 export const PROFILE_PAGE_SIZE = 100;
@@ -30,6 +31,7 @@ export function parseProfilePage(value: unknown): ProfilePage {
     && Array.isArray(page.cards)
     && Array.isArray(page.annotations)
     && Array.isArray(page.preferences)
+    && Array.isArray(page.modelConcurrency)
     && !!page.sampleCounts && typeof page.sampleCounts === "object"
     && Number.isInteger(page.tableRevision)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
@@ -65,6 +67,12 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[]): 
   return added.length ? [...current, ...added] : current;
 }
 
+function addMissingFamilies(current: ModelConcurrencyEntry[], extra: ModelConcurrencyEntry[]): ModelConcurrencyEntry[] {
+  const known = new Set(current.map(familyKey));
+  const added = extra.filter((entry) => !known.has(familyKey(entry)) && (known.add(familyKey(entry)), true));
+  return added.length ? [...current, ...added] : current;
+}
+
 /**
  * Appends one page of the same revision. A page read at another `tableRevision`
  * is never merged in or relabelled: pages from different revisions do not
@@ -78,6 +86,7 @@ export function mergePage(previous: ProfilePage | null, next: ProfilePage): Prof
     cards: addMissing(previous.cards, next.cards),
     annotations: addMissing(previous.annotations, next.annotations),
     preferences: addMissing(previous.preferences, next.preferences),
+    modelConcurrency: addMissingFamilies(previous.modelConcurrency, next.modelConcurrency),
     sampleCounts: { ...next.sampleCounts, ...previous.sampleCounts },
     tableRevision: next.tableRevision,
     nextCursor: next.nextCursor,

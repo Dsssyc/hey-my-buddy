@@ -39,6 +39,10 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean; discov
     annotations: [{ profileId: flashOff, text: "原人工意见", revision: 1, updatedAt: null }],
     preferences: [], evidence: [], decisions: [],
     sampleCounts: { [flashOff]: 5, "dsh:deepseek-official:deepseek-flash:high": 2 },
+    modelConcurrency: [
+      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 },
+      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-pro", limit: 5, active: 3 },
+    ],
     tasks: { runs: [], total: 0 },
     capabilities: { selection: true, maintenance: true, evaluationWriteGate: true },
   };

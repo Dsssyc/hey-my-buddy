@@ -171,6 +171,19 @@ export type Gate = {
     expiresAt: string;
   };
 };
+/**
+ * Identity of one model family: the exact adapter, provider and model tuple.
+ * Effort variants share one family and never enter the key.
+ */
+export type ModelFamily = { adapter: string; provider: string; model: string };
+/** The user-owned per-family concurrent-task limit (integer 1–32, default 2). */
+export type ModelConcurrencySetting = ModelFamily & { limit: number };
+/**
+ * One snapshot/page observation entry per represented model family. `active`
+ * counts unresolved attempts and is observation only; a draft never carries or
+ * publishes it.
+ */
+export type ModelConcurrencyEntry = ModelConcurrencySetting & { active: number };
 export type Configuration = {
   revision: number;
   decisionProfileId: string | null;
@@ -196,6 +209,12 @@ export type Snapshot = {
   decisions: Decision[];
   /** Recorded verification samples per profile; independent of published card prose. */
   sampleCounts: Record<string, number>;
+  /**
+   * One concurrent-task entry per model family represented in the response,
+   * including defaults for families without an explicit override. `active` is
+   * read-only occupancy; publishing it is refused.
+   */
+  modelConcurrency: ModelConcurrencyEntry[];
   tasks: { runs: Task[]; total: number };
   capabilities: Record<string, boolean>;
 };
@@ -216,7 +235,18 @@ export type WriterGrant = {
 export type Draft = Pick<
   Snapshot,
   "profiles" | "preferences" | "annotations" | "configuration"
-> & { tableRevision: number };
+> & {
+  tableRevision: number;
+  /**
+   * User limit settings keyed by the exact family tuple. Occupancy (`active`)
+   * is never carried here, so a draft cannot publish it.
+   */
+  modelConcurrency: ModelConcurrencySetting[];
+};
+/** Full console view: recorded facts with the human draft's user fields. */
+export type ConsoleView = Omit<Snapshot, "modelConcurrency"> & {
+  modelConcurrency: ModelConcurrencySetting[];
+};
 /** One page of retained profile identities, including unavailable history. */
 export type ProfilePage = {
   profiles: Profile[];
@@ -224,6 +254,8 @@ export type ProfilePage = {
   annotations: Annotation[];
   preferences: Preference[];
   sampleCounts: Record<string, number>;
+  /** Concurrent-task entries for the families this page represents. */
+  modelConcurrency: ModelConcurrencyEntry[];
   tableRevision: number;
   nextCursor: string | null;
 };
