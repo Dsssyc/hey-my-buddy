@@ -102,6 +102,8 @@ def main():
                 send({"method": "thread/status/changed" if case == "foreign-turn" else "thread/futureNotification", "params": {
                     "threadId": "thread-foreign" if case == "foreign-thread" else "thread-1",
                     **({"turnId": "turn-foreign"} if case == "foreign-turn" else {})}})
+            if case == "foreign-thread-started":
+                send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
             if case == "connection-notification":
                 send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})

@@ -254,7 +254,8 @@ class FastSeamTests(SeamCase):
         # A known method isolates the identity guard; unknown turn-scoped
         # methods likewise remain facts in batch 4.
         for case, text, method in (("foreign-turn", "Foreign native turn", "thread/status/changed"),
-                                   ("foreign-thread", "Unbound native event", "thread/futureNotification")):
+                                   ("foreign-thread", "Unbound native event", "thread/futureNotification"),
+                                   ("foreign-thread-started", "Unbound native event", "thread/started")):
             with self.subTest(case=case):
                 correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
                 result = self.fast_run(case, correction)

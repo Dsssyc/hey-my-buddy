@@ -866,6 +866,11 @@ class _FastProtocol:
         method = message.get("method")
         label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
         params = message.get("params")
+        if method == "thread/started" and isinstance(params, dict):
+            thread = params.get("thread")
+            thread_id = thread.get("id") if isinstance(thread, dict) else None
+            if isinstance(thread_id, str) and thread_id != self.thread_id:
+                raise CodexProtocolError("invalid-native-result", f"Unbound native event in no-tool stream ({label})")
         if not isinstance(params, dict) or "threadId" not in params:
             return
         if params["threadId"] != self.thread_id:
@@ -1630,7 +1635,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
     completion = None
     if state.turn_id is not None:
         completion = CompletionEvidence(stream_end=state.drained if mode == "fast" else None)
-    unconfirmed = [name for key, name in (("configReadback", "configuration-readback"),
+    unconfirmed = [name for key, name in (("configReadback", "settings-readback"),
                                           ("threadReceipt", "thread-receipt"))
                    if state.policy_checks.get(key, {}).get("status") == "unknown"]
     if state.catalog_read is not None and state.catalog_read["discovery"]["status"] == "unknown":

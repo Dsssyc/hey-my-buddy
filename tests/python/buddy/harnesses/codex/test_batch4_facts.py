@@ -253,9 +253,24 @@ class NativeFactsTests(unittest.TestCase):
                         carrier({"method": method, "params": params})
                     self.assertEqual(caught.exception.code, "invalid-native-result")
 
+    def test_thread_started_checks_nested_session_identity(self):
+        state = {"started": False, "final": None, "completed": None}
+        carrier = native_run._FastProtocol("thread", "turn", state, TurnEvidence("thread", "turn"),
+                                           native_run._RunState())
+        for thread in ({"id": "foreign"}, {"id": ""}):
+            with self.subTest(thread=thread):
+                with self.assertRaises(CodexProtocolError) as caught:
+                    carrier({"method": "thread/started", "params": {"thread": thread}})
+                self.assertEqual(caught.exception.code, "invalid-native-result")
+        for params in (None, [], {}, {"thread": None}, {"thread": []}, {"thread": {}},
+                       {"thread": {"id": None}}, {"thread": {"id": 17}}, {"thread": {"id": "thread"}}):
+            with self.subTest(params=params):
+                carrier({"method": "thread/started", "params": params})
+        self.assertEqual(state, {"started": False, "final": None, "completed": None})
+
     def test_shared_native_facts_reach_all_three_carrier_results_without_duplicate_keys(self):
         expected = {"unknownEvents": {"countsByType": {"account/updated": 1}, "total": 1},
-                    "unconfirmed": ["configuration-readback", "thread-receipt", "model-catalog"]}
+                    "unconfirmed": ["settings-readback", "thread-receipt", "model-catalog"]}
         for mode, scope in (("fast", "none"), ("review", "read"), ("worker", "write")):
             with self.subTest(mode=mode):
                 root = self.root / mode
