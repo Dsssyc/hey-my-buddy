@@ -50,18 +50,57 @@ BUNDLE_TOOLS = (
     'var globTool={metadata:{name:"Glob",readOnly:!0}};'
     'var grepTool={metadata:{name:"Grep",readOnly:!0}};'
 )
-#: The in-loop positive flow; the refresh site really calls the registered
-#: function with the resolver's output as allowedTools, like the installation.
+#: The installed mechanism under fresh minified names: the short-circuit OR
+#: registration chain with the disallowed-Set builder, the agent-name
+#: predicate and a constant set, the tool transform on the register argument,
+#: and the alias-map/explore-filter/root-child resolver chain.
+TRANSFORM_HELPERS = (
+    'function fO(e,t){return e.metadata.name==="Bash"?bR({bashTimeoutPolicy:t.bashTimeoutPolicy})'
+    ':e.metadata.name===sK&&t.submitResultSchema!==void 0?sU(t.submitResultSchema)'
+    ':e.metadata.name==="EnterPlanMode"?eP({embeddedSearchEnabled:t.embeddedSearchEnabled})'
+    ':e}'
+    'function fT(e){let t=nL(e.toolAllowlist);'
+    'return e.toolset!=="explore"?aC(e,t):t?aC(e,t.filter(v=>eS.has(v))):aC(e,dL)}'
+    'function nL(e){return e?.map(v=>aM(v))}'
+    'function aM(v){return v==="web_search"?"WebSearch":v}'
+    'function aC(e,t){return t&&(e.taskType==="subagent_child"?t.includes(rC)?t:[...t,rC]:t)}'
+    'var eS=new Set(dL),dL=["Bash","Glob","Grep","Read","WebFetch","WebSearch","TodoWrite"],'
+    'rC="RespondToCoordinator",sK="submit_result",wS=new Set(["Agent","Task"]),nS=new Set(["Agent","Task"]);'
+    'function fD(e){if(!e||e.length===0)return;let t=new Set;'
+    'for(let n of e){let o=nZ(n);o&&t.add(o)}return t.size>0?t:void 0}'
+    'function nZ(e){let t=e.trim(),n=t.indexOf("("),o=n>0?t.slice(0,n):t;return aM(o)}'
+    'function gA(e){return e?nS.has(e):!1}'
+)
+BUNDLE_MAPPING = 'r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");'
+#: The refresh call site: a direct options object whose unique allowedTools
+#: value is the verified resolver called on config, like the installation.
+BUNDLE_CALLSITE = (
+    'function refresh(e){Uw(e.registry,{bashTimeoutPolicy:e.config.bashTimeoutPolicy,'
+    'includeSkill:!!e.skillPort,embeddedSearchEnabled:!1,allowedTools:fT(e.config),'
+    'disallowedTools:e.config.toolDisallowlist,silentDuplicateWarnings:!0})}'
+)
+#: The installed short-circuit OR flow: every rejection operand verified, the
+#: membership rejection one complete operand, the register call last.
 GOOD_BUNDLE = (BUNDLE_SCHEMA
-               + 'function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0;'
-                 'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(s)}'
-               + 'function fT(e){let t=e.toolAllowlist;return t}'
-               + 'r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");'
-               + 'function refresh(e){Uw(e.registry,{embeddedSearchEnabled:!1,'
-                 'allowedTools:fT(e.config),disallowedTools:e.config.toolDisallowlist})}'
-               + BUNDLE_TOOLS)
-#: The short-circuit OR chain the installed bundle uses, rejection member and
-#: chain-final register included, under wholly $-renamed identifiers.
+               + 'function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0,'
+                 'o=fD(t.disallowedTools);'
+                 'for(let s of builtins)'
+                 't.embeddedSearchEnabled===!0&&(s.metadata.name==="Glob"||s.metadata.name==="Grep")'
+                 '||n&&!n.has(s.metadata.name)'
+                 '||o?.has(s.metadata.name)'
+                 '||gA(s.metadata.name)&&t.includeAgent!==!0'
+                 '||s.metadata.name==="Skill"&&t.includeSkill===!1'
+                 '||t.includeDynamicWorkflow===!1&&wS.has(s.metadata.name)'
+                 '||e.register(fO(s,t),{silentDuplicateWarning:t.silentDuplicateWarnings})}'
+               + TRANSFORM_HELPERS + BUNDLE_MAPPING + BUNDLE_CALLSITE + BUNDLE_TOOLS)
+#: The same mechanism in the supported in-loop positive if form.
+GOOD_IF_BUNDLE = (BUNDLE_SCHEMA
+                  + 'function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0,'
+                    'o=fD(t.disallowedTools);'
+                    'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(fO(s,t))}'
+                  + TRANSFORM_HELPERS + BUNDLE_MAPPING + BUNDLE_CALLSITE + BUNDLE_TOOLS)
+#: The minimal OR chain under wholly $-renamed identifiers with the direct
+#: same-value resolver: the second supported registration and resolver shape.
 GOOD_OR_CHAIN_BUNDLE = (BUNDLE_SCHEMA
                        + 'function $r($e,$t={}){let $n=$t.allowedTools?new Set($t.allowedTools):void 0;'
                          'for(let $s of $l)'
@@ -73,13 +112,14 @@ GOOD_OR_CHAIN_BUNDLE = (BUNDLE_SCHEMA
                        + 'r($r,"registerBuiltInTools");r($f,"resolveBuiltInToolAllowlist");'
                        + 'function refresh(e){$r(e.registry,{allowedTools:$f(e.config)})}'
                        + BUNDLE_TOOLS)
-#: The same if-form under renamed identifiers: minified names are never fixed.
-RENAMED_IF_BUNDLE = (GOOD_BUNDLE
-                     .replace("function Uw(e,t={})", "function Uw($e,$t={})")
-                     .replace("t.allowedTools", "$t.allowedTools")
-                     .replace("let n=", "let $n=")
-                     .replace("for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(s)",
-                              "for(let $s of builtins)if(!$n||$n.has($s.metadata.name))$e.register($s)"))
+#: The same minimal if-form under renamed identifiers: names are never fixed.
+RENAMED_IF_BUNDLE = (BUNDLE_SCHEMA
+                     + 'function $w($e,$t={}){let $n=$t.allowedTools?new Set($t.allowedTools):void 0;'
+                       'for(let $s of builtins)if(!$n||$n.has($s.metadata.name))$e.register($s)}'
+                     + 'function $f(e){return e.toolAllowlist}'
+                     + 'r($w,"registerBuiltInTools");r($f,"resolveBuiltInToolAllowlist");'
+                     + 'function refresh(e){$w(e.registry,{allowedTools:$f(e.config)})}'
+                     + BUNDLE_TOOLS)
 
 
 class SessionParameterTests(unittest.TestCase):
@@ -100,8 +140,8 @@ class ContractProblemTests(unittest.TestCase):
     """The helper identifies mechanisms; mutating any one yields its own reason."""
 
     def test_the_well_formed_mechanism_set_is_accepted(self):
-        for label, bundle in (("if-form", GOOD_BUNDLE), ("or-chain", GOOD_OR_CHAIN_BUNDLE),
-                              ("renamed-if", RENAMED_IF_BUNDLE)):
+        for label, bundle in (("installed-or-form", GOOD_BUNDLE), ("installed-if-form", GOOD_IF_BUNDLE),
+                              ("minimal-or-chain", GOOD_OR_CHAIN_BUNDLE), ("renamed-if", RENAMED_IF_BUNDLE)):
             with self.subTest(label=label):
                 self.assertIsNone(native_contract_problem(bundle))
 
@@ -109,43 +149,45 @@ class ContractProblemTests(unittest.TestCase):
         """Only the two complete flows qualify; near-misses carry their reason."""
         for label, mutated, reason in (
             ("inverted-if-membership",
-             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(n&&!n.has(s.metadata.name))"),
+             GOOD_IF_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(n&&!n.has(s.metadata.name))"),
              "unrecognized control flow"),
             ("inverted-chain-member",
-             GOOD_OR_CHAIN_BUNDLE.replace("$n&&!$n.has($s.metadata.name)", "$n&&$n.has($s.metadata.name)"),
+             GOOD_BUNDLE.replace("n&&!n.has(s.metadata.name)", "n&&n.has(s.metadata.name)"),
              "unrecognized control flow"),
             ("unconditional-register",
-             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", ""),
+             GOOD_IF_BUNDLE.replace("if(!n||n.has(s.metadata.name))", ""),
              "unrecognized control flow"),
             ("register-not-chain-final",
-             GOOD_OR_CHAIN_BUNDLE.replace("$e.register($s)}", "$e.register($s)||x}"),
+             GOOD_BUNDLE.replace("||e.register(fO(s,t),{silentDuplicateWarning:t.silentDuplicateWarnings})}",
+                                 "||e.register(fO(s,t),{silentDuplicateWarning:t.silentDuplicateWarnings})||x}"),
              "unrecognized control flow"),
             ("register-outside-the-flow",
-             GOOD_BUNDLE.replace("e.register(s)}", "e.register(s);e.register(s)}"),
+             GOOD_IF_BUNDLE.replace("e.register(fO(s,t))}", "e.register(fO(s,t));e.register(s)}"),
              "outside the one allowlist-gated flow"),
             ("membership-on-another-set",
-             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(!q||q.has(s.metadata.name))"),
+             GOOD_IF_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(!q||q.has(s.metadata.name))"),
              "unrecognized control flow"),
             ("set-not-from-the-options-parameter",
              GOOD_BUNDLE.replace("new Set(t.allowedTools)", "new Set(globalAllow)"),
              "no Set membership filter"),
             ("membership-on-another-variable",
-             GOOD_BUNDLE.replace("n.has(s.metadata.name)", "n.has(other.metadata.name)"),
+             GOOD_IF_BUNDLE.replace("n.has(s.metadata.name)", "n.has(other.metadata.name)"),
              "unrecognized control flow"),
             ("register-on-a-foreign-registry",
-             GOOD_BUNDLE.replace("e.register(s)}", "k.register(s)}"),
+             GOOD_IF_BUNDLE.replace("e.register(fO(s,t))}", "k.register(fO(s,t))}"),
              "own registry parameters"),
             ("register-on-two-registries",
-             GOOD_BUNDLE.replace("e.register(s)}", "e.register(s);k.register(s)}"),
+             GOOD_IF_BUNDLE.replace("e.register(fO(s,t))}", "e.register(fO(s,t));k.register(s)}"),
              "own registry parameters"),
             ("unknown-loop-structure",
-             GOOD_BUNDLE.replace("for(let s of builtins)", "builtins.forEach(function(s)"),
+             GOOD_IF_BUNDLE.replace("for(let s of builtins)", "builtins.forEach(function(s)"),
              "for-of loop"),
             ("bypassed-resolver-call",
-             GOOD_BUNDLE.replace("Uw(e.registry,{embeddedSearchEnabled:!1,"
-                                 "allowedTools:fT(e.config),disallowedTools:e.config.toolDisallowlist})",
-                                 "Uw(e.registry,{embeddedSearchEnabled:!1});"
-                                 "wire(e.registry,{allowedTools:fT(e.config)})"),
+             GOOD_BUNDLE.replace("function refresh(e){Uw(e.registry,{bashTimeoutPolicy:e.config.bashTimeoutPolicy,"
+                                 "includeSkill:!!e.skillPort,embeddedSearchEnabled:!1,allowedTools:fT(e.config),"
+                                 "disallowedTools:e.config.toolDisallowlist,silentDuplicateWarnings:!0})}",
+                                 "function refresh(e){Uw(e.registry,{embeddedSearchEnabled:!1});"
+                                 "wire(e.registry,{allowedTools:fT(e.config)})}"),
              "not called with allowedTools from resolveBuiltInToolAllowlist"),
             ("decoy-resolver-named",
              GOOD_BUNDLE.replace('r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");',
@@ -172,9 +214,9 @@ class ContractProblemTests(unittest.TestCase):
              "Set membership filter"),
             ("no-allowlist-read", GOOD_BUNDLE.replace("e.toolAllowlist", "e.toolDenylist"),
              "does not read the config toolAllowlist"),
-            ("no-call-chain", GOOD_BUNDLE.replace("allowedTools:fT(e.config)", ""),
+            ("no-call-chain", GOOD_BUNDLE.replace("allowedTools:fT(e.config),", ""),
              "not called with allowedTools from resolveBuiltInToolAllowlist"),
-            ("missing-grep", GOOD_BUNDLE.replace("var grepTool={metadata:{name:\"Grep\",readOnly:!0}};", ""),
+            ("missing-grep", GOOD_BUNDLE.replace('var grepTool={metadata:{name:"Grep",readOnly:!0}};', ""),
              "Grep built-in tool is not registered"),
             ("not-read-only", GOOD_BUNDLE.replace('metadata:{name:"Read",readOnly:!0}',
                                                   'metadata:{name:"Read",readOnly:!1}'),

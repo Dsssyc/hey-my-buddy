@@ -16,7 +16,9 @@ blackboard at publication: the
 native snapshot carries no allowlist echo, none is invented, and every state
 and identity here comes from the native protocol. The native installation
 content is only statically checked (:func:`native_contract_problem`); that
-check proves the mechanisms exist, never that a live session enforced them.
+check proves the packaged restriction mechanisms exist through complete
+template matching over tokenized code, never that a live session enforced
+them.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ import secrets
 from .read_only import correction_code, no_tool_prompt, valid_answer
 from .zcode_protocol import NativeConnection, NativeError
 from .zcode_runner import NoToolEvidence, configure_session
+from .zcode_static_contract import allowlist_chain_problem
 from .zcode_tool_evidence import ZcodeToolFacts
 
 #: The exact restricted tool set; the native registry filters registrations to
@@ -62,37 +65,39 @@ _SCHEMA_FIELDS = ("workspace", "parentSessionId", "mode", "titleGenerationEnable
                   "offPeakToolEnabled", "dynamicWorkflowEnabled")
 
 
+#: The public bundle text this contract ever reads, bounded by the L6 design.
+_MAX_BUNDLE_TEXT_BYTES = 32 * 1024 * 1024
+
+
 def native_contract_problem(source_text) -> str | None:
     """The first missing read-only mechanism in the public CLI bundle text.
 
     The check is structural and identifies mechanisms, never names: a strict
     session/create schema carrying the restriction fields with a mode enum that
     offers ``plan``, the named ``registerBuiltInTools``/``resolveBuiltInToolAllowlist``
-    pair whose registration runs through one of the two complete allowlist
-    control flows — the in-loop ``if(!allowSet || allowSet.has(...))`` or the
-    short-circuit OR chain whose rejection member is
-    ``allowSet && !allowSet.has(tool.metadata.name)`` with the register action
-    as its last item — bound from the options parameter's allowedTools to the
-    same Set, the same loop variable's ``metadata.name`` and the same registry
-    parameter, the resolver reading the config ``toolAllowlist`` and its call
-    handed to that very registration as ``allowedTools``, and the three
-    registration names. Minified identifiers are read from the text itself,
-    never assumed; versions, hashes and certificates play no part. A bundle
-    whose mechanisms cannot be identified is ineligible with the specific
-    reason — a bare mention of ``toolAllowlist``, an inverted membership test
-    or an unconditional register proves nothing. The caller supplies the text
-    bounded to 32 MiB of the public bundle; no credential or provider
-    configuration ever enters this check.
+    pair whose complete registration flow, tool-preserving transform, resolver
+    return chain and call-site wiring are verified by
+    :mod:`~buddy.adapters.zcode_static_contract` through string/comment/bracket-aware
+    tokenization and complete supported templates — a discarded membership
+    test, an ``allowedTools`` object the registration never reads, a rewritten
+    Set or a side-effecting rejection operand each fail with their own reason —
+    and the three read-only registration names. Minified identifiers are read
+    from the text and followed to their declarations, never assumed; versions,
+    hashes and certificates play no part. The caller supplies the text bounded
+    to 32 MiB of the public bundle; no credential or provider configuration
+    ever enters this check.
     """
     if not isinstance(source_text, str) or not source_text.strip():
         return "no public CLI bundle text was provided for the read-only contract check"
+    if len(source_text) > _MAX_BUNDLE_TEXT_BYTES:
+        return "the public CLI bundle text exceeds the 32 MiB read-only contract bound"
     schema = _strict_session_schema(source_text)
     if schema is None:
         return "the public bundle has no strict session/create schema carrying the restriction fields"
     problem = _schema_mode_problem(source_text, schema)
     if problem is not None:
         return problem
-    return _allowlist_chain_problem(source_text) or _registration_problem(source_text)
+    return allowlist_chain_problem(source_text) or _registration_problem(source_text)
 
 
 def _strict_session_schema(text: str) -> str | None:
@@ -123,210 +128,6 @@ def _schema_mode_problem(text: str, schema: str) -> str | None:
     return None
 
 
-def _allowlist_chain_problem(text: str) -> str | None:
-    register = re.search(r'r\(([\w$]+),\s*"registerBuiltInTools"\)', text)
-    resolve = re.search(r'r\(([\w$]+),\s*"resolveBuiltInToolAllowlist"\)', text)
-    if register is None:
-        return "the public bundle does not name registerBuiltInTools"
-    if resolve is None:
-        return "the public bundle does not name resolveBuiltInToolAllowlist"
-    body = _function_body(text, register.group(1))
-    if body is None:
-        return "registerBuiltInTools is not a function definition in the public bundle"
-    problem = _registration_flow_problem(body)
-    if problem is not None:
-        return problem
-    body = _function_body(text, resolve.group(1))
-    if body is None:
-        return "resolveBuiltInToolAllowlist is not a function definition in the public bundle"
-    if not re.search(r"(?<![\w$])[\w$]+\.toolAllowlist\b", body):
-        return "resolveBuiltInToolAllowlist does not read the config toolAllowlist"
-    if not _resolver_feeds_registration(text, register.group(1), resolve.group(1)):
-        return "registerBuiltInTools is not called with allowedTools from resolveBuiltInToolAllowlist"
-    return None
-
-
-#: The fail-closed verdict for a registration the two recognized control flows
-#: cannot explain: an inverted membership test, an extra guard shape, a chain
-#: that continues past the register action — none of them is the allowlist.
-_UNRECOGNIZED_FLOW = ("registerBuiltInTools registers through an unrecognized control flow "
-                      "instead of the allowedTools Set membership filter over metadata.name")
-
-
-def _registration_flow_problem(body: str) -> str | None:
-    """Bind the one complete allowlist-gated registration flow in ``body``.
-
-    The Set must be built from a parameter's ``allowedTools``, the membership
-    reads the same for-of loop variable's ``metadata.name``, every registration
-    lands on the same registry parameter inside that one loop, and the flow is
-    either the in-loop ``if(!allowSet || allowSet.has(name)) register`` or the
-    short-circuit OR chain whose rejection member is
-    ``allowSet && !allowSet.has(name)`` with the register action as its last
-    item. Unrecognized control flows fail closed.
-    """
-    params = _parameter_names(body)
-    set_var = _allowset_variable(body, params)
-    if set_var is None:
-        return "registerBuiltInTools builds no Set membership filter from its options allowedTools parameter"
-    loop = re.search(r"for\s*\(\s*(?:let|var|const)\s+([\w$]+)\s+of\b", body)
-    if loop is None:
-        return "registerBuiltInTools filters no per-tool for-of loop over the built-in tools"
-    loop_var = loop.group(1)
-    receiver = _registry_receiver(body, params)
-    if receiver is None:
-        return "registerBuiltInTools does not register on one of its own registry parameters"
-    calls = list(re.finditer(r"(?<![\w$])" + re.escape(receiver) + r"\s*\.\s*register\s*\(", body))
-    header_end = _balanced_span(body, body.index("(", loop.start()))
-    span = _loop_body_span(body, header_end) if header_end is not None else None
-    if span is None or len(calls) != 1 or not span[0] <= calls[0].start() < span[1]:
-        return "registerBuiltInTools carries registrations outside the one allowlist-gated flow"
-    call = calls[0]
-    call_end = _balanced_span(body, call.end() - 1)
-    if call_end is None:
-        return _UNRECOGNIZED_FLOW
-    before, after = body[span[0]:call.start()], body[call_end:span[1]]
-    membership = (re.escape(set_var) + r"\s*\.\s*has\s*\(\s*" + re.escape(loop_var)
-                  + r"\s*\.\s*metadata\s*\.\s*name\s*\)")
-    # Flow one: the in-loop positive condition registers exactly what the
-    # allowlist carries, with no further arm that could weaken it.
-    gate = re.compile(r"\(\s*!\s*" + re.escape(set_var) + r"\s*\|\|\s*" + membership + r"\s*\)")
-    for if_header in re.finditer(r"(?<![.\w$])if\s*\(", body):
-        if not span[0] <= if_header.start() < span[1]:
-            continue
-        condition_end = _balanced_span(body, if_header.end() - 1)
-        if (condition_end is not None and condition_end <= call.start()
-                and body[condition_end:call.start()].strip() in ("", "{")
-                and gate.fullmatch(body[if_header.end() - 1:condition_end])):
-            return None
-    # Flow two: the top-level short-circuit OR chain rejects with the Set
-    # membership and registers only as the chain's final item.
-    rejection = re.escape(set_var) + r"\s*&&\s*!\s*" + membership
-    if re.search(rejection, before) and re.search(r"\|\|\s*$", before) and "||" not in after:
-        return None
-    return _UNRECOGNIZED_FLOW
-
-
-def _parameter_names(body: str) -> tuple[str, ...]:
-    """The simple identifier parameters of the function ``body`` opens with."""
-    head = re.match(r"function\s+[\w$]+\s*\(", body)
-    if head is None:
-        return ()
-    end = _balanced_span(body, head.end() - 1)
-    if end is None:
-        return ()
-    names = []
-    for part in _split_arguments(body[head.end():end - 1]):
-        name = re.match(r"\s*([\w$]+)", part)
-        if name is not None:
-            names.append(name.group(1))
-    return tuple(names)
-
-
-def _split_arguments(text: str) -> list[str]:
-    """Comma-separated top-level pieces of a parameter or argument list."""
-    parts, depth, quote, escaped, start = [], 0, None, False, 0
-    for index, character in enumerate(text):
-        if quote is not None:
-            if escaped:
-                escaped = False
-            elif character == "\\":
-                escaped = True
-            elif character == quote:
-                quote = None
-        elif character in "'\"`":
-            quote = character
-        elif character in "([{":
-            depth += 1
-        elif character in ")]}":
-            depth -= 1
-        elif character == "," and depth == 0:
-            parts.append(text[start:index])
-            start = index + 1
-    parts.append(text[start:])
-    return parts
-
-
-def _allowset_variable(body: str, params: tuple[str, ...]) -> str | None:
-    """The variable a declaration binds to ``new Set(<param>.allowedTools…)``."""
-    for name in params:
-        for built in re.finditer(r"new Set\(\s*" + re.escape(name) + r"\.allowedTools\b[^)]{0,80}\)", body):
-            # The nearest assignment reaching the Set's construction binds it;
-            # no statement separator and no second assignment may intervene.
-            window = body[max(0, built.start() - 200):built.start()]
-            declaration = re.search(r"([\w$]+)\s*=\s*[^;=]*$", window)
-            if declaration is not None:
-                return declaration.group(1)
-    return None
-
-
-def _registry_receiver(body: str, params: tuple[str, ...]) -> str | None:
-    """The one registry parameter every registration in the body acts on."""
-    receivers = {call.group(1) for call in re.finditer(r"(?<![\w$])([\w$]+)\s*\.\s*register\s*\(", body)}
-    if len(receivers) != 1:
-        return None
-    receiver = next(iter(receivers))
-    return receiver if receiver in params else None
-
-
-def _loop_body_span(body: str, header_end: int) -> tuple[int, int] | None:
-    """The loop's content span: inside braces when braced, else to the end.
-
-    A braceless minified loop body is one statement, so the span runs to the
-    end of the function body — which only ever widens the fail-closed checks
-    around what lies inside the loop.
-    """
-    index = header_end
-    while index < len(body) and body[index].isspace():
-        index += 1
-    if index >= len(body):
-        return None
-    if body[index] == "{":
-        close = _balanced_span(body, index)
-        return None if close is None else (index + 1, close - 1)
-    return index, len(body)
-
-
-def _resolver_feeds_registration(text: str, register_name: str, resolve_name: str) -> bool:
-    """One call of the registration receives the resolver's call as allowedTools."""
-    for call in re.finditer(r"(?<![\w$])" + re.escape(register_name) + r"\s*\(", text):
-        if text[max(0, call.start() - 9):call.start()].rstrip().endswith("function"):
-            continue  # the function's own definition, not a call
-        end = _balanced_span(text, call.end() - 1)
-        if end is not None and re.search(r"(?<![\w$])allowedTools\s*:\s*"
-                                         + re.escape(resolve_name) + r"\s*\(",
-                                         text[call.end():end - 1]):
-            return True
-    return False
-
-
-def _balanced_span(text: str, open_index: int) -> int | None:
-    """The index just past the closer matching the opener at ``open_index``.
-
-    Only the opener's own bracket kind is counted and string literals are
-    skipped, so brackets of the other kind and quoted text cannot end the scan
-    early; the span is bounded like a function body.
-    """
-    opener, closer = text[open_index], ")" if text[open_index] == "(" else "}"
-    depth, quote, index = 0, None, open_index
-    while index < len(text) and index - open_index <= 65536:
-        character = text[index]
-        if quote is not None:
-            if character == "\\":
-                index += 1
-            elif character == quote:
-                quote = None
-        elif character in "'\"`":
-            quote = character
-        elif character == opener:
-            depth += 1
-        elif character == closer:
-            depth -= 1
-            if depth == 0:
-                return index + 1
-        index += 1
-    return None
-
-
 def _registration_problem(text: str) -> str | None:
     for name in READ_ONLY_TOOLS:
         # The span stops at the metadata object's first closing brace, so the
@@ -336,48 +137,6 @@ def _registration_problem(text: str) -> str | None:
             return f"the {name} built-in tool is not registered in the public bundle"
         if not re.search(r"readOnly\s*:\s*!0", registered.group(0)):
             return f"the {name} built-in tool is not registered as read-only in the public bundle"
-    return None
-
-
-def _function_body(text: str, name: str) -> str | None:
-    """One function's source between its name and its balanced closing brace.
-
-    The scan enters the body only at a brace outside the parameter list, so a
-    default-parameter object literal cannot end the body early, and skips over
-    string literals while balancing.
-    """
-    head = re.search(r"function\s+" + re.escape(name) + r"\s*\(", text)
-    if head is None:
-        return None
-    # The regex consumed the parameter list's opening paren: we start one deep,
-    # so a default-parameter object literal cannot end the scan early.
-    index, parens = head.end(), 1
-    while index < len(text):
-        character = text[index]
-        if character == "(":
-            parens += 1
-        elif character == ")":
-            parens -= 1
-        elif character == "{" and parens == 0:
-            break
-        index += 1
-    depth, quote = 0, None
-    while index < len(text) and index - head.start() <= 65536:
-        character = text[index]
-        if quote is not None:
-            if character == "\\":
-                index += 1
-            elif character == quote:
-                quote = None
-        elif character in "'\"`":
-            quote = character
-        elif character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return text[head.start():index + 1]
-        index += 1
     return None
 
 
