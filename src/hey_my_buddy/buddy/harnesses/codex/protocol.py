@@ -24,9 +24,10 @@ _UNREADABLE_RESULT = "rpc/result-unreadable"
 
 
 class CodexProtocolError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, native_error: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.native_error = native_error
 
 
 #: The one shared strict decode (duplicate members and non-finite numbers,
@@ -133,6 +134,18 @@ class Connection:
             self.pump()
         response = self.responses.pop(request_id)
         self.pending_ids.discard(request_id)
+        if method == "thread/delete":
+            if "error" in response:
+                error = response["error"]
+                if (not isinstance(error, dict) or type(error.get("code")) is not int
+                        or not isinstance(error.get("message"), str)):
+                    raise CodexProtocolError("invalid-protocol", "Codex returned an invalid thread/delete error")
+                native_error = {"code": error["code"], "message": error["message"]}
+                raise CodexProtocolError("native-rpc-error",
+                    f"Codex rejected {method} ({error['code']}): {error['message']}", native_error=native_error)
+            if response.get("result") != {}:
+                raise CodexProtocolError("invalid-protocol", "Codex returned an invalid thread/delete result")
+            return {}
         if "error" in response:
             # The native refusal keeps its own message beside the stable
             # machine code, cut on UTF-8 byte safety with the prefix included

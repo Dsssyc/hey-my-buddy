@@ -39,6 +39,7 @@ import queue
 import subprocess
 import time
 import tomllib
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -1888,6 +1889,36 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     whether to trust the reading. The return value is the catalog receipt
     shape the current callers consume.
     """
+    with _control_connection(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
+                             timeout_seconds=timeout_seconds, cancelled=cancelled) as (connection, version, facts):
+        try:
+            account = connection.call("account/read", {"refreshToken": False}).get("account")
+        except CodexProtocolError:
+            account = None
+        account_status = _discovery_account_status(account)
+        configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
+        provider = native_provider(configured) if isinstance(configured, dict) else None
+        catalog_value, _listed_ids = _catalog(connection, version, provider)
+        from ....protocol.billing import codex_account, fact
+        observed_at = utc_now()
+        catalog_value["billingByProvider"] = {provider: (
+            codex_account(account, observed_at) if provider == "openai"
+            else fact("unknown", "codex/account-read", observed_at))} if provider is not None else {}
+        catalog_value["discoveries"][0]["accountStatus"] = account_status
+        if facts.unknown_counts:
+            catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,
+                                               "total": sum(facts.unknown_counts.values())}
+        if account_status == "unknown":
+            catalog_value["warnings"] = [*catalog_value["warnings"],
+                                         "The discovery session could not confirm the Codex account; "
+                                         "whether to trust this reading is the board's judgment"]
+    return catalog_value
+
+
+@contextmanager
+def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
+                        timeout_seconds: int, cancelled: Callable[[], bool]):
+    """The shared model-free app-server lifetime, handshake and stop receipt."""
     owned: list = [{"created": False, "shutdown": True, "exit_code": None}]
     shutdown = True
     try:
@@ -1919,27 +1950,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             connection.on_notification = classifier.observe
             connection.call("initialize", _INIT_CLIENT)
             connection.send({"method": "initialized", "params": {}})
-            try:
-                account = connection.call("account/read", {"refreshToken": False}).get("account")
-            except CodexProtocolError:
-                account = None
-            account_status = _discovery_account_status(account)
-            configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
-            provider = native_provider(configured) if isinstance(configured, dict) else None
-            catalog_value, _listed_ids = _catalog(connection, version, provider)
-            from ....protocol.billing import codex_account, fact
-            observed_at = utc_now()
-            catalog_value["billingByProvider"] = {provider: (
-                codex_account(account, observed_at) if provider == "openai"
-                else fact("unknown", "codex/account-read", observed_at))} if provider is not None else {}
-            catalog_value["discoveries"][0]["accountStatus"] = account_status
-            if facts.unknown_counts:
-                catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,
-                                                   "total": sum(facts.unknown_counts.values())}
-            if account_status == "unknown":
-                catalog_value["warnings"] = [*catalog_value["warnings"],
-                                             "The discovery session could not confirm the Codex account; "
-                                             "whether to trust this reading is the board's judgment"]
+            yield connection, version, facts
         finally:
             try:
                 shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
@@ -1948,10 +1959,30 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         if not shutdown or spawn.process.returncode != 0:
             raise CodexProtocolError("native-shutdown-failed",
                                      "the native app server did not exit normally with confirmed group shutdown")
-        return catalog_value
     except Exception as error:
         error.discovery_shutdown_confirmed = shutdown
         raise
+
+
+def run_delete_sessions(*, session_ids: list[str], cwd: str, invocation_root: Path,
+                        native_root: Path, timeout_seconds: int,
+                        cancelled: Callable[[], bool]) -> dict[str, str]:
+    """Delete each exact session ID once, without a thread start or model turn."""
+    sessions = {}
+    with _control_connection(cwd=cwd, invocation_root=invocation_root, native_root=native_root,
+                             timeout_seconds=timeout_seconds, cancelled=cancelled) as (connection, _version, _facts):
+        for session_id in dict.fromkeys(session_ids):
+            try:
+                connection.call("thread/delete", {"threadId": session_id})
+            except CodexProtocolError as error:
+                native = error.native_error
+                if (native is None or native["code"] != -32600
+                        or not native["message"].startswith("no rollout found for thread id ")):
+                    raise
+                sessions[session_id] = "already-gone"
+            else:
+                sessions[session_id] = "deleted"
+    return sessions
 
 
 # -- the registered seam's role-facing operations ----------------------------------

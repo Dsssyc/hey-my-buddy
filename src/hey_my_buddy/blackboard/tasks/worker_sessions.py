@@ -2,7 +2,8 @@
 
 Native identities come from authoritative receipts alone: this module never
 opens a user's native session files and never calls a native harness. Codex
-history is deliberately observation-only; DSH sessions are execution-private
+history listing is read only; the deletion engine selects proven identities
+through this same inventory. DSH sessions are execution-private
 since ADR-021 decision 18, so no DSH listing or native archive exists.
 """
 from __future__ import annotations
@@ -29,12 +30,17 @@ def _completed_codex_turn(result: dict, row) -> dict | None:
     return turn
 
 
-def _inventory(store) -> list[dict]:
+def _inventory(store, task_ids: set[str] | None = None) -> list[dict]:
+    if task_ids is not None and not task_ids:
+        return []
     rows = []
+    selected = sorted(task_ids) if task_ids is not None else []
+    task_filter = " AND a.task_id IN (" + ",".join("?" for _ in selected) + ")" if selected else ""
     with store.db.read() as db:
         attempts = db.execute(
             "SELECT a.attempt_id,a.task_id,a.execution_state,a.shutdown_confirmed,a.result_json "
-            "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL ORDER BY a.attempt_id"
+            "FROM attempts a WHERE a.adapter='codex' AND a.result_json IS NOT NULL" + task_filter
+            + " ORDER BY a.attempt_id", selected
         ).fetchall()
     for row in attempts:
         try:
@@ -87,6 +93,15 @@ def _inventory(store) -> list[dict]:
             threads[key] = {**row, 'attemptIds': []}
         threads[key]['attemptIds'].append(row['attemptId'])
     return list(threads.values())
+
+
+def deletable_sessions(store, task_ids: set[str]) -> list[dict]:
+    """Proven created sessions in the harness user store for execution task IDs.
+
+    Return the inventory records, including task/attempt bindings. Private-root
+    sessions are removed with their root by the deletion engine.
+    """
+    return [row for row in _inventory(store, task_ids) if row['storageOwner'] == 'harness-user-store']
 
 
 def handle(store, params: dict) -> dict:

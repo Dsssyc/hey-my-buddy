@@ -199,6 +199,9 @@ class Adapter:
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
 
+    def delete_sessions(self, session_ids: list[str]) -> dict[str, str]:
+        raise BoardError("UNSUPPORTED", f"{self.name} does not declare session deletion")
+
     def discovery_available(self) -> tuple[bool, str | None]:
         """Whether fresh metadata can be queried; execution readiness may be stricter."""
         return self.available()

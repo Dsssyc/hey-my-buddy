@@ -49,3 +49,7 @@ class CodexAdapter:
     def discover_models(self) -> dict:
         from ...roles.run_execution import discover_models
         return discover_models(self.name)
+
+    def delete_sessions(self, session_ids: list[str]) -> dict[str, str]:
+        from ...roles.run_execution import delete_sessions
+        return delete_sessions(self.name, session_ids)

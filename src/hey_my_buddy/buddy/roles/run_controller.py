@@ -1,4 +1,4 @@
-"""Process entry retained only for registered harness model discovery."""
+"""Process entry for registered harness operations that do not start model turns."""
 from __future__ import annotations
 
 import argparse
@@ -27,22 +27,30 @@ from .turn_io import guard_private_path
 
 
 def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
-    if control.get("operation") != "discover":
-        raise BoardError("INVALID_ARGUMENT", "The controller only supports model discovery")
+    operation = control["operation"]
+    if operation == "discover":
+        seam, result_key, arguments = "run_discovery", "catalog", {}
+    elif operation == "delete-sessions":
+        seam, result_key = "run_delete_sessions", "sessions"
+        arguments = {"session_ids": control["sessionIds"]}
+    else:
+        raise BoardError("INVALID_ARGUMENT", "Unsupported native controller operation")
     module = run_seam(control["harness"])
-    if module is None or not callable(getattr(module, "run_discovery", None)):
-        raise BoardError("ROLE_RUN_UNREGISTERED", "The harness has no registered discovery operation")
+    if module is None or not callable(getattr(module, seam, None)):
+        raise BoardError("ROLE_RUN_UNREGISTERED", f"The harness has no registered {operation} operation")
     try:
-        catalog = module.run_discovery(
+        value = getattr(module, seam)(
             cwd=control["cwd"], invocation_root=Path(control["privateRoot"]),
             native_root=Path(control["nativeRoot"]), timeout_seconds=control["timeoutSeconds"],
-            cancelled=cancelled.is_set)
+            cancelled=cancelled.is_set, **arguments)
     except Exception as error:
-        unknown = getattr(error, "code", None) == "deadline"
+        unknown = operation == "discover" and getattr(error, "code", None) == "deadline"
+        native_error = getattr(error, "native_error", None)
         return canonical_json({"status": "unknown" if unknown else "error", "modelStarted": False,
-            "code": getattr(error, "code", None), "error": str(error)[:512], "processState": {
+            "code": getattr(error, "code", None), "error": str(error) if native_error else str(error)[:512],
+            **({"nativeError": native_error} if native_error else {}), "processState": {
                 "shutdownConfirmed": getattr(error, "discovery_shutdown_confirmed", None) is True}}), 0 if unknown else 1
-    return canonical_json({"status": "ok", "modelStarted": False, "catalog": catalog,
+    return canonical_json({"status": "ok", "modelStarted": False, result_key: value,
                            "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}), 0
 
 
