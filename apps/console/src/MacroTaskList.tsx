@@ -13,7 +13,7 @@ import { MacroSort } from "./MacroSort";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, Disclosure } from "./components/ui/collapsible";
-import { useTextClipped } from "./components/use-text-clipped";
+import { useFadingText } from "./components/use-fading-text";
 
 export type MacroTaskListProps = {
   rows: MacroTaskSummary[]; totals: Record<MacroTaskFilter, number>;
@@ -37,10 +37,6 @@ export function MacroCounts({ row }: { row: MacroTaskSummary }) {
     { key: "ended", count: row.counts.ended - row.counts.accepted - row.counts.failed, mark: "idle" },
   ] as const;
   return <>{counts.map(({ key, count, mark }) => count > 0 && <span key={key} className="inline-flex items-center gap-1.5 tabular-nums"><Hint text={t(key)}><span><StateMark kind={mark} className="size-2.5"/></span></Hint><span className="sr-only">{t(key)} {formatNumber(count)}</span><span aria-hidden="true">{formatNumber(count)}</span></span>)}</>;
-}
-function useFadingText(text: string) {
-  const [ref, clipped] = useTextClipped<HTMLSpanElement>(text);
-  return { ref, className: clipped ? "text-fade" : "truncate", hint: clipped ? text : undefined };
 }
 function GroupHeading({ label, count, open }: { label: string; count: number; open: boolean }) {
   const text = useFadingText(label);
