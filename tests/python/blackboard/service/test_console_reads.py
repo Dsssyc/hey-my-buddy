@@ -222,6 +222,8 @@ class MarkerTests(BoardTestCase):
 
         replacement = board.store.directory / "replacement.sqlite3"
         with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
+            # Replacing only the main file must not replay the old board's WAL.
+            source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             source.backup(target)
             target.execute("INSERT INTO meta(key,value) VALUES('cache-content-test','replacement')")
             target.commit()

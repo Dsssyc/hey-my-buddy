@@ -353,6 +353,8 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
 
         replacement = board.store.directory / "replacement.sqlite3"
         with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
+            # Replacing only the main file must not replay the old board's WAL.
+            source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             source.backup(target)
             target.execute("UPDATE router_settings SET retry_interval_seconds=997 WHERE id=1")
             target.commit()

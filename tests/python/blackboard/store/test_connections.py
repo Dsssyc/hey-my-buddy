@@ -51,6 +51,120 @@ class ConnectionTests(BoardTestCase):
         with database.read() as reused:
             self.assertEqual(reused.execute("SELECT value FROM connection_test").fetchone()[0], 2)
 
+    def test_nested_reads_use_and_reuse_independent_connections_at_each_depth(self):
+        database = self.database()
+        with database.write() as outer:
+            outer.execute("CREATE TABLE connection_test(value INTEGER)")
+        for rollback in (True, False):
+            with self.subTest(rollback=rollback):
+                try:
+                    with database.read() as outer_again:
+                        self.assertIs(outer, outer_again)
+                        with database.read() as inner:
+                            self.assertIsNot(outer, inner)
+                            self.assertTrue(outer.in_transaction)
+                            with database.read() as deepest:
+                                self.assertIsNot(deepest, outer)
+                                self.assertIsNot(deepest, inner)
+                            with database.read() as deepest_again:
+                                self.assertIs(deepest, deepest_again)
+                        self.assertFalse(inner.in_transaction)
+                        with database.read() as inner_again:
+                            self.assertIs(inner, inner_again)
+                            self.assertEqual(inner.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], 0)
+                        outer.execute("INSERT INTO connection_test VALUES(1)")
+                        if rollback:
+                            raise RuntimeError("outer failed")
+                except RuntimeError as error:
+                    self.assertEqual(str(error), "outer failed")
+                self.assertFalse(outer.in_transaction)
+                with database.read() as reused:
+                    self.assertIs(reused, outer)
+                    self.assertEqual(reused.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], int(not rollback))
+        database.close()
+        for connection in (outer, inner, deepest):
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+
+    def test_read_nested_in_write_cannot_see_uncommitted_outer_changes(self):
+        database = self.database()
+        with database.write() as outer:
+            outer.execute("CREATE TABLE connection_test(value INTEGER)")
+        for rollback in (True, False):
+            with self.subTest(rollback=rollback):
+                try:
+                    with database.write() as outer_again:
+                        self.assertIs(outer, outer_again)
+                        outer.execute("INSERT INTO connection_test VALUES(1)")
+                        with database.read() as inner:
+                            self.assertIsNot(outer, inner)
+                            self.assertEqual(inner.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], 0)
+                        self.assertFalse(inner.in_transaction)
+                        self.assertTrue(outer.in_transaction)
+                        self.assertEqual(outer.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], 1)
+                        if rollback:
+                            raise RuntimeError("outer failed")
+                except RuntimeError as error:
+                    self.assertEqual(str(error), "outer failed")
+                self.assertFalse(outer.in_transaction)
+                with database.read() as reused:
+                    self.assertIs(reused, outer)
+                    self.assertEqual(reused.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], int(not rollback))
+
+    def test_write_nested_in_read_commits_independently_of_outer_snapshot_and_rollback(self):
+        database = self.database()
+        with database.write() as outer:
+            outer.execute("CREATE TABLE connection_test(value INTEGER)")
+        for count, rollback in enumerate((True, False)):
+            with self.subTest(rollback=rollback):
+                try:
+                    with database.read() as outer_again:
+                        self.assertIs(outer, outer_again)
+                        self.assertEqual(outer.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], count)
+                        with database.write() as inner:
+                            self.assertIsNot(outer, inner)
+                            inner.execute("INSERT INTO connection_test VALUES(1)")
+                        self.assertFalse(inner.in_transaction)
+                        self.assertTrue(outer.in_transaction)
+                        self.assertEqual(outer.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], count)
+                        with database.read() as inner_again:
+                            self.assertIs(inner, inner_again)
+                            self.assertEqual(inner.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], count + 1)
+                        if rollback:
+                            raise RuntimeError("outer failed")
+                except RuntimeError as error:
+                    self.assertEqual(str(error), "outer failed")
+                self.assertFalse(outer.in_transaction)
+                with database.read() as reused:
+                    self.assertIs(reused, outer)
+                    self.assertEqual(reused.execute("SELECT COUNT(*) FROM connection_test").fetchone()[0], count + 1)
+
+    def test_failed_nested_transactions_leave_both_depths_usable(self):
+        database = self.database()
+        with database.write() as outer:
+            outer.execute("CREATE TABLE parent(id INTEGER PRIMARY KEY)")
+            outer.execute("CREATE TABLE child(parent_id INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED)")
+        with database.read() as outer:
+            for transaction in (database.read, database.write):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    with transaction() as inner:
+                        inner.execute("INSERT INTO child VALUES(1)")
+                self.assertFalse(inner.in_transaction)
+                self.assertTrue(outer.in_transaction)
+                with database.read() as inner_again:
+                    self.assertIs(inner, inner_again)
+                    self.assertEqual(inner.execute("SELECT COUNT(*) FROM child").fetchone()[0], 0)
+            with self.assertRaisesRegex(RuntimeError, "inner failed"):
+                with database.write() as inner:
+                    inner.execute("INSERT INTO parent VALUES(1)")
+                    raise RuntimeError("inner failed")
+            self.assertFalse(inner.in_transaction)
+            outer.execute("INSERT INTO parent VALUES(2)")
+        self.assertFalse(outer.in_transaction)
+        with database.read() as reused:
+            self.assertIs(outer, reused)
+            self.assertEqual([row[0] for row in reused.execute("SELECT id FROM parent")], [2])
+
     def test_connections_are_per_thread_and_service_close_also_closes_exited_threads(self):
         database = self.database()
         connections = []
