@@ -1,9 +1,50 @@
-import type { Snapshot } from "./types";
+import type { RoutingHealth, Snapshot } from "./types";
 import type { Editor } from "./use-editor";
 import { Badge, Icon } from "./ui";
+import { clockSeconds } from "./objective-display";
 import { effortText, profileTitle, profileTitleOr } from "./profile-display";
 import { decisionAttention, decisionCandidates, hasDecisionCapability } from "./policy";
 import { READ_ONLY_DRAFT_NOTE } from "./console-session";
+
+/**
+ * Read-only routing status (0.15 R4): the snapshot's bounded selection-health
+ * window. Abstentions, cancellations and stale results are reported as
+ * themselves, never as model failures; absent data is unknown, not zero. This
+ * section never invokes a model, works in read-only sessions, and carries no
+ * write control of any kind.
+ */
+function RoutingStatus({ health }: { health: RoutingHealth | undefined }) {
+  return <div className="routing-status" aria-label="路由状态">
+    <h3>路由状态</h3>
+    {!health
+      ? <p className="muted">路由摘要暂不可用。</p>
+      : health.sampleCount === 0
+        ? <p className="muted">窗口内暂无已记录样本（窗口上限 {health.windowSize} 次），没有可报告的成功或失败。</p>
+        : <>
+          <p className="small">
+            最近 {health.sampleCount} 次中失败 {health.failureCount} 次（窗口上限 {health.windowSize} 次）
+            {health.consecutiveFailures > 0 ? ` · 连续失败 ${health.consecutiveFailures} 次` : ""}
+          </p>
+          <p className="small muted">
+            {health.abstentionCount > 0 ? `弃权 ${health.abstentionCount} 次` : ""}
+            {health.cancelledCount > 0 ? `${health.abstentionCount > 0 ? " · " : ""}取消 ${health.cancelledCount} 次` : ""}
+            {health.staleCount > 0 ? ` · 过期 ${health.staleCount} 次` : ""}
+            {(health.abstentionCount > 0 || health.cancelledCount > 0 || health.staleCount > 0) ? "，不计为失败" : "无弃权、取消或过期结果"}
+          </p>
+          <p className="small">
+            最后一次成功：{health.lastSuccessAt ? `${clockSeconds(health.lastSuccessAt)}${health.lastSuccessDecisionId ? ` · ${health.lastSuccessDecisionId}` : ""}` : "无成功记录"}
+          </p>
+          {health.recentFailures.length > 0 && <ul className="routing-failures">
+            {health.recentFailures.map(failure => <li key={failure.decisionId}>
+              <span>{clockSeconds(failure.at)}</span>
+              <code>{failure.code}</code>
+              {failure.runId ? <span className="muted">{failure.runId}</span> : <span className="muted">委派未记录</span>}
+            </li>)}
+          </ul>}
+          <p className="small muted">只读统计，读取不触发模型；最近的失败记录最多列出 5 条。</p>
+        </>}
+  </div>;
+}
 
 export function Settings({
   snapshot,
@@ -132,6 +173,7 @@ export function Settings({
             明确指定、优先考虑和排除各有含义。偏好影响后续选择，不会改写已有验收，也不会改变运行中任务的配置。保存只提交你实际修改的字段。
           </p>
         </div>
+        <RoutingStatus health={snapshot.routingHealth} />
       </section>
     </div>
   );

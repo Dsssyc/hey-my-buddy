@@ -5,12 +5,14 @@ import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-ti
 import { scaleTimeline } from "./objective-timeline-scale";
 import type { SpanOutcome, TimelineItem } from "./objective-display";
 import {
-  CATEGORY_LABEL, COUNT_ORDER, categoryTone, clockSeconds, clockTime, configurationLabel, durationShort,
-  eventVocab, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
-  eventItem, toMs, totalDelegations, buildChronology, configurationPalette,
+  buildChronology, clockSeconds, clockTime, configurationLabel, durationShort, eventVocab, outcomeLabel,
+  paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem, eventItem, toMs, configurationPalette,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
-import { Badge } from "./ui";
+import { ObjectiveOverview } from "./ObjectiveOverview";
+import { TimelineInspector } from "./TimelineInspector";
+import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
+import type { InspectorSelection } from "./inspector-card";
 import { excerpt } from "./task-state";
 
 /** Markers closer than this many actual track pixels merge into one numbered marker. */
@@ -20,7 +22,7 @@ const FALLBACK_VIEWPORT_PX = 800;
 const FALLBACK_LABEL_PX = 240;
 
 type SpanFacts = { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome };
-type MarkerCluster = { key: string; x: number; xPx: number; events: TimelineEvent[]; items: TimelineItem[]; lines: string[]; head: string };
+type MarkerCluster = MarkerClusterView & { lines: string[]; head: string };
 
 export type ObjectiveTimelineProps = {
   summary: ObjectiveSummary | null;
@@ -30,13 +32,20 @@ export type ObjectiveTimelineProps = {
   stale: boolean;
   newRunIds: ReadonlySet<string>;
   hidden: boolean;
+  /** The delegation whose detail is currently open (accent marker on its row). */
   openedKey: string | null;
   openedRunId: string | null;
+  /** The pinned inspector selection; a refresh never clears it. */
+  selection: InspectorSelection | null;
   locked: boolean;
   expandedGapIds: ReadonlySet<string>;
   onToggleGap: (gapId: string) => void;
   onSetExpanded: (gapIds: Set<string>) => void;
+  onSelectItem: (item: TimelineItem) => void;
   onOpenItem: (item: TimelineItem) => void;
+  onSelectRun: (runId: string) => void;
+  onOpenRun: (runId: string) => void;
+  onClearSelection: () => void;
   onRetry: () => void;
   onBackToList: () => void;
 };
@@ -46,14 +55,18 @@ export type ObjectiveTimelineProps = {
  * folding and instants come from the frozen layout module; scaleTimeline maps
  * that normalized axis onto actual pixels (fixed 64px breaks, 1.6px/min
  * minimum) from the measured scroll viewport. This component renders recorded
- * facts only, keeps focus/expanded state across refreshes, and stays mounted
- * (hidden) while a delegation detail is open.
+ * facts only, keeps focus/expanded/selection state across refreshes, and stays
+ * mounted while a delegation detail is open. Single clicks only select the
+ * pinned inspector; Enter, double-click and the explicit 打开 controls open
+ * details (0.15 C1–C3).
  */
 export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
-  const { timeline, loading, error, stale, hidden, openedKey, openedRunId } = props;
+  const { timeline, loading, error, stale, hidden, openedKey, openedRunId, selection } = props;
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [asList, setAsList] = useState(false);
+  const [openCluster, setOpenCluster] = useState<string | null>(null);
+  const [clusterNotice, setClusterNotice] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -171,7 +184,6 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       return {
         key: `events:${group[0]!.event.seq}`,
         x: group[0]!.x,
-        xPx: group[0]!.xPx,
         events: group.map(entry => entry.event),
         items,
         lines: items.map(item => `${item.head}，${item.parts.join("，")}`),
@@ -179,6 +191,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       };
     });
   }, [timeline, scaled, rowsById]);
+
+  // A refresh that changes an open popover's membership closes it with a
+  // notice instead of silently showing a different set of events.
+  const clusterMembership = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const membership = new Map(clusters.map(cluster => [cluster.key, cluster.events.map(event => event.seq).join(",")]));
+    const previous = clusterMembership.current;
+    clusterMembership.current = membership;
+    if (openCluster !== null && previous.get(openCluster) !== undefined && previous.get(openCluster) !== membership.get(openCluster)) {
+      setOpenCluster(null);
+      setClusterNotice("事件分组已随刷新更新");
+    }
+  }, [clusters, openCluster]);
 
   const canFold = layout?.canFold ?? false;
   const eligibleGaps = useMemo(() =>
@@ -237,6 +262,17 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     }
   }, [hidden, focusKey, asList]);
 
+  function requestClusterClose(focusMarker: boolean) {
+    setOpenCluster(current => {
+      if (current === null) return null;
+      if (focusMarker) {
+        const marker = rootRef.current?.querySelector<HTMLElement>(`[data-key="${current}"]`);
+        marker?.focus();
+      }
+      return null;
+    });
+  }
+
   function itemAria(item: TimelineItem): string {
     return `${item.head}，${item.parts.join("，")}`;
   }
@@ -252,6 +288,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (rowIndex < 0) return;
     const columnIndex = rows[rowIndex]!.indexOf(item);
     const anchor = Number(item.dataset.x);
+    const key = item.dataset.key ?? "";
     let next: HTMLElement | null = null;
     if (event.key === "ArrowRight") next = rows[rowIndex]![columnIndex + 1] ?? null;
     else if (event.key === "ArrowLeft") next = rows[rowIndex]![columnIndex - 1] ?? null;
@@ -264,8 +301,21 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
           Math.abs(Number(element.dataset.x) - anchor) < Math.abs(Number(best.dataset.x) - anchor) ? element : best, row[0]!);
       }
     } else if (event.key === " ") {
+      // Space selects the focused item (or opens the cluster popover).
       event.preventDefault();
       item.click();
+      return;
+    } else if (event.key === "Enter") {
+      // Enter selects and opens the focused item; a merged cluster opens its popover.
+      event.preventDefault();
+      const cluster = clusters.find(candidate => candidate.key === key);
+      if (cluster && cluster.items.length > 1) {
+        setClusterNotice(null);
+        setOpenCluster(current => (current === key ? null : key));
+        return;
+      }
+      const resolved = itemsByKey.get(key);
+      if (resolved) props.onOpenItem(resolved);
       return;
     } else if (event.key === "Escape") {
       event.preventDefault();
@@ -320,7 +370,19 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   const guideLeft = activeCluster !== null || activeItem?.guide === true
     ? (activeCluster ? activeCluster.x : scaled && activeItem && activeItem.atMs !== null ? scaled.position(activeItem.atMs) : null)
     : null;
-  const summary = timeline?.objective ?? props.summary;
+  const selectedRunId = selection?.type === "run" ? selection.runId : null;
+  // Selecting a delegation (from a row label or an overview card) brings its
+  // row into view without moving the horizontal time position.
+  useEffect(() => {
+    if (selectedRunId === null || hidden) return;
+    const row = rootRef.current?.querySelector<HTMLElement>(`[data-key="row:${selectedRunId}"]`);
+    row?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [selectedRunId, hidden]);
+  const selectedEventKeys = useMemo(() => {
+    if (selection?.type !== "item") return null;
+    return selection.key.startsWith("event:") ? selection.key : null;
+  }, [selection]);
+  const openClusterView = openCluster ? clusters.find(cluster => cluster.key === openCluster) ?? null : null;
 
   const truncation: string[] = [];
   if (timeline?.filtered) truncation.push(`已按筛选显示 ${timeline.rows.length} / ${timeline.totals.allRows} 个委派`);
@@ -335,7 +397,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
       onFocus: () => setFocusKey(key),
       onMouseEnter: () => setHoverKey(key),
       onMouseLeave: () => setHoverKey(current => (current === key ? null : current)),
+      // A single click only pins the inspector; opening needs Enter, a double
+      // click or an explicit 打开 control.
       onClick: () => {
+        const item = itemsByKey.get(key);
+        if (item) props.onSelectItem(item);
+      },
+      onDoubleClick: () => {
         const item = itemsByKey.get(key);
         if (item) props.onOpenItem(item);
       },
@@ -352,7 +420,8 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     const right = facts.endMs !== null ? scaled.position(facts.endMs) : null;
     const width = right !== null ? Math.max(right - left, 0.3) : 0.3;
     const widthPxSpan = width / 100 * widthPx;
-    const selected = openedKey === facts.item.key;
+    const selected = selection?.type === "item" && selection.key === facts.item.key;
+    const runHighlighted = selectedRunId === row.runId;
     const classes = ["tl-item", "sp", span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : span.kind === "host" ? "wait" : "exec"];
     if (facts.outcome === "running") classes.push("running");
     if (facts.outcome === "failed") classes.push("failed");
@@ -360,6 +429,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     if (facts.outcome === "unknown") classes.push("unknown");
     if (span.kind === "host" && span.endAt == null) classes.push("open");
     if (selected) classes.push("selected");
+    if (runHighlighted) classes.push("run-member");
     if (span.kind === "execution" && style?.striped) classes.push("striped");
     const colorVars = span.kind === "execution" && style
       ? { "--c": `var(--cfg-${style.color})` } as CSSProperties : undefined;
@@ -420,7 +490,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
         <div style={{ marginTop: 12 }}><button className="button small-button" onClick={props.onRetry}>重试读取</button></div></div></div>
       : timeline && scaled
         ? <div className={"timeline-body" + (asList ? " as-list" : "")}>
-          <div ref={scrollRef} className="tl-scroll" onKeyDown={onCanvasKeyDown}>
+          <div ref={scrollRef} className="tl-scroll"
+            onScroll={() => { if (openCluster !== null) requestClusterClose(false); }}
+            onKeyDown={onCanvasKeyDown}>
             <div ref={gridRef} className="tl-grid" role="group" aria-label="工作目标时间轴"
               style={{ width: `calc(var(--label-w) + ${Math.round(widthPx)}px)` }}>
               <div className="tl-row axis">
@@ -442,27 +514,46 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
               </div>
               <div className="tl-row markers" data-nav="">
                 <div className="tl-label"><span>Host 事件</span>
-                  {missingEvents > 0 && <span className="trunc-chip">‹ {missingEvents} 条事件未返回</span>}</div>
+                  {missingEvents > 0 && <span className="trunc-chip">‹ {missingEvents} 条事件未返回</span>}
+                  {clusterNotice && <span className="trunc-chip">{clusterNotice}</span>}</div>
                 <div className="tl-track">
                   {clusters.map(cluster => {
                     const single = cluster.items.length === 1 ? cluster.items[0]! : null;
                     const vocab = single ? eventVocab(single ? cluster.events[0]!.kind : "") : null;
+                    const isOpen = openCluster === cluster.key;
+                    const clusterSelected = cluster.items.some(item => item.key === selectedEventKeys);
                     const classes = ["tl-item", "mk", cluster.items.length > 1 ? "cluster" : cluster.events[0]!.kind];
+                    if (clusterSelected) classes.push("selected");
+                    if (isOpen) classes.push("open");
                     return <button key={cluster.key} type="button" className={classes.join(" ")} style={{ left: `clamp(9px, ${cluster.x}%, calc(100% - 9px))` }}
-                      data-key={cluster.key} data-x={cluster.x} tabIndex={focusKey === cluster.key ? 0 : -1}
-                      aria-label={cluster.lines.join("；")} title={cluster.lines.join("；")}
+                      data-key={cluster.key} data-cluster-key={cluster.key} data-x={cluster.x} tabIndex={focusKey === cluster.key ? 0 : -1}
+                      aria-expanded={cluster.items.length > 1 ? isOpen || undefined : undefined}
+                      aria-controls={cluster.items.length > 1 && isOpen ? `popover-${cluster.key}` : undefined}
+                      aria-label={cluster.items.length > 1 ? `Host 事件 ${cluster.items.length} 条，按 Enter 列出` : cluster.lines.join("；")}
+                      title={cluster.lines.join("；")}
                       onFocus={() => setFocusKey(cluster.key)}
                       onMouseEnter={() => setHoverKey(cluster.key)}
                       onMouseLeave={() => setHoverKey(current => (current === cluster.key ? null : current))}
                       onClick={() => {
-                        // Enter/click opens the cluster's first recorded event;
-                        // per-event links stay available in the inspector.
-                        const first = cluster.items[0];
-                        if (first) props.onOpenItem(first);
+                        // Opening the popover selects nothing (0.15 C3).
+                        if (single) {
+                          props.onSelectItem(single);
+                          return;
+                        }
+                        setClusterNotice(null);
+                        setOpenCluster(current => (current === cluster.key ? null : cluster.key));
+                      }}
+                      onDoubleClick={() => {
+                        if (single) props.onOpenItem(single);
                       }}>
                       {cluster.items.length > 1 ? cluster.items.length : vocab?.glyph}
                     </button>;
                   })}
+                  {openClusterView && openClusterView.items.length > 1 && <MarkerPopover
+                    cluster={openClusterView} rowsById={rowsById} selectedEventKey={selectedEventKeys}
+                    onSelect={item => { setFocusKey(item.key); props.onSelectItem(item); }}
+                    onOpen={item => { setFocusKey(item.key); props.onOpenItem(item); requestClusterClose(false); }}
+                    requestClose={requestClusterClose} />}
                 </div>
               </div>
               {timeline.rows.map(row => {
@@ -475,26 +566,35 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                 }).length;
                 const settle = settleItem(row);
                 const settleLeft = settle && settle.atMs !== null ? scaled.position(settle.atMs) : null;
-                return <div key={row.runId} className="tl-row" data-nav="">
+                const runSelected = selectedRunId === row.runId;
+                const runOpened = openedRunId === row.runId;
+                const settleSelected = selection?.type === "item" && selection.key === settle?.key;
+                return <div key={row.runId} className={"tl-row" + (runSelected ? " run-selected" : "")} data-nav="">
                   <button type="button"
-                    className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (openedRunId === row.runId ? " selected-run" : "")}
+                    className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
                     style={{ "--depth": row.depth } as CSSProperties}
-                    data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
+                    data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
                     title={row.title} aria-label={itemAria(label)}
-                    {...itemHandlers(label.key)}>
+                    onFocus={() => setFocusKey(label.key)}
+                    onMouseEnter={() => setHoverKey(label.key)}
+                    onMouseLeave={() => setHoverKey(current => (current === label.key ? null : current))}
+                    onClick={() => props.onSelectRun(row.runId)}
+                    onDoubleClick={() => props.onOpenRun(row.runId)}>
                     <span className="lbl-title">
                       {row.kind === "helper" && <span aria-hidden="true" className="muted">↳</span>}
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
                       {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
                       <span>{row.title}</span>
+                      {runOpened && <span className="opened-mark">详情</span>}
                     </span>
                     <span className="lbl-sub">{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{configurationLabel(row.configuration)}</span>
+                    {row.summary && <span className="lbl-summary" title={row.summary}>结果：{excerpt(row.summary, 60)}</span>}
                     {unplaced > 0 && <span className="trunc-chip" title="这些片段的时间缺失或颠倒，未在时间轴上放置">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">
                     {(spansByRun.get(row.runId) ?? []).map(span => renderSpan(row, span))}
                     {settle && settleLeft !== null && <button type="button"
-                      className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept")}
+                      className={"tl-item flag " + (row.acceptanceVerdict === "rejected" ? "reject" : "accept") + (settleSelected ? " selected" : "") + (runSelected ? " run-member" : "")}
                       style={{ left: `${settleLeft}%` }} data-x={settleLeft}
                       tabIndex={focusKey === settle.key ? 0 : -1} aria-label={itemAria(settle)} title={itemAria(settle)}
                       {...itemHandlers(settle.key)}>{row.acceptanceVerdict === "rejected" ? "!" : "✓"}</button>}
@@ -510,50 +610,25 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
               </div>
             </div>
           </div>
-          <ObjectiveChronology entries={chronology} palette={palette} selectedKey={openedKey}
+          <ObjectiveChronology entries={chronology} palette={palette} selectedKey={selection?.type === "item" ? selection.key : null}
+            openedKey={openedKey}
+            onSelectItem={item => { setFocusKey(item.key); props.onSelectItem(item); }}
             onOpenItem={item => { setFocusKey(item.key); props.onOpenItem(item); }} />
-          <div className="inspector" aria-live="polite">
-            {activeCluster
-              ? <span className="cluster-lines">
-                <strong>{activeCluster.head}</strong>
-                {activeCluster.items.map((item, index) => <span key={item.key} className="cluster-line">
-                {activeCluster.lines[index]}
-                  <button type="button" className="button small-button" onClick={() => props.onOpenItem(item)}>打开</button>
-                </span>)}
-              </span>
-              : activeItem
-                ? <><strong>{activeItem.head}</strong><span>{activeItem.parts.join(" · ")}</span></>
-                : <span className="muted">悬停或聚焦片段查看记录。</span>}
-            <span className="hint">Enter 打开委派详情 · 方向键移动</span>
-          </div>
+          <TimelineInspector selection={selection}
+            previewItem={activeItem}
+            previewClusterHead={activeCluster ? activeCluster.head : null}
+            timeline={timeline} itemsByKey={itemsByKey}
+            truncatedEvents={!!timeline.truncated.events}
+            locked={props.locked} lockedRunId={openedRunId}
+            onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}
+            onUnpin={props.onClearSelection} />
         </div>
         : null;
 
   return <div className="timeline-view" ref={rootRef} hidden={hidden}>
-    {summary && <header className="detail-header tl-head">
-      <div className="row-between">
-        <button type="button" className="button small-button narrow-back" onClick={props.onBackToList}>返回工作目标</button>
-        <span className="small muted truncate" title={summary.project.path || summary.project.id}>{summary.project.label}</span>
-        <span className="chip-row">
-          {summary.kind === "standalone" && <Badge tone="neutral">独立委派</Badge>}
-          <Badge tone={categoryTone(summary.state)}>{CATEGORY_LABEL[summary.state]}</Badge>
-        </span>
-      </div>
-      <h2 title={summary.title}>{excerpt(summary.title, 100)}</h2>
-      <p className="assignment-line">
-        <span>来源 Host：{summary.sourceHostId || "未记录"}</span>
-        <span>共 {totalDelegations(summary.counts)} 个委派{summary.counts.helpers ? `（含 ${summary.counts.helpers} 个协助任务）` : ""}</span>
-        <span>最近活动 {clockTime(summary.lastActivityAt)}</span>
-      </p>
-      <span className="count-line">
-        {COUNT_ORDER.filter(entry => summary.counts[entry.key] > 0).map(entry =>
-          <span key={entry.key} className={`cnt cnt-${entry.key}`}><span aria-hidden="true">{entry.glyph}</span>{entry.label} {summary.counts[entry.key]}</span>)}
-        <span className="muted">共 {totalDelegations(summary.counts)} 个委派</span>
-      </span>
-      <p className="tl-note">{summary.kind === "standalone"
-        ? "这条旧记录没有工作目标，按字段为空的规则单独显示，不与其他记录合并。"
-        : "工作目标只用于归档与浏览，不调度任务，也不作为验收条件。"}</p>
-    </header>}
+    <ObjectiveOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
+      selectedRunId={selectedRunId} onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun}
+      onBackToList={props.onBackToList} />
     <div className="tl-toolbar">
       <div className="legend" aria-label="执行配置图例">
         <span className="legend-title">执行配置</span>

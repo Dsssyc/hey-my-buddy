@@ -49,6 +49,17 @@ function deferred(): Pending {
   return { promise, resolve };
 }
 
+/** jsdom ships no matchMedia: stub the ≤760px viewport decision per test. */
+function stubViewport(narrow: boolean) {
+  const listeners: Array<() => void> = [];
+  window.matchMedia = vi.fn().mockImplementation(() => ({
+    matches: narrow,
+    addEventListener: (_: string, callback: () => void) => { listeners.push(callback); },
+    removeEventListener: () => {},
+  })) as unknown as typeof window.matchMedia;
+  return { set(next: boolean) { narrow = next; for (const callback of listeners) callback(); } };
+}
+
 function harness(options: { writesAvailable?: boolean; pendingContinue?: Pending; secondObjective?: boolean } = {}) {
   const snapshot = snapshotFixture();
   const timeline = objectiveTimelineFixture();
@@ -87,16 +98,18 @@ const openObjective = async (f: ReturnType<typeof harness>) => {
   await f.user.click(await screen.findByRole("button", { name: /工作目标时间轴：设计、接口与实现/ }));
   await screen.findByRole("group", { name: "工作目标时间轴" });
 };
+// Layer mode opens details with Enter or a double click; a single click only pins.
 const openSpan = async (f: ReturnType<typeof harness>, key: string) => {
-  await f.user.click(document.querySelector(`[data-key="span:${key}"]`) as HTMLButtonElement);
+  await f.user.dblClick(document.querySelector(`[data-key="span:${key}"]`) as HTMLButtonElement);
   await screen.findByRole("complementary", { name: "工作目标详情" });
   await waitFor(() => expect(document.querySelector(".locator")).toBeTruthy());
 };
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); delete (window as { matchMedia?: unknown }).matchMedia; });
 
-describe("objective detail navigation", () => {
+describe("objective detail navigation (layer mode, ≤760px viewport)", () => {
   it("opens the existing detail with the locator bar and preselected section", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-e1");
@@ -113,6 +126,7 @@ describe("objective detail navigation", () => {
   });
 
   it("returns to the timeline by button and by Escape, restoring focus, outline and expanded gaps", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     // Expand one folded break first; it must survive the detail round-trip.
@@ -122,6 +136,7 @@ describe("objective detail navigation", () => {
     await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "‹ 返回时间轴" }));
     await waitFor(() => expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false));
     expect(document.activeElement).toBe(span);
+    // Opening pinned the selection, so the outline survives the return.
     expect(span.className).toContain("selected");
     expect(screen.getByRole("button", { name: /^收起空闲/ })).toBeTruthy();
     // Reopen and return with Escape while focus is outside any field.
@@ -132,11 +147,11 @@ describe("objective detail navigation", () => {
   });
 
   it("keeps Escape inside inputs so typing is never discarded", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-e1");
     await screen.findByRole("tab", { name: "协作与待办" });
-    // The default seeded section is execution; switch to the continuation field.
     await f.user.click(screen.getByRole("tab", { name: "协作与待办" }));
     const input = await screen.findByLabelText("交给下一回合的输入");
     await f.user.type(input, "补充输入");
@@ -146,6 +161,7 @@ describe("objective detail navigation", () => {
   });
 
   it("locks navigation while a command result is unconfirmed and unlocks after", async () => {
+    stubViewport(true);
     const pending = deferred();
     const f = harness({ pendingContinue: pending, secondObjective: true });
     await openObjective(f);
@@ -159,7 +175,9 @@ describe("objective detail navigation", () => {
     expect(back.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(back);
     expect(document.querySelector(".run-view")).toBeTruthy();
-    // Switching to any other objective stays disabled until the result is confirmed.
+    // Switching to any other objective stays disabled until the result is
+    // confirmed; the unarchived section must be expanded first.
+    await f.user.click(screen.getByRole("button", { name: /未归档委派（已加载 1）/ }));
     const otherObjective = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
     expect(otherObjective).toHaveProperty("disabled", true);
     // Re-clicking the selected objective must not unmount the unconfirmed detail.
@@ -173,6 +191,7 @@ describe("objective detail navigation", () => {
   });
 
   it("keeps the detail mounted while a list refresh temporarily drops the selected row", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r1-q");
@@ -187,6 +206,7 @@ describe("objective detail navigation", () => {
   });
 
   it("ignores Escape while the tab is not the active page", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r1-q");
@@ -201,6 +221,7 @@ describe("objective detail navigation", () => {
   });
 
   it("keeps the objective context when the detail navigates to a helper", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-e1");
@@ -215,6 +236,7 @@ describe("objective detail navigation", () => {
   });
 
   it("keeps drafts when navigating between timeline and details", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r1-q");
@@ -227,6 +249,7 @@ describe("objective detail navigation", () => {
   });
 
   it("keeps every read working in a read-only session with existing controls disabled", async () => {
+    stubViewport(true);
     const f = harness({ writesAvailable: false });
     await openObjective(f);
     await openSpan(f, "s-r1-q");
@@ -239,10 +262,123 @@ describe("objective detail navigation", () => {
   });
 
   it("routes a routing span to the decision task's own detail", async () => {
+    stubViewport(true);
     const f = harness();
     await openObjective(f);
     await openSpan(f, "s-r2-r");
     await waitFor(() => expect(f.api.task).toHaveBeenCalledWith("run-d02b"));
     expect((document.querySelector(".locator .crumbs") as HTMLElement).textContent).toContain("run-d02b");
   });
+
+  it("single clicks never open a detail; the inspector pins instead", async () => {
+    stubViewport(true);
+    const f = harness();
+    await openObjective(f);
+    await f.user.click(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
+    expect(document.querySelector(".run-view")).toBeNull();
+    const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
+    expect(inspector.textContent).toContain("执行片段");
+    await f.user.click(document.querySelector('[data-key="row:r1"]') as HTMLButtonElement);
+    expect(document.querySelector(".run-view")).toBeNull();
+    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("整项委派");
+  });
 });
+
+describe("objective detail docking (C4)", () => {
+  it("stacks the detail under a visible timeline on a medium-wide pane", async () => {
+    stubViewport(false);
+    const f = harness();
+    await openObjective(f);
+    await openSpan(f, "s-r2-e1");
+    // jsdom has no ResizeObserver: the pane width stays unknown, so the detail
+    // docks stacked below the timeline instead of replacing it.
+    const dock = document.querySelector(".right-dock.stack") as HTMLElement;
+    expect(dock).toBeTruthy();
+    expect(document.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false);
+    const locator = document.querySelector(".locator") as HTMLElement;
+    expect(within(locator).getByRole("button", { name: "× 关闭详情" })).toBeTruthy();
+    // Clicking another item in the timeline only changes the inspector.
+    await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
+    expect(f.api.task).toHaveBeenCalledTimes(1); // still r2's detail
+    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    // Selection survives closing the detail.
+    await f.user.click(within(locator).getByRole("button", { name: "× 关闭详情" }));
+    expect(document.querySelector(".run-view")).toBeNull();
+    expect(document.querySelector('[data-key="span:s-r1-e"]')!.className).toContain("selected");
+  });
+
+  it("docks side by side on a wide pane and switches to stacked without losing state", async () => {
+    stubViewport(false);
+    const observers: Array<{ callback: ResizeObserverCallback }> = [];
+    vi.stubGlobal("ResizeObserver", class {
+      callback: ResizeObserverCallback;
+      observe = vi.fn(() => { this.callback([], {} as ResizeObserver); });
+      disconnect = vi.fn(); unobserve = vi.fn();
+      constructor(callback: ResizeObserverCallback) { this.callback = callback; observers.push(this); }
+    });
+    let paneWidth = 1200;
+    const widthOriginal = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get() { return paneWidth; } });
+    try {
+      const f = harness();
+      await openObjective(f);
+      // The list pane also reports 1200; the detail panel is the observed one.
+      await f.user.dblClick(document.querySelector('[data-key="span:s-r2-e1"]') as HTMLButtonElement);
+      await waitFor(() => expect(document.querySelector(".right-dock.side")).toBeTruthy());
+      const dock = document.querySelector(".right-dock.side") as HTMLElement;
+      expect(dock.querySelector(".timeline-view")!.hasAttribute("hidden")).toBe(false);
+      expect(dock.querySelectorAll(".run-view").length).toBe(1);
+      // Pin a selection while docked side by side.
+      await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
+      // Narrow the pane below the dock threshold: stacked, state preserved.
+      paneWidth = 800;
+      actResize(observers);
+      await waitFor(() => expect(document.querySelector(".right-dock.stack")).toBeTruthy());
+      expect(document.querySelector(".right-dock.side")).toBeNull();
+      expect(document.querySelector('[data-key="span:s-r1-e"]')!.className).toContain("selected");
+      expect(document.querySelector(".run-view")).toBeTruthy();
+      // Widen again: the side dock returns with the same detail.
+      paneWidth = 1200;
+      actResize(observers);
+      await waitFor(() => expect(document.querySelector(".right-dock.side")).toBeTruthy());
+      expect((document.querySelector(".locator .crumbs") as HTMLElement).textContent).toContain("实现 objectives 表");
+    } finally {
+      if (widthOriginal) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthOriginal);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("locked details allow the same run's sections but block other runs and closing", async () => {
+    stubViewport(false);
+    const pending = deferred();
+    const f = harness({ pendingContinue: pending });
+    await openObjective(f);
+    await openSpan(f, "s-r2-e1");
+    await f.user.click(await screen.findByRole("tab", { name: "协作与待办" }));
+    const input = await screen.findByLabelText("交给下一回合的输入");
+    await f.user.type(input, "等待中的接续");
+    await f.user.click(screen.getByRole("button", { name: "提交接续输入" }));
+    await waitFor(() => expect(document.querySelector(".lock-note")).toBeTruthy());
+    // Selection stays available while locked.
+    await f.user.click(document.querySelector('[data-key="span:s-r1-e"]') as HTMLButtonElement);
+    expect(document.querySelector(".timeline-inspector")!.textContent).toContain("设计工作目标时间轴视图与交互规范");
+    // Opening another run's detail is disabled in the pinned card.
+    const card = document.querySelector(".inspector-card") as HTMLElement;
+    const open = within(card).getByRole("button", { name: "打开详情" });
+    expect(open.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(open);
+    await waitFor(() => expect(f.api.task).toHaveBeenCalledTimes(1));
+    expect((document.querySelector(".locator .crumbs") as HTMLElement).textContent).toContain("实现 objectives 表");
+    // The same delegation's other sections stay reachable: dblclick r2's own span.
+    await f.user.dblClick(document.querySelector('[data-key="span:s-r2-e2"]') as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelector(".lock-note")).toBeTruthy());
+    expect((document.querySelector(".locator .crumbs") as HTMLElement).textContent).toContain("实现 objectives 表");
+    pending.resolve({ ok: true });
+    await waitFor(() => expect(document.querySelector(".lock-note")).toBeNull());
+  });
+});
+
+function actResize(observers: Array<{ callback: ResizeObserverCallback }>) {
+  for (const observer of observers) observer.callback([], {} as ResizeObserver);
+}

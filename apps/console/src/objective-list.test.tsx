@@ -6,7 +6,6 @@ import { listFixture } from "./objective-fixtures";
 import type { ObjectiveSummary } from "./objective-types";
 
 const rows = listFixture();
-const noop = () => {};
 const props = () => ({
   rows, total: rows.length, loading: false, error: "", nextCursor: null, reorder: null,
   filter: "all" as const, query: "", projectId: "", hostId: "",
@@ -23,11 +22,13 @@ const props = () => ({
 afterEach(() => cleanup());
 
 describe("objective list", () => {
-  it("groups by source project, keeps activity order and shows fixed-order counts with zeros omitted", () => {
-    render(<ObjectiveList {...props()} />);
+  it("shows only work objectives by default; standalone delegations fold into their own loaded-only section", async () => {
+    const user = userEvent.setup();
+    const p = props();
+    render(<ObjectiveList {...p} />);
+    // p1's main heading counts the two objectives, not the standalone row.
     const headings = screen.getAllByRole("button", { name: /已加载/ }).map(node => node.textContent?.replace(/\s+/g, " "));
-    // p1 (newest activity 08:12) comes before p2 (08:11); within p1 seq descends.
-    expect(headings).toEqual(["▾ hey-my-buddy 已加载 3 个工作目标", "▾ dsh-harness 已加载 1 个工作目标"].map(text => text.replace(" 已加载", "已加载")));
+    expect(headings).toEqual(["▾ hey-my-buddy已加载 2 个工作目标", "▾ dsh-harness已加载 1 个工作目标", "▸ 未归档委派（已加载 1）"]);
     const first = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
     expect(within(first).getByText("进行中 1")).toBeTruthy();
     expect(within(first).getByText("待验收 1")).toBeTruthy();
@@ -35,18 +36,60 @@ describe("objective list", () => {
     expect(within(first).queryByText(/待决定/)).toBeNull();
     expect(within(first).getByText("共 6 个委派")).toBeTruthy();
     expect(within(first).getByText("来源 Host：codex-desktop")).toBeTruthy();
-    expect(screen.getByText("已加载 4 / 4 个工作目标 · 按最近活动排序 · 项目选项来自已加载记录")).toBeTruthy();
+    // The standalone row is collapsed away by default.
+    expect(screen.queryByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeNull();
+    // Expanding shows it with the honest loaded-only label and note.
+    await user.click(screen.getByRole("button", { name: /未归档委派（已加载 1）/ }));
+    const standalone = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
+    expect(within(standalone).getByText("未归档委派")).toBeTruthy();
+    expect(screen.getByText("这些委派提交时没有指定工作目标，按记录单独显示。")).toBeTruthy();
+    // No join or archive affordance anywhere (the section heading itself is
+    // not a write control; it only toggles the folded view).
+    expect(screen.queryByRole("button", { name: /归档到|移出|加入工作目标/ })).toBeNull();
   });
 
-  it("marks standalone roots with the neutral label and an absolute tooltip time", () => {
-    render(<ObjectiveList {...props()} />);
-    const standalone = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
-    expect(within(standalone).getByText("独立委派")).toBeTruthy();
-    expect(within(standalone).getByText("已结束 1")).toBeTruthy();
-    const time = standalone.querySelector("time")!;
-    expect(time.getAttribute("dateTime")).toBe("2026-09-25T10:22:00Z");
-    // The absolute fallback keeps the design's MM-DD HH:MM shape in local time.
-    expect(time.getAttribute("title")).toMatch(/^\d{2}-\d{2} \d{2}:\d{2}$/);
+  it("marks the loaded count as possibly incomplete while a next page exists", () => {
+    const p = { ...props(), nextCursor: "older-page" };
+    render(<ObjectiveList {...p} />);
+    expect(screen.getByText(/已加载 4 个记录 · 可能还有更多 · 按最近活动排序/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /未归档委派（已加载 1 · 可能还有更多）/ })).toBeTruthy();
+  });
+
+  it("uses the recorded intent title with the nullable summary as a second line", () => {
+    const summarized: ObjectiveSummary[] = [{
+      ...rows[0]!, summary: "已验证 0.15 交互切片的回归测试",
+    }];
+    render(<ObjectiveList {...{ ...props(), rows: summarized }} />);
+    const row = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+    expect(within(row).getByText(/^结果：已验证 0\.15 交互切片的回归测试$/)).toBeTruthy();
+    // The intent title keeps the titleSource meaning; no summary-as-title rule.
+    expect(within(row).getAllByText(/工作目标时间轴：设计、接口与实现/).length).toBeGreaterThan(0);
+  });
+
+  it("filters the display by kind through the 显示 dropdown", async () => {
+    const user = userEvent.setup();
+    const p = props();
+    render(<ObjectiveList {...p} />);
+    const select = screen.getByLabelText("显示类别") as HTMLSelectElement;
+    expect(select.value).toBe("objectives");
+    await user.click(select);
+    await user.selectOptions(select, "standalone");
+    expect(screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /工作目标时间轴：设计、接口与实现/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /未归档委派（已加载/ })).toBeNull();
+    await user.selectOptions(select, "all");
+    expect(screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ })).toBeTruthy();
+  });
+
+  it("offers loading older records when the loaded page has only standalone delegations", async () => {
+    const user = userEvent.setup();
+    const standaloneOnly = [rows[2]!];
+    const p = { ...props(), rows: standaloneOnly, total: 9, nextCursor: "older-page" };
+    render(<ObjectiveList {...p} />);
+    expect(screen.getByText("已加载的记录中暂无工作目标")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "加载更早记录" }));
+    expect(p.onMore).toHaveBeenCalled();
   });
 
   it("selects an objective, and a pending reorder keeps the selection while offering the notice", async () => {
@@ -76,7 +119,7 @@ describe("objective list", () => {
     const empty = { ...props(), rows: [] as ObjectiveSummary[], total: 0 };
     const first = render(<ObjectiveList {...empty} />);
     expect(screen.getByText("还没有工作目标")).toBeTruthy();
-    expect(screen.getByText("Host 提交委派后，这里按项目列出工作目标；旧记录各自显示为独立委派。")).toBeTruthy();
+    expect(screen.getByText("Host 提交委派后，这里按项目列出工作目标；旧记录各自显示为未归档委派。")).toBeTruthy();
     first.unmount();
     render(<ObjectiveList {...empty} filter="host" query="任意" />);
     expect(screen.getByText("没有匹配的工作目标")).toBeTruthy();

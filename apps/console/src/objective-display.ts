@@ -142,8 +142,9 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
   };
 }
 
+/** `title` is always the intent under 0.15; the nullable `summary` is a separate result line. */
 export const TITLE_SOURCE_LABEL: Record<string, string> = {
-  objective: "工作目标标题", title: "Host 标题", summary: "最近结果摘要", task: "原始任务首行", none: "未命名委派",
+  objective: "工作目标标题", title: "Host 标题", task: "原始任务首行", none: "未命名委派",
 };
 
 /* ---- configuration identity and colour assignment ---- */

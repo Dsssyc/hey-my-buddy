@@ -21,11 +21,13 @@ export type DetailTarget = {
 
 /**
  * Right pane, layer two: the locator bar plus the existing TaskDetails for the
- * delegation opened from the timeline. No control set is duplicated here; the
- * locator is the return entry at every width while TaskDetails' own mobile
- * back button stays hidden.
+ * delegation opened from the timeline. No control set is duplicated here. In
+ * dock mode the timeline stays visible beside or above this pane, so the
+ * return control reads as closing the detail instead of going back.
  */
-export function RunDetailPane({ objectiveTitle, target, snapshot, api, refresh, active, authority, writesAvailable, locked, onBack, onNavigate, onLockChange, rowTitleFor }: {
+export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot, api, refresh, active, authority, writesAvailable, locked, onBack, onNavigate, onLockChange, rowTitleFor }: {
+  /** "layer" replaces the timeline; "dock" keeps it visible beside/above. */
+  mode?: "layer" | "dock";
   objectiveTitle: string;
   target: DetailTarget;
   snapshot: Snapshot;
@@ -61,7 +63,7 @@ export function RunDetailPane({ objectiveTitle, target, snapshot, api, refresh, 
     <div className="locator">
       <button type="button" className="button small-button" aria-disabled={locked || undefined}
         title={locked ? LOCK_NOTE : undefined}
-        onClick={() => { if (!locked) onBack(); }}>‹ 返回时间轴</button>
+        onClick={() => { if (!locked) onBack(); }}>{mode === "dock" ? "× 关闭详情" : "‹ 返回时间轴"}</button>
       <span className="crumbs" title={crumbs}>{crumbs}</span>
       {target.locator && <span className="from">来自时间轴：{target.locator}</span>}
       {locked && <span className="lock-note" role="status">{LOCK_NOTE} 当前委派的其他栏目仍可浏览。</span>}

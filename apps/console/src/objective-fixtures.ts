@@ -100,7 +100,7 @@ export function objectiveTimelineFixture(overrides: Partial<ObjectiveTimeline> =
   const spans: TimelineSpan[] = [
     span("s-r1-q", "r1", "queue", "2026-09-26T01:12:00Z", "2026-09-26T01:14:00Z"),
     span("s-r1-e", "r1", "execution", "2026-09-26T01:14:00Z", "2026-09-26T01:58:00Z",
-      { turnIndex: 1, attemptId: "att-r1", configuration: OPUS, shutdownConfirmed: true }),
+      { turnIndex: 1, attemptId: "att-r1", configuration: OPUS, shutdownConfirmed: true, resultStatus: "ok" }),
     span("s-r2-q", "r2", "queue", "2026-09-26T01:20:00Z", "2026-09-26T01:21:00Z"),
     span("s-r2-r", "r2", "routing", "2026-09-26T01:21:00Z", "2026-09-26T01:24:00Z", { decisionTaskId: "run-d02b" }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
@@ -113,7 +113,7 @@ export function objectiveTimelineFixture(overrides: Partial<ObjectiveTimeline> =
     span("s-r3-e1", "r3", "execution", "2026-09-26T01:40:00Z", "2026-09-26T02:02:00Z",
       { turnIndex: 1, attemptId: "att-r3a", configuration: GLM, resultStatus: "failed", error: "测试命令超时", shutdownConfirmed: true }),
     span("s-r3-e2", "r3", "execution", "2026-09-26T02:04:00Z", "2026-09-26T02:30:00Z",
-      { turnIndex: 2, attemptId: "att-r3b", configuration: GLM, shutdownConfirmed: true }),
+      { turnIndex: 2, attemptId: "att-r3b", configuration: GLM, shutdownConfirmed: true, resultStatus: "ok" }),
     span("s-r5-q", "r5", "queue", "2026-09-26T05:30:00Z", "2026-09-26T05:31:00Z"),
     span("s-r5-e", "r5", "execution", "2026-09-26T05:31:00Z", "2026-09-26T05:50:00Z",
       { turnIndex: 1, attemptId: "att-r5", configuration: GLM, resultStatus: "cancelled", shutdownConfirmed: true }),

@@ -356,8 +356,6 @@ button.tl-label:hover { background: var(--subtle); }
 .inspector strong { font-weight: 600; }
 .inspector > span:not(.hint) { min-width: 0; overflow-wrap: anywhere; }
 .inspector .hint { margin-left: auto; color: var(--faint); font-size: 11px; }
-.cluster-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.cluster-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
 /* Chronological list: narrow screens and the desktop 以列表查看 option. */
 .tl-list { display: none; flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; border-top: 1px solid var(--line); }
 .timeline-body.as-list .tl-scroll, .timeline-body.as-list .inspector { display: none; }
@@ -386,4 +384,91 @@ button.tl-label:hover { background: var(--subtle); }
   .tl-tools .list-toggle { display: none; }
   .timeline-body .tl-scroll, .timeline-body .inspector { display: none; }
   .timeline-body .tl-list { display: block; }
+  .timeline-body .timeline-inspector { display: block; }
+}
+
+/* ---- 0.15: pinned inspector, marker popover, overview cards, dock ---- */
+.timeline-inspector { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 4px; max-height: 16em; }
+.timeline-body.as-list .timeline-inspector { display: flex; }
+.inspector-preview-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.inspector-preview { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; overflow-wrap: anywhere; }
+.inspector-card { border-top: 1px solid var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.inspector-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.inspector-card-head strong { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.inspector-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.inspector-unpin { width: 22px; height: 22px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--surface); color: var(--muted); line-height: 1; }
+.inspector-unpin:hover { color: var(--danger); border-color: var(--danger-line); }
+.inspector-missing { margin: 0; padding: 3px 6px; border-radius: 3px; background: var(--warning-wash); color: var(--warning); font-size: 11px; }
+.inspector-group { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.inspector-group-label { flex-shrink: 0; min-width: 5.5em; color: var(--faint); font-size: 11px; }
+.inspector-group-lines { min-width: 0; display: flex; flex-direction: column; gap: 1px; overflow-wrap: anywhere; }
+.inspector-group-lines .tone-muted { color: var(--muted); }
+.inspector-group-lines .tone-warn { color: var(--warning); }
+.inspector-link { padding: 0; border: 0; background: none; color: var(--accent); text-align: left; font-size: 12px; overflow-wrap: anywhere; }
+.inspector-link:hover { text-decoration: underline; }
+.inspector-events { gap: 2px; }
+.inspector-event { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.marker-popover { position: absolute; top: 26px; z-index: 8; width: min(320px, 86vw); max-width: 340px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 18%, transparent); }
+.marker-popover-rows { max-height: calc(8 * 34px); overflow-y: auto; overscroll-behavior: contain; }
+.marker-popover-row { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); }
+.marker-popover-row:last-child { border-bottom: 0; }
+.marker-popover-row.selected { background: var(--accent-wash); }
+.marker-popover-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 7px 8px; border: 0; background: none; color: var(--ink); text-align: left; font-size: 12px; }
+.marker-popover-main time { color: var(--muted); font-size: 11px; }
+.marker-popover-title { min-width: 0; overflow-wrap: anywhere; }
+.marker-popover-row .button { margin-right: 6px; flex-shrink: 0; }
+.marker-popover-hint { margin: 0; padding: 4px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10px; }
+.mk.open { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mk.selected { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
+/* Row-level selection: every span and flag of the selected run gets a thin outline. */
+.sp.run-member, .flag.run-member { box-shadow: 0 0 0 1px var(--focus); }
+.tl-label.opened-run { box-shadow: inset 3px 0 var(--accent); }
+.opened-mark { flex-shrink: 0; font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); }
+.lbl-summary { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-entry.opened { box-shadow: inset 3px 0 var(--accent); background: var(--subtle); }
+/* Overview: metrics and delegation cards */
+.objective-summary-line { margin: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+.metric-warn { padding: 0 6px; border-radius: 3px; background: var(--warning-wash); color: var(--warning); cursor: help; }
+.delegation-strip { display: flex; align-items: stretch; gap: 8px; margin-top: 8px; overflow-x: auto; padding-bottom: 4px; }
+.delegation-card { flex: 0 0 auto; width: 230px; display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); text-align: left; }
+.delegation-card:hover { background: var(--subtle); }
+.delegation-card.selected { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); background: var(--subtle); }
+.delegation-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.delegation-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.delegation-card-facts { font-size: 11px; color: var(--ink); }
+.delegation-card-meta { font-size: 10px; }
+.delegation-card.single.expanded { width: auto; flex: 1 1 auto; }
+.delegation-metrics { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
+.strip-bound { align-self: center; flex-shrink: 0; font-size: 10px; padding: 0 4px; }
+/* Dock modes: the detail shares the right pane with the timeline. One stable
+   wrapper keeps children mounted across layer/dock threshold changes. */
+.right-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.right-stage-pane { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+/* In layer mode the timeline is hidden, so its pane must not claim space. */
+.right-stage-pane:has(> [hidden]) { display: none; }
+.right-dock { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.right-dock.side { display: grid; grid-template-columns: minmax(0, 1fr) 10px var(--dock-detail-width, 520px); }
+.right-dock.stack .detail-stage { flex: 0 0 var(--dock-detail-height, 45%); min-height: 180px; }
+.dock-divider { position: relative; touch-action: none; }
+.dock-divider.vertical { cursor: col-resize; }
+.dock-divider.horizontal { cursor: row-resize; }
+.dock-divider::after { content: ""; position: absolute; border-radius: 2px; background: var(--line-strong); }
+.dock-divider.vertical::after { top: 42%; bottom: 42%; left: 4px; width: 2px; }
+.dock-divider.horizontal::after { left: 42%; right: 42%; top: 4px; height: 2px; }
+.dock-divider:hover::after, .dock-divider:focus-visible::after { background: var(--accent); }
+/* List: A4/A5 additions */
+.task-summary { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.standalone-note { margin: 6px 0 0 10px; }
+/* Settings: routing status */
+.routing-status { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.routing-status h3 { margin: 0 0 6px; font-size: 13px; }
+.routing-status p { margin: 2px 0; }
+.routing-failures { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.routing-failures li { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; }
+.routing-failures code { font-size: 11px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .delegation-strip { flex-direction: column; }
+  .delegation-card { width: auto; }
+  .inspector-group { flex-direction: column; gap: 1px; }
 }

@@ -9,13 +9,16 @@ const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", canc
  * The chronological column: narrow screens and the desktop 以列表查看 option.
  * Spans and Host events merge into one start-time-ordered list; idle stretches
  * appear as separators only when the frozen layout trusts the scope, and the
- * list never compresses time, so there is nothing to expand.
+ * list never compresses time, so there is nothing to expand. A single click
+ * pins the inspector selection; Enter or a double click opens the detail.
  */
-export function ObjectiveChronology({ entries, palette, onOpenItem, selectedKey }: {
+export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem, selectedKey, openedKey }: {
   entries: ChronoEntry[];
   palette: ConfigurationStyle[];
+  onSelectItem: (item: TimelineItem) => void;
   onOpenItem: (item: TimelineItem) => void;
   selectedKey: string | null;
+  openedKey: string | null;
 }) {
   if (!entries.length) return <p className="tl-state">没有可按时间列出的记录；缺少可用的时间信息。</p>;
   return <div className="tl-list" aria-label="按时间排序的记录">
@@ -31,8 +34,16 @@ export function ObjectiveChronology({ entries, palette, onOpenItem, selectedKey 
         const helper = entry.row?.kind === "helper" ? "↳ 协助 · " : "";
         const title = entry.row?.title ?? `委派 ${entry.event.runId}`;
         return <button key={entry.item.key} data-key={entry.item.key}
-          className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "")}
-          onClick={() => onOpenItem(entry.item)} aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
+          className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "") + (openedKey === entry.item.key ? " opened" : "")}
+          onClick={() => onSelectItem(entry.item)}
+          onDoubleClick={() => onOpenItem(entry.item)}
+          onKeyDown={event => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onOpenItem(entry.item);
+            }
+          }}
+          aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
           <time>{clockTime(entry.atMs)}</time>
           <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
           <span className="e-title">Host {entry.event.label || vocab.label} · {helper}{title}</span>
@@ -49,8 +60,16 @@ export function ObjectiveChronology({ entries, palette, onOpenItem, selectedKey 
         : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : "wait")} aria-hidden="true" />;
       const duration = durationText(entry.endMs !== null ? entry.endMs - entry.atMs : null);
       return <button key={entry.item.key} data-key={entry.item.key}
-        className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "")}
-        onClick={() => onOpenItem(entry.item)} aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
+        className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "") + (openedKey === entry.item.key ? " opened" : "")}
+        onClick={() => onSelectItem(entry.item)}
+        onDoubleClick={() => onOpenItem(entry.item)}
+        onKeyDown={event => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onOpenItem(entry.item);
+          }
+        }}
+        aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
         <time>{clockTime(entry.atMs)}</time>
         {swatch}
         <span className="e-title">{entry.item.head} · {helper}{entry.row.title}</span>
@@ -59,7 +78,7 @@ export function ObjectiveChronology({ entries, palette, onOpenItem, selectedKey 
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}
           {resultGlyph && <span>{resultGlyph} {outcomeLabel(span, outcome)}</span>}
         </span>
-      </button>;
+      </button>
     })}
   </div>;
 }
