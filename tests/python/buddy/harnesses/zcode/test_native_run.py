@@ -1644,7 +1644,7 @@ class DiscoveryStopTests(NativeRunCase):
             finally:
                 connection.assert_not_called()
 
-    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None):
+    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None, fail_observation=False):
         """Fail only the app-server stderr close after real owned_popen runs.
 
         Windows uses injected API/Popen handles; POSIX starts the real private
@@ -1681,6 +1681,9 @@ class DiscoveryStopTests(NativeRunCase):
                              if windows_api is not None else nullcontext())
             with creation_time:
                 owner = handle_type(*args, **kwargs)
+            if fail_observation and owner._members is not None:
+                owner._members.snapshot = lambda: (_ for _ in ()).throw(
+                    PermissionError("fixture session scan refused"))
             def reap():
                 try:
                     if owner._members is not None:
@@ -1737,7 +1740,8 @@ class DiscoveryStopTests(NativeRunCase):
         error = OSError("fixture stderr close failed")
         with self.assertRaises(Exception) as caught:
             self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIs(self.fd_close_child, process)
         self.assertIn(("terminate", 77), api.events)
@@ -1765,7 +1769,8 @@ class DiscoveryStopTests(NativeRunCase):
         with mock.patch.object(process, "kill", side_effect=OSError("fixture kill refused")):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIsNone(self.fd_close_child)
         self.assertTrue(caught.exception.__context__.owned_popen_evidence.created)
@@ -1800,10 +1805,8 @@ class DiscoveryStopTests(NativeRunCase):
     @unittest.skipIf(os.name == "nt", "POSIX group observation; Windows Job uncertainty is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
         error = OSError("fixture stderr close failed")
-        with mock.patch.object(process_members, "process_snapshot",
-                               side_effect=PermissionError("fixture session scan refused")):
-            with self.assertRaises(Exception) as caught:
-                self.discover_with_fd_close_failure(error)
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, fail_observation=True)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
         self.assertIs(caught.exception, error)
         self.assertIsNotNone(self.fd_close_child)

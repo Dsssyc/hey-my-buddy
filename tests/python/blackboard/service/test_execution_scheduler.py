@@ -229,7 +229,7 @@ class ExecutionObservationTests(unittest.TestCase):
     def test_failed_parent_capture_is_closed_by_a_verified_child_report(self):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
-        handle = Mock(pid=123, process_started_at=456, pgid=123, job=None)
+        handle = Mock(pid=123, process_started_at=456, session_id=123, job=None)
         identity = {"bootId": "test-boot", "pid": 123, "startedAt": 456,
                     "processGroupId": 123, "jobName": None}
         scheduler._handles["attempt-1"] = (handle, None)

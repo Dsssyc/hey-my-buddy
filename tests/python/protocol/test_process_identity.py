@@ -229,7 +229,7 @@ class ProcessIdentityTests(unittest.TestCase):
 
     def test_windows_capture_reads_no_boot_identifier(self):
         handle = SimpleNamespace(pid=301, process_started_at=WINDOWS_RECORD["startedAt"],
-                                 pgid=None, job=SimpleNamespace(name=WINDOWS_RECORD["jobName"]))
+                                 session_id=None, job=SimpleNamespace(name=WINDOWS_RECORD["jobName"]))
         with mock.patch.object(identity, "boot_id", side_effect=AssertionError("no boot read")):
             record = identity.capture_process_identity(handle)
         self.assertEqual(record, WINDOWS_RECORD)
@@ -250,6 +250,16 @@ class ProcessIdentityTests(unittest.TestCase):
         source.job = [301, 302]
         source.started_at = mock.Mock(side_effect=OSError("observation failed"))
         self.assertFalse(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
+
+    @unittest.skipIf(os.name == "nt", "POSIX process session identity")
+    def test_capture_checks_the_root_session_not_its_process_group(self):
+        handle = SimpleNamespace(pid=301, process_started_at=815, session_id=301, job=None)
+        with mock.patch.object(identity, "boot_id", return_value="linux:00000000-0000-0000-0000-000000000001"), \
+             mock.patch.object(identity.os, "getsid", return_value=301) as getsid, \
+             mock.patch.object(identity.os, "getpgid", side_effect=AssertionError("process group read")):
+            record = identity.capture_process_identity(handle)
+        getsid.assert_called_once_with(301)
+        self.assertEqual(record["processGroupId"], 301)  # The persisted field remains unchanged.
 
     @unittest.skipIf(os.name == "nt", "POSIX process group test")
     def test_real_owned_process_identity_and_orphan_stop(self):

@@ -174,7 +174,7 @@ class ExecutionScheduler:
             # Compare it with the creation facts retained in our owned handle.
             expected = {"bootId": boot_id(), "pid": handle.pid,
                         "startedAt": handle.process_started_at,
-                        "processGroupId": handle.pgid, "jobName": None}
+                        "processGroupId": handle.session_id, "jobName": None}
             if identity != expected:
                 return None
             return self._adopt_verified(attempt_id, held, identity)

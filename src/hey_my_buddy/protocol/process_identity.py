@@ -1,7 +1,8 @@
 """Durable OS identity and conservative recovery evidence for one execution.
 
-A POSIX root records its boot session, PID, creation time and initial process
-group; its PID is also its session ID. A Windows root records the PID and raw-FILETIME creation time of the
+A POSIX root records its boot session, PID and creation time; its PID is also
+its session ID. The existing `processGroupId` field stores that session ID. A
+Windows root records the PID and raw-FILETIME creation time of the
 process the service created plus the exclusively created root Job, and reads no
 boot identifier. Only the complete recorded identity authorizes the service to
 stop an orphan after its execution has ended. An uninspectable identity remains
@@ -190,8 +191,9 @@ def validate_process_identity(record: object) -> dict:
     """Validate the one stored form at the RPC/storage boundary.
 
     The two platforms carry one shape each, told apart by the Job and
-    process-group exclusion: a Windows root names its Job and records no boot
-    or group; a POSIX root records its boot session and process-group leader.
+    boot/session fields: a Windows root names its Job and records no boot or
+    session; a POSIX root records its boot session and root session ID. The
+    stored ``processGroupId`` key is retained and contains the root session ID.
     """
     if not isinstance(record, dict):
         raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
@@ -223,11 +225,11 @@ def validate_process_identity(record: object) -> dict:
             raise ValueError("noncanonical boot identifier")
     except ValueError as error:
         raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
-    pgid, job = record["processGroupId"], record["jobName"]
-    if type(pgid) is not int or pgid <= 0 or pgid != record["pid"]:
-        raise BoardError("INVALID_ARGUMENT", "owned process-group leader must match the root PID")
+    session_id, job = record["processGroupId"], record["jobName"]
+    if type(session_id) is not int or session_id <= 0 or session_id != record["pid"]:
+        raise BoardError("INVALID_ARGUMENT", "owned process session must match the root PID")
     if job is not None:
-        raise BoardError("INVALID_ARGUMENT", "exactly one process group or Job is required")
+        raise BoardError("INVALID_ARGUMENT", "exactly one process session or Job is required")
     return record
 
 
@@ -241,19 +243,19 @@ def capture_process_identity(handle) -> dict:
     if job is not None:
         return {"pid": pid, "startedAt": child_start, "jobName": job.name}
     boot = boot_id()
-    if handle.pgid is None:
-        raise OSError("owned process group was not captured at spawn")
+    if handle.session_id is None:
+        raise OSError("owned process session was not captured at spawn")
     try:
-        current_group = os.getpgid(pid)
+        current_session = os.getsid(pid)
     except ProcessLookupError:
         # The root may already have exited. ProcessHandle captured its
-        # creation time and owned group before callers could reap it.
+        # creation time and session before callers could reap it.
         pass
     else:
-        if current_group != handle.pgid:
-            raise OSError("owned process group changed before identity capture")
+        if current_session != handle.session_id:
+            raise OSError("owned process session changed before identity capture")
     return {"bootId": boot, "pid": pid, "startedAt": child_start,
-            "processGroupId": handle.pgid, "jobName": None}
+            "processGroupId": handle.session_id, "jobName": None}
 
 
 def _inspect_job_identity(record: dict, source, job) -> str:

@@ -46,11 +46,11 @@ class ProcessHandle:
         self.process_started_at = None
         self._exit_code = None
         self._confirmed = False
-        # start_new_session makes the owned child's PID its process-group ID.
+        # start_new_session makes the owned child's PID its session ID.
         # Keep it even if the leader exits before identity capture.
-        self.pgid: int | None = None
+        self.session_id: int | None = None
         if own_group and self.job is None and os.name != "nt" and process.pid is not None:
-            self.pgid = process.pid
+            self.session_id = process.pid
         try:
             from .process_identity import _creation_time, record_native_process_spawn
 
@@ -58,7 +58,7 @@ class ProcessHandle:
                                        if type(process.pid) is int and process.pid > 0 else None)
             if self.job is None and os.name != "nt" and self.process_started_at is not None:
                 self._members = SessionProcesses(process.pid, self.process_started_at,
-                                                 session=self.pgid)
+                                                 session=self.session_id)
             if stop_channel == "stdin":
                 if process.stdin is None:
                     raise ValueError("stdin stop channel requires a pipe")
@@ -223,7 +223,7 @@ class ProcessHandle:
             time.sleep(0.025 if deadline is None else min(0.025, max(0, deadline - time.monotonic())))
 
     def shutdown_confirmed(self, settle_seconds: float = 2.0) -> bool:
-        """True only when the owned group is confirmed gone, never inferred from a PID."""
+        """True only when the owned member boundary is confirmed empty."""
         if self.poll() is None:
             return False
         deadline = time.monotonic() + settle_seconds
