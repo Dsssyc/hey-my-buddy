@@ -15,6 +15,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
@@ -624,15 +625,56 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertNotIn("zeroToolVerified", outcome.result)
 
     def test_cancelled_and_timeout_receipts_carry_incomplete_evidence(self):
-        for case, cancel in (("timeout", False), ("timeout", True)):
-            with self.subTest(case=case, cancel=cancel):
-                outcome = self.execute(case, timeout=10 if cancel else 1, cancel=cancel)
-                self.assertIn(outcome.status, ("failed", "cancelled"))
-                self.assertNotIn("zeroToolVerified", outcome.result)
-                package = outcome.result["toolEvidence"]
-                self.assertEqual(package["events"], [])
-                self.assertFalse(package["streamComplete"])
-                self.assertEqual(package["toolCalls"], 0)
+        outcome = self.execute("timeout", timeout=10, cancel=True)
+        self.assertIn(outcome.status, ("failed", "cancelled"))
+        self.assertNotIn("zeroToolVerified", outcome.result)
+        package = outcome.result["toolEvidence"]
+        self.assertEqual(package["events"], [])
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(package["toolCalls"], 0)
+
+    def test_timeout_after_prompt_carries_incomplete_evidence(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import (
+            PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
+        )
+        from hey_my_buddy.buddy.harnesses.zcode import native_run
+        from hey_my_buddy.buddy.roles.run_observers import FastCorrection
+        from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
+
+        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        request = RunRequest(
+            identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                                 invocation_id="timeout-after-prompt"),
+            harness="zcode", buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
+            cwd=str(self.cwd),
+            private_state=PrivateStatePaths(invocation_root=str(self.root / "invocation"),
+                                            native_root=str(self.root / "native")),
+            input_text=prompt, tool_scope="none", output_schema=SCHEMA,
+            budget=RunBudget(timeout_seconds=None))
+        ready = self.root / "prompt-ready"
+        expired_at_prompt = []
+        original_pump = native_run.NativeConnection._pump
+
+        def pump(connection):
+            if not expired_at_prompt and ready.exists() and ready.read_text():
+                expired_at_prompt.append(True)
+                connection.deadline = time.monotonic() - 1
+            return original_pump(connection)
+
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "timeout"}, clear=True), \
+                mock.patch.object(native_run.NativeConnection, "_pump", pump):
+            result = native_run.run(request, observer=FastCorrection(SCHEMA, prompt).observer,
+                                    services=None, cancelled=lambda: False)
+
+        self.assertTrue(expired_at_prompt, "fake native turn never received the prompt")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "timeout")
+        package = result.tool_evidence.value
+        self.assertIsNotNone(package)
+        self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
+        self.assertEqual(package["events"], [])
+        self.assertFalse(package["streamComplete"])
+        self.assertEqual(package["toolCalls"], 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

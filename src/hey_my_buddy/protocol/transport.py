@@ -293,8 +293,6 @@ def _cold_start_preflight(directory: Path) -> None:
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                listener.settimeout(1)
-                connector.settimeout(1)
                 listener.bind(('127.0.0.1', 0))
                 listener.listen(1)
                 connector.connect(listener.getsockname())
@@ -311,8 +309,6 @@ def _cold_start_preflight(directory: Path) -> None:
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
-                listener.settimeout(1)
-                connector.settimeout(1)
                 listener.bind(address)
                 listener.listen(1)
                 connector.connect(address)
@@ -417,15 +413,14 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             threading.Thread(target=child.wait, name="hey-my-buddy-daemon-reaper", daemon=True).start()
         finally:
             os.close(log_fd)
-        # A first cold start may install a runtime before the daemon exists.
-        deadline = time.monotonic() + (300 if target.get("installed") else 20)
-        while time.monotonic() < deadline:
+        # Readiness is an observation; a slow live child remains unknown.
+        while True:
             endpoint = _healthy(directory)
             if endpoint:
                 if target["stable"]:
                     write_active_runtime(directory, Path(target["runtime"]["runtimeDir"]))
                 return endpoint
-            if child.poll() not in (None, 0):
+            if child.poll() is not None:
                 from ..install.launcher import read_private
                 failure = read_private(directory / "startup-error.json") or {}
                 if failure.get("pid") == child.pid and isinstance(failure.get("code"), str) and isinstance(failure.get("message"), str):
@@ -433,7 +428,6 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
                     raise ServiceError(failure["code"], failure["message"], **(details if isinstance(details, dict) else {}))
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
             time.sleep(0.05)
-        raise ServiceError("SERVICE_START_TIMEOUT", "The board daemon did not become ready; inspect control.log")
     finally:
         locking.unlock(lock_fd)
         os.close(lock_fd)

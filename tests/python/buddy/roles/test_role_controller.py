@@ -8,6 +8,7 @@ module. Nothing here starts a native harness or a model.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 import tempfile
 import unittest
@@ -280,6 +281,38 @@ class WorkerSeamTests(unittest.TestCase):
 
 
 class RouterCallPointTests(unittest.TestCase):
+    def test_final_input_verification_uses_original_router_deadline(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        from hey_my_buddy.buddy.roles import router as calls
+        context = self.context(decision_input={'buddy': {}, 'budget': {'timeoutSeconds': 60}})
+        handle = SimpleNamespace(router_started=10, router_deadline=70,
+                                 router_input=(None, self.root, 'expected'))
+        outcome = AdapterOutcome(status='ok', result={}, shutdown_confirmed=True)
+        with mock.patch.object(calls.read_only, 'collect', return_value=outcome), \
+             mock.patch.object(calls.time, 'monotonic', return_value=71), \
+             mock.patch.object(calls.router_input, 'digest') as digest, \
+             mock.patch.object(calls.router_input, 'discard') as discard:
+            collected = calls.DecisionAdapter().collect(handle, context)
+        digest.assert_not_called()
+        discard.assert_not_called()
+        self.assertEqual(collected.result['code'], 'router-budget-exhausted')
+        self.assertIsNone(collected.result['inputVerification']['unchanged'])
+        self.assertTrue(collected.result['stopEvidence']['shutdownConfirmed'])
+
+    def test_review_usage_cannot_hide_input_preparation_time(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        from hey_my_buddy.buddy.roles import router as calls
+        context = self.context(decision_input={'buddy': {}, 'budget': {'timeoutSeconds': 60}})
+        handle = SimpleNamespace(router_started=10)
+        outcome = AdapterOutcome(status='failed', result={'code': 'deadline', 'usage': {'elapsedMs': 1}},
+                                 shutdown_confirmed=False)
+        with mock.patch.object(calls.read_only, 'collect', return_value=outcome), \
+             mock.patch.object(calls.time, 'monotonic', return_value=20):
+            collected = calls.DecisionAdapter().collect(handle, context)
+        self.assertEqual(collected.result['usage']['elapsedMs'], 10000)
+
     def setUp(self):
         self.module = FakeHarnessRun()
         registrations = mock.patch.dict(RUN_SEAMS, {"dsh": self.module})
@@ -358,6 +391,69 @@ class RouterCallPointTests(unittest.TestCase):
         harness, _context, request = self.start_call
         self.assertEqual(harness, "dsh")
         self.assertIs(request, preparation.request)
+
+    def test_review_input_time_reduces_the_native_budget(self):
+        from hey_my_buddy.buddy.roles import router
+
+        now = [100.0]
+        frozen = self.root / "frozen-budget"
+        frozen.mkdir()
+        def prepare(_manifest, _directory):
+            now[0] = 101.2
+            return frozen, "digest"
+        with mock.patch.object(router.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(router.router_input, "prepare", side_effect=prepare):
+            preparation = self.preparation("review")
+        self.assertEqual(preparation.request.budget["timeoutSeconds"], 58)
+
+    def test_review_budget_exhausted_during_input_does_not_start_native(self):
+        from hey_my_buddy.buddy.roles import router
+
+        now = [100.0]
+        frozen = self.root / "frozen-expired"
+        frozen.mkdir()
+        def prepare(_manifest, _directory):
+            now[0] = 160.1
+            return frozen, "digest"
+        with mock.patch.object(router.time, "monotonic", side_effect=lambda: now[0]), \
+                mock.patch.object(router.router_input, "prepare", side_effect=prepare), \
+                mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=self.Native()), \
+                mock.patch.object(router.router_input, "discard") as discard, \
+                mock.patch.object(controller, "start_router_preparation") as start:
+            with self.assertRaises(BoardError) as refused:
+                router.DecisionAdapter().start(self.context(decision_input={
+                    "buddy": {"harness": "dsh"}, "routingMode": "review", "budget": {"timeoutSeconds": 60},
+                    "outputSchema": {"type": "object"}, "task": "choose", "buddies": [],
+                }))
+        self.assertEqual(refused.exception.code, "router-budget-exhausted")
+        self.assertFalse(refused.exception.owned_popen_evidence.created)
+        self.assertTrue(refused.exception.owned_popen_evidence.shutdown_confirmed)
+        discard.assert_called_once_with(frozen)
+        start.assert_not_called()
+
+    def test_review_launch_preserves_deadline_after_launch_time(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.buddy.roles import run_execution
+
+        preparation = self.preparation("review")
+        context = self.context(spec={**preparation.context.spec,
+                                     "provider": "provider", "model": "model", "effort": "off"})
+        deadline = time.monotonic() + 0.01
+        handle = SimpleNamespace(deadline=None)
+        def slow_launch(**_kwargs):
+            time.sleep(0.03)
+            return handle
+        with mock.patch.object(run_execution, "launch_controller", side_effect=slow_launch) as launch:
+            actual = run_execution.start_review("dsh", context, preparation.request,
+                                                deadline_monotonic=deadline)
+        self.assertIs(actual, handle)
+        self.assertGreater(time.monotonic(), deadline)
+        self.assertEqual(handle.deadline, deadline + 10)
+        control = handle.role_run_control
+        self.assertEqual(control["deadlineMonotonic"], deadline)
+        self.assertEqual(control["timeoutSeconds"], preparation.request.budget["timeoutSeconds"])
+        self.assertEqual(control["readOnlyRequest"]["budget"], preparation.request.budget)
+        launch.assert_called_once()
 
     def test_a_registered_seam_refuses_the_legacy_router_entry(self):
         preparation = self.preparation("fast")

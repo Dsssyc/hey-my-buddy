@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 from pathlib import Path
 import time
 
 from ...errors import BoardError
 from ...private_dirs import context_root, ensure_private_dir
 from ...blackboard.routing import router
+from ...blackboard.tasks import workspace
 from . import router_input
 from .prompts import router_prompt
 from . import controller as role_seam
@@ -19,8 +21,16 @@ from ..harnesses.base import (
     ReadOnlyStructuredRequest,
 )
 from . import structured_call as read_only
+from ..runtime.windows_process import ProcessCreationEvidence
 
 ROUTER_STOP_GRACE_SECONDS = 12.0
+
+
+def _review_seconds(deadline: float) -> int:
+    remaining = math.floor(deadline - time.monotonic())
+    if remaining < 1:
+        raise BoardError("router-budget-exhausted", "The Router budget expired before native review")
+    return remaining
 
 
 def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
@@ -45,20 +55,29 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
 
 
 def prepare_router_review(document: dict, buddy: dict, native: Adapter,
-                          context: ExecutionContext) -> role_seam.ReviewPreparation:
+                          context: ExecutionContext, *, started: float | None = None) -> role_seam.ReviewPreparation:
     """Eligibility, the frozen mirror and the read-only request, before any start.
 
     The mirror is materialized from the immutable input tree before the native
     call exists, and the binding the collection re-verifies is frozen here.
     """
+    started = time.monotonic() if started is None else started
     eligibility = native.local_read_only_check()
     if not eligibility["eligible"]:
         detail = eligibility.get("reason") or "harness 不满足审阅模式本地资格"
         raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
+    deadline = started + document["budget"]["timeoutSeconds"]
     manifest = document.get("executionWorkspace")
-    root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
-    request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
-                                        document["budget"], capture_evidence=document.get("captureEvidence") is True)
+    with workspace.git_deadline(deadline):
+        root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
+    prompt = router_prompt(router.render_prompt(document))
+    try:
+        budget = {**document["budget"], "timeoutSeconds": _review_seconds(deadline)}
+    except BoardError:
+        router_input.discard(root)
+        raise
+    request = ReadOnlyStructuredRequest(str(root), prompt, document["outputSchema"],
+                                        budget, capture_evidence=document.get("captureEvidence") is True)
     child_context = replace(context, spec={**context.spec, **buddy, "cwd": str(root)}, turn=None, agent_credential=None)
     return role_seam.ReviewPreparation(harness=native.name, native=native, request=request, context=child_context,
                                        mirror=(manifest, root, digest))
@@ -84,13 +103,27 @@ class DecisionAdapter(Adapter):
         native = adapter(buddy.get("harness"))
         fast = document.get("routingMode") == "fast"
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if fast:
-            preparation = prepare_router_fast(document, buddy, native, context)
-        else:
-            preparation = prepare_router_review(document, buddy, native, context)
         started = time.monotonic()
-        handle = role_seam.start_router_preparation(preparation)
+        deadline = started + document["budget"]["timeoutSeconds"]
+        try:
+            if fast:
+                preparation = prepare_router_fast(document, buddy, native, context)
+            else:
+                preparation = prepare_router_review(document, buddy, native, context, started=started)
+                try:
+                    budget = {**preparation.request.budget,
+                              "timeoutSeconds": _review_seconds(deadline)}
+                except BoardError:
+                    router_input.discard(preparation.mirror[1])
+                    raise
+                preparation = replace(preparation, request=replace(preparation.request, budget=budget))
+        except BoardError as error:
+            # This branch has not reached the native/controller launch boundary.
+            error.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+            raise
+        handle = role_seam.start_router_preparation(preparation, deadline_monotonic=deadline)
         handle.router_started = started
+        handle.router_deadline = deadline
         if fast:
             handle.router_input = None
             handle.no_tool_cwd = preparation.no_tool_cwd
@@ -109,17 +142,20 @@ class DecisionAdapter(Adapter):
             except OSError:
                 pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
-            verification = router_input.verify(*handle.router_input)
+            with workspace.git_deadline(handle.router_deadline):
+                verification = router_input.verify(*handle.router_input)
             # The mirror is a full copy of the frozen input. Once the native group is
             # proven stopped and the copy verified, the digests are the evidence; keep
-            # a changed copy for inspection only.
+            # an unverified or changed copy for inspection only.
             if verification["unchanged"]:
                 router_input.discard(handle.router_input[1])
+        elapsed_ms = round((time.monotonic() - handle.router_started) * 1000)
         usage = {
-            "elapsedMs": round((time.monotonic() - handle.router_started) * 1000),
+            "elapsedMs": elapsed_ms,
             "toolCalls": None, "bytesRead": None,
             **(native_result.get("usage") or {}),
         }
+        usage['elapsedMs'] = max(elapsed_ms, usage['elapsedMs'])
         result = {
             "operation": "select", "status": "ok" if outcome.status == "ok" else "error",
             "requested": document["buddy"],
@@ -148,7 +184,7 @@ class DecisionAdapter(Adapter):
             code = "router-review-unavailable"
             result.update(reason="The native review permission policy could not be verified")
         if verification is not None and not verification["unchanged"]:
-            code = "router-input-changed"
+            code = verification["code"]
         if code is None and outcome.status == "ok":
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),

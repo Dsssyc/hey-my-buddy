@@ -435,7 +435,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 started = time.monotonic()
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
             self.assertLess(time.monotonic() - started, 2)
-            self.assertEqual(result["status"], "unhealthy")
+            self.assertEqual(result["status"], "unhealthy" if result["reasonCode"] == "shutdown-unverified" else "unknown")
             # A slow OS reaper may not close the inherited pipe within the
             # cleanup budget. It must remain unavailable with honest evidence.
             self.assertIn(result["reasonCode"], ("scan-timeout", "shutdown-unverified"))
@@ -462,6 +462,21 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 1.5)
             self.assertEqual(result["reasonCode"], "scan-timeout")
             self.assertEqual(len(result["candidates"]), 2)
+
+    def test_a_later_unknown_node_scan_is_not_replaced_by_an_earlier_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = self.executable(root / 'codex.js', 'print("fixture")\n')
+            node = self.executable(root / 'node', 'print("fixture")\n')
+            candidate = {'path': str(launcher), 'source': 'manual', 'exists': True,
+                         'fingerprint': discovery.file_fingerprint(launcher)}
+            with patch.object(discovery, '_variants', return_value=[node]), \
+                 patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
+                 patch.object(discovery, '_discover', return_value={'status': 'unknown', 'available': False,
+                                                                  'reasonCode': 'scan-timeout'}):
+                result = discovery._candidate_handshake('codex', candidate, {'PATH': ''}, time.monotonic() + 20)
+            self.assertEqual(result['status'], 'unknown')
+            self.assertEqual(result['reasonCode'], 'scan-timeout')
 
     def test_native_environment_does_not_enumerate_values(self):
         class NoEnumeration(dict):

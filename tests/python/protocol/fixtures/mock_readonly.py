@@ -40,6 +40,7 @@ import time
 import uuid
 from unittest.mock import patch
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
+from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 
 
 def prepare_input(manifest, directory):
@@ -52,11 +53,9 @@ def prepare_input(manifest, directory):
 
 
 def verify_input(manifest, root, expected):
-    from hey_my_buddy.buddy.roles.router_input import digest
-
-    return {"unchanged": digest(root) == expected,
-            "manifestSha256": (manifest or {}).get("manifestSha256"),
-            "snapshotSha256": expected}
+    result = verify_frozen_input(None, root, expected)
+    result["manifestSha256"] = (manifest or {}).get("manifestSha256")
+    return result
 
 
 def install(testcase, *, path=None, **options):
@@ -73,8 +72,9 @@ def install(testcase, *, path=None, **options):
     testcase._readonly_installed = True
     testcase.readonly_start = testcase.enterContext(patch(
         "hey_my_buddy.buddy.roles.run_execution.start_review", autospec=True,
-        side_effect=lambda harness, context, request: start(
-            harness, context, request, testcase._readonly_fixture, testcase._readonly_options),
+        side_effect=lambda harness, context, request, *, deadline_monotonic=None: start(
+            harness, context, request, testcase._readonly_fixture, testcase._readonly_options,
+            deadline_monotonic=deadline_monotonic),
     ))
     testcase.enterContext(patch.object(DshAdapter, "read_only_structured", True))
     testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
@@ -87,7 +87,7 @@ def install(testcase, *, path=None, **options):
     testcase.input_verify = testcase.enterContext(patch("hey_my_buddy.buddy.roles.router_input.verify", side_effect=verify_input))
 
 
-def start(harness, context, request, fixture, options):
+def start(harness, context, request, fixture, options, *, deadline_monotonic=None):
     """The stand-in ``start_review``: the production control freeze and spawn."""
     from hey_my_buddy.buddy.harnesses.base import ProcessHandle, open_logs
     from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
@@ -100,7 +100,9 @@ def start(harness, context, request, fixture, options):
     assert context.turn is None and context.agent_credential is None
     assert context.cwd == request.cwd
     assert set(request.output_schema["properties"]) == {"buddyId", "reason", "evidence"}
-    assert request.budget == context.decision_input["budget"]
+    assert {key: value for key, value in request.budget.items() if key != "timeoutSeconds"} == {
+        key: value for key, value in context.decision_input["budget"].items() if key != "timeoutSeconds"}
+    assert 0 < request.budget["timeoutSeconds"] <= context.decision_input["budget"]["timeoutSeconds"]
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
@@ -117,6 +119,8 @@ def start(harness, context, request, fixture, options):
         # The stand-in's own material: it never reaches the role reader's keys.
         "fixture": {"document": context.decision_input, "options": options},
     }
+    if deadline_monotonic is not None:
+        control['deadlineMonotonic'] = deadline_monotonic
     control.update(invocationId=identity.invocation_id,
                    requestFile=str(private / _REQUEST), verdictFile=str(private / _VERDICT),
                    # Production carries the result frame on the controller's stdout;
@@ -140,6 +144,8 @@ def start(harness, context, request, fixture, options):
         os.close(stderr)
     handle = ProcessHandle(process, own_group=True,
                            log_paths={**context.log_paths(), "stdout": control["resultFile"]})
+    if deadline_monotonic is not None:
+        handle.deadline = deadline_monotonic + 10
     # Held bindings, frozen exactly as the production launch freezes them.
     handle.role_run_control = decode_strict_json(canonical_json(control))
     handle.role_run_identity = identity

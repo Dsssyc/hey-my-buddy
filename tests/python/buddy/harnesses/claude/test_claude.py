@@ -387,7 +387,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertTrue(outcome.result["turn"]["provenance"]["backgroundSettled"])
 
     def test_model_output_before_the_user_message_is_rejected(self):
-        outcome = self.execute(self.context("early-result"))
+        outcome = self.execute(self.context("early-result", timeout=None))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "native-turn-started-early")
         self.assertNotIn("turn", outcome.result)

@@ -17,7 +17,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, enable_fixture_buddy, wait_for
+from support import BoardTestCase, enable_fixture_buddy, wait_for, stop_private_workers
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -272,6 +272,9 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
         enable_fixture_buddy(self.board().store, BUDDY)
         with self.daemon(env=self.env()):
+            # The manual claimant is this test's actor; observe idle automatic
+            # supervisors relinquishing their locks before submitting its task.
+            stop_private_workers(self.directory)
             code, submitted = self.cli("submit", json.dumps({
                 **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
                 "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
@@ -280,9 +283,14 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertEqual(code, 0, submitted)
             code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh"]}), env=self.env())
             self.assertEqual(code, 0, registered)
-            code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
-                                                                  "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
-            self.assertEqual(code, 0, response)
+            response = None
+            def claim_when_ready():
+                nonlocal response
+                code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
+                                                                      "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
+                self.assertEqual(code, 0, response)
+                return response['claim'] is not None
+            self.assertTrue(wait_for(claim_when_ready, timeout=30), response)
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
             credential.chmod(0o600)

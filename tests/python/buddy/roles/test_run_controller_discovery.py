@@ -63,6 +63,53 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
              bound([record], environment=environment):
             return run_execution.discover_models('codex')
 
+    def test_native_metadata_wait_is_unknown_and_the_next_read_can_complete(self):
+        handle = SimpleNamespace(wait=lambda seconds: 0)
+        unknown = SimpleNamespace(payload={'status': 'unknown', 'code': 'deadline'}, exit_code=0, stop_confirmed=True)
+        catalog = {'source': 'fixture', 'providers': [], 'discoveries': [
+            {'harness': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        ready = SimpleNamespace(payload={'status': 'ok', 'catalog': catalog}, exit_code=0, stop_confirmed=True)
+        with patch.object(run_execution, 'launch_controller', return_value=handle), \
+             patch.object(run_execution, 'collect_controller', side_effect=[unknown, ready]):
+            self.assertEqual(self.discover()['discoveries'][0]['status'], 'unknown')
+            self.assertEqual(self.discover(), catalog)
+
+    def test_outer_wait_expiry_with_confirmed_stop_is_unknown(self):
+        from unittest.mock import Mock
+        handle = Mock()
+        handle.wait.return_value = None
+        collection = SimpleNamespace(payload={'status': 'error', 'code': 'user-cancel',
+                                              'processState': {'shutdownConfirmed': True}},
+                                     exit_code=-15, stop_confirmed=True)
+        with patch.object(run_execution, 'launch_controller', return_value=handle), \
+             patch.object(run_execution, 'collect_controller', return_value=collection):
+            result = self.discover()
+        self.assertEqual(result['discoveries'][0]['status'], 'unknown')
+        handle.terminate.assert_called_once_with(grace_seconds=8)
+
+    def test_real_metadata_refusal_remains_a_failure(self):
+        handle = SimpleNamespace(wait=lambda seconds: 1)
+        collection = SimpleNamespace(payload={'status': 'error', 'error': 'native refused'}, exit_code=1, stop_confirmed=True)
+        with patch.object(run_execution, 'launch_controller', return_value=handle), \
+             patch.object(run_execution, 'collect_controller', return_value=collection), \
+             self.assertRaises(BoardError) as caught:
+            self.discover()
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
+
+    def test_explicit_native_refusal_is_not_erased_by_outer_wait_expiry(self):
+        from unittest.mock import Mock
+        handle = Mock()
+        handle.wait.return_value = None
+        collection = SimpleNamespace(payload={'status': 'error', 'code': 'native-rpc-error',
+                                              'error': 'native explicitly refused the request'},
+                                     exit_code=1, stop_confirmed=True)
+        with patch.object(run_execution, 'launch_controller', return_value=handle), \
+             patch.object(run_execution, 'collect_controller', return_value=collection), \
+             self.assertRaises(BoardError) as caught:
+            self.discover()
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
+        self.assertEqual(caught.exception.message, collection.payload['error'])
+
     def test_emfile_before_spawn_keeps_confirmed_stop_through_role(self):
         error = OSError(errno.EMFILE, 'fixture controller logs exhausted')
         with patch.object(controller, 'open_logs', side_effect=error), \

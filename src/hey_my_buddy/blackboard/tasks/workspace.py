@@ -8,6 +8,7 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from ... import locking
 from collections import Counter
 import hashlib
@@ -18,6 +19,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 
 from ...errors import BoardError
 from ...protocol.schemas import normalize_access
@@ -25,6 +27,27 @@ from . import windows_paths
 from . import workspace_identity
 
 _WINDOWS = os.name == "nt"
+_GIT_DEADLINE: ContextVar[float | None] = ContextVar("git_deadline", default=None)
+
+
+@contextmanager
+def git_deadline(deadline: float):
+    """Apply one monotonic deadline to Git reads in the current Router call."""
+    token = _GIT_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _GIT_DEADLINE.reset(token)
+
+
+def remaining_git_seconds() -> float | None:
+    deadline = _GIT_DEADLINE.get()
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BoardError("deadline", "The Git read deadline expired")
+    return remaining
 
 
 _EXCLUSION_POLICY = {"version": 1, "kind": "git-standard",
@@ -97,8 +120,11 @@ def _git(root, *args, data=None, env=None, allowed=(0,)):
     command, git_env = _git_command(root, *args)
     git_env.update(env or {})
     try:
-        result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        result = subprocess.run(command, input=data, capture_output=True, env=git_env,
+                                timeout=remaining_git_seconds())
+    except subprocess.TimeoutExpired as error:
+        raise BoardError("deadline", "The Git read deadline expired") from error
+    except OSError as error:
         raise _git_failure(command, args[0], stdout=getattr(error, "stdout", None),
                            stderr=getattr(error, "stderr", None), error=error) from error
     if result.returncode not in allowed:
@@ -125,8 +151,11 @@ def _git_in(git_dir, *args, allowed=(0,)):
                "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
                "--git-dir", str(git_dir), *args]
     try:
-        result = subprocess.run(command, input=None, capture_output=True, env=git_env, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        result = subprocess.run(command, input=None, capture_output=True, env=git_env,
+                                timeout=remaining_git_seconds())
+    except subprocess.TimeoutExpired as error:
+        raise BoardError("deadline", "The Git read deadline expired") from error
+    except OSError as error:
         raise _git_failure(command, args[0], stdout=getattr(error, "stdout", None),
                            stderr=getattr(error, "stderr", None), error=error) from error
     if result.returncode not in allowed:
@@ -147,6 +176,8 @@ def _commit(root, ref):
     try:
         return _line(root, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}")
     except BoardError as error:
+        if error.code == "deadline":
+            raise
         raise BoardError("WORKSPACE_REF_INVALID", "The workspace revision does not resolve to a commit", ref=ref) from error
 
 
@@ -168,6 +199,8 @@ def inspect(cwd: str) -> dict:
             git_dir = Path(_line(path, "rev-parse", "--absolute-git-dir")).resolve(strict=True)
             common = Path(_line(path, "rev-parse", "--path-format=absolute", "--git-common-dir")).resolve(strict=True)
         except BoardError as error:
+            if error.code == "deadline":
+                raise
             raise BoardError("WORKSPACE_UNSUPPORTED", "A non-bare Git checkout is required", cwd=str(path)) from error
         if not path.is_relative_to(root):
             raise BoardError("WORKSPACE_UNSUPPORTED", "cwd is outside the Git checkout root", cwd=str(path))
@@ -302,8 +335,8 @@ def _write_objects(root, objects):
                     stream.write(b"\n")
                 stream.write(b"done\n")
                 stream.close()
-                code = process.wait(timeout=60)
-            except (OSError, subprocess.TimeoutExpired) as error:
+                code = process.wait(timeout=remaining_git_seconds())
+            except (OSError, subprocess.TimeoutExpired, BoardError) as error:
                 # A broken input pipe is still a Git command failure. Reap our
                 # process before reading its captured output and retain the
                 # original exception even if shutdown itself encounters I/O.
@@ -313,8 +346,13 @@ def _write_objects(root, objects):
                     process.wait()
                 except OSError:
                     pass
-                raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics,
-                                   returncode=process.returncode, error=error) from error
+                if isinstance(error, BoardError):
+                    raise
+                failure = _git_failure(command, "fast-import", stdout=output, stderr=diagnostics,
+                                       returncode=process.returncode, error=error)
+                if isinstance(error, subprocess.TimeoutExpired):
+                    raise BoardError('deadline', 'The Git write deadline expired', **failure.details) from error
+                raise failure from error
             finally:
                 if not stream.closed:
                     try:

@@ -135,8 +135,6 @@ _SESSIONS_DIRNAME = "sessions"
 #: The public row id whose config root is re-pinned to the sessions dir.
 _SESSION_ROOT_ROW = "session-persistence-jsonl"
 
-_SESSION_TIMEOUT = 30.0
-_CONFIG_TIMEOUT = 30.0
 _CLOSE_TIMEOUT = 30.0
 _SETTLE_SECONDS = 5.0
 _DRAIN_SECONDS = 10.0
@@ -647,13 +645,13 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
 
 
 def _native_call(call, *, code: str, message: str):
-    """One bounded native request outside the prompt: errors stay stage-specific."""
+    """One native request: refusals stay stage-specific, expiry is the run deadline."""
     try:
         return call()
     except AcpRequestError as error:
         raise NativeError(code, f"{message}: the native agent refused {error.method}") from None
     except AcpTimeout:
-        raise NativeError(code, f"{message}: the native agent did not answer within its budget") from None
+        raise NativeError("deadline", f"{message}: the run's overall deadline expired") from None
     except AcpConnectionClosed:
         raise NativeError("native-disconnected",
                           f"{message}: the native agent connection ended before the answer") from None
@@ -666,9 +664,9 @@ def _note_native_shape(facts: dict, label: str, value: object) -> None:
                     "shape": type(value).__name__, "contentMeta": content_meta(value)}
 
 
-def _initialize(client: AcpClient, facts: dict) -> str | None:
+def _initialize(client: AcpClient, facts: dict, deadline: float) -> str | None:
     """The protocol handshake; the version text is optional metadata."""
-    result = _native_call(lambda: client.initialize(timeout=_SESSION_TIMEOUT),
+    result = _native_call(lambda: client.initialize(timeout=_remaining(deadline)),
                           code="harness-unavailable", message="the ACP initialize failed")
     if not isinstance(result, dict):
         _note_native_shape(facts, "initialize", result)
@@ -730,7 +728,7 @@ def _readback(options: object, option_id: str) -> str | None:
 
 
 def _configure(client: AcpClient, session_id: str, snapshot: dict,
-               buddy: RunBuddy, facts: dict) -> dict:
+               buddy: RunBuddy, facts: dict, deadline: float) -> dict:
     """The one model/effort selection site: declared values in, readback out.
 
     Recognized selectors are set through ``session/set_config_option`` and
@@ -751,7 +749,7 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
     model_value = _declared_model_value(options, buddy)
     effort_value = _declared_effort_value(options, buddy)
     echoed = _native_call(lambda: client.set_config_option(session_id, "model", model_value,
-                                                           timeout=_CONFIG_TIMEOUT),
+                                                           timeout=_remaining(deadline)),
                           code="buddy-unavailable", message="the native model selection failed")
     model_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
     model_readback = _readback(model_options, "model")
@@ -760,7 +758,7 @@ def _configure(client: AcpClient, session_id: str, snapshot: dict,
     elif model_readback != model_value:
         raise NativeError("buddy-mismatch", "the native session did not retain the requested model")
     echoed = _native_call(lambda: client.set_config_option(session_id, "reasoning_effort", effort_value,
-                                                           timeout=_CONFIG_TIMEOUT),
+                                                           timeout=_remaining(deadline)),
                           code="invalid-buddy", message="the native effort selection failed")
     effort_options = echoed.get("configOptions") if isinstance(echoed, dict) else None
     effort_readback = _readback(effort_options, "reasoning_effort")
@@ -1050,7 +1048,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                sessions_root=sessions_root,
                                scope_rows=scope_rows, extra_env=extra_env,
                                permission_policy=policy)
-        state.harness_version = _initialize(client, state.native_facts)
+        state.harness_version = _initialize(client, state.native_facts, deadline)
         pump = _Pump(client.connection)
         if micro_task:
             mount = services.mount
@@ -1145,10 +1143,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
 
 def _open_session(*, client: AcpClient, request: RunRequest, servers: list,
                   state: _RunState, tools: DshToolFacts, activity: DshActivity,
-                  sessions: list) -> tuple[str, dict]:
+                  sessions: list, deadline: float) -> tuple[str, dict]:
     """The one session-open site: a fresh root session with this run's mounts."""
     snapshot = _native_call(lambda: client.new_session(request.cwd, mcp_servers=servers,
-                                                       timeout=_SESSION_TIMEOUT),
+                                                       timeout=_remaining(deadline)),
                             code="session-open-failed", message="the native session could not be created")
     session_id = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
     if not isinstance(session_id, str) or not session_id:
@@ -1165,7 +1163,7 @@ def _open_session(*, client: AcpClient, request: RunRequest, servers: list,
 
 def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
-                    sessions: list, previous: str) -> tuple[str, dict]:
+                    sessions: list, previous: str, deadline: float) -> tuple[str, dict]:
     """The one session-resume site: the exact previous root session, remounted.
 
     The resume request itself names the session identity — the observed resume
@@ -1176,7 +1174,7 @@ def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
     """
     snapshot = _native_call(lambda: client.resume_session(previous, request.cwd,
                                                           mcp_servers=servers,
-                                                          timeout=_SESSION_TIMEOUT),
+                                                          timeout=_remaining(deadline)),
                             code="native-resume-failed",
                             message="the native session could not be resumed")
     echoed = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
@@ -1278,13 +1276,10 @@ def _settle_stop_reason(state: _RunState, stop_reason: object) -> str | None:
     return _END_REASONS.get(stop_reason, "native-stop")
 
 
-def _close_session(client: AcpClient, session_id: str) -> None:
-    """The one close site; an unacknowledged close always fails the run."""
-    try:
-        client.close_session(session_id, timeout=_CLOSE_TIMEOUT)
-    except (AcpRequestError, AcpTimeout) as error:
-        raise NativeError("session-close-unconfirmed",
-                          "the native session close was not acknowledged") from error
+def _close_session(client: AcpClient, session_id: str, *, deadline: float) -> None:
+    """Await the required close fact under the same execution deadline."""
+    _native_call(lambda: client.close_session(session_id, timeout=_remaining(deadline)),
+                 code='session-close-unconfirmed', message='the native session close was not acknowledged')
 
 
 # -- the two carriers ---------------------------------------------------------------
@@ -1307,9 +1302,10 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
     while True:
         session_id, snapshot = _open_session(client=client, request=request, servers=[],
                                              state=state, tools=tools, activity=activity,
-                                             sessions=sessions)
+                                             sessions=sessions, deadline=deadline)
         state.configured = True
-        state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
+        state.checked = _configure(client, session_id, snapshot, request.buddy,
+                                   state.native_facts, deadline)
         raw_parts: list[str] = []
         raw_bytes = 0
 
@@ -1344,13 +1340,13 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
             # stream still drains, but no answer of an unreadable turn is ever
             # published as settled.
             tools.close_root(session_id)
-            _close_session(client, session_id)
+            _close_session(client, session_id, deadline=deadline)
             return None, correction_count
         if failure is not None:
             raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
         raw = "".join(raw_parts)
         tools.close_root(session_id)
-        _close_session(client, session_id)
+        _close_session(client, session_id, deadline=deadline)
         feedback = notify(settled=True, raw=raw)
         if feedback.action == "correct":
             correction_count += 1
@@ -1387,7 +1383,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         session_id, snapshot = _resume_session(client=client, request=request,
                                                servers=list(mount.mcp_servers), state=state,
                                                tools=tools, activity=activity, sessions=sessions,
-                                               previous=previous)
+                                               previous=previous, deadline=deadline)
         # The ordering boundary of the public protocol: every notification the
         # agent sent before its resume answer is replayed history, already
         # enqueued by the reader thread in order; draining it here keeps the
@@ -1403,11 +1399,12 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         session_id, snapshot = _open_session(client=client, request=request,
                                              servers=list(mount.mcp_servers),
                                              state=state, tools=tools, activity=activity,
-                                             sessions=sessions)
+                                             sessions=sessions, deadline=deadline)
     if inquiry_bridge is not None:
         inquiry_bridge.activate(session_id)
     state.configured = True
-    state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
+    state.checked = _configure(client, session_id, snapshot, request.buddy,
+                               state.native_facts, deadline)
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def micro_task_fold(message: object) -> bool:
@@ -1428,7 +1425,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # tool, is what the turn's end means.
         state.prompt_stop_reason = "cancelled"
         if state.interrupt_requested:
-            _close_session(client, session_id)
+            _close_session(client, session_id, deadline=time.monotonic() + _CLOSE_TIMEOUT)
             state.interrupted_turn_closed = True
         raise NativeError("native-cancelled", "the native root turn stopped cancelled")
     failure = _settle_stop_reason(state, value.get("stopReason"))
@@ -1436,7 +1433,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         # The end is a real unknown: the session close still completes, but the
         # turn is never settled, so no receipt becomes a turn, no provenance is
         # written and no resumable binding is established.
-        _close_session(client, session_id)
+        _close_session(client, session_id, deadline=deadline)
         return
     if failure is not None:
         raise NativeError(failure, f"the native turn stopped with reason {state.prompt_stop_reason!r}")
@@ -1450,7 +1447,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         publisher.publish(activity.payload())
     except BoardError:
         pass
-    _close_session(client, session_id)
+    _close_session(client, session_id, deadline=deadline)
     # The close was acknowledged: the accepted finish's ordered native evidence
     # is complete and is retained for the role's turn record.
     state.provenance = evidence.provenance(close_ordinal=state.event_count,
@@ -1821,9 +1818,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     native_facts: dict = {}
     error: NativeError | None = None
     try:
-        version = _initialize(client, native_facts) or "unknown"
+        version = _initialize(client, native_facts, deadline) or "unknown"
         snapshot = _native_call(lambda: client.new_session(cwd, mcp_servers=[],
-                                                           timeout=_SESSION_TIMEOUT),
+                                                           timeout=_remaining(deadline)),
                                 code="session-open-failed", message="the discovery session failed")
         session_id = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
         if not isinstance(session_id, str) or not session_id:
@@ -1835,14 +1832,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
             catalog_value["warnings"].append(
                 "ACP initialize response shape unrecognized; capability check unknown: "
                 + json.dumps(native_facts, sort_keys=True))
-        try:
-            client.close_session(session_id, timeout=_CLOSE_TIMEOUT)
-        except (AcpRequestError, AcpTimeout) as close_error:
-            raise NativeError("session-close-unconfirmed",
-                              "the discovery session close was not acknowledged") from close_error
-        except AcpConnectionClosed as close_error:
-            raise NativeError("native-disconnected",
-                              "the native connection ended during the discovery session close") from close_error
+        _close_session(client, session_id, deadline=deadline)
     except NativeError as caught:
         error = caught
     except BoardError as caught:

@@ -163,6 +163,28 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
             self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
 
+    def test_review_preparation_budget_expiry_dispatches_next_router(self):
+        from hey_my_buddy.buddy.roles import router_input
+
+        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}):
+            request, first = self.start(review=True)
+            worker = Worker("w-route", self.directory, client=self.client, log=lambda _message: None)
+            worker.spool.write_startup({"nonce": first["nonce"], "attemptId": first["attempt"]["attemptId"]})
+            mirror = self.directory / "slow-review-mirror"
+            def slow_prepare(_manifest, _directory):
+                mirror.mkdir()
+                time.sleep(1.05)
+                return mirror, "digest"
+            with patch.object(router_input, "prepare", side_effect=slow_prepare):
+                receipt = worker.execute(first)
+            self.assertEqual(receipt["report"]["result"]["code"], "router-budget-exhausted")
+            self.assertTrue(receipt["report"]["shutdownConfirmed"])
+            self.assertIsNone(receipt["report"]["exitCode"])
+            self.assertTrue(worker.deliver(receipt))
+            second = self.next_claim(request)
+            self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
+            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
+
     def test_two_no_answers_keep_request_and_dispatch_receipts_without_loop(self):
         request, first = self.start()
         frozen = self.snapshot_of(request["decisionId"])

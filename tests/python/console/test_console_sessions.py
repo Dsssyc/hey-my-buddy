@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from hey_my_buddy.console.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENTRY_SECONDS
 from hey_my_buddy.errors import BoardError
 from console.test_console import Browser, ConsoleTestCase, http_call
-from support import _child_environment
+from support import _child_environment, wait_for
 
 
 class ConsoleSessionTests(ConsoleTestCase):
@@ -254,7 +254,10 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 browser = Browser(notice.partition('entry URL: ')[2].strip())
                 self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
                 child.send_signal(signal.SIGINT)
-                stdout, stderr = child.communicate(timeout=15)
+                self.assertTrue(wait_for(
+                    lambda: not self.cli('console', '{"action":"status"}')[1]['running'], 30),
+                    'the foreground CLI did not close its console after the interrupt')
+                stdout, stderr = child.communicate(timeout=30)
                 self.assertEqual(child.returncode, 0, stderr)
                 result = json.loads(stdout)
                 self.assertEqual(result['wait']['status'], 'interrupted')

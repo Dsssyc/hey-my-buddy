@@ -329,7 +329,6 @@ def materialize(
     destination: Path | None = None,
     *,
     uv_bin: str | None = None,
-    timeout_seconds: int = 900,
     log_path: Path | None = None,
 ) -> dict:
     """Install the stable runtime, or return the existing READY one unchanged.
@@ -351,11 +350,11 @@ def materialize(
     # final location before installation starts.
     lock_path = target.parent / f".{target.name}.install.lock"
     with installation_lock(lock_path):
-        return _materialize_locked(root, target, lock_path, uv_bin, timeout_seconds, log_path)
+        return _materialize_locked(root, target, lock_path, uv_bin, log_path)
 
 
 def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str | None,
-                        timeout_seconds: int, log_path: Path | None) -> dict:
+                        log_path: Path | None) -> dict:
     working = None
     try:
         if is_ready(target):
@@ -397,13 +396,10 @@ def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str |
                 env=environment_variables,
                 stdout=log_stream,
                 stderr=subprocess.STDOUT if log_path else subprocess.DEVNULL,
-                timeout=timeout_seconds,
                 check=False,
             )
         except FileNotFoundError as exc:
             raise BoardError("UV_NOT_FOUND", "uv is required to install the stable runtime") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise BoardError("RUNTIME_INSTALL_TIMEOUT", "Installing the stable runtime timed out") from exc
         finally:
             if log_path:
                 log_stream.close()

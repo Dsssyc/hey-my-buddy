@@ -117,7 +117,7 @@ class RolePromptTests(unittest.TestCase):
                         directory.mkdir(parents=True)
                         context = ExecutionContext("task", "attempt", 1, {}, directory, {},
                                                    {"HMB_STATE_DIR": str(directory / "state")})
-                        document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {}}
+                        document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
                         native = adapter(name)
                         if mode == "fast":
                             if not native.no_tool_structured:

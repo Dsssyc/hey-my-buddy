@@ -349,16 +349,18 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(sentinel.read_bytes(), b'keep outside')
         self.assertTrue(control.is_symlink())
 
-    def test_startup_timeout_never_signals_a_daemon_or_cancels_work(self):
+    def test_startup_waits_for_readiness_without_signalling_a_live_daemon(self):
         board=self.board()
         child=mock.Mock()
         child.poll.return_value=None
+        child.pid=123
         (self.directory/'runtime-target'/'src'/'hey_my_buddy').mkdir(parents=True)
         with mock.patch('hey_my_buddy.install.upgrade.subprocess.Popen',return_value=child), \
-             mock.patch('hey_my_buddy.install.upgrade.time.monotonic',side_effect=[0,46]):
-            with self.assertRaises(BoardError) as caught:
-                upgrade.start(board.directory, self.directory/'runtime-target')
-        self.assertEqual(caught.exception.code,'UPGRADE_SHUTDOWN_UNCONFIRMED')
+             mock.patch('hey_my_buddy.install.upgrade.time.sleep', side_effect=lambda seconds: (board.directory/'control.json').write_text('{"pid":123}')), \
+             mock.patch('hey_my_buddy.install.upgrade.command', return_value={'status': 'ready'}) as health:
+            result = upgrade.start(board.directory, self.directory/'runtime-target')
+        self.assertEqual(result, {'status': 'ready'})
+        health.assert_called_once()
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 

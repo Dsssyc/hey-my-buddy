@@ -54,13 +54,14 @@ class GitErrorTests(unittest.TestCase):
                 self.assertEqual(error.details["returncode"], 128)
                 self.assertEqual(run.call_args.args[0][-2:], ["status", "--porcelain=v1"])
 
-    def test_timeout_entries_preserve_cause_and_captured_binary_outputs(self):
+    def test_router_timeout_entries_report_the_budget_and_preserve_cause(self):
         for entry in self.run_entries():
             failure = subprocess.TimeoutExpired(["placeholder"], 60, output=self.stdout, stderr=self.stderr)
-            with self.subTest(entry=entry.__name__), patch.object(workspace.subprocess, "run", side_effect=failure) as run:
-                error = self.failure(lambda: entry(self.root, "rev-parse", "HEAD"))
-                self.diagnostics(error, run.call_args.args[0], "rev-parse")
-                self.assertIs(error.__cause__, failure)
+            with self.subTest(entry=entry.__name__), workspace.git_deadline(workspace.time.monotonic() + 60), \
+                 patch.object(workspace.subprocess, "run", side_effect=failure), self.assertRaises(BoardError) as caught:
+                entry(self.root, 'rev-parse', 'HEAD')
+            self.assertEqual(caught.exception.code, 'deadline')
+            self.assertIs(caught.exception.__cause__, failure)
 
     def test_oserror_entries_preserve_cause_and_bound_the_exception_reason(self):
         for entry in self.run_entries():
@@ -168,8 +169,11 @@ class GitErrorTests(unittest.TestCase):
 
     def test_fast_import_timeout_reaps_child_and_keeps_diagnostics_and_cause(self):
         state, start = self.importer(timed_out=True)
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+        with workspace.git_deadline(workspace.time.monotonic() + 60), \
+             patch.object(workspace.subprocess, "Popen", side_effect=start), self.assertRaises(BoardError) as caught:
+            workspace._write_objects(self.root, {self.oid: b"payload"})
+        error = caught.exception
+        self.assertEqual(error.code, 'deadline')
         self.diagnostics(error, state["command"], "fast-import")
         self.assertIs(error.__cause__, state["failure"])
         self.assertTrue(state["child"].killed)

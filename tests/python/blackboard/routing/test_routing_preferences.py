@@ -190,7 +190,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                 return {'eligible': True}
 
         calls = []
-        def start(_name, context, request):
+        def start(_name, context, request, *, deadline_monotonic):
             calls.append((context, request))
             return SimpleNamespace()
         with tempfile.TemporaryDirectory() as root:
@@ -224,7 +224,10 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertTrue(request.prompt.startswith(role + "\n"))
             self.assertEqual(request.prompt[len(role) + 1:], body)
             self.assertEqual(request.output_schema, document["outputSchema"])
-            self.assertEqual(request.budget, budget)
+            self.assertEqual({key: value for key, value in request.budget.items() if key != "timeoutSeconds"},
+                             {key: value for key, value in budget.items() if key != "timeoutSeconds"})
+            self.assertGreater(request.budget["timeoutSeconds"], 0)
+            self.assertLess(request.budget["timeoutSeconds"], budget["timeoutSeconds"])
             self.assertIsNone(child.turn)
             self.assertIsNone(child.agent_credential)
             self.assertEqual(child.spec["model"], "fixture-model")
@@ -233,7 +236,7 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                   decision_input={"buddy": {"harness": "codex"}})
+                                       decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \

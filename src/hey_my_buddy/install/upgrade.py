@@ -118,7 +118,7 @@ def command(state: Path, target: Path, method: str, params: dict | None = None) 
     script = ("import json,sys; from pathlib import Path; from " + client + " import BoardClient; "
               "print(json.dumps(BoardClient(Path(sys.argv[1]),autostart=False).call(sys.argv[2],json.loads(sys.argv[3]))))")
     result = subprocess.run([str(runtime.runtime_python(target)), '-c', script, str(state), operations[method], json.dumps(payload)],
-                            env=_environment(state, target), cwd=target, capture_output=True, text=True, timeout=45)
+                            env=_environment(state, target), cwd=target, capture_output=True, text=True)
     try:
         data = json.loads(result.stdout)
     except ValueError:
@@ -180,8 +180,7 @@ def start(state: Path, target: Path) -> dict:
                                  start_new_session=True, close_fds=True)
     finally:
         os.close(log)
-    deadline = time.monotonic() + 45
-    while time.monotonic() < deadline:
+    while True:
         if child.poll() is not None:
             from .launcher import read_private
             failure = read_private(state / 'startup-error.json') or {}
@@ -195,10 +194,6 @@ def start(state: Path, target: Path) -> dict:
         except (OSError, ValueError, BoardError):
             pass
         time.sleep(.2)
-    # SIGTERM runs the daemon's task-cancelling stop handler. Even a rollback
-    # startup may be preserving work admitted before a legacy detach, so an
-    # upgrade must never use that signal as a timeout cleanup shortcut.
-    raise BoardError('UPGRADE_SHUTDOWN_UNCONFIRMED', 'Replacement startup is unconfirmed; journal retained, no process was signalled')
 
 
 def _restore_guard(path: Path) -> None:

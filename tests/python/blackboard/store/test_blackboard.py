@@ -1166,13 +1166,14 @@ class TestDelivery(BoardTestCase):
         client.register_worker("w-load", adapter="command", capabilities=["command"])
         claim = client.claim("w-load", "claim-load-1", "a" * 32)
         attempt = claim["claim"]["attempt"]
+        cursor = board.store.head()
         results: list[str] = []
         barrier = threading.Barrier(9, timeout=30)
 
         def waiter():
             barrier.wait()
             try:
-                client.wait_events(after=0, timeout_ms=2000)
+                client.wait_events(after=cursor, timeout_ms=2000)
                 results.append("ok")
             except BoardError as error:
                 results.append(error.code)
@@ -1181,7 +1182,9 @@ class TestDelivery(BoardTestCase):
         for thread in threads:
             thread.start()
         barrier.wait()
-        time.sleep(0.3)
+        self.assertTrue(wait_for(lambda: board.admission.stats()["admitted"] == 2
+                                 and board.admission.stats()["rejected"] >= 1, 10),
+                        "two waits must occupy capacity and an overflow must be observed")
         # Mutations must stay responsive: renew, cancel and the result commit.
         client.renew("w-load", attempt["attemptId"], attempt["generation"], "a" * 32)
         client.cancel(runId=task["runId"], reason="race")
@@ -1473,7 +1476,7 @@ class TestPackaging(BoardTestCase):
         if not shutil_module.which(os.environ.get("UV_BIN", "uv")):
             self.skipTest("uv is not available")
         runtime_root = self.directory / "runtime-root"
-        environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root)}
+        environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root), "UV_OFFLINE": "1"}
         self.addCleanup(lambda: self.cli("stop", "{}", env=environment, timeout=60))
         # The production cold-start path: no daemon pre-started by the test.
         code, health = self.cli("health", env=environment, timeout=600)

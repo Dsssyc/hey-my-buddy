@@ -204,7 +204,8 @@ class ReviewPreparation:
             object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
-def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> ProcessHandle:
+def start_router_preparation(preparation: FastPreparation | ReviewPreparation,
+                             *, deadline_monotonic: float | None = None) -> ProcessHandle:
     """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A
@@ -219,11 +220,17 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
         raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
     if isinstance(preparation, FastPreparation):
         from .run_execution import start_fast
-        return start_fast(module, preparation.harness, preparation.context, preparation.request)
+        if deadline_monotonic is None:
+            return start_fast(module, preparation.harness, preparation.context, preparation.request)
+        return start_fast(module, preparation.harness, preparation.context, preparation.request,
+                          deadline_monotonic=deadline_monotonic)
     from .run_execution import start_review
     if not preparation.native.read_only_structured:
         raise BoardError("router-review-unsupported", "Review on this registered harness is not implemented")
-    return start_review(preparation.harness, preparation.context, preparation.request)
+    if deadline_monotonic is None:
+        return start_review(preparation.harness, preparation.context, preparation.request)
+    return start_review(preparation.harness, preparation.context, preparation.request,
+                        deadline_monotonic=deadline_monotonic)
 
 
 # -- the new run seam's one call point ----------------------------------------

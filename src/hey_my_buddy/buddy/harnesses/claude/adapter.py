@@ -146,5 +146,6 @@ def _load_native_metadata() -> dict:
     except BoardError as error:
         _metadata_cache = {"key": key, "at": now, "error": error}
         raise
-    _metadata_cache = {"key": key, "at": now, "metadata": metadata}
+    if all(item['status'] == 'complete' for item in metadata['catalog'].get('discoveries', [])):
+        _metadata_cache = {"key": key, "at": now, "metadata": metadata}
     return metadata
