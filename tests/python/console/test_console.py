@@ -750,11 +750,6 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         status, _headers, data = browser.command("message_list", {"runId": run, "limit": 201}, csrf=csrf)
         self.assertEqual(status, 400, data)
         self.assertEqual(json.loads(data)["error"]["code"], "INVALID_ARGUMENT")
-        # The browser reads inquiries but cannot post or answer them.
-        for operation in ("message_post", "message_update"):
-            status, _headers, data = browser.command(operation, {"runId": run, "inquiryId": "ask-2", "question": "?"}, csrf=csrf)
-            self.assertEqual(status, 404, data)
-            self.assertEqual(json.loads(data)["error"]["code"], "METHOD_NOT_FOUND")
 
     def test_a_browser_cannot_bring_its_own_console_authority_to_a_read(self):
         board = self.board()

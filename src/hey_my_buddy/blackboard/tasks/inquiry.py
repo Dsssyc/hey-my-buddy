@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from ...protocol import schemas
 from ...protocol.reasons import reason as make_reason
 from ...errors import BoardError
-from ..store.store import BoardStore
+from ..store.store import BoardStore, MESSAGE_STATES
 from ...private_dirs import attempt_root
 from ...protocol.inquiry import (
     BRIDGE_ERRORS,
@@ -137,7 +137,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
               "canObserve": can_observe, "canAsk": can_ask}
     live: dict[str, Any] = {
         "available": False,
-        "reason": None,
+        "error": None,
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
@@ -162,7 +162,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 # it is — a withdrawn question's replay carries ``discarded``
                 # and its delivery evidence, never a transport refusal.
                 bridge["observed"] = True
-                _apply_bridge_answer(store, view["taskId"], inquiry_id, _live_ask_value(reply), None)
+                _apply_bridge_answer(store, view["taskId"], inquiry_id, _live_ask_value(reply))
             else:
                 code = reply.error_code or reply.reason_code
                 bridge["reason"] = "bridge-refused" if code in BRIDGE_ERRORS else reply.reason_code
@@ -254,8 +254,11 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 # same single roundtrip the direct path made.
                 answer_view = channel.observe(inquiry_id=inquiry_id, timeout_ms=timeout_ms)
                 if answer_view.inquiries:
-                    _apply_bridge_answer(store, view["taskId"], inquiry_id,
-                                         _live_answer_value(answer_view.inquiries[0]), None)
+                    rejected = _apply_bridge_answer(store, view["taskId"], inquiry_id,
+                                                    _live_answer_value(answer_view.inquiries[0]))
+                    if rejected is not None:
+                        rejections[inquiry_id] = rejected
+                        bridge["journalRejected"] = rejected
                     break
             time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -394,10 +397,8 @@ def _known_question(store: BoardStore, task_id: str, inquiry_id: str) -> bool:
         ).fetchone() is not None
 
 
-def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> str | None:
-    """Record a refusal only for a question the blackboard already owns."""
-    if not _known_question(store, task_id, inquiry_id):
-        return "journal-question-unknown"
+def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> None:
+    """Record the refusal of the question just posted by observe."""
     reason = (make_reason("inquiry-observe-only") if code == "unsupported"
               else make_reason("bridge-refused", errorCode=code))
     store._message_update(task_id, inquiry_id, actor="live-bridge", state="unavailable", reason=reason)
@@ -425,7 +426,7 @@ def _inquiry_view(message: dict, duplicate: bool) -> dict:
     }
 
 
-def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value: dict, result: dict | None) -> str | None:
+def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value: dict) -> str | None:
     return _apply_inquiry_record(store, task_id, inquiry_id, value, actor="live-bridge")
 
 
@@ -438,8 +439,6 @@ def normalize_journal_answer(record: dict) -> dict | None:
     if not isinstance(text, str) or not text.strip():
         return None
     size = len(text.encode("utf-8"))
-    if size > schemas.MAX_ANSWER_BYTES:
-        raise BoardError("INVALID_ARGUMENT", "answer exceeds the size limit")
     return {
         "text": text,
         "bytes": size,
@@ -452,12 +451,18 @@ def normalize_journal_answer(record: dict) -> dict | None:
 
 
 def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dict) -> str | None:
+    if not _known_question(store, task_id, inquiry_id):
+        return "journal-question-unknown"
     return _apply_inquiry_record(store, task_id, inquiry_id, record, actor="bridge-journal")
 
 
 def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, record: dict, *, actor: str) -> str | None:
-    if not _known_question(store, task_id, inquiry_id):
-        return "journal-question-unknown"
+    state = record.get("state")
+    if state not in MESSAGE_STATES:
+        return "journal-record-invalid"
+    answer = normalize_journal_answer(record)
+    if answer is not None and answer["bytes"] > schemas.MAX_ANSWER_BYTES:
+        return "journal-record-invalid"
     patch: dict[str, Any] = {}
     if isinstance(record.get("delivery"), dict):
         patch["delivery"] = {
@@ -466,23 +471,17 @@ def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, reco
                 "deliveredAt", "observedAt", "observedAgentStatus")
             if (value := record["delivery"].get(key)) not in (None, "")
         }
-    answer = normalize_journal_answer(record)
     if answer is not None:
         patch["answer"] = {**answer, "source": actor}
-    state = record.get("state")
     reason = None
-    if state is not None and state not in ("queued", "claimed", "delivered", "answered", "discarded", "unavailable"):
-        raise BoardError("INVALID_ARGUMENT", "Unknown message state")
-    if state is not None:
-        if state == "answered" and answer is None:
-            patch["state"] = "delivered"
-            reason = make_reason("inquiry-answer-empty")
-        else:
-            patch["state"] = state
-            if state == "unavailable":
-                reason = make_reason("inquiry-root-turn-ended")
-    if patch:
-        store._message_update(task_id, inquiry_id, actor=actor, reason=reason, **patch)
+    if state == "answered" and answer is None:
+        patch["state"] = "delivered"
+        reason = make_reason("inquiry-answer-empty")
+    else:
+        patch["state"] = state
+        if state == "unavailable":
+            reason = make_reason("inquiry-root-turn-ended")
+    store._message_update(task_id, inquiry_id, actor=actor, reason=reason, **patch)
     return None
 
 
@@ -500,13 +499,14 @@ def _live(value: dict) -> dict:
     if value.get("ready") is not True:
         return {
             "available": False,
-            "reason": value.get("error"),
+            "error": value.get("error"),
+            "deliveryMode": value.get("deliveryMode"),
             "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
             "limits": LIMITS,
         }
     return {
         "available": True,
-        "reason": None,
+        "error": value.get("error"),
         "observedAt": value.get("observedAt"),
         "sessionId": value.get("sessionId"),
         "agentStatus": value.get("agentStatus"),
@@ -517,7 +517,7 @@ def _live(value: dict) -> dict:
         "replyTool": value.get("replyTool"),
         "capability": value.get("capability") or ("inquiry" if value.get("replyTool") else "observe"),
         "supported": value.get("supported") is not False,
-        "deliveryMode": "cooperative-checkpoint" if value.get("deliveryMode") == "cooperative-checkpoint" else None,
+        "deliveryMode": value.get("deliveryMode"),
         "journal": value.get("journal"),
         # Bounded, metadata-only evidence that the native harness asked for an
         # interactive capability this adapter cannot grant. It is surfaced verbatim

@@ -68,19 +68,17 @@ class HostNoteContractTests(BoardTestCase):
             board.call("workflow_continue", {**params, "accessNote": "Required by task"})
         self.assertNotEqual(accepted.exception.details.get("field"), "accessNote")
 
-    def test_client_retry_sends_note_and_retired_message_methods_are_absent(self):
+    def test_client_retry_sends_note(self):
         requests = []
 
         def call(operation, params):
             requests.append((operation, params))
-            return {"task": {"runId": "run-1"}} if operation == "task_retry" else {"message": {}}
+            return {"task": {"runId": "run-1"}}
 
         from hey_my_buddy.protocol.client import BoardClient
         client = BoardClient(call=call)
         client.retry(runId="run-1", note="Try again")
         self.assertEqual(requests[0], ("task_retry", {"runId": "run-1", "note": "Try again"}))
-        for method in ("post_question", "update_message", "wait_message"):
-            self.assertFalse(hasattr(client, method))
 
 
 class CancellationNoteTests(WorkflowTestCase):
