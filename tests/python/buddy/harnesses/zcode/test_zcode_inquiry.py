@@ -10,6 +10,7 @@ the controller writer and the session-tool readers. End-to-end turn flows with
 the real runner and fixture live in ``test_zcode_realtime_flow.py``.
 """
 from __future__ import annotations
+from buddy.roles.test_role_prompts import real_turn_input
 from hey_my_buddy.protocol.inquiry_journal import MAX_JOURNAL_BYTES
 
 import hashlib
@@ -907,7 +908,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertNotIn("limitation", outcome.result["inquiry"])
         from hey_my_buddy.buddy.roles.worker_services import micro_task_prompt
 
-        prompt = micro_task_prompt("task", {"turn": 1}, "mcp__buddy_x__hey_my_buddy_finish_turn",
+        prompt = micro_task_prompt("task", real_turn_input(), "mcp__buddy_x__hey_my_buddy_finish_turn",
                                  checkpoint_tool=None,
                                  answer_tool="mcp__buddy_x__hey_my_buddy_answer_inquiry")
         self.assertNotIn("mcp__buddy_x__hey_my_buddy_checkpoint", prompt)

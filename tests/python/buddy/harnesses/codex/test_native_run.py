@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.fixture_selection import select_command, select_fixture
+from buddy.roles.test_role_prompts import real_turn_input
 from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -859,10 +860,18 @@ class ReviewSeamTests(CodexSeamCase):
 
 class WorkerSeamTests(CodexSeamCase):
     def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
-        task = "Execute this task once: 单份任务正文-2fef3c"
-        turn = {"version": 3, "taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
-                "turnId": "turn-check", "context": {"delegationAuthority": False,
-                    "evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}}
+        # The prompt's two real byte budgets carry it past 2 MiB: the task text
+        # (1,048,550 of the 1 MiB submission bound) and the continuation input
+        # (1,048,560 of its own 1 MiB bound), whose CJK, emoji, quotes,
+        # backslashes and newlines also stress the canonical JSON escaping.
+        task = "Execute this task once: 单份任务正文-2fef3c\n" * 20971
+        turn = real_turn_input()
+        turn.update(taskId="micro-task-1", attemptId="attempt-check", generation=7, turnId="turn-check")
+        turn["context"]["taskId"] = "micro-task-1"
+        turn["context"]["continuation"] = {
+            "kind": "manual", "trigger": None, "note": "continue",
+            "input": "完整上下文😀\n\"quoted\"\\path " * 30840,
+        }
         frozen_input = json.dumps(turn, ensure_ascii=False)
         frozen_hash = input_hash(turn)
         prompt = worker_format("codex").prompt(task, turn)
