@@ -2,9 +2,9 @@
 
 2026-10-21，设计候选，核对基线 `ab21a83a8e4c868ab3014ef7439ec2f11505d3e5`。本文只提出设计与实现验收顺序，没有修改产品代码、运行检查套件、连接日常看板、调用真实 harness 或验证 Windows 11。依据为[分批计划](plan.md)、[清单](inventory.md)的 F01、F02、F04、F08、P01、P02、P04、T03、AGENTS.md、[架构](../../reference/architecture.md)、[ADR-007](../../decisions/007-neutral-core-and-single-current-contract.md)、[ADR-010](../../decisions/010-production-workflow-repair-plan.md)、[ADR-031](../../decisions/031-one-process-per-execution.md)。涉及 harness 的建议同时受 ADR-023、ADR-030 约束。本文的“已核实”指本次读到源码或第十轮日志，不能当作目标系统的运行验收。
 
-建议采用 Windows 专用的 pywin32 依赖处理安全描述符，抽出一处句柄级文件边界；把事实发布与备份的共同承诺定为进程崩溃恢复；执行根 Job 去掉随服务最后句柄关闭而终止的属性，原生运行的短命 Job 继续由执行进程拥有；所有结束判断与回收统一保留 unknown。Windows 11 的 BootIdentifier、无句柄时 Job 的存续和嵌套 Job 必须先经实验，才能接受这套执行设计。POSIX 脱离进程组的后代是本批的实质缺口，不能通过补 Windows 分支就宣称待办已解决。
+本轮按 Host 核对独立审查后的决定修订：先用冻结的状态根文件身份挡住看板副本停止原执行；Windows 文件句柄层沿用现有 ctypes，只用 pywin32 校验 ACL；执行根 Job 保留执行，原生 Job 全空后交回执，执行根退出且根 Job 全空后才释放资源。服务控制台及外层 Job、登录会话、提权属主等新增假设均未验证，列入阶段 A。Linux/macOS 脱离进程组的后代另成一批，本批不宣称解决，也不再以它阻塞本批安装。
 
-支持范围沿用计划：Windows 11 x64、本地 NTFS、同一个登录会话、Python 3.12；Windows 服务、网络盘、FAT/exFAT 和 Windows ARM 不在首发范围。Linux、macOS 继续使用各自的真实开机会话和内核进程创建值。三系统共用任务身份、单一事实发布协议、结果导入及停止结算规则；ACL、Job、重解析点和文件共享模式在 Windows 的系统边界实现。
+支持范围沿用计划：Windows 11 x64、本地 NTFS、同一个登录会话、Python 3.12；另建议将下限改为 3.12.4，交开发者确认；作为 Windows 系统服务运行、网络盘、FAT/exFAT 和 Windows ARM 不在首发范围。Linux、macOS 继续使用各自的真实开机会话和内核进程创建值。三系统共用任务身份、单一事实发布协议、结果导入及停止结算规则；ACL、Job、重解析点和文件共享模式在 Windows 的系统边界实现。
 
 ## 1. 第十轮日志能证明什么
 
@@ -18,23 +18,25 @@ run `39555977214` 的四份 `overview.md` 记载：w1 为 74 文件、26 通过�
 
 ## 2. 私有目录与文件：一次句柄级属主及 ACL 校验
 
-已核实：`private_dirs.py:ensure_private_dir` 在 Windows 上不设置或验证 DACL；`protocol/transport.py:_private_directory` 在 Windows 上只判断真实目录；`protocol/execution.py:_private_json/read_execution_receipt` 仅在 POSIX 检查 uid 和 mode。相反，`console/console_sessions.py` 的 session 读取与 `buddy/roles/run_execution.py:start_fast` 仍用 `st_mode & 0o077` 拒绝 Windows 路径。`private_dirs.py:open_regular_fd` 的 Windows 分支是检查路径、普通 `os.open`、再检查路径；它没有 POSIX 逐级固定祖先的等价保证。`buddy/roles/turn_io.py:_private_bytes` 也只有 POSIX 分支固定父目录 fd。不能将现有 Windows 分支描述成已经保证私有性。
+已核实：`private_dirs.py:ensure_private_dir` 在 Windows 上不设置或验证 DACL；`protocol/transport.py:_private_directory` 在 Windows 上只判断真实目录；`protocol/execution.py:_private_json/read_execution_receipt` 仅在 POSIX 检查 uid 和 mode。相反，`console/console_sessions.py` 的 session 读取与 `buddy/roles/run_execution.py:start_fast` 仍用 `st_mode & 0o077` 拒绝 Windows 路径。`private_dirs.py:open_regular_fd` 在 Windows 上先检查路径、普通 `os.open`、再检查路径，没有 POSIX 逐级固定祖先的等价保证；`buddy/roles/turn_io.py:_private_bytes` 也只有 POSIX 分支固定父目录 fd。
 
-建议显式增加 `pywin32; sys_platform == 'win32'` 为直接依赖并锁定版本。当前 `uv.lock` 已因 `portalocker 3.2.0` 的 Windows 条件依赖锁入 `pywin32 312`，有 CPython 3.12 x64 wheel，`pyproject.toml` 尚未直接声明它；这次选择不要求另找一个未锁定的软件包。直接依赖表达本项目对安全接口的使用，不能依赖 portalocker 永远替本项目带入它。没有在本机导入 Windows 模块，本文所列 Win32/pywin32 接口是实现目标，具体 Python 签名与返回值须在 Windows 11 核实。
+本轮补核对两组凭据入口。`cli/main.py:_save_control/_read_control` 保存及读取 Host 控制能力文件，读取在 Windows 上跳过 uid/mode 校验；`_submission_token/_read_submission_token` 保存及读取提交令牌，读端直接用 `path.read_text`，没有真实的 Windows ACL 校验。`install/launcher.py:take_agent_credential_document` 对继承的执行凭据描述符、`read_private` 对运行时选择等私有文件，在 Windows 上也不检查真实属主和 DACL。执行凭据的文件入口 `agent_credential_document` 同样要经统一边界；已经继承的 fd 使用其原生句柄校验，不按路径重开。不能只修服务端回执而留下这些能力文件。
 
-两种做法都可以提供 Win32 语义，但成本不同。pywin32 的 `win32security`、`win32file`、`win32api` 可承载令牌 SID、安全描述符、ACL 和句柄的对象生命周期，避免自己声明 SID、变长 ACE、令牌和安全描述符内存释放。沿用 ctypes 的好处是风格接近 `protocol/windows_process.py:WindowsAPI` 与 `blackboard/tasks/windows_paths.py:WindowsFileAPI`，已有可注入边界；代价是本项目还要维护安全结构、访问掩码、错误映射及句柄释放。已有代码并没有 ACL 实现可直接复用。建议安全与文件句柄边界使用 pywin32，不同时保留 ctypes ACL 回退；Job 的现有 ctypes 边界本批按实际所需修改，不为使用同一库而整体重写精确进程启动值或 Job 实现。
+建议将 `pywin32; sys_platform == 'win32'` 加为直接依赖并锁定版本。当前 `uv.lock` 已因 `portalocker 3.2.0` 的 Windows 条件依赖锁入 `pywin32 312`，有 CPython 3.12 x64 wheel，`pyproject.toml` 尚未直接声明。直接依赖表达本项目对安全接口的使用，不依赖 portalocker 永远替本项目带入它。本文没有在 Windows 导入模块；API 签名、句柄适配和稳定运行时中的导入均为未验证。
 
-私有规则建议冻结为：对象 owner SID 必须等于当前进程令牌的用户 SID；DACL 必须存在，不能是 NULL DACL，状态根的 DACL 还须受保护以阻断宽父目录继承；可授予访问的主体只允许该用户、LocalSystem 与本机 Administrators，当前用户具备所需读写及管理权。私有根内的子对象可继承已校验私有祖先的 ACE，但不能接受规则外主体，不能把“有继承 ACE”本身当作不安全；SQLite 等原生写者创建的子文件也按同一规则读回。SYSTEM 和 Administrators 是明确的本机特权主体，不把私有性描述成能阻止管理员或同一用户任意 shell 篡改。校验只接受普通 allow ACE 的已知形式，按文件/目录的 generic mapping 归一化访问掩码，要求用户具有该对象的完全控制；deny ACE、未知 ACE、对象 ACE、条件 ACE、规则外主体及不符合继承范围的 ACE 均明确拒绝。这样读回并核对的是内核持有的 owner/DACL，不用“当前用户能打开文件”代替其他用户没有权限的证明，也不实现一套通用 Windows 有效权限推导器。新建目录使用用户完全控制并向文件、子目录继承的安全描述符；新建凭据与事实文件在创建时就带私有描述符，不能先写秘密再收紧权限。已存在的用户自选状态根只校验，宽 DACL 或其他属主给出原因，不自动改其 ACL。需要收紧的操作另有明确授权才做。
+库与 ctypes 的取舍按实际边界收窄：pywin32 只用于 `GetSecurityInfo`、ACL 遍历与 SID 比较，避免自己维护安全描述符、变长 ACE 与 SID 的解析；现有 `blackboard/tasks/windows_paths.py:WindowsFileAPI` 的 ctypes 句柄层原样搬到根包拟新增 `windows_files.py`，不使用 win32file/win32api 重写打开、固定、fd 转移、关闭与错误映射。`windows_paths.py` 保留工作树政策并调用搬出的能力，私有文件入口复用它；不保留两份实现，不另写 ctypes ACL 回退。`protocol/windows_process.py` 的 Job 层仍沿用 ctypes。本批新增的卷/文件身份读取和必要共享模式在唯一文件边界内扩展，不借搬移重做整个路径模块。
 
-在拟新增的公共 Windows 文件边界中，先用不跟随重解析点的目录句柄逐级打开并固定祖先，使用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` 检查类型、重解析属性与最终名称；父句柄不允许删除共享，从而阻止检查后替换祖先。叶子通过同一个句柄核对普通文件、owner SID 和 DACL，然后将句柄交给读写者，不再由调用点按字符串重开。ACL 使用句柄上的 `GetSecurityInfo`，不用路径上的安全描述符查询冒充同一对象。新建用独占创建和显式安全属性；拒绝叶子和祖先的重解析点，拒绝设备、目录冒充文件及别名路径。转换为 CRT fd 时只转移一次所有权，使用二进制和不可继承标志，避免双重关闭。
+Windows ACL 只留一条接受规则：属主是当前用户 SID 或本机 Administrators SID；DACL 存在且不是 NULL DACL；每一条 ACE 都是普通 allow 类型，受托者都在当前用户、LocalSystem、Administrators、OWNER RIGHTS 的白名单内。必须遍历全部 ACE，包括只作用于子对象的 ACE；其他属主、deny ACE、未知类型、对象或条件 ACE、白名单外主体一律拒绝。空 DACL 与 NULL DACL 区分，规则不额外要求某个访问掩码或“用户完全控制”；实际操作是否获准由系统调用决定。取消 generic mapping、继承范围分析和“状态根 DACL 必须受保护”的要求，不实现通用有效权限分析器。Windows 提权创建时属主是否为 Administrators、提权与非提权交替使用同一根能否正常工作，均需实验。此规则不承诺隔离管理员或同一用户的任意 shell。
 
-文件路径固定与私有权限是同一边界的两个政策参数。现有 `blackboard/tasks/windows_paths.py` 的工作树读写需要复用句柄固定机制，但不能因此要求普通用户源检出也符合私有 DACL；Git 符号链接仍由工作树政策显式处理。建议将低层句柄能力从 tasks 抽至根包拟新增 `windows_files.py`，私有政策留在 `private_dirs.py` 或其专用实现；让备份、凭据和回执不再反向依赖黑板的工作树模块。POSIX 保留逐级 `dir_fd/O_NOFOLLOW` 和 uid/mode 规则，调用方只见一次统一边界校验。
+新私有目录用 Python 自带的 `mkdir(mode=0o700)` 创建，使用 Python 3.12.4 起在 Windows 上设置的受保护 DACL，不自造安全描述符；目录内新文件靠继承，凭据文件也不另带显式描述符。创建后仍以句柄读回并按上述唯一规则校验；已存在目录同样校验，不自动修改其 ACL。默认状态根、逐级创建的私有父目录与 PowerShell 启动器预先建立的目录都在范围内，不能认为传了 mode 就已证明既有目录安全。Python 创建的实际主体、保护标志及子文件继承仍未验证。建议将 `requires-python = ">=3.12.4,<3.13"` 交开发者确认；本任务不改依赖文件，也不为较早版本保留另一套建目录方法。
 
-受影响入口包括 `protocol/transport.py` 的状态根、token 与 endpoint 文件，`private_dirs.py` 的目录及普通文件入口，`protocol/execution.py` 的 startup/live/receipt，`buddy/roles/turn_io.py` 的私有输入与输出，`console/console_sessions.py` 的 session，`buddy/roles/run_execution.py:start_fast` 的空 cwd，以及备份和安装产生的私有文件。空 cwd 同时要求目录私有、真实且为空；不能仅删除 mode 检查。祖先允许的系统权限与状态根的私有规则分开：不要求磁盘根和用户目录一律为私有，但固定的状态根及其私有对象必须满足上述规则。
+文件边界继续使用已有 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` 语义逐级打开并固定祖先，父句柄不允许删除共享，检查类型、重解析属性与最终名称。私有叶子经同一句柄检查普通文件、属主和 DACL，然后交给读写者；ACL 用句柄上的 `GetSecurityInfo`，不用路径查询冒充同一对象。新文件独占创建并继承私有父目录权限；句柄转 CRT fd 只转移一次所有权，使用二进制及不可继承标志。普通源检出复用路径固定而不套私有 ACL 政策，Git 链接仍由工作树政策处理；POSIX 保留 `dir_fd/O_NOFOLLOW` 与 uid/mode，调用点不叠加另一轮权限猜测。
 
-未验证的 Windows 11 实验：以普通用户在宽继承父目录下创建私有根，核对创建瞬间及读回的 owner/DACL；分别加入 Everyone、Users、Authenticated Users 的读或写 ACE、改属主、NULL DACL、规则外继承 ACE，确认拒绝；合法 SYSTEM/Administrators ACE、私有祖先的合法继承与 SQLite 创建的文件确认接受。并发替换每级目录为 junction、替换叶子为 reparse point，验证不能读到根外标记文件；同时验证持有祖先句柄不会令自身的正常发布、关闭和删除死锁。ACL API 调用失败必须是明确的访问错误，不能回到 mode 推断或默认通过。
+受影响入口包括上述 CLI 与 launcher 凭据、`protocol/transport.py` 的状态根/token/endpoint、`private_dirs.py` 的目录与普通文件、`protocol/execution.py` 的 startup/live/receipt、`buddy/roles/turn_io.py` 的私有输入输出、`console/console_sessions.py` 的 session、`buddy/roles/run_execution.py:start_fast` 的空 cwd，以及备份和安装的私有文件。空 cwd 仍须私有、真实且为空。不要求磁盘根或普通用户目录一律私有；固定祖先的路径政策与私有对象 ACL 政策各有明确作用。
 
-拟扩充 `tests/python/test_private_directories.py`、`tests/python/blackboard/tasks/test_windows_workspace.py`、fast Router 与 console session 的现有测试，新增 Windows 原生安全边界测试；测试可注入边界覆盖异常清理，但 ACL 与重解析点竞态的结论必须来自 Windows 原生调用。POSIX 的 uid、mode、符号链接拒绝回归保留。
+未验证的 Windows 11 实验全部列入阶段 A：普通用户与提权创建、两者交替访问同一根；Python 3.12.4 之前和之后、默认根及 PowerShell 先建目录，读回实际 owner/DACL/继承；普通 allow、只作用于子对象的白名单外 ACE、deny、NULL DACL 与其他属主的正反例；SQLite 和凭据新文件继承；并发把祖先换成 junction、叶子换成 reparse point；在稳定运行时里替换源目录后 `import win32security`。API 失败或导入失败明确报告，不能回退 mode 判断或放行。
+
+拟扩充 `tests/python/test_private_directories.py`、`tests/python/blackboard/tasks/test_windows_workspace.py`、fast Router、console session、CLI 控制能力/提交令牌与 launcher 凭据的原有测试，并新增 Windows 原生 ACL 测试。可注入边界只验证异常收尾；ACL、提权、继承和路径竞态必须有原生证据，POSIX 的 uid/mode/链接拒绝回归保留。
 
 ## 3. 落盘：进程崩溃保证与断电边界
 
@@ -50,63 +52,63 @@ F08 的根因已经由 w3、w4 的 `backup.py:create` 堆栈确认。`_private_c
 
 备份建议三个系统共用现有 journal 发布协议：先完成并验证 `.incoming`，发布 journal，必要时把 current 改名为 `.previous`，把 incoming 改名为 current，验证 current 后删除 previous，最后删除 journal。已有实现位于 `backup.py:_publication_journal/_recover_publication/create`；POSIX 目前另走 `exchange`，应在替换时删除这套分支及专属测试，不保留自动回退。恢复必须在备份锁下进行；current 在两次改名之间可以暂时缺席，所有正式读者必须先恢复或报告进行中，不能承诺路径一直存在。首次备份中断还没有完整一代时，返回未完成并允许重建，不声称一定有可恢复备份；不得丢掉唯一已验证的一代。
 
-决定 4 的推论只成立一半。已核实 `protocol/process_identity.py:boot_id/inspect_process_identity`：Linux 读 boot UUID，macOS 读 `kern.bootsessionuuid`，Windows 调 `NtQuerySystemInformation(0x5A)`，取前 16 字节作 BootIdentifier；相异时立即返回 `boot-changed`。`blackboard/tasks/interruption.py:_stop_native` 已把这个结果作为所有旧执行与原生进程停止的证据。真正换了一次内核开机会话，旧内核的进程不可能继续存在，因此这个推理可以证明进程停止；它不能证明断电前的回执、备份或未提交的 SQLite 数据还存在，也不能重建已丢的产物。恢复应记中断、按保留下来的证据处理部分输出，不能填造成功回执。
+决定 4 的推论只成立一半。已核实 `protocol/process_identity.py:boot_id/inspect_process_identity`：Linux 读 boot UUID，macOS 读 `kern.bootsessionuuid`，Windows 调 `NtQuerySystemInformation(0x5A)`，取前 16 字节作 BootIdentifier；相异时立即返回 `boot-changed`；这个当前实现尚无本轮新增的状态根文件身份与 Windows 会话围栏。`blackboard/tasks/interruption.py:_stop_native` 已把这个结果作为所有旧执行与原生进程停止的证据。真正换了一次内核开机会话，旧内核的进程不可能继续存在，因此这个推理可以证明进程停止；它不能证明断电前的回执、备份或未提交的 SQLite 数据还存在，也不能重建已丢的产物。恢复应记中断、按保留下来的证据处理部分输出，不能填造成功回执。新版恢复先做第 7 节的状态根归属核对；Windows 还须核对登录会话，不得在副本或不同会话中跳过围栏直接结算。
 
 Windows 分支目前只有代码，没有本次可读的系统 API 契约材料或 Windows 11 运行证据；源码注释写的“documented-size prefix”不能证明 `0x5A` 及 32 字节缓冲区在目标系统可用。因此不能现在确认 Windows 的上述前提。重启、关机后开机（含 Fast Startup）、休眠恢复、睡眠恢复、同次开机注销再登录分别记录标识与存活测试进程；要求实际终结旧进程的内核重启改变标识，保留用户进程的恢复不产生错误的改变。Fast Startup 是否换标识必须按观察记录，不从“点了关机”推导；旧执行已经结束但标识没变时，应依完整身份缺席证明。API 失败或结果不可靠时保持 unknown，禁止用墙钟启动时间或生成的 UUID 代替。
 
-应在启动意图中先记录已观测的 bootId 和预分配 Job 名（Windows），再允许创建执行，避免只剩没有开机会话的 intent。当前 `spawn.intent` 只有 taskId/attemptId/generation，完整身份稍后才写入 `spawn.marker`；仅有这份 intent 不能在重启后凭空知道是哪次开机启动的。没有完整身份的既有意图不能用文件 mtime 推定启动会话。启动到身份发布间的中断必须有测试：未放行原生工作不等于执行根已经消失，未证明的根仍占名额。若修改跨进程事实格式，按第 8 节处理契约与升级。
+应在启动意图中先冻结启动状态根的文件身份、已观测 bootId，以及 Windows 的会话号和预分配 Job 名，再允许创建执行；启动文件、marker、跨进程身份与持久记录绑定同一组启动事实，避免只剩没有归属或开机会话的 intent。当前 `spawn.intent` 只有 taskId/attemptId/generation，完整身份稍后才写入 `spawn.marker`；仅有这份 intent 不能在重启后凭空知道是哪次开机启动的。没有完整身份的既有意图不能用文件 mtime 推定启动会话，也不能把当前状态根身份补填成历史启动属主。启动到身份发布间的中断必须有测试：未放行原生工作不等于执行根已经消失，未证明的根仍占名额。若修改跨进程事实格式，按第 8 节处理契约与升级。
 
 未验证实验与测试：Windows 11 上对每个文件发布阶段、gzip 尾部结束前后、journal 两次改名和清理阶段设置模型无关的暂停点，由父测试进程强杀写者，重新启动读者/恢复器核对摘要、绑定和完整代际；POSIX 做同一组进程中断测试。为 bootId 单独保留重启前后探针记录。断电实验只能在可丢弃虚拟机或专用环境做，目标是确认重启后的停止结算与错误报告，不把它作为“不丢数据”的验收。拟扩充 `tests/python/protocol/test_native_process_journal.py`、`tests/python/buddy/runtime/test_execution_process.py`、`tests/python/install/test_backup.py`、`test_backup_windows.py`、`test_upgrade.py` 和 `tests/python/blackboard/store/test_interruption_recovery.py`。
 
-## 4. 执行 Job、接回与停止证据
+## 4. 服务启动、执行 Job、会话与停止证据
 
-已核实的调用路径是 `protocol/execution.py:launch_execution` 预分配 Job 名，`protocol/process_controller.py:launch_controller` 调 `owned_popen(close_fds=True)`，`protocol/owned_process.py:owned_popen` 先创建 Job、以 suspended 启动子进程、加入 Job 再恢复线程，`windows_process.py:WindowsAPI.create_job` 对每个 Job 都设 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`。Job 句柄放在父进程的 `Popen._buddy_job`，执行在 `buddy/runtime/execution.py:main` 仅从 startup 取得名称后生成自己的身份，没有接持根 Job 句柄。`blackboard/service/daemon.py:on_restart/cleanup` 停调度器并清理服务；这条实现不能满足 ADR-031 的服务崩溃与补丁重启保留执行。
+已核实两层启动路径。服务冷启动在 `protocol/transport.py` 的 `subprocess.Popen` 只给 `start_new_session=True`，没有 Windows `creationflags`；它没有 Windows 脱离启动器控制台及外层 Host Job 的实现。执行路径是 `protocol/execution.py:launch_execution` 预分配 Job 名，`process_controller.py:launch_controller` 调 `owned_popen(close_fds=True)`，`owned_process.py` 以 suspended 启动、加入 Job 再恢复；`windows_process.py:create_job` 每个 Job 都设 kill-on-close。Job 句柄在父进程的 `Popen._buddy_job`，执行从 startup 取名字生成身份，没有接持根 Job 句柄。当前两层实现不能证明执行挺过启动器、Host 或服务退出。
 
-建议明确两种现有创建用途的生命周期，不给调用者任意组合开关：执行根 Job 不设 kill-on-close，也不允许 breakaway；原生 harness/探测/command 的短命 Job 继续设 kill-on-close，由创建它的执行或探测进程持有。前者属于一次执行的可接回事实，后者属于一个仍持有原生句柄的运行。服务退出关闭执行根 Job 句柄不结束执行，执行崩溃关闭其原生 Job 句柄会触发原生工作清理，最终仍由根 Job 证明边界已空。这两个用途共用 Job 机制和身份校验，没有另一套 PID 递归停止器。不得取消全部 Job 的清理属性，也不通过给执行继承服务句柄来要求服务与执行做脆弱的移交握手。
+Windows 服务改用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，不再依靠 POSIX 的 `start_new_session` 表达 Windows 生命周期；存在外层 Job 且允许脱离时加 `CREATE_BREAKAWAY_FROM_JOB`。若外层 Job 不允许脱离，明确报“执行活不过 Host 的 Job”，不把此环境当作已满足执行独立性的启动成功，不靠补一个内部 Job 抵消外层限制。无外层 Job 时不需要 breakaway。外层权限的识别、`SILENT_BREAKAWAY_OK` 与显式 breakaway 的组合及实际继承结果都未验证，阶段 A 必须给出证据；实现不要通过失败后盲目换一组 flags 来假装成功。
 
-Windows 11 必须验证无 kill-on-close 的命名 Job 在服务所有句柄关闭后，只要关联进程还在就仍可按名打开；也必须验证执行根属于根 Job、其后创建的 native Job 可以正常嵌套，孙进程都仍属于根 Job，外层 Job 禁止脱离在 Python、uv、shell、Node 和带 breakaway 标志的创建中成立。当前 ctypes 代码已经有基础操作，但这些组合在本任务内没有运行过。若实验否定该生命周期，先退回设计选择，不加轮询续租、看门狗进程或 taskkill 来掩盖缺口。
+执行与原生子进程的统一 Windows 创建边界加 `CREATE_NO_WINDOW`，仍先 suspended、加入其 Job 再恢复；这不替代服务的 detached/breakaway，也不绕过用户 harness 的设置。阶段 A 从 PowerShell 窗口、VS Code 终端、Host harness CLI 的工具 shell 分别启动私有服务，再关闭启动一方，核对控制台和 Job 链，证明服务及执行是否继续。此处只使用工具 shell 启动模型无关替身，不发模型请求；需要访问真实 harness 的实验由 Host 后续安排。本任务没有操作这些界面或进程。
 
-创建边界必须拒绝 `CreateJobObjectW` 打开了已有同名对象的情况，并为新 Job 使用明确的用户私有安全描述符；`Local\\HeyMyBuddy-<uuid>` 名称继续使用随机 UUID，bootId、task/attempt/generation 和由状态根推导的启动证据绑定在一起。名称只是定位，不单独授予结束权限。创建执行根时保持 suspended，能取得的完整身份及 Job 归属应在恢复线程前落下；原生工作仍须等现有 `Execution.run` 的身份确认之后才开始。原生 pending 到已登记之间也必须覆盖“创建后尚未持久化就崩溃”的窗口，不能让缺失 journal 被当作无子进程。
+执行根 Job 不设 kill-on-close，也不允许 breakaway；原生 harness/探测/command 的短命 native Job 继续设 kill-on-close，并且不允许脱离，由执行或探测进程持有。服务关闭最后根 Job 句柄不应结束执行，执行崩溃关闭 native Job 句柄则触发原生工作清理，最终由根 Job 证明执行边界已空。保留这两种已有创建用途，不对全部 Job 一律取消清理属性，也不引入继承服务句柄的移交握手、PID 递归停止、轮询续租或看门狗。
 
-接回由 `blackboard/service/execution_scheduler.py:_resume_executions/verify_identity` 使用当前看板所拥有的 attempt 推导固定私有目录、读取对应身份，再调用系统边界 `OpenJobObjectW`，保留这个句柄完成查询、必要的停止及停止观察。一次观察与发出终止之间不能先关 Job 再按名字打开另一对象；当前 `process_identity.py:_SystemSource.job_members/stop_job` 分别开关句柄，应收敛成一次持有的观察/操作。根仍在时需核对 bootId、原始创建 FILETIME、PID 与实际 Job 成员关系；根已退出而 Job 还有成员时，凭私有启动边界预先绑定的同一 Job 结束遗留工作，不用另一个同 PID 的新进程作为凭据。Job 绑定或成员来源不能核实时是 unknown。
+Windows 11 需验证无 kill-on-close 的命名 Job 在所有服务句柄关闭后仍因关联进程存活而可接回，native Job 可以嵌套且后代仍在根 Job 中，Python/uv/shell/Node/new-console/breakaway 请求不能逃出根 Job。尤其验证启动器外层 Job 带 `SILENT_BREAKAWAY_OK` 时服务、执行、孙进程各归哪一层，以及 conhost 是否计入 ActiveProcesses；不能把进程计数看似只多一个的情况忽略掉。若组合不成立，回到设计选择，不用过滤进程名或放宽空 Job 判据补齐。
 
-Windows 的软停由现有 ExecutionLive stop 进入执行的控制与 harness 原生 interrupt/close 路径，宽限到时以 `TerminateJobObject` 强停。`process_handle.py:signal_group` 目前把 SIGTERM 映射到 CTRL_BREAK_EVENT，异常会被吞掉；控制台事件有控制台关联前提，GUI/无控制台不能把“已请求发送”记作有序收尾成功。建议把控制台事件从共同软停承诺中移出：有序收尾用既有原生通道，系统层负责强停与结果；command 测试执行没有原生协议，不承诺获得 POSIX SIGTERM 等价的处理机会。停止原因仍区分 completed、grace-expired、forced-stop、service-stop 等，不因 Windows 缺少 POSIX 信号号而伪造负退出码。
+Job 使用令牌的默认 DACL，不设置显式安全描述符；保留拒绝 `CreateJobObjectW` 打开已有同名对象的创建校验。随机 `Local\HeyMyBuddy-<uuid>` 只负责定位，必须绑定冻结的状态根文件身份、bootId、会话号及 task/attempt/generation，名字不单独授予停止权限。创建执行根时保持 suspended，取得并持久化完整身份及 Job 绑定后再恢复线程；原生工作仍须等待现有 `Execution.run` 的身份确认。创建到登记的崩溃窗口保留 pending，缺失登记不等于没有子进程。
 
-停止证据必须区分：持有 Job 观察 ActiveProcesses 为 0 且执行根句柄已退出，可以确认该边界为空；按名打开明确报对象不存在，结合根完整身份缺席和可信启动绑定可确认结束；bootId 确实改变可以确认旧开机中的执行结束。拒绝访问、查询失败、返回不完整列表、仍有成员、根身份冲突都不能当作空 Job；`TerminateJobObject` 返回成功本身不是停止证据。当前 `process_identity.py:inspect_process_identity`、`ProcessHandle.shutdown_confirmed`、`blackboard/tasks/interruption.py:_stop_native` 的 unknown 原则保留，具体 Job 操作改为持有同一句柄。根 Job 仍有原生工作时不能因 creator-reaped、长调用断开或回执报告成功就释放 attempt 的资源；正常回执交付时允许的唯一存活执行根及其约束见第 5 节。
+`Local\` 名字空间按 Windows 登录会话隔离。现有 `process_identity.py:validate_process_identity` 的身份只有 bootId、pid、startedAt、processGroupId、jobName，没有会话号。新版在 Windows 身份及启动事实里加入由 `ProcessIdToSessionId` 得到的会话号；POSIX 采用明确的不适用形式，不按字段缺失推断版本。服务打开 Job 或据 Job 缺席结算前，先核对当前会话与启动会话；不同或无法读取就 unknown，不接回、不发信号，也不把按名打不开解释为原 Job 已不存在。重启后的新会话是否仍相同不作假设；bootId 变化的停止事实不能在不同会话中绕过本批规定的归属边界。会话 API、同用户不同会话、会话切换后 Local Job 的可见性列入阶段 A。
 
-POSIX 共同接口仍是发送 SIGTERM、必要时 SIGKILL、观察原组已空；`killpg` 返回成功不是停止证明。已有 `process_identity.py` 会把根已退出但组仍在、根 PID 重用且组仍在记 unknown，这个规则不能为了和 Windows 对齐而放松。Windows Job 的组员继承与 POSIX 进程组的可脱离性不同，第 5 节单独处理，不声称两者有同等强度。
+接回从 `blackboard/service/execution_scheduler.py:_resume_executions/verify_identity` 的权威 attempt 出发，先做第 7 节状态根文件身份及 Windows 会话核对，再读取固定私有证据，以 `OpenJobObjectW` 保留同一句柄完成查询、必要的停止和结束观察。根仍在时核对 bootId、原始创建 FILETIME、PID 与实际 Job 成员关系；根已退而 Job 还有成员时只能按已绑定的同一 Job 结束遗留工作。当前 `process_identity.py:_SystemSource.job_members/stop_job` 分别开关 Job，应收敛为同一次持有操作，不能查询后关闭再按名字打开另一个对象。这里不新增“已验证目标”类型，业务归属只在入口校验一次。
 
-拟修改 `protocol/windows_process.py`、`owned_process.py`、`process_controller.py`、`process_handle.py`、`process_identity.py`、`execution.py`、`buddy/runtime/execution.py`、`buddy/runtime/receipts.py`、`blackboard/store/store.py` 的结果导入、`blackboard/service/execution_scheduler.py`、`blackboard/tasks/interruption.py`。拟扩充 `tests/python/buddy/runtime/test_windows_process.py`、`tests/python/protocol/test_process_identity.py`、`tests/python/blackboard/service/test_execution_recovery.py`、`tests/python/blackboard/store/test_interruption_native_tree.py` 与安装执行围栏测试。原生测试覆盖服务强杀后执行继续、同契约私有重启接回、根先退出而孙进程继续、无控制台停止、Job 权限错误、创建碰撞、成员枚举扩大与嵌套 Job。
+Windows 有序停止沿现有 ExecutionLive stop 与 harness 原生 interrupt/close 路径，宽限后用 `TerminateJobObject`。`process_handle.py:signal_group` 当前把 SIGTERM 映射为 CTRL_BREAK_EVENT 并吞掉异常，不能把发送控制台事件当作无控制台运行的共同软停保证。command 替身没有原生协议，不承诺等价的 SIGTERM 处理机会。仍区分正常、宽限结束、强停及 service-stop，不伪造 POSIX 负退出码。
 
-## 5. 回合结束后仍活着的进程：三系统的解决范围
+同状态根、同会话中的停止证据是：持有的根 Job ActiveProcesses 为 0，且根的完整身份已退出；或按名打开明确返回对象不存在，同时根身份缺席且启动绑定可信；或符合归属及会话前提的真正 boot-changed。拒绝访问、查询失败、不完整成员列表、身份冲突、不同会话都保留 unknown。`TerminateJobObject` 返回成功、creator-reaped、长调用断开、回执里的成功布尔值都不能单独证明全部工作结束。正常回执前 native Job 必须全空，回执接收与根退出后的资源释放次序见第 5 节。
 
-已核实待办 `docs/design/backlog.md` 记录的是 ZCode CLI 某回合中经 `uv run` 起的合成预览服务，在停止确认及受管检出回收后仍活了数小时；记录明说没有核实它怎样逃过停止。因此不能写成已经复现 uv 或 ZCode 会脱离进程组，也不能给没有观测过的 CLI 版本补上版本号。当前 `buddy/roles/run_execution.py:InlineRunHandle.shutdown_confirmed` 只判断 native stop evidence 的 `group_state == 'gone'`；native journal 只登记通过本项目 `owned_popen/ProcessHandle` 创建的直接原生运行，不登记 harness 工具内部每个后代。这个覆盖范围不足以证明任意后代都停止。
+POSIX 继续使用 SIGTERM、必要时 SIGKILL 与原进程组缺席；killpg 成功不是结束证据，根先退而组仍在、PID 重用且组仍在继续 unknown。本批修正三系统共同的归属和结算顺序，不把进程组扩成不可逃逸的子树，POSIX 脱离后代按第 5 节拆出。
 
-共同修正是把“原生运行结束”“本次执行可归属的工作边界已空”“可以封存/回收”分清，并在权威结果导入处统一要求后两者的证据。正常完成、取消、超时、执行崩溃都走同一终结规则：先原生有序收尾，再结束遗留工作，观察边界为空，最后发布 shutdownConfirmed、封存和释放资源。执行进程仍要活着交回执，所以 Windows 不能对包含自己的外层 Job 要求 ActiveProcesses 等于 0 后才写回执；正常回执前验证只剩经完整身份核实的执行根且全部 native Job 已空，执行根退出后服务再确认整个根 Job 已空，完成执行端点及启动材料清理；正常结果导入与资源释放所需的是前一步原生工作已停的证据，不把交付回执的已知根进程伪称为已经退出。执行根以外仍有成员或观察失败时返回未确认，不能导入为已停止。强停及崩溃结算则直接要求根 Job 空。
+拟修改 `protocol/transport.py`、`windows_process.py`、`owned_process.py`、`process_controller.py`、`process_handle.py`、`process_identity.py`、`execution.py`、`buddy/runtime/execution.py`、`buddy/runtime/receipts.py`、`blackboard/store/store.py`、`blackboard/service/execution_scheduler.py` 与 `blackboard/tasks/interruption.py`。拟扩充 `tests/python/buddy/runtime/test_windows_process.py`、`tests/python/protocol/test_process_identity.py`、`tests/python/blackboard/service/test_execution_recovery.py`、`tests/python/blackboard/store/test_interruption_native_tree.py`、transport 冷启动及安装执行围栏测试。Windows 原生实验另记录环境、外层 Job flags、会话、完整身份、成员和实际退出结果，不把 mock 当实测。
 
-Windows 的具体方案是第 4 节不可脱离的根 Job：工具启动的新控制台或新进程组不应逃离 Job，子 Job 不应取消外层归属。回合结束先关闭原生协议，对其 native Job 强停并观察；仍残留在根 Job 的其他工作要查明归属并终止。不能通过终止整个根 Job 来一边杀执行进程一边要求它写成功回执；必要时由服务按中断路径结算。若目标 harness 实际让系统上已有的外部进程代起工作，Job 不会自然覆盖，必须通过它已有的原生生命周期接口取得相同强度的停止事实，否则不宣布该能力完成。
+## 5. Windows 后代停止与三系统共用的结算次序
 
-Linux 的普通同组后代用现有进程组统一结束；主动 `setsid/setpgid` 的后代不能由 `killpg` 证明。候选的强制边界是每执行一个已委派可写的 cgroup v2，执行在允许 native 工作前就进入，后代不能迁出，终止工作后要求组内只剩执行根，根退出后要求 populated 为 0；它需要权限、委派、执行根的排除/最终停止次序、服务重启接回及 cgroup 身份的实际证明。当前仓库没有这条实现，普通用户环境是否提供该能力未验证，不能为了本批而假定有 root 或用户 systemd，也不与 killpg 拼成一条“先试一下”的回退路径。若选它，是统一执行所有权的契约改动，应单独确认支持条件与停用旧的完成判定。
+已核实待办 `docs/design/backlog.md` 记录 ZCode CLI 某回合经 `uv run` 起的预览服务，在停止确认及检出回收后仍存活，但没有核实它怎样逃过停止。当前 `buddy/roles/run_execution.py:InlineRunHandle.shutdown_confirmed` 只依据 native stop evidence 的 group_state；native journal 登记通过本项目 owned_popen/ProcessHandle 创建的原生运行，不登记 harness 工具内每个后代。不能把待办写成已复现 uv/ZCode 自行脱离，也不补造 CLI 版本。
 
-macOS 的普通同组后代同样可用现有进程组结束；本次没有核实到一个无需新权限、覆盖任意双重 fork/setsid、可由重启后的服务接回的 Job 等价机制。进程树枚举、进程标记环境变量、cwd 扫描和重复观察都可能漏掉先重挂父进程或换 cwd 的后代，不能作为“全后代已停”的证明；也不能靠进程名或端口号杀掉陌生进程。需要先用与已接入 CLI 原生执行载体一致的模型无关替身重现，再核对 harness 自身的后台工作生命周期和可用系统约束。不得为解决这个问题替换 harness 的工具、写配置 home 或偷偷开关用户原生能力，ADR-023、ADR-030 仍生效。
+按 Host 本轮决定，Linux/macOS 脱离进程组的后代另成一批，由开发者决定支持条件；本批照实保留“POSIX 上未解决”。普通同组后代继续按原组处理，任意 setsid、双重 fork 或脱离后代不能由 killpg 证明已经停止。本批不实现 cgroup、递归 PID 追踪或 cwd 扫描，也不在回收边界增加按 cwd 找进程的检查；这些方案与其权限、竞态和强度留到后续一批定。本批安装不再以前述 POSIX 完整子树方案为前置条件，公开说明与验收必须保留这个缺口。
 
-因此本批能够具体设计 Windows 的完整边界，以及三系统共同的防止错误结算/回收规则；Linux、macOS 的任意脱离后代终结方案仍有前置实验，不能在本文里宣称三系统待办已可直接实现完。建议把这项作为实施前的独立验收关口：实验要给出可执行的停止机制或明确的能力边界，并提交开发者确认需要的支持条件；拿不到等价证据时保持 unknown 与工作区占用，不把“未观察到残留”改称完整停止证明。这个关口没有通过，整批不能声称已消除待办，不能安装后再补。
+Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束、取消、超时均先执行原生有序收尾，必要时强停 native Job，观察所有 native Job 全空后再封存原生输出并发回执；执行崩溃则由服务依据完整归属与根 Job 处理遗留成员。执行根退出后根 Job 也必须全空，服务才确认全部停止并释放资源，不通过“只剩执行根”提前释放。不增加“只交付阶段”的事实、进程计数例外或对应服务端验证；conhost 对空 Job 判据的影响先在阶段 A 实验，不能按名字忽略。
 
-回收再补一个用途明确的边界检查：`blackboard/tasks/workflow.py` 的 cleanup plan/apply 与 `blackboard/tasks/workspace.py:remove_checkout` 在最后删除前核对已登记执行的停止事实，并检查是否有可观察的进程 cwd 落入目标检出。Windows 用目标平台可用的进程观察接口，Linux 读 `/proc`，macOS 用系统进程接口或既有受维护库；该扫描只能阻止已发现的忙目录，不能授权发信号，也不能补全树停止证据。查到不属于本次登记执行的进程就报告占用；权限导致无法完成本应观察的范围就报告未知，不能强制回收。内容证明与最终删除的并发写入问题仍按已有回收围栏处理，不把本节扫描包装成全机文件访问隔离。
+三系统共用接收回执与最终结算的次序：服务先可靠接收回执并立即确认收到，attempt 保持 finalizing、保留容量与资源；执行收到确认后退出；服务沿现有长调用失败后的身份观察或自己持有的回收证据确认根和已登记工作边界结束，再一次性导入权威结果、事件并释放资源。Windows 对应根 Job 全空，POSIX 对应既有完整身份及已登记原组的结束证据，不把这一点描述成已覆盖脱离后代。未知就继续保留占用，不因为成功回执已经收到而释放。
 
-这道终结边界必须在 `buddy/runtime/execution.py` 调用 `partial_outputs.enrich` 形成封存之前完成，并在 `blackboard/store/store.py:execution_result_reference/execution_result` 导入时核对相同证据。当前 `buddy/runtime/receipts.py:deliver_receipt` 等服务确认结果后才退出，不能让服务等执行根消失后才回应这次 RPC，否则双方死锁。保留现有交付顺序：执行在发回执前关闭原生 spawn 入口，服务核实只剩该执行根且它已进入只交付阶段，才按正常结果规则结算；不新增“先伪报停止再补证据”的第二套回执。如果无法验证只交付阶段或仍有未知工作，现有未确认结果与恢复路径继续保留占用。该阶段的事实格式、执行侧入口封闭及服务验证必须同时设计和测试，不能只相信回执里一个布尔值。
+已核实 `buddy/runtime/receipts.py:deliver_receipt` 要等 submit_result 返回后才退出，当前还会写 delivery 并删掉 receipt；`blackboard/store/store.py:execution_result_reference/execution_result/_commit_execution_result` 会在收到 shutdownConfirmed 时完成 attempt 并释放 claims。需要调整这两处与调度观察：回执成功响应只确认服务已持久接收，不能等待根退出才回应 RPC；接收阶段复用 finalizing 并保留已接收的原始回执，最终停止确认前不删掉恢复所需内容，也不发布完成事件。最终结算仍是一条路径和一个原子事务，重启后复用已接收回执恢复；不把 native 已停的事实改写成假布尔值，不新增另一种结果或一套交付阶段协议。结果接收、根结束与最终事务之间的断点都须验证幂等与仅结算一次。具体暂存应复用现有 attempt/回执存储，在实现任务中同步调整其状态含义及恢复读端，不保留原来的收到即释放分支。
 
-三系统实验应使用模型无关的 Python 替身分别创建同组孙进程、新进程组、setsid、双重 fork（POSIX）、新控制台与 breakaway 请求（Windows），让它继续写目标检出中的标记。覆盖主进程先退、收到 TERM 不退、服务先崩、执行先崩、正常回合结束和回收重试；验收必须同时看到被归属工作实际结束、停止事实不提前成立、检出未在进程仍工作时删除。Windows 再用真正 uv 启动同一替身核对祖孙链；真实 ZCode CLI 的版本化复现另需 Host 后续授权，本文没有运行真实 harness。
+模型无关实验覆盖同组孙进程、主进程先退出、native Job 内孙进程忽略软停、新控制台、breakaway 请求、uv 启动替身、服务先崩与执行先崩。验收同时观察 native Job 全空后才发回执、RPC 不因等根退出而死锁、根 Job 非空期间不释放容量/claims、不启动冲突工作、不回收检出，根结束后只结算一次。若 harness 通过已有外部进程代起工具工作，Job 不自然覆盖，需如实记录边界而非假报全停；真实 CLI 的版本化复现由 Host 后续安排，本任务没有运行。
 
-拟扩充 `tests/python/protocol/test_native_process_journal.py`、`tests/python/blackboard/store/test_interruption_native_tree.py`、`tests/python/buddy/roles/test_run_execution.py`、`tests/python/blackboard/service/test_execution_recovery.py` 与 workspace reclaim/cleanup 用例；Linux/macOS 具体新增模块和测试由前置实验选定的唯一机制决定，不能现在凭空安排一套跨系统 PID 跟踪器。
+拟扩充 `tests/python/protocol/test_native_process_journal.py`、`tests/python/blackboard/store/test_interruption_native_tree.py`、`tests/python/buddy/roles/test_run_execution.py`、`tests/python/buddy/runtime/test_execution_delivery.py`、`tests/python/blackboard/service/test_execution_recovery.py`、store 结果导入及容量/claims 测试。共同结算规则要在正常、失败、取消、服务重启与回执确认前后崩溃中保持一致；POSIX 脱离后代的完整终结和 cwd 回收扫描不在这些验收的完成声明内。
 
 ## 6. 占用文件、只读文件与测试收尾
 
-产品中的第一类是事实文件更新：startup/live/budget/receipt、native journal、控制 token、endpoint 与 session 文件。发布者要在改名之前结束自己的写者；允许原子换代的只读事实读者在 Windows 明确使用删除共享，读取和校验仍基于持有的那份对象，不要求所有读者都看到最新一代。固定祖先的句柄继续不允许删除共享，但在删除或改名该目录自身前必须退出固定祖先的操作作用域。目标被外部不允许删除共享的句柄打开时，报告忙并保留已发布旧事实与未完成状态，不无限重试、不删除目标再声称原子替换。
+产品中的第一类是事实文件更新：startup/live/budget/receipt、native journal、控制 token、endpoint 与 session 文件。发布者要在改名之前结束自己的写者；允许原子换代的只读事实读者在 Windows 明确使用删除共享，读取和校验仍基于持有的那份对象，不要求所有读者都看到最新一代。固定祖先的句柄继续不允许删除共享，但在删除或改名该目录自身前必须退出固定祖先的操作作用域。目标被外部不允许删除共享的句柄打开时，报告忙并保留已发布旧事实与未完成状态，不无限重试、不删除目标再声称原子替换。阶段 A 在开启 Defender 实时扫描时反复运行发布热路径，核对杀毒软件与索引器是否造成短暂占用；只有确有偶发证据时，才在唯一文件边界对确定的瞬时占用做一次有界重试，并测试重试上限与失败保留。调用点不各加重试，长期占用、ACL 拒绝与证据未知不重试成成功。
 
 第二类是 SQLite、备份和升级恢复：`Database.connect` 缓存每线程/嵌套层连接，退出读事务不会关连接；`Database.close` 才关闭缓存。`daemon.py:cleanup` 已在调度、维护、harness 和 console 清理之后调用 db.close，不能根据测试日志断言产品完全没有关闭数据库。备份在安装协调器已脱离写者并完成 WAL checkpoint 的条件下复制，恢复在替换 board 及 sidecar 前必须让唯一所有者的全部连接关闭并释放操作句柄；与 Windows 无关的存储一致性围栏保留。外部 SQLite 查看器等占用时保留 journal、当前备份和看板，不删除 WAL/SHM 来绕过 sharing violation。恢复的 `install/upgrade.py:restore`、备份 generation 清理使用同一显式忙错误，允许用户解除占用后重试该 journal 的恢复。
 
-第三类是受管检出、私有会话与宏任务 tomb：`workspace.py:remove_checkout` 先核验注册与锁再用 Git 删除，失败时恢复该注册的锁；`workflow.py`、`macro_task_deletion.py`、`macro_task_deletion_workspace.py`、`tasks/storage.py` 调用 `private_dirs.remove_tree` 删除自己拥有的私有树。应保持现有清理计划/墓碑记录，删除不完整就明确可重试，不把目录一部分消失当成整个工作区已回收。Git worktree 元数据仍交 Git；仓库公共 `.git/objects` 不是某次工作树的可删除范围。产品真正拥有的私有树中如有只读普通文件，删除边界可在持有同一叶子对象且已核对归属后，只清除 Windows READONLY 属性再重试该次删除；不扩大 DACL、不递归 chmod 用户源仓库、不跟随链接、不清其他属性。叶子只读处理应落在公共 Windows 文件边界，供私有删除使用；不要给任何 WinError 5 都执行 chmod。
+第三类是受管检出、私有会话与宏任务 tomb：`workspace.py:remove_checkout` 先核验注册与锁再用 Git 删除，失败时恢复该注册的锁；`workflow.py`、`macro_task_deletion.py`、`macro_task_deletion_workspace.py`、`tasks/storage.py` 调用 `private_dirs.remove_tree` 删除自己拥有的私有树。应保持现有清理计划/墓碑记录，删除不完整就明确可重试，不把目录一部分消失当成整个工作区已回收。Git worktree 元数据仍交 Git；仓库公共 `.git/objects` 不是某次工作树的可删除范围。本批不在产品私有树删除器中增加清除 READONLY 的能力，目前没有已核实的产品使用者；只读文件仍明确报出删除失败并保留清理计划，不扩大 DACL、不递归 chmod 用户源仓库。测试根的只读 Git 对象单独处理，见下文。
 
 第四类是 runtime/skill 安装：`install/runtime.py` 有 staging rename 和若干 ignore_errors 清理，`install/upgrade.py` 有 skill 切换、回滚及旧代删除。Windows 会拒绝删除仍被解释器加载的运行时，已有在做或 unknown 执行使用的 runtime 必须按 ADR-031 第 10 条保留；不能把解释器占用当可忽略的垃圾，也不能停止无关执行来让清理成功。正式安装步骤失败必须报错并保留恢复证据；切换后的可延后旧代清理要明确报保留原因，不能承诺清空。目录联接的创建和名字拒绝属于第三批，本批只统一关闭句柄、忙错误与删除结果，不顺带实现链接安装。
 
@@ -120,34 +122,68 @@ macOS 的普通同组后代同样可用现有进程组结束；本次没有核�
 
 未验证的 Windows 11 实验：自己持有的正常读者、允许删除共享的读者、外部禁止删除共享的读者分别参与 replace/delete；打开 SQLite 写/只读连接时恢复与删根；gzip 未关闭时改名；只读 Git 对象清理；已加载 Python runtime 的保留；junction 换入删除树。验证忙错误含操作和受限相对路径、原始系统错误，释放占用后能继续同一恢复/清理。拟扩充 `tests/python/install/test_backup_windows.py`、`test_upgrade.py`、`test_execution_install_fence.py`、`tests/python/blackboard/tasks/test_workspace_submission_cleanup.py`、`test_windows_workspace.py`、`tests/python/cli/test_support_cleanup.py`、`test_checks_cleanup.py` 与相应未关闭资源的原用例。POSIX 专项 killpg/FIFO 测试正确标为 POSIX，并补 Job 对应的边界测试；不能只跳过 Windows 失败。
 
-## 7. ADR-031 拟新增第 13 条：发信号的归属边界
+## 7. ADR-031 拟新增第 13 条：状态根文件身份围栏
 
-本次读取的 ADR-031 当前只有第 1 至 12 条，没有已接受的第 13 条。以下是提交开发者确认的新增措辞，本文不修改 ADR，也不把措辞当作已定规则：“服务只停止由本状态目录的权威执行记录授权启动、并以该目录下固定私有启动证据绑定的执行及其原生工作。停止前须核对开机会话、内核进程创建身份和所属进程组或 Job；接回原服务启动的同一次执行适用相同规则。路径、命令行、进程号或进程名只能用于定位与诊断，不能单独授予发信号的权限。无法证明归属或停止时保留未知，不释放资源、不回收工作区。”
+本轮已读待办“看板副本上起的服务，停止时会强杀原服务的执行”及 Host 的 `tmp/copy-board-experiment.py`，没有运行它。待办记录 2026-10-20 私有副本服务经 `_force_if_required` → `kill_verified_process_group` 停止日常执行；脚本以两个私有服务和 SQLite 副本复现 B 停止后 A 的执行消失。现有启动 marker、startup、身份与看板都可能被复制，因此旧稿“由 store.directory 与 attempt 推导固定路径再核对”不能挡住副本；即使文件、task/attempt/generation、bootId、PID 与 start 全对得上，也只证明是哪一个进程，尚未证明它属于当前状态根。此事故不依赖 Windows，POSIX 围栏列为本批第一个实施阶段。
 
-这里的“从自己状态目录启动”指授权和证据的来源，不要求可执行文件、harness 安装目录或 Worker 的工作目录位于 state 下。已核实执行用稳定 runtime 的解释器，native harness 使用用户自己的安装，工作目录通常是分配的检出；若按 exe/cwd 的路径前缀解释，就会错误拒绝正常执行。实际执行根当前使用 state/attempts 下证据目录为 cwd 只是启动安排，不作为新权限来源。两个独立状态根即使同一 OS 用户、可读到彼此 PID，也不能互相发信号。
+启动证据新增不可变的 `stateRootIdentity`，在允许创建执行之前由真实状态目录的句柄取得并冻结：POSIX 取该目录的 `st_dev/st_ino`；Windows 取卷序列号和文件 ID，均从句柄取，不把路径字符串或 Windows 模拟 st_ino 当替代。使用有平台标识的明确字段形式，数字/字节的编码由协议 schema 固定；不要在同一字段里按写入时间解释值。复制的 marker/startup/看板继续带原根的文件身份，B 目录有自己的身份，比较必不应通过；副本即使占了 A 原来的路径，也不能因同路径取得停止权限。当前源没有这个字段，Windows 获取及持久化编码为未验证，阶段 A 验证；不以本轮建议描述产品已经有围栏。
 
-代码落点应在服务把权威 attempt 解析为可停止执行的边界：`execution_scheduler.py` 的接回、`verify_identity`、`_force_if_required`；`blackboard/tasks/interruption.py:_directory/_marker_identity/_stop_native` 的崩溃结算。由服务从自己的 `store.directory` 与 attempt 推导固定路径，读取并验证 task/attempt/generation、文件私有性与完整身份一次，然后把已验证的目标交给系统层。`protocol/process_identity.py:kill_verified_process_group/stop_orphan_process` 是机制实现，不能继续成为仅凭任意 dict 就拥有授权意义的入口；调用契约要清楚表达来自哪个已验证执行。新启动的子句柄在创建边界已有归属，不额外再做一次路径扫描。
+接回、`execution_scheduler.py:verify_identity`、`_force_if_required`、崩溃结算及其原生 journal 处理都在进入动作的边界先比较冻结身份与现用状态根的句柄身份，再核对 Windows 会话和完整进程/Job 身份。不能只用服务启动时缓存的路径或旧目录身份代替当前实际根；打开失败、缺少启动根身份或身份不一致就按外来执行记 unknown，不接回、不连接其执行端点、不发信号，也不导入为本根已停止。长调用失败、boot-changed 或本地缺 marker 都不能越过归属围栏。新启动执行也绑定同一根身份，执行自己的身份上报不得把副本的当前根回填覆盖冻结值。
 
-三系统共用这个授权规则；Windows 额外把 Job 名、私有对象权限与所属执行绑定，POSIX 校验原组和精确 root start。Windows 11 与三系统模型无关测试均需创建私有状态 A、B：A 能接回自己的旧执行，不能结束 B 的执行；伪造 argv/cwd、换启动文件路径、同名 Job、改 generation、PID 重用与读权限错误必须拒绝或 unknown，B 的替身保持存活。只读进程扫描为回收报告占用，不能成为绕过这条规则的停止入口。
+具体落点为 `protocol/execution.py:launch_execution` 的 intent/startup/marker 与执行身份交接，`protocol/process_identity.py` 的事实校验和 journal，`blackboard/tasks/interruption.py:read_identity/record_identity/_marker_identity/_stop_native`，`blackboard/service/execution_scheduler.py` 的恢复、身份确认与强停，以及 `blackboard/store/db.py` 的持久身份表。文件边界负责取得状态根句柄身份，业务入口统一做一次归属核对；保留 `kill_verified_process_group` 及其 dict 参数，不把它重构为“已验证目标”类型，也不在系统调用层再叠同一业务校验。系统层原有对活身份及停止结果的核对仍有必要，不能把归属判断等同于操作结果观察。
+
+当前 ADR-031 只有第 1 至 12 条。拟新增第 13 条仍交开发者确认：“服务只接回和停止由当前状态根启动的执行及其原生工作。启动前将该状态目录的文件身份冻结进启动证据；接回、身份确认、强停和崩溃结算先与现用状态根的文件身份比对，Windows 还须比对启动会话，再核对完整进程与进程组或 Job 身份。副本或同路径替换后的不同状态目录不取得原执行的归属；身份缺失、不符或无法观察时一律视为外来或未知，不接回、不发信号、不按已停释放资源。路径、PID、进程名、复制来的看板与证据文件均不能单独授予这些权限。”
+
+状态根身份与可执行文件、harness 安装位置、Worker cwd 无关；稳定 runtime 和用户自己的 harness 可以在根外，合法工作区也通常在分配的检出。实际目录改名后文件身份可能不变，但这条比较只判归属，不额外承诺状态迁移或重定位的可用性；恢复/复制到一个新根不能继承旧执行的控制权。目录身份不能改成随机 board ID，因为 board ID 会随副本一起复制。
+
+验收先在 POSIX 做 A/B 私有模型无关复现：A 有活执行，B 只复制看板，B 启动和停止之后 A 执行仍在；再完整复制启动文件、spawn.marker 和 native journal，结果相同，B 记 foreign/unknown 且不发信号。另测把新副本放到同一路径、同一真实根服务重启能接回、文件身份获取失败、marker/root identity 不符、PID 重用与 boot 变化，不让缺省分支绕过围栏。Windows 11 用卷/文件 ID 重做副本及同路径替换测试，并加不同会话；所有场景只操作私有根，原始复现脚本仅供改造成受支持检查用例，不能直接运行并删除其范围外现场。
+
+该字段改变跨进程事实与存储形式，必须移动 CONTRACT_VERSION/中间号，扩展显式 schema 升级及 fixture。不能在升级时给旧活记录填当前根身份来“修复”：旧记录可能本就是副本。首次变更契约安装须空闲，升级明确转换或清理被替换的非封存启动存量，无法证明历史归属的记录不再具有新契约的接回/停止资格；sealed 回执与摘要绑定证据不重写。拟扩充 `tests/python/blackboard/service/test_execution_recovery.py`、`tests/python/protocol/test_process_identity.py`、`tests/python/blackboard/store/test_interruption_recovery.py`、native tree、schema fixture 与安装围栏测试；副本停止不能杀 A 是第一阶段的硬验收。
 
 ## 8. 文件、契约与可各自验收的实施顺序
 
-本批涉及的主要修改面已在各节列出。公共新模块建议为根包 `windows_files.py`（原生文件句柄，不携带业务授权）、私有边界 `private_dirs.py`、公共私有事实发布模块（最终名称由实现任务定）。现有 `windows_paths.py` 保留工作树政策并调用公共文件能力；不留复制的 Win32 文件打开/关闭实现。测试辅助使用产品的身份与 Job 原语，只拥有测试根和自己创建的句柄，不把测试全机观察逻辑并入产品恢复。
+公共文件改动集中在根包拟新增 `windows_files.py`：原样搬入现有 ctypes WindowsFileAPI，再在唯一边界接 ACL、状态根文件身份和确有证据才需要的短暂占用重试。`windows_paths.py` 保留工作树政策，`private_dirs.py` 承载私有政策；pywin32 不重写句柄层。公共私有事实发布模块统一 execution/turn_io/daemon/launcher/CLI 写入；测试观察与 READONLY 清理仍只服务私有测试根。
 
-阶段 A：先做模型无关的所有权与 boot 实验，产出可审查的 Windows 11 原生证据与 Linux/macOS 脱离后代的最小复现。Windows 验收点是 BootIdentifier、无 kill-on-close 的根 Job 在服务退出后的存续/按名接回、嵌套与禁止 breakaway、无控制台强停；POSIX 验收点是明确现有组判定漏掉哪种后代，以及选定机制能否给出完整结束证明。未找到 macOS 或普通用户 Linux 的可接受机制就交回设计选择，不能开一个承诺修好的实现任务。不得运行真实 harness 或模型来代替这些系统实验。
+阶段 0：状态根文件身份围栏，本批第一个实施阶段，先完成不依赖 Windows 实验的 POSIX 修复。冻结目录 `st_dev/st_ino`，覆盖接回、verify_identity、force 与崩溃结算，完成契约/存储形式及 fixture 升级；把 Host 的 A/B 副本复现改成正式模型无关用例，要求 B 停止后 A 仍在，完整复制启动证据和同路径换副本也不能绕过。同一真实根重启仍能接回。Windows 的卷/文件 ID 对应落地随后依阶段 A/B 在阶段 D 完成，不因 Windows 工作未完延后 POSIX 事故修复；不新增目标类型重构。
 
-阶段 B：私有文件/目录边界及直接 pywin32 依赖。依赖设计获审；可在 A 的实验进行时独立实现。验收为 ACL 正反例、同句柄读取、祖先置换、fd 所有权、原有 POSIX 边界、fast cwd 与 console session；删掉调用方互相矛盾的 mode 校验。这个阶段不改变停止结算。
+阶段 A：Windows 11 模型无关的系统实验，全部为未验证，不能用本设计文字或 mock 代替结果。记录版本、登录会话、提权状态、目录身份、Job flags、实际成员及退出结果；具体需要 Host shell 或界面时由 Host 后续安排，本任务不执行真实 harness 或模型调用。该阶段可以与阶段 0 的 POSIX 实施并行，但不作为把 POSIX 围栏排后的理由。
 
-阶段 C：公共事实发布和唯一备份 journal。依赖 B。验收为写者强杀的每个发布窗口、gzip 写者刷盘、三系统恢复一致、只读 fsync 循环与 exchange 分支删除、失败保留唯一完整代。同步更新 owning reference 的故障模型；不因消除 PermissionError 就宣称 Job 修好了。
+阶段 A 的启动/Job 实验：从 PowerShell 窗口、VS Code 终端、Host harness CLI 工具 shell 分别启动服务后关闭启动方；验证 detached/new-group/breakaway、外层不允许时的明确失败、外层 SILENT_BREAKAWAY_OK 下孙进程归属、CREATE_NO_WINDOW 和 conhost 是否计入 ActiveProcesses。验证无 kill-on-close 的根 Job 无服务句柄时存续与按名接回、native Job 嵌套及禁止脱离、无控制台有序/强制停止、创建同名对象拒绝、成员查询失败保留 unknown。
 
-阶段 D：执行根 Job 生命周期、启动证据、服务接回与第 13 条授权落点。依赖 A 的 Windows 结果、B、C，且新增 ADR 措辞已由开发者确认。验收为服务崩溃和同契约私有重启时原执行继续、按固定状态根接回、持有同一 Job 句柄观察与停止、根先退仍能处理后代、两个状态根互不停止。native 短命 Job 的 kill-on-close 保留且经测试，所有异常仍不假报 stopped。
+阶段 A 的身份实验：卷序列号与文件 ID 的句柄读取、目录改名/复制/同路径替换；ProcessIdToSessionId、Local Job 在同用户不同会话中的可见性，跨会话一律 unknown；BootIdentifier 在内核重启、Fast Startup、睡眠、休眠及注销/登录中的真实值与存活进程关系。不同会话按名字打不开不能记为 Job 已停；API 失败不能用墙钟替代。
 
-阶段 E：三系统回合后代与封存/回收终结规则。依赖 A 的 POSIX 设计结论和 D。验收为第 5 节的完整替身矩阵、工作仍在写检出时不得结算/回收、正常回执前只剩执行根的判据、强停后的整个边界空、与旧执行相同身份的接回。该阶段有一个系统未能给出证据，待办就仍未完成；不能通过弱化 shutdownConfirmed 语义结束它。
+阶段 A 的私有存储实验：提权/非提权及交替用同一状态根；预置的 Python 3.12.4 前后环境里新目录、默认状态根、PowerShell 启动器先建目录的实际 owner/DACL/继承主体，核对白名单含 OWNER RIGHTS；凭据/SQLite 子文件继承、ACL 正反例和 junction 竞态；锁定稳定 runtime 中源目录被替换后 `import win32security`，确认 bootstrap 校验不会在尚无依赖时误载模块，并与 W08 的 .pth 问题衔接；开启 Defender 实时扫描跑文件发布热路径和占用实验。有瞬时冲突证据才设计唯一边界的一次有界重试，持续占用仍报忙。
 
-阶段 F：产品忙文件/只读删除和测试辅助关闭/观察。文件删除原语依赖 B，产品生命周期与测试根最终收尾依赖 D、E；手建测试 store 未关闭等明确缺陷可先独立修。验收为每个占用者持有句柄时的明确失败、释放后的同计划恢复、Git 对象只读清理、SQLite 全连接关闭、Windows 观察失败保留根并退出 3。按日志堆栈修各资源所有者，不写吞异常的通用删根器。
+阶段 A 的文件发布实验：普通/允许删除共享/禁止删除共享的读者参与 replace/delete，SQLite 连接占用与关闭、已加载 runtime 保留、只读测试 Git 对象删除；对私有事实、native journal、gzip 尾部、备份 journal 两次改名及清理逐点强杀写者并恢复，核对摘要、绑定与完整代际。持续占用明确报忙且现场可恢复，发布成功才满足进程崩溃承诺；断电后的启动身份与中断报告单独验证，不承诺找回丢失数据。
 
-阶段 G：Host 最终整合与安装前演练。依赖 B 至 F 的分别验收。计划要求的 Opus 独立设计审查应在实现前完成，不能拖到阶段 G 才审设计。按最终源码在三系统跑完整 Python 检查，分别保存退出码、文件清单、teardown 结果；Windows 11 原生实验单独成记录，CI 不替代它。再在私有安装和正在运行的模型无关执行上做同契约重启/补丁替换演练，核对旧 runtime 留存、执行继续、结果仅提交一次、回收有实际停止证据；改变契约的升级另做空闲围栏、备份、失败回滚演练。不把第一次安装本批候选当作“同契约补丁保活”的验证。本文没有执行这些动作，日常安装仍由 Host 后续安排。
+阶段 B：私有目录/文件 ACL 边界及直接 pywin32 依赖，依赖 A 的相关结论和开发者对 Python 下限的确认。原样搬 ctypes 文件 API，接统一安全校验和继承创建，补 CLI Host 能力/提交令牌、launcher 凭据 fd/read_private、fast cwd 与 session；删除调用点互相矛盾的 mode 判断。验收为唯一 ACE 规则、提权正反例、祖先固定、fd 单次转移、稳定 runtime 导入和 POSIX 原边界回归。Windows 安全依赖按需加载，保持 launcher bootstrap 的现有加载边界；首次启动、已有 active 指针的启动与源替换后的稳定运行时均纳入实验和回归，不能因依赖加载问题跳过私有校验。加载次序及 .pth 能否成立均未验证，先由阶段 A 暴露问题再落实现有入口。
 
-版本与升级先算清再实施：仅修文件句柄或测试且不改契约时不凭空改中间号；新增启动意图/回执或跨进程停止事实形式属于 ADR-031 第 10 条的契约变化，必须移动中间号与 CONTRACT_VERSION，首次安装要求空闲。当前升级基线是 0.49.0、schema 27、没有 pending upgrade；如改存储形式，在同一待执行升级中转换或清理真正被替换的非封存 stock，并扩充 fixture generator 和新旧板比较。既有 sealed manifest、回执及其摘要绑定文件不能重写，新 seal 自带形式。无法补全的历史身份不推断、不补造 bootId；若不改数据库表，是否需要 schema/文件升级仍按真实被改的存储形式明确登记，不能因为载体是 JSON 就跳过升级要求。
+阶段 C：公共事实发布与唯一备份 journal，依赖 B。验收写者强杀的每个发布窗口、gzip 尾部由写者刷盘、三系统完整代恢复、只读 fsync 循环及 exchange 分支删除、唯一完整代不丢。接入经过实验确认的短暂占用处理；更新 owning reference 的故障模型，不因 PermissionError 消失就宣布 Job 修好。
 
-实现后的 owning references 至少核对 `docs/reference/architecture.md`、`operations.md`、`workers.md` 以及 ADR-031 的新增决定；验收证据进入 `docs/acceptance/`，计划和清单的状态由 Host 在证据稳定后更新。本文阶段划分不是已派发任务，设计提交也不代表独立审查、Windows 验证或安装验收通过。
+阶段 D：Windows 服务控制台/外层 Job、执行根 Job、会话与状态根身份接回，依赖阶段 0、A、B、C。落地 detached/new-group/breakaway 与 NO_WINDOW；Windows 身份增加会话及卷/文件 ID，先比归属再碰 Local Job；根 Job 保留执行、native 短命 Job 保留 kill-on-close，拒绝同名对象，Job 不设显式描述符。验收服务/Host 退出后实际存活、同根同会话接回、副本与跨会话不接回/不停止、根先退出仍有后代的处理、查询失败 unknown。新增 ADR-031 第 13 条的最终措辞仍须开发者确认。
+
+阶段 E：Windows 后代停止与三系统共同的回执接收/最终结算，依赖 D。验收 native Job 全空后才发回执，服务先确认可靠接收、执行根退出及根 Job 全空后才释放资源；成功回执到达不提前完成，接收/退出/最终事务任一点崩溃都能恢复且不重复结算，冲突工作与回收在证据未齐时继续受阻。不增加只交付阶段事实。POSIX 只验收既有完整身份/已登记原组和共同次序，脱离后代待办及 cwd 回收扫描另批，不阻塞本批安装。
+
+阶段 F：产品忙文件和测试辅助关闭/观察，依赖 B 的文件边界及 D/E 的生命周期；已核实的手建测试 store 未关闭可先独立修。产品保留删除/恢复计划与未知执行，测试根单独清 READONLY；验收长期占用明确失败、释放后同计划继续、Git 测试对象清理、SQLite 全连接关闭、观察失败保留根且退出 3。Defender 偶发重试只在唯一文件边界验证，不在调用点扩散，不加产品私有树 READONLY 功能。
+
+阶段 G：Host 最终整合与安装前演练，依赖阶段 0、B 至 F 的分别验收及 A 的对应实证。Host 已说明做过设计与独立审查，本轮文档修订仍供 Host 核对，不把审查当 Windows 验证。按最终源码在三系统跑完整 Python 检查，分别保留退出码与 teardown；Windows 11 原生实验单独记录。私有安装上以在跑的模型无关执行演练同契约服务/补丁重启、runtime 留存、回执仅结算一次及根空后的回收；变更契约的首次安装另做空闲围栏、备份与失败回滚，不能把它当同契约保活演练。POSIX 脱离后代未解决的边界要随验收明确记录，日常安装由 Host 后续安排。
+
+本轮已确定会改变事实与存储形式：stateRootIdentity 和 Windows 会话号进入启动证据、身份持久记录及执行/服务交接，必须移动中间号与 CONTRACT_VERSION，并做显式 schema 升级。当前升级基线为 0.49.0、schema 27、没有 pending upgrade；阶段 0 开始同一个待执行升级，后续格式变化在其中完善，fixture generator 提供每种被转换或清理形式的 stock，并比较升级板与新板。若这次 pending upgrade 已在真实板运行，遵 AGENTS.md 消费升级、更新基线与 fixture，后续再开新升级，不能在已运行升级里继续追加。结果暂存/结算语义的调整同时检查表、字段、读取路径与夹具，删除被替代分支及无读者存量；不把“只是 JSON”当作不升级的理由。
+
+首次契约变更安装要求空闲；无法证明历史启动根/会话的旧活记录不补造当前值。被替换的非封存存量显式转换或清理，sealed manifest/回执及摘要绑定文件保持原样，新 seal 明确形式；原始回执暂存与最终结果各自的存储及清理随结束证明一起验收。建议 Python 下限 `>=3.12.4,<3.13` 尚待开发者确认，本文不擅自视为已定。
+
+实现后 owning references 核对 `docs/reference/architecture.md`、`operations.md`、`workers.md` 及 ADR-031；实际证据进 `docs/acceptance/`，Host 在稳定后更新计划/清单与 POSIX 后续批次。本文只改设计，未派发阶段任务，未运行产品测试、系统实验或安装。
+
+## 9. 本轮按 Host 审查决定的改动
+
+归属围栏改为冻结状态根文件身份，补入看板副本事故、脚本阅读边界、完整证据复制与同路径替换验收；POSIX 修复列为第一个实施阶段 0。第 13 条候选措辞及契约/显式升级随之重写，不做“已验证目标”类型重构。
+
+Windows 启动补服务 detached/new-group、允许时 breakaway、不允许时明确失败，以及执行/native 子进程 NO_WINDOW；加入 Local Job 的会话号围栏、提权属主和默认 Job DACL。启动方关闭、SILENT_BREAKAWAY_OK、跨会话和 conhost 均明确未验证并列入阶段 A。
+
+私有边界改为原样搬 ctypes WindowsFileAPI，pywin32 只处理安全查询、ACE 与 SID；新目录用 Python 3.12.4 起的 mode=0700，文件靠继承，ACL 简化为属主集合、DACL 存在和全部 ACE 的类型/主体白名单，加入 OWNER RIGHTS。删除显式凭据/Job 描述符、掩码归一化、完全控制要求、继承范围分析与受保护根的校验要求；Python 下限建议仍交开发者确认。
+
+停止结算删除只交付阶段事实和服务验证，改为 native Job 空后发回执、服务可靠接收后回应、根退出且根 Job 空后最终结算和释放。补源码中收到回执即释放与删除恢复回执的修改点、RPC 死锁避免及幂等验收。
+
+删除产品私有树清 READONLY 的建议，仅测试根保留；补 Defender 实时扫描下热路径实验，确有偶发才在唯一边界作一次有界重试。补 CLI Host 控制能力/提交令牌和 launcher 继承凭据 fd/read_private 入口，以及稳定 runtime 源替换后的 win32security 导入实验。
+
+POSIX 脱离后代与 cwd 回收扫描拆到另批，由开发者定支持条件；本批明确其未解决且不据此阻塞安装。阶段 A 汇集本轮全部未验证项，文档没有把 Host 的修改决定、事故记录或独立审查写成实际系统验证结果。
