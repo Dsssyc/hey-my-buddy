@@ -1,5 +1,6 @@
 """Public lifecycle operations against private real-Git workspaces."""
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 
 import contextlib
 import io
@@ -146,12 +147,13 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         submitted, _claimed, manifest, checkout, _seal, view, artifact = self.run_worktree(board)
         control_file = cli._save_control(submitted["runId"], submitted["control"], self.directory)
         target = self.target_with_artifact(artifact)
-        code, accepted = self.cli_call(board, "accept", {
-            "runId": view["runId"], "artifactId": artifact["artifactId"],
-            "note": "Inspected the sealed output and verified the target commit",
-            "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], "keepCheckout": True, "controlFile": control_file,
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            code, accepted = self.cli_call(board, "accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"],
+                "note": "Inspected the sealed output and verified the target commit",
+                "target": {"path": str(target["path"]), "ref": "HEAD"},
+                "beforeCommit": target["before"],  "controlFile": control_file,
+            })
         self.assertEqual(code, 0, accepted)
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integration"]["state"], "verified")

@@ -27,9 +27,6 @@ _SKIP_CODES = {
     "unregistered-checkout": "macro-task-deletion.unregistered-checkout",
     "lock-mismatch": "macro-task-deletion.lock-mismatch",
     "attached-branch": "macro-task-deletion.attached-branch",
-    "unsealed-changes": "macro-task-deletion.unsealed-changes",
-    "unsealed-handoff": "macro-task-deletion.unsealed-handoff",
-    "sealed-output-invalid": "macro-task-deletion.sealed-output-invalid",
 }
 
 
@@ -144,7 +141,7 @@ def _delete_refs(repository: Path, identifier: str, expected: dict[str, str]) ->
 def _record_proven(state: Path, manifest: dict) -> bool:
     identifier = manifest["workspaceId"]
     directory = state / "workspaces" / identifier
-    if workspace.allocation_lock_directory(state, identifier) != directory:
+    if private_dirs.linked(directory) or workspace.allocation_lock_directory(state, identifier) != directory:
         return False
     if workspace._record(directory / "manifest.json") != manifest:
         return False
@@ -236,23 +233,18 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
             checkout = directory / "checkout"
             checkout_retained = False
             if workspace._path_present(checkout):
-                allocation = workspace.resolve_allocation(state, manifest, manifests)
-                if allocation is None or allocation["workspaceId"] != identifier:
-                    skipped.append(_skip("checkout", str(checkout), "OWNER_UNPROVEN", identifier))
+                from .checkout_processes import require_idle_checkout
+                require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
+                    (manifest["repositoryId"], manifest["checkoutId"])))
+                # Macro deletion proves physical ownership; the user's
+                # deletion also covers committed and unsealed task content.
+                proof = workspace.deletion_inspect(state, manifest)
+                if proof["reasons"]:
+                    skipped.extend(_skip("checkout", str(checkout), reason, identifier)
+                                   for reason in proof["reasons"])
                     checkout_retained = True
                 else:
-                    from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
-                        (manifest["repositoryId"], manifest["checkoutId"])))
-                    # A complete checkout uses the established Git/seal proof;
-                    # interrupted removal is checked without restoring files.
-                    proof = workspace.deletion_inspect(state, manifest, artifacts, retained=manifests)
-                    if proof["reasons"]:
-                        skipped.extend(_skip("checkout", str(checkout), reason, identifier)
-                                       for reason in proof["reasons"])
-                        checkout_retained = True
-                    else:
-                        workspace.cleanup_remove(state, manifest, retained=manifests, resume=proof["resume"])
+                    workspace.cleanup_remove(state, manifest, proof=proof)
             if checkout_retained or workspace._path_present(checkout):
                 skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["DEPENDENCY_RETAINED"]

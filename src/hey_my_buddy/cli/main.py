@@ -126,7 +126,7 @@ examples:
       conclude ends a failed, cancelled or delivered-but-unaccepted micro task: unsealed
       managed changes are sealed as an independent Host partial output, the
       micro task enters terminal concluded and the checkout is reclaimed. reclaim retries the
-      removal after a blocked reclaim or a keepCheckout acceptance. All three take
+      removal after a blocked reclaim. All three take
       targetRunId for an owned helper and no command number: the same request
       replays, a changed payload conflicts. controlFile injects the control triple;
       no implicit latest-generation lookup. accepted and concluded micro tasks cannot continue.
@@ -137,7 +137,7 @@ examples:
       target itself; differing paths are refused with their names first, and your
       own adjustments are confirmed with "adjusted":true and a note.
       Optional hostPaths with beforeCommit verify real Host additions; the checkout
-      is reclaimed afterwards unless "keepCheckout":true.
+      is reclaimed afterwards; the service retries a blocked reclaim every 60 seconds.
 
   hey-my-buddy await '{"runId":"<runId>"}'      hey-my-buddy await '{"requestId":"fix-123","waitSeconds":3600}'
       Wait without starting, resuming or cancelling work. waitSeconds is at most

@@ -2352,20 +2352,14 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         if error.code != "WORKSPACE_SCOPE_VIOLATION":
             raise
         unsealed = [path for path in (error.details.get("paths") or []) if path not in set(allowed)]
-    result["reasons"].append("unsealed-changes")
-    result["unsealedPaths"] = unsealed
+    if unsealed:
+        result["reasons"].append("unsealed-changes")
+        result["unsealedPaths"] = unsealed
     return
 
 
-def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retained=()) -> dict:
-    """Prove deletion of one checkout without restoring an interrupted removal.
-
-    A missing gitfile can be the result of ``git worktree remove`` stopping
-    halfway through. Compare surviving tracked and nonignored untracked paths
-    with retained Git trees; ignored caches stay outside this observation.
-    Missing files are allowed, but an added or changed managed file keeps the
-    checkout in place. Registration and lock still prove the physical allocation.
-    """
+def deletion_inspect(state_dir, manifest: dict) -> dict:
+    """Prove physical ownership for a macro deletion, including interrupted removal."""
     with _errors():
         _validate_manifest(manifest)
         allocation = _resolve_allocation(state_dir, manifest)
@@ -2373,21 +2367,6 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
             return {"reasons": ["owner-unproven"], "resume": False}
         checkout = Path(allocation["path"])
         repository = Path(manifest["snapshot"]["repositoryPath"])
-        related = [item for item in _allocation_candidates(manifest, retained)
-                   if isinstance(item, dict) and item.get("repositoryId") == manifest["repositoryId"]
-                   and item.get("checkoutId") == manifest["checkoutId"]
-                   and item.get("checkoutRoot") == manifest["checkoutRoot"]]
-        for item in related:
-            if item is not manifest:
-                _validate_manifest(item)
-        by_hash = {item["manifestSha256"]: item for item in related}
-        candidates = [item for item in artifacts if isinstance(item, dict)
-                      and item.get("workspaceId") in {value["workspaceId"] for value in related}
-                      and item.get("manifestSha256") in by_hash
-                      and item.get("workspaceId") == by_hash[item["manifestSha256"]]["workspaceId"]
-                      and isinstance(item.get("snapshot"), dict)
-                      and isinstance(item.get("tree"), str)]
-        pointer_missing = not _path_present(checkout / ".git")
         try:
             record, _git_dir = _cleanup_resume_registration(repository, checkout, allocation, manifest)
         except BoardError as error:
@@ -2395,47 +2374,16 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
                 return {"reasons": error.details["reasons"], "resume": True}
             raise
         if record is None:
-            return {"reasons": [], "resume": True}
+            return {"reasons": [], "resume": True, "eligible": True,
+                    "allocation": allocation, "worktree": False}
         if "detached" not in record:
-            return {"reasons": ["attached-branch"], "resume": True}
-        if record.get("HEAD") != manifest["inputCommit"]:
-            return {"reasons": ["identity-changed"], "resume": True}
-        if not pointer_missing:
-            first = None
-            for candidate in candidates:
-                selected = by_hash[candidate["manifestSha256"]]
-                proof = _cleanup_inspect(state_dir, selected, sealed=candidate, retained=related)
-                if proof["eligible"]:
-                    return {"reasons": [], "resume": True}
-                if first is None:
-                    first = proof
-            for selected in related:
-                proof = _cleanup_inspect(state_dir, selected, retained=related)
-                if proof["eligible"]:
-                    return {"reasons": [], "resume": True}
-                if first is None:
-                    first = proof
-            return {"reasons": first["reasons"], "resume": True}
-
-        # The registration is still bound to this allocation, but Git removed
-        # its gitfile. Never write it back merely to complete deletion.
-        trees = [item["tree"] for item in candidates if
-                 _line(repository, "rev-parse", item["commit"] + "^{tree}") == item["tree"]]
-        trees.append(manifest["inputTree"])
-        expected_trees = [_entries(repository, tree) for tree in dict.fromkeys(trees)]
-        capture = sorted({path for expected in expected_trees for path in expected})
-        observed = _observe(checkout, [], state_dir=state_dir, git_dir=_git_dir, capture=capture)
-        surviving = observed["tracked"] | observed["untrackedEntries"]
-        unknown = observed["untracked"].keys() - observed["untrackedEntries"].keys()
-        differences = []
-        for expected in expected_trees:
-            differences = sorted(unknown | {path for path, value in surviving.items() if expected.get(path) != value})
-            if not differences:
-                return {"reasons": [], "resume": True}
-        return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
+            return {"reasons": ["attached-branch"], "resume": True,
+                    "attachedBranch": _attached_branch_report(checkout, record)}
+        return {"reasons": [], "resume": True, "eligible": True,
+                "allocation": allocation, "worktree": True}
 
 
-def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:
+def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, proof=None) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
     The caller has rechecked acceptance, integration, shutdown, dependency and
@@ -2453,12 +2401,15 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
     occupying the path stays fatal.
     """
     with _errors():
-        _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
-        allocation = _resolve_allocation(state_dir, manifest, retained)
-        if allocation is None or not _inside(manifest["path"], allocation["path"]):
-            raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable hey-my-buddy checkout",
-                             path=manifest["checkoutRoot"])
+        if proof is None:
+            _validate_manifest(manifest)
+            allocation = _resolve_allocation(state_dir, manifest, retained)
+            if allocation is None or not _inside(manifest["path"], allocation["path"]):
+                raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable hey-my-buddy checkout",
+                                 path=manifest["checkoutRoot"])
+        else:
+            allocation = proof["allocation"]
         checkout_root = Path(allocation["path"])
         removal = {"removed": True, "path": str(checkout_root),
                    "repositoryPath": manifest["snapshot"]["repositoryPath"],
@@ -2466,7 +2417,13 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
         if not _path_present(checkout_root):
             return removal
-        restored = None
+        if proof is not None:
+            if not proof["worktree"]:
+                checkout_root.rmdir()
+                removal["alreadyRemoved"] = False
+                return removal
+            return _remove_worktree(Path(manifest["snapshot"]["repositoryPath"]), checkout_root,
+                                    allocation, manifest, removal)
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)

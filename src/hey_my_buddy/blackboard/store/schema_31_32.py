@@ -1,4 +1,4 @@
-"""Schema 31 → 32: remove derived task/execution facts and unused catalog metadata.
+"""Schema 31 → 32: prune task/execution facts, catalog metadata and cleanup expiry.
 
 No sealed content or spec is rewritten. Rebuild in SQLite's documented order;
 the caller holds the transaction with foreign keys disabled until its check.
@@ -74,6 +74,7 @@ TASK_COLUMNS = (
 
 
 def upgrade(connection):
+    connection.execute("ALTER TABLE workspace_cleanup_plans DROP COLUMN expires_at")
     connection.execute(TASKS_DDL)
     columns = ','.join(('rowid', *TASK_COLUMNS))
     connection.execute(f"INSERT INTO tasks_next({columns}) SELECT {columns} FROM tasks")

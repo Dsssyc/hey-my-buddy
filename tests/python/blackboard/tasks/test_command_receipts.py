@@ -1,5 +1,6 @@
 """Workflow receipt identities replay against an advancing private board."""
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 
 from contextlib import ExitStack
 import json
@@ -142,7 +143,8 @@ class WorkflowReceiptTests(WorkflowTestCase):
             "expectedScopeVersion": 1, "writeScope": ["docs"], "note": "Authorize the next stage",
             **self.control(delivered),
         })
-        accepted = self.accept_run(board, amended, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept_run(board, amended)
         for kind, original, facts in (
             ("workflow.scope_amend", amended, ("scopeVersion", "writeScope", "targetRunId")),
             ("workflow.accept", accepted, ("verdict", "integrationId", "integration")),
@@ -246,7 +248,7 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             "runId": submitted["runId"], "artifactId": resolved["artifactId"],
             "note": "reviewed the Host-resolved delivery",
             "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], "keepCheckout": True,
+            "beforeCommit": target["before"],
             **self.control(resolved),
         }
         first = board.call("workflow_accept", request)
@@ -277,19 +279,21 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": delivered["finalArtifactId"],
-            "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": delivered["finalArtifactId"],
+                "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
+                 **self.control(delivered),
+            })
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "receipt-plan", "expectedRevision": accepted["revision"],
-            **self.control(accepted),
+            "runId": run_id,
+            "commandId": "receipt-plan",
         })
         applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "receipt-apply",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": run_id,
+            "planId": planned["plan"]["planId"],
+            "commandId": "receipt-apply",
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertFalse(checkout.exists())
         for kind, original in (("workflow.cleanup_plan", planned), ("workflow.cleanup_apply", applied)):
@@ -314,14 +318,15 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": delivered["finalArtifactId"],
-            "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": delivered["finalArtifactId"],
+                "note": "Reviewed the output", "notRequired": "No separate target in this fixture",
+                 **self.control(delivered),
+            })
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "missing-allocation-plan", "expectedRevision": accepted["revision"],
-            **self.control(accepted),
+            "runId": run_id,
+            "commandId": "missing-allocation-plan",
         })
         shutil.rmtree(self.directory / "workspaces" / manifest["workspaceId"])
         with board.store.db.read() as connection:
@@ -330,9 +335,10 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             )
         self.assertIsNone(workspace_module.resolve_allocation(self.directory, manifest, retained))
         applied = board.store.workflow.cleanup_apply({
-            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "missing-allocation-apply",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": run_id,
+            "planId": planned["plan"]["planId"],
+            "commandId": "missing-allocation-apply",
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertTrue(applied["removed"])
         self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
@@ -347,10 +353,15 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         expected = applied['targetRevision']
         operations = (
             lambda: board.store.workflow.cleanup_plan({
-                'runId':run_id,'commandId':'gone-replan','expectedRevision':expected,**self.control(accepted)}),
+                'runId': run_id,
+                'commandId': 'gone-replan',
+            }),
             lambda: board.store.workflow.cleanup_apply({
-                'runId':run_id,'planId':planned['plan']['planId'],'commandId':'gone-reapply',
-                'expectedRevision':expected,'confirmPath':planned['plan']['path'],**self.control(accepted)}),
+                'runId': run_id,
+                'planId': planned['plan']['planId'],
+                'commandId': 'gone-reapply',
+                'confirmPath': planned['plan']['path'],
+            }),
             lambda: board.call('workflow_reclaim',{'runId':run_id,**self.control(accepted)}),
         )
         for operation in operations:

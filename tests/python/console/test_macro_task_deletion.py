@@ -349,11 +349,13 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             manifest = json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
                                                      (run['runId'],)).fetchone()[0])
         checkout = Path(manifest['path'])
-        (checkout / 'user-change.txt').write_text('Keep this file', encoding="utf-8", newline="\n")
+        from hey_my_buddy.blackboard.tasks import workspace
+        workspace._git(checkout, 'worktree', 'unlock', str(checkout))
+        workspace._git(checkout, 'worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
         _, browser = self.open_console(board)
         result = self.command(browser, DELETE, {'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True})
         self.assertEqual(result['state'], 'deleted')
-        self.assertIn({'code': 'macro-task-deletion.unsealed-changes', 'params': {}},
+        self.assertIn({'code': 'macro-task-deletion.lock-mismatch', 'params': {}},
                       [item['reason'] for item in result['skipped']])
         self.assertTrue(checkout.exists())
         for item in result['skipped']:

@@ -69,20 +69,27 @@ class DeletionWorkspaceTests(unittest.TestCase):
                                           f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
                 self.assertEqual(self.delete(manifest, [output]), [])
 
-    def test_changed_lock_and_unsealed_file_preserve_checkout_and_refs(self):
+    def test_changed_lock_preserves_checkout_and_refs(self):
         manifest = self.prepare()
         checkout = Path(manifest["checkoutRoot"])
         (checkout / "src/new.txt").write_text("unsealed\n", encoding="utf-8", newline="\n")
-        skipped = self.delete(manifest)
-        self.assertIn("macro-task-deletion.unsealed-changes", [item["reason"]["code"] for item in skipped])
-        self.assertTrue(checkout.exists())
-        self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
-        (checkout / "src/new.txt").unlink()
         self.git("worktree", "unlock", str(checkout))
         self.git("worktree", "lock", "--reason", "someone-else", str(checkout))
         skipped = self.delete(manifest)
         self.assertIn("macro-task-deletion.lock-mismatch", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
+
+    def test_worker_commit_and_unsealed_files_do_not_block_owned_macro_deletion(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        (checkout / "src/file.txt").write_text("Worker commit\n", encoding="utf-8")
+        self.git("add", ".", cwd=checkout)
+        self.git("commit", "-qm", "Worker commit", cwd=checkout)
+        (checkout / "src/new.txt").write_text("unsealed\n", encoding="utf-8")
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse((self.state / "workspaces" / manifest["workspaceId"]).exists())
+        self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
 
     def test_enumerates_more_than_sixty_four_fixed_refs(self):
         manifest = self.prepare()

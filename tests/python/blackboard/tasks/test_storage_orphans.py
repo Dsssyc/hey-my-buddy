@@ -1,4 +1,5 @@
 """Disposable real Git allocations, retained-board facts and apply-time fences."""
+from unittest.mock import patch as defer_reclaim
 import json
 from pathlib import Path
 import subprocess
@@ -86,10 +87,11 @@ class StorageOrphanTests(WorkflowTestCase):
             sealed = json.loads(connection.execute(
                 'SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?',
                 (view['finalArtifactId'],)).fetchone()[0])
-        accepted = board.call('workflow_accept', {
-            'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
-            'note': 'Private ref integration regression', 'keepCheckout': True,
-            'target': {'path': str(checkout), 'ref': sealed['commit']}, **self.control(view)})
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call('workflow_accept', {
+                'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
+                'note': 'Private ref integration regression',
+                'target': {'path': str(checkout), 'ref': sealed['commit']}, **self.control(view)})
         self.assertEqual(accepted['integration']['state'], 'verified')
         self.assertEqual(accepted['integration']['target']['path'], str(checkout))
         self.assertEqual(self.git(checkout, 'rev-parse', 'HEAD'), manifest['inputCommit'])
@@ -194,12 +196,12 @@ class StorageOrphanTests(WorkflowTestCase):
                         identity = state + '-' + str(index)
                         connection.execute('''INSERT INTO workspace_cleanup_plans
                             (plan_id,run_id,workspace_id,checkout_id,path,kind,state,evidence_json,
-                             retention_json,created_at,expires_at)
-                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}',?,?)''',
+                             retention_json,created_at)
+                            VALUES (?,?,'other-workspace',?,?,'worktree',?,?,'{}',?)''',
                             (identity, parent['runId'], value if kind == 'identity' else 'other-checkout',
                              value if kind == 'path' else '', state,
                              json.dumps(value if kind == 'nested' else {}),
-                             '2026-01-01T00:00:00Z', '2027-01-01T00:00:00Z'))
+                             '2026-01-01T00:00:00Z'))
                         rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
                                 if table == 'workspace_cleanup_plans' and row['plan_id'] == identity]
                         self.assertEqual(storage._allocation_reference_reasons(

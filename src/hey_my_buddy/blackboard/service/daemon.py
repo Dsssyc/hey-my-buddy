@@ -51,8 +51,6 @@ class Daemon:
             raise BoardError("INVALID_ARGUMENT", "HMB_WAIT_CAPACITY exceeds RPC callback capacity")
         self.wait_admission = WaitAdmission(wait_capacity)
         self._admission_lock = threading.RLock()
-        self._cleanup_lock = threading.Lock()
-        self._cleanup_pending: set[str] = set()
         max_concurrent = _env_int("HMB_MAX_CONCURRENT", scheduling.TOTAL_CONCURRENCY_DEFAULT)
         minimum, maximum = launcher.LAUNCH_KEYS["HMB_MAX_CONCURRENT"]
         if not minimum <= max_concurrent <= maximum:
@@ -92,38 +90,17 @@ class Daemon:
                 raise ServiceError("ALREADY_RUNNING", owner_held_message(), lock=name)
             self.lock_fds.append(fd)
 
-    def queue_workspace_cleanup(self, run_id: str) -> None:
-        # The queue is only an optimization. Existing accepted workspaces remain
-        # discoverable by storage plan after a crash or daemon restart.
-        with self._cleanup_lock:
-            self._cleanup_pending.add(run_id)
-
-    def _cleanup_accepted_workspaces(self) -> None:
+    def _reclaim_storage(self) -> None:
         if self.store.upgrading():
             return
-        from ..tasks.storage import cleanup_accepted_workspace
-        with self._cleanup_lock:
-            pending = tuple(self._cleanup_pending)
-            self._cleanup_pending.clear()
-        failed = False
-        for run_id in pending:
-            try:
-                cleanup_accepted_workspace(self.store, run_id)
-            except (BoardError, OSError) as error:
-                # Expected retention preserves the workspace and its durable plan.
-                if isinstance(error, BoardError) and error.code == "NOT_READY":
-                    continue
-                failed = True
-                self.store.record_service_issue("workspace-cleanup", error)
-        if pending and not failed:
-            self.store.clear_service_issue("workspace-cleanup")
+        from ..tasks.reclamation import reclaim
+        reclaim(self.store)
 
     def service(self) -> BoardService:
         return BoardService(
             self.store, live_registry=self.live_registry, token=self.token, control=self.control,
             on_stop=self.on_stop, on_restart=self.on_restart,
             console_factory=self.on_console,
-            on_accepted=self.queue_workspace_cleanup,
             automatic_discovery=True,
             admission_lock=self._admission_lock,
         )
@@ -171,8 +148,13 @@ class Daemon:
 
     def _maintain(self) -> None:
         next_recovery = time.monotonic() + 15
-        while not self.stopping.wait(2):
-            self._cleanup_accepted_workspaces()
+        next_reclaim = 0
+        while not self.stopping.is_set():
+            if time.monotonic() >= next_reclaim:
+                self._reclaim_storage()
+                next_reclaim = time.monotonic() + 60
+            if self.stopping.wait(2):
+                break
             if time.monotonic() >= next_recovery:
                 try:
                     self.store.recover_executions()

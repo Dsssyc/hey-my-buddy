@@ -1,4 +1,5 @@
 """Submission failure revokes only the invocation's new private Git allocation."""
+from unittest.mock import patch as defer_reclaim
 import json
 import tempfile
 from pathlib import Path
@@ -55,7 +56,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             self.assertIsNone(connection.execute('SELECT task_id FROM tasks WHERE request_id=?', (request,)).fetchone())
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations WHERE path=?', (str(self.allocation(request) / 'checkout'),)).fetchone()[0], 0)
 
-    def test_reclaim_keeps_group_sessions_and_failure_evidence_without_successful_private_state(self):
+    def test_service_reclamation_keeps_group_sessions_and_retains_private_evidence_for_three_days(self):
         from hey_my_buddy import private_dirs
         from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
         from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
@@ -104,19 +105,23 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             native_path(native / 'session.json').write_text('native binding fixture', encoding="utf-8", newline="\n")
             unknown = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown'))
             native_path(unknown / 'unknown-record').write_text('not a known attempt', encoding="utf-8", newline="\n")
-        accepted = self.accept_run(board, delivered, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept_run(board, delivered)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)
-                self.assertFalse(native_path(root / 'agent-credential.json').exists())
-                if attempt_id == success_id:
-                    self.assertFalse(native_path(root).exists())
-                else:
-                    self.assertEqual(native_path(root / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence fixture')
-            self.assertFalse(native_path(private_dirs.native_root(board.directory, adapter, run_id)).exists())
-            self.assertFalse(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown')).exists())
+                self.assertEqual(native_path(root / 'agent-credential.json').exists(), attempt_id == success_id)
+                self.assertEqual(native_path(root / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence fixture')
+            self.assertTrue(native_path(private_dirs.native_root(board.directory, adapter, run_id)).exists())
+            self.assertTrue(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown')).exists())
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        reclaim_native(board.store)
+        for adapter in ('codex', 'dsh', 'zcode', 'claude'):
+            self.assertFalse(native_path(private_dirs.micro_task_root(board.directory, adapter, run_id)).exists())
         for attempt_id in (failed_id, success_id):
             self.assertEqual(native_path(private_dirs.session_record_path(board.directory, group_id, attempt_id)).read_bytes(),
                              records[attempt_id])
@@ -154,13 +159,22 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 native_path(root / 'unrelated-directory').mkdir()
                 native_path(root / 'unrelated-directory/unrelated.txt').write_text('not a record', encoding="utf-8", newline="\n")
             native_path(root / 'settings.json').write_text('configuration fixture', encoding="utf-8", newline="\n")
-        accepted = self.accept_run(board, delivered, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept_run(board, delivered)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
         self.assertEqual(native_path(path).read_bytes(), expected)
         self.assertEqual(outside.read_text(encoding="utf-8"), 'untouched target')
         for adapter in ('dsh', 'zcode', 'claude'):
-            self.assertFalse(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)).exists())
+            self.assertTrue(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)).exists())
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        reclaim_native(board.store)
+        for adapter in ('dsh', 'zcode', 'claude'):
+            self.assertFalse(native_path(private_dirs.micro_task_root(board.directory, adapter, run_id)).exists())
+        self.assertEqual(native_path(path).read_bytes(), expected)
+        self.assertEqual(outside.read_text(encoding="utf-8"), 'untouched target')
 
     def test_public_integration_during_failed_admission_retains_new_target(self):
         board = self.board()
@@ -177,10 +191,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         original = BoardError('ADMISSION_FAILED', 'Controlled admission refusal after integration')
         def admission(*args, **kwargs):
             manifest = kwargs['micro_task']['manifest']
-            accepted = board.call('workflow_accept', {
-                'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
-                'note': 'Retained private integration target', 'keepCheckout': True,
-                'target': {'path': manifest['checkoutRoot'], 'ref': sealed['commit']}, **self.control(view)})
+            with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+                accepted = board.call('workflow_accept', {
+                    'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
+                    'note': 'Retained private integration target',
+                    'target': {'path': manifest['checkoutRoot'], 'ref': sealed['commit']}, **self.control(view)})
             self.assertEqual(accepted['integration']['state'], 'verified')
             raise original
         with patch.object(board.store, 'task_submit', side_effect=admission):

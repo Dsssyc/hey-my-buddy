@@ -257,6 +257,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'attempt_process_identities':
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'workspace_cleanup_plans':
+                self.assertEqual(actual, [row[:-1] for row in original])
             elif name == 'catalog_observations':
                 self.assertEqual(len(actual), len(original))
                 for old, new in zip(original, actual):
@@ -797,3 +799,20 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
             self.assertEqual(caught.exception.details['tables'], ['commands'])
             command.assert_not_called()
+
+    def test_cleanup_expiry_is_removed_from_populated_floor_stock(self):
+        fixture, connection = self.restored('cleanup-expiry', migrate=False)
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')}
+        self.assertIn('expires_at', columns)
+        stock = [tuple(row) for row in connection.execute('SELECT plan_id,created_at FROM workspace_cleanup_plans ORDER BY rowid')]
+        self.assertTrue(stock)
+        self.assertTrue(all(row[0] for row in connection.execute('SELECT expires_at FROM workspace_cleanup_plans')))
+        connection.close()
+        upgrade_state(fixture['state'])
+        upgraded = sqlite3.connect(fixture['state'] / 'board.sqlite3')
+        self.addCleanup(upgraded.close)
+        upgraded.row_factory = sqlite3.Row
+        self.assertNotIn('expires_at', {row[1] for row in upgraded.execute('PRAGMA table_info(workspace_cleanup_plans)')})
+        self.assertEqual([tuple(row) for row in upgraded.execute('SELECT plan_id,created_at FROM workspace_cleanup_plans ORDER BY rowid')], stock)
+        for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
+            self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))

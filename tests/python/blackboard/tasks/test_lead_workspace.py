@@ -1,5 +1,6 @@
 """A Lead controls workspace decisions for its own real-Git micro tasks."""
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 from admission import admit_board, admit_store
 
 import os
@@ -139,11 +140,12 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
         self._finish_child(board, child, claim, seal=seal)
         view = board.call("workflow_get", {"runId": child["runId"]})
-        accepted = board.call("workflow_accept", {
-            "runId": child["runId"], "artifactId": view["finalArtifactId"],
-            "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
-            "keepCheckout": True, "credential": lead["credential"],
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": child["runId"], "artifactId": view["finalArtifactId"],
+                "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
+                 "credential": lead["credential"],
+            })
         self.assertEqual(accepted["state"], "accepted")
         self.assertTrue(checkout.exists())
         params = {"runId": child["runId"]}

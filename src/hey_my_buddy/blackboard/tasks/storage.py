@@ -22,7 +22,6 @@ from ...private_dirs import directory_mode
 from ...process_observation import observe_open_paths, observe_process_argv
 from ...protocol import schemas
 from ..store.db import utc_now
-from . import host_conclusions
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock, runtime_root
 
@@ -170,31 +169,6 @@ def _runtime_leftover_recent(path: Path, now: float) -> bool:
                 elif _runtime_leftover_recent(child, now):
                     return True
     return False
-
-
-def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
-    if run is None or task is None:
-        return ['owner-unproven']
-    # Cancelled runs can currently continue. Preserve them rather than changing
-    # existing Host recovery semantics merely to make reclaimable bytes bigger.
-    shutdown = store.workflow.shutdown_summary(connection, run['run_id'])
-    reasons = []
-    if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
-        reasons.append('shutdown-unconfirmed')
-    if run['state'] == 'accepted' and task['accepted_at']:
-        finished_at = task['accepted_at']
-    elif run['state'] == 'concluded':
-        finished_at = host_conclusions.current(connection, run)['created_at']
-    else:
-        return ['continuation-supported', *reasons]
-    finished = datetime.fromisoformat(finished_at).timestamp()
-    if now - finished < GRACE_SECONDS:
-        reasons.append('grace-period')
-    if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run['run_id'],)).fetchone():
-        reasons.append('pending-continuations')
-    if connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=? AND state='open'", (run['run_id'],)).fetchone():
-        reasons.append('open-requests')
-    return reasons
 
 
 def _workspace_reference_rows(connection):
@@ -420,34 +394,17 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         return row
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
-    native_owners = {}
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
-            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
-            reasons = _zcode_reasons(store, connection, run, task, now)
-            micro_task_ids = [run['run_id'], *(routed['task_id'] for routed in
-                                             store.workflow._routing_tasks(connection, run['run_id']))]
-            for micro_task_id in micro_task_ids:
-                digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
-                native_owners[digest] = (run['run_id'], reasons)
             manifest = json.loads(run['workspace_manifest_json'])
             retained = store.workflow._allocation_provenance(connection, run)
-            reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
-            sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
-            workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
+            reasons = None
+            if run['state'] not in ('accepted', 'concluded'):
+                task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
+                reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
+            workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons))
     harnesses = state / 'harnesses'
-    if harnesses.exists():
-        for adapter in sorted(private_dirs.ADAPTERS):
-            adapter_root = harnesses / adapter
-            if not adapter_root.exists():
-                continue
-            micro_tasks = adapter_root / 'micro-tasks'
-            if micro_tasks.exists():
-                for name in sorted(os.listdir(native_path(micro_tasks))):
-                    path = micro_tasks / name
-                    run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
     sessions = state / 'sessions'
     if sessions.exists():
         for category in ('macro-tasks', 'micro-tasks'):
@@ -460,7 +417,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
     recognized = set()
-    for _, _, manifest, retained, _, _ in workspace_inputs:
+    for _, _, manifest, retained, _ in workspace_inputs:
         for recorded in (manifest, *retained):
             root = recorded.get('checkoutRoot')
             if isinstance(root, str):
@@ -468,27 +425,22 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             identifier = recorded.get('workspaceId')
             if recorded.get('kind') == 'worktree' and workspace._workspace_identifier(identifier):
                 recognized.add(state / 'workspaces' / identifier / 'checkout')
-    for run_id, revision, manifest, retained, reasons, sealed in workspace_inputs:
+    for run_id, revision, manifest, retained, reasons in workspace_inputs:
+        if reasons is None:
+            continue  # Terminal allocations belong to the service's reclamation loop.
         try:
             allocation = workspace.resolve_allocation(state, manifest, retained)
             if allocation is None:
-                continue  # Host-owned/unrelated checkout: never measure or delete.
+                continue
             path = Path(allocation['path'])
             if path in seen:
                 continue
             seen.add(path)
             if not workspace._path_present(path):
-                # The checkout may have been reclaimed while its allocation
-                # record and sealed outputs remain. Keep those bytes visible.
-                add('workspaces', path.parent, [*reasons, 'checkout-missing'],
-                    runId=run_id, revision=revision)
-                continue
-            if not reasons and git_proof:
-                inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
-                reasons.extend(inspected['reasons'])
-            add('workspaces', path, reasons, runId=run_id, revision=revision)
+                add('workspaces', path.parent, [*reasons, 'checkout-missing'], runId=run_id, revision=revision)
+            else:
+                add('workspaces', path, reasons, runId=run_id, revision=revision)
         except BoardError:
-            # Invalid ownership never licenses a filesystem guess.
             continue
     workspace_root = state / 'workspaces'
     orphan_inputs = []
@@ -599,7 +551,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key in ('harnesses', 'session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
+    for key in ('session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,
@@ -656,12 +608,10 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     original = Path(pending['path'])
     if '..' in original.parts:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
-    root = Path(state).absolute()
     if category == 'runtimes':
-        allowed_parent = runtime_root().absolute()
-        allowed = original.parent == allowed_parent
+        allowed = original.parent == runtime_root().absolute()
     else:
-        allowed = any(original.parent == root / 'harnesses' / adapter / 'micro-tasks'
+        allowed = any(original.parent == Path(state).absolute() / 'harnesses' / adapter / 'micro-tasks'
                       for adapter in private_dirs.ADAPTERS)
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
     if (not allowed or pending.get('tomb') != str(tomb) or
@@ -696,19 +646,6 @@ def plan(store, params: dict) -> dict:
         result.update(planId='stg-' + uuid.uuid4().hex, expiresAt=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat())
         _atomic_storage_json(directory / (result['planId'] + '.json'), result)
         return result
-
-
-def _changed_workspace_reasons(store, candidate: dict) -> list[str]:
-    """Diagnose a retained checkout without authorizing its changed storage plan."""
-    from . import workspace
-    with store.db.read() as connection:
-        run = store.workflow._run_row(connection, candidate['runId'])
-        manifest = json.loads(run['workspace_manifest_json'])
-        retained = store.workflow._allocation_provenance(connection, run)
-        sealed = store.workflow._latest_handoff(connection, run, manifest)
-    proof = workspace.cleanup_inspect(store.directory, manifest, sealed=sealed, retained=retained,
-                                      allowed=store.workflow._board_adopted_paths(run['run_id'], manifest))
-    return proof['reasons'] or ['candidate-changed']
 
 
 def apply(store, params: dict) -> dict:
@@ -771,34 +708,19 @@ def apply(store, params: dict) -> dict:
                 if (fresh is None or not fresh['eligible'] or
                         any(fresh.get(key) != candidate.get(key) for key in ('category', 'path', 'fingerprint'))):
                     reasons = fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']
-                    if (fresh is not None and fresh['eligible'] and fresh['category'] == 'workspaces'
-                            and not fresh.get('orphan')
-                            and all(fresh.get(key) == candidate.get(key) for key in ('category', 'path'))):
-                        reasons = _changed_workspace_reasons(store, fresh)
                     result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
                     continue
                 if candidate['category'] == 'workspaces':
-                    if fresh.get('orphan') is True:
-                        _remove_orphan_workspace(store, candidate)
-                        result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
-                        result['removedBytes'] += fresh['bytes']
-                        _save_receipt(receipt, result)
-                        continue
-                    authority = {'sessionId': 'storage-maintenance'}
-                    request = {'runId': fresh['runId'], 'commandId': command + ':' + fresh['id'], 'expectedRevision': fresh['revision']}
-                    planned_workspace = store.workflow.cleanup_plan(request, console_authority=authority)
-                    wp = planned_workspace['plan']
-                    store.workflow.cleanup_apply({**request, 'commandId': request['commandId'] + ':apply', 'expectedRevision': planned_workspace['targetRevision'], 'planId': wp['planId'], 'confirmPath': fresh['path']}, console_authority=authority)
-                elif candidate['category'] in ('harnesses', 'runtimes'):
+                    _remove_orphan_workspace(store, candidate)
+                elif candidate['category'] == 'runtimes':
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
                     with ExitStack() as removal:
-                        if candidate['category'] == 'runtimes':
-                            removal.enter_context(_runtime_removal_locks(original, create=True))
-                            if original.is_dir():
-                                _, commands, known = process_inventory(store.directory.resolve())
-                                if runtime_usage(original, commands, known):
-                                    raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                        removal.enter_context(_runtime_removal_locks(original, create=True))
+                        if original.is_dir():
+                            _, commands, known = process_inventory(store.directory.resolve())
+                            if runtime_usage(original, commands, known):
+                                raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                         if tree_info(original)[1:] != (fresh['fingerprint'], True):
                             raise BoardError('STORAGE_CHANGED', 'Candidate changed')
                         tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
@@ -855,24 +777,6 @@ def _finish_pending(result: dict, receipt: Path) -> None:
     result['removedBytes'] += pending['bytes']
     del result['pending']
     _save_receipt(receipt, result)
-
-
-def cleanup_accepted_workspace(store, run_id: str) -> dict:
-    """Daemon-triggered cleanup after acceptance, using the normal guarded plan."""
-    with store.db.read() as connection:
-        run = store.workflow._run_row(connection, run_id)
-        if run['state'] != 'accepted':
-            return {'removed':False, 'reason':'not-accepted'}
-        revision = run['revision']
-    authority = {'sessionId':'accepted-workspace-maintenance'}
-    command = 'accepted-cleanup-' + uuid.uuid4().hex
-    params = {'runId':run_id, 'expectedRevision':revision, 'commandId':command}
-    planned = store.workflow.cleanup_plan(params, console_authority=authority)
-    if not planned['plan']['eligible']:
-        return {'removed':False, 'plan':planned['plan']}
-    return store.workflow.cleanup_apply({**params, 'commandId':command + '-apply',
-        'expectedRevision':planned['targetRevision'], 'planId':planned['plan']['planId'],
-        'confirmPath':planned['plan']['path']}, console_authority=authority)
 
 
 def prune_old_runtimes(store) -> dict:

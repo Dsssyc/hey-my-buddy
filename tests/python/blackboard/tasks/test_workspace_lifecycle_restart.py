@@ -6,6 +6,7 @@ administration directory is refused, a scope failure keeps its reason, and an
 abandoned continuation returns its input.
 """
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 import json
 import shutil
 import time
@@ -70,7 +71,8 @@ class RestartLifecycleTests(LifecycleTestCase):
         delivered = self.view(board, run_id)
         self.assertEqual(delivered["state"], "delivered")
         final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
-        accepted = self.accept(board, delivered, final, target=self.target_with_artifact(final), keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, delivered, final, target=self.target_with_artifact(final))
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(workspace_module.verify_sealed_output(original, current, sealed)["changedPaths"], ["tracked.txt"])
         removed = self.reclaim(board, self.view(board, run_id))
@@ -99,10 +101,11 @@ class RestartLifecycleTests(LifecycleTestCase):
         target_run = self.submit(board, request_id="restart-target-input", cwd=target["path"], access="read")
         target_identity = workspace_module.inspect(str(target["path"]))
         target.update({key: target_identity[key] for key in ("repositoryId", "checkoutId")})
-        accepted = self.accept(board, delivered, artifact, target=target, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, delivered, artifact, target=target)
         planned = board.store.workflow.cleanup_plan({
-            "runId": submitted["runId"], "commandId": "restart-plan",
-            "expectedRevision": accepted["revision"], **self.control(accepted),
+            "runId": submitted["runId"],
+            "commandId": "restart-plan",
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         files = self.fixed_files()
@@ -116,12 +119,14 @@ class RestartLifecycleTests(LifecycleTestCase):
         )
         self.assertTrue(target_check["verified"])
         # A receipt-bound replay retains the user's optional target identities.
-        repeated = self.accept(board, self.view(board, submitted["runId"]), artifact, target=target, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            repeated = self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
         self.assertEqual(repeated["state"], "accepted")
         removed = board.store.workflow.cleanup_apply({
-            "runId": submitted["runId"], "planId": planned["plan"]["planId"], "commandId": "restart-apply-plan",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": submitted["runId"],
+            "planId": planned["plan"]["planId"],
+            "commandId": "restart-apply-plan",
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertTrue(removed["removed"])
         self.assertEqual(removed["plan"]["path"], original["checkoutRoot"])

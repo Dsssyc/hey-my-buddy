@@ -125,8 +125,6 @@ MAX_OUTPUT_PATH_SAMPLE_BYTES = 500
 INTEGRATION_PATH_FIELDS = (
     "matchingPaths", "differingPaths", "missingPaths", "adjustments", "hostPaths", "unrecordedPaths",
 )
-#: A cleanup plan is a short-lived authorization, not a permanent permission.
-CLEANUP_PLAN_TTL_SECONDS = 900
 SCOPE_ACTIONS = ("restore", "adopt", "abandon")
 INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge")
 FINAL_ARTIFACT_KINDS = ("output", "resolved-output")
@@ -651,7 +649,6 @@ class WorkflowCoordinator:
             "revision": row["revision"],
             "createdAt": row["created_at"],
             "appliedAt": row["applied_at"],
-            "expiresAt": row["expires_at"],
         }
 
     def compact(self, connection, run_row, task_row=None) -> dict:
@@ -3812,17 +3809,17 @@ class WorkflowCoordinator:
         paths are refused with their names first; the Host confirms they are its
         own adjustments with ``adjusted: true`` (the note is the reason) instead
         of listing paths. Optional ``hostPaths`` with ``beforeCommit`` still
-        verify real Host additions outside the artifact's paths. Without
-        ``keepCheckout`` the registered managed checkout is reclaimed after the
-        acceptance is durable; a blocked reclaim keeps the acceptance and reports
-        its reasons, and a later ``reclaim`` retries. The same run/artifact
+        verify real Host additions outside the artifact's paths. The registered
+        managed checkout is reclaimed after acceptance is durable; a blocked
+        reclaim keeps acceptance and reports its reasons. The service retries
+        periodically, and a Host can also retry with ``reclaim``. The same run/artifact
         payload replays its recorded response; a changed payload is a conflict.
         """
         schemas.reject_unknown(
             params,
             {
                 "runId", "targetRunId", "artifactId", "note", "target", "notRequired", "adjusted",
-                "hostPaths", "beforeCommit", "keepCheckout", *schemas.CONTROL_FIELDS,
+                "hostPaths", "beforeCommit", *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.accept",
@@ -3837,7 +3834,6 @@ class WorkflowCoordinator:
         adjusted = schemas.optional_bool(params, "adjusted", False)
         host_paths = schemas.string_list(params, "hostPaths", limit=256)
         before_commit = schemas.optional_string(params, "beforeCommit", max_length=128)
-        keep_checkout = schemas.optional_bool(params, "keepCheckout", False)
         target = None
         if not_required is not None:
             if params.get("target") is not None:
@@ -3861,8 +3857,7 @@ class WorkflowCoordinator:
         # acceptance instead of relabelling it.
         request_key = {"runId": owner_run_id, "targetRunId": target_id, "artifactId": artifact_id, "note": note,
                        "notRequired": not_required, "target": normalized_target, "adjusted": adjusted,
-                       "hostPaths": sorted(host_paths), "beforeCommit": before_commit,
-                       "keepCheckout": keep_checkout}
+                       "hostPaths": sorted(host_paths), "beforeCommit": before_commit}
         command_id = "accept-" + sha256_text(canonical_json(request_key))[:32]
         verification_inputs = None
         duplicate = None
@@ -3930,9 +3925,8 @@ class WorkflowCoordinator:
             # A replay returns the recorded outcome and never repeats the removal;
             # a lost reclaim retry goes through the dedicated reclaim operation.
             response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
-        elif not keep_checkout:
-            response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
-                                                         purpose="accept", control=params, console_authority=console_authority)
+        else:
+            response["reclaim"] = self._reclaim_checkout(run_id=run_id)
         # The reclaim journals its removal under fresh run revisions; the returned
         # view must match the board a caller sees after this call.
         with self.db.read() as connection:
@@ -4303,8 +4297,7 @@ class WorkflowCoordinator:
             raise BoardError("REVISION_CONFLICT", "The micro-task run changed concurrently; re-read it and retry")
         accumulate_overall(connection, run_id)
         if not host_completion:
-            # Logical ownership ends with the recorded acceptance exactly as before;
-            # keepCheckout keeps the checkout directory, not the writer exclusion.
+            # Logical ownership ends with the recorded acceptance.
             self._release_reservations(connection, run_id, now)
         else:
             updated_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
@@ -4465,9 +4458,7 @@ class WorkflowCoordinator:
         response = dict(response)
         owned_reclaims = []
         for child_id in descendants:
-            reclaimed = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=child_id,
-                                                purpose="conclude", control=params, lead_conclusion=True,
-                                                console_authority=console_authority)
+            reclaimed = self._reclaim_checkout(run_id=child_id)
             if len(owned_reclaims) < MAX_CHILD_VIEW:
                 owned_reclaims.append({"runId": child_id, **reclaimed})
         if descendants:
@@ -4476,8 +4467,7 @@ class WorkflowCoordinator:
         if duplicate is not None:
             response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
         else:
-            response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
-                                                         purpose="conclude", control=params, console_authority=console_authority)
+            response["reclaim"] = self._reclaim_checkout(run_id=run_id)
         with self.db.read() as connection:
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
@@ -4646,8 +4636,7 @@ class WorkflowCoordinator:
     def reclaim(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """Reclaim this micro task's own registered managed checkout.
 
-        Used after an acceptance that kept the checkout, or after a reclaim that
-        was blocked and whose blocker is now gone. Only the checkout this run
+        Retry a reclaim whose blocker is now gone. Only the checkout this run
         registered is ever a deletion target; the same eligibility proof,
         convergence and interruption recovery as the internal reclaim apply. A
         blocked removal reports its concrete reasons and changes nothing.
@@ -4664,8 +4653,7 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
             run_row = self._target_run(connection, owner, target_id)
             target_id = run_row["run_id"]
-        result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params,
-                                       console_authority=console_authority)
+        result = self._reclaim_checkout(run_id=target_id)
         with self.db.read() as connection:
             run_row = self._run_row(connection, target_id)
             response = {**self.compact(connection, run_row), "targetRunId": target_id,
@@ -4675,82 +4663,41 @@ class WorkflowCoordinator:
                              runId=run_id, reclaim=result)
         return response
 
-    def _reclaim_checkout(self, *, owner_run_id: str, run_id: str, purpose: str, control: dict,
-                          lead_conclusion: bool = False, console_authority: dict | None = None) -> dict:
-        """Reclaim one owned checkout through the guarded internal removal journal.
-
-        The two internal steps reuse the expiring plan only as the durable journal
-        of one exact deletion: an applying plan fences concurrent capture and
-        writer claims on that checkout, the removal converges when another owner
-        completes it first, and an interrupted apply resumes. They are authorized
-        by the originating Host's exact control triple against the controlling
-        root or the authenticated console session, so a control takeover between
-        the recorded review and the removal only
-        blocks the removal (the review stays recorded) until the new owner
-        retries; no synthetic authority plans a deletion. No Host-visible
-        two-step path exists. A blocked removal keeps every recorded acceptance
-        or conclusion and reports the concrete reasons. Only a committed Lead
-        conclusion may reclaim its owned micro tasks through the larger stop
-        graph; public targets remain confined to the helper graph.
-        """
+    def _reclaim_checkout(self, *, run_id: str) -> dict:
+        """Reclaim from terminal board facts, independently of a Host generation."""
         with self.db.read() as connection:
-            run_row = self._run_optional(connection, run_id)
-            if run_row is None:
-                return {"removed": False, "reasons": ["run-not-found"]}
-            revision = self._run_row(connection, owner_run_id)["revision"]
-        command = f"reclaim-{purpose}-" + uuid.uuid4().hex
-        control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if key in control}
-        params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
-                  "commandId": command, **control_triple}
+            run = self._run_row(connection, run_id)
+            manifest = json.loads(run["workspace_manifest_json"])
+            provenance = [manifest, *self._allocation_provenance(connection, run)]
+            if not any(item.get("kind") == "worktree" and item.get("checkoutId") == manifest["checkoutId"]
+                       and item.get("repositoryId") == manifest["repositoryId"] for item in provenance):
+                return {"removed": False, "reasons": ["not-a-managed-worktree"]}
+        command = "reclaim-" + uuid.uuid4().hex
+        params = {"runId": run_id, "commandId": command}
+        planned = None
         try:
-            planned = self.cleanup_plan(params, console_authority=console_authority, _lead_conclusion=lead_conclusion)
+            planned = self.cleanup_plan(params)
+            plan = planned["plan"]
+            if plan["state"] != "applied":
+                applied = self.cleanup_apply({
+                    "runId": run_id, "commandId": command + "-apply",
+                    "planId": plan["planId"], "confirmPath": plan["path"],
+                })
+                plan = applied["plan"]
         except BoardError as error:
             if error.code == "TASK_DELETING":
                 raise
-            return {"removed": False, "reasons": [error.code], "detail": error.message}
-        plan = planned["plan"]
-        if plan["state"] == "applied":
-            result = (plan.get("result") or {})
-            return {"removed": True, "alreadyRemoved": bool(result.get("alreadyRemoved")),
-                    "path": plan["path"], "planId": plan["planId"], "retention": plan["retention"]}
-        if plan["state"] not in ("planned", "applying"):
-            # An applying plan is not re-admitted here: cleanup_apply resumes it.
-            blocked = {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
-                       "path": plan["path"]}
-            return blocked
-        try:
-            # Planning advances the target only. An independently allocated
-            # helper's revision cannot stand in for its controlling root's.
-            apply_revision = planned["targetRevision"] if owner_run_id == run_id else revision
-            applied = self.cleanup_apply(
-                {**params, "commandId": command + "-apply", "expectedRevision": apply_revision,
-                 "planId": plan["planId"], "confirmPath": plan["path"]},
-                console_authority=console_authority,
-                _lead_conclusion=lead_conclusion,
-            )
-        except BoardError as error:
-            if error.code == "TASK_DELETING":
-                raise
+            result = {"removed": False, "reasons": error.details.get("reasons") or [error.code]}
+            if planned is not None:
+                result.update(planId=planned["plan"]["planId"], path=planned["plan"]["path"])
             if error.code == "NOT_READY":
-                blocked = {"removed": False, "reasons": error.details.get("reasons") or [error.code],
-                           "planId": plan["planId"], "path": plan["path"]}
-                if error.details.get("attachedBranch") is not None:
-                    blocked["attachedBranch"] = error.details["attachedBranch"]
-                if error.details.get("unsealedPaths"):
-                    blocked.update({key: value for key, value in error.details.items()
-                                    if key.startswith("unsealedPaths")})
-                if "reason" in error.details:
-                    blocked["reason"] = error.details["reason"]
-                return blocked
-            return {"removed": False, "reasons": [error.code], "detail": error.message,
-                    "planId": plan["planId"], "path": plan["path"]}
-        now = self.now()
-        with self.db.write() as connection:
-            self._release_reservations(connection, run_id, now)
-            head = self.board._head_of(connection)
-        self.board._notify(head)
-        return {"removed": True, "alreadyRemoved": bool(applied.get("plan", {}).get("result", {}).get("alreadyRemoved")),
-                "path": plan["path"], "planId": plan["planId"], "retention": applied.get("retention")}
+                result.update({key: value for key, value in error.details.items()
+                               if key in ("attachedBranch", "reason") or key.startswith("unsealedPaths")})
+            else:
+                result["detail"] = error.message
+            return result
+        return {"removed": True, "alreadyRemoved": bool((plan["result"] or {}).get("alreadyRemoved")),
+                "path": plan["path"], "planId": plan["planId"], "retention": plan["retention"]}
 
     # -- workspace lifecycle (Host-owned) ------------------------------------
     def _bump_run(self, connection, run_row, now: str):
@@ -5384,42 +5331,26 @@ class WorkflowCoordinator:
         retention["outputPatches"] = list(dict.fromkeys(retention["outputPatches"]))
         return reasons, evidence, retention
 
-    def cleanup_plan(self, params: dict, *, console_authority: dict | None = None,
-                     _lead_conclusion: bool = False) -> dict:
-        """Plan the removal of exactly one registered disposable hey-my-buddy checkout.
-
-        The plan names the allocation and checks board eligibility without reading
-        Git. Execution proves the live checkout and records its retention evidence
-        before entering applying. Repeated planning returns the same live plan.
-        """
-        schemas.reject_unknown(
-            params,
-            {"runId", "targetRunId", "commandId", "expectedRevision", *schemas.CONTROL_FIELDS,
-             schemas.CONSOLE_AUTHORITY_FIELD},
-            "workflow.cleanup_plan",
-        )
-        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
-        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
-        command_id = schemas.required_string(params, "commandId", max_length=128)
-        expected = schemas.require_expected_revision(params)
-        request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
+    def cleanup_plan(self, params: dict) -> dict:
+        """Name one allocation in the internal journal; deletion proves live facts."""
+        run_id, command_id = params["runId"], params["commandId"]
+        request_key = {"runId": run_id}
         with self.db.read() as connection:
-            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
-            owner = self._run_row(connection, run_id)
-            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
-            receipt = self.board._receipt_response(connection, receipt_entry)
+            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
-            run_id = target_id
-            target_snapshot = run_row
+            run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"])
             retained = self._allocation_provenance(connection, run_row)
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
-        module = workspace_module()
-        allocation = module.resolve_allocation(self.board.directory, manifest, retained)
+        physical = next((item for item in (manifest, *retained) if item.get("kind") == "worktree"
+                         and item.get("checkoutId") == manifest["checkoutId"]
+                         and item.get("repositoryId") == manifest["repositoryId"]), None)
+        allocation = ({"workspaceId": physical["workspaceId"], "path": physical["checkoutRoot"], "kind": "worktree",
+                       "checkoutId": physical["checkoutId"], "repositoryId": physical["repositoryId"],
+                       "manifestSha256": physical["manifestSha256"], "manifestWorkspaceId": manifest["workspaceId"]}
+                      if physical is not None else None)
         workspace = {
             "workspaceId": (allocation or manifest)["workspaceId"],
             "manifestWorkspaceId": manifest["workspaceId"],
@@ -5430,80 +5361,42 @@ class WorkflowCoordinator:
         }
         if allocation is None:
             reasons.append("not-a-managed-worktree")
-            if (manifest["kind"] == "worktree"
-                    and Path(manifest["checkoutRoot"]) != self.board.directory / "workspaces" / manifest["workspaceId"] / "checkout"):
-                reasons.append("unsafe-path")
-        elif not module._inside(manifest["path"], allocation["path"]):
-            reasons.append("unsafe-path")
-        retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
-                                              / (allocation or manifest)["workspaceId"])
+        retention.update(workspaceDirectory=str(self.board.directory / "workspaces" / workspace["workspaceId"]),
+                         checkoutRoot=workspace["path"], cwd=workspace["cwd"])
+        evidence["workspace"] = workspace
         reasons = sorted(set(reasons))
-        retention["checkoutRoot"] = workspace["path"]
-        retention["cwd"] = workspace["cwd"]
-        evidence = {**evidence, "workspace": workspace}
         now = self.now()
-        plan_id = f"cln-{uuid.uuid4()}"
-        expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
-            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
-            owner = self._run_row(connection, owner_run_id)
-            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
-            receipt = self.board._receipt_response(connection, receipt_entry)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
-            reject_deleting_run(connection, target_id)
-            self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
-            run_id = run_row["run_id"]
-            self._expect_revision(run_row, target_snapshot["revision"])
+            reject_deleting_run(connection, run_id)
+            run_row = self._run_row(connection, run_id)
             existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=?"
-                " AND state IN ('planned','applying','applied') ORDER BY rowid DESC LIMIT 1",
-                (run_id, manifest.get("checkoutId")),
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=? ORDER BY rowid DESC LIMIT 1",
+                (run_id, manifest["checkoutId"]),
             ).fetchone()
-            if existing is not None and (existing["state"] != "planned" or existing["expires_at"] >= now):
+            if existing is not None:
                 return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
+            plan_id = "cln-" + uuid.uuid4().hex
             connection.execute(
-                "INSERT INTO workspace_cleanup_plans(plan_id, run_id, workspace_id, checkout_id, repository_id, path,"
-                " kind, state, evidence_json, retention_json, reasons_json, command_id, revision, created_at,"
-                " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+                "INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,repository_id,path,"
+                "kind,state,evidence_json,retention_json,reasons_json,command_id,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (plan_id, run_id, workspace["workspaceId"], workspace["checkoutId"], workspace["repositoryId"],
-                 workspace["path"], workspace["kind"],
-                 "blocked" if reasons else "planned", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(reasons), command_id, now, expires_at),
+                 workspace["path"], workspace["kind"], "blocked" if reasons else "planned",
+                 canonical_json(evidence), canonical_json(retention), canonical_json(reasons), command_id, now),
             )
-            self.board._append_event(
-                connection,
-                "workflow.cleanup_planned",
-                task_id=run_id,
-                revision=run_row["revision"] + 1,
-                payload={"planId": plan_id, "path": workspace["path"], "eligible": not reasons, "reasons": reasons},
-            )
-            plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
+            self.board._append_event(connection, "workflow.cleanup_planned", task_id=run_id,
+                                     revision=run_row["revision"] + 1,
+                                     payload={"planId": plan_id, "path": workspace["path"],
+                                              "eligible": not reasons, "reasons": reasons})
             run_row = self._bump_run(connection, run_row, now)
+            plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
             response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan),
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self.board._store_receipt(connection, command_id, "workflow.cleanup_plan", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
         self.board._notify(head)
         return response
-
-    def _expiry(self, seconds: int) -> str:
-        moment = datetime.fromisoformat(self.now()) + timedelta(seconds=seconds)
-        return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-    @staticmethod
-    def _failed_attempt_ids(connection, micro_task_id: str) -> frozenset[str]:
-        """Only a successful, explicitly completed result permits evidence reclamation."""
-        failed = set()
-        for row in connection.execute(
-            'SELECT attempt_id, result_json FROM attempts WHERE task_id=?', (micro_task_id,)
-        ):
-            result = json.loads(row['result_json'] or '{}')
-            if result.get('status') != 'ok' or result.get('terminationReason') != 'completed':
-                failed.add(row['attempt_id'])
-        return frozenset(failed)
 
     @staticmethod
     @contextmanager
@@ -5519,218 +5412,123 @@ class WorkflowCoordinator:
         with module._lock(directory, create=False):
             yield
 
-    def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
-                      _lead_conclusion: bool = False) -> dict:
-        """Apply one unexpired cleanup plan to exactly its registered checkout.
-
-        Acceptance, integration, shutdown, dependency and unsealed-change evidence
-        are rechecked against the live board and the actual worktree immediately
-        before the single ``git worktree remove`` of the exact path. Outputs,
-        manifests, Git refs, patches and receipts are outside this deletion.
-        """
-        schemas.reject_unknown(
-            params,
-            {"runId", "targetRunId", "planId", "commandId", "expectedRevision", "confirmPath", *schemas.CONTROL_FIELDS,
-             schemas.CONSOLE_AUTHORITY_FIELD},
-            "workflow.cleanup_apply",
-        )
-        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
-        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
-        plan_id = schemas.required_string(params, "planId", max_length=128)
-        command_id = schemas.required_string(params, "commandId", max_length=128)
-        expected = schemas.require_expected_revision(params)
-        confirm_path = schemas.required_string(params, "confirmPath", max_length=4096)
-        request_key = {"runId": run_id, "targetRunId": target_id, "planId": plan_id, "confirmPath": confirm_path,
-                       "expectedRevision": expected}
+    def cleanup_apply(self, params: dict) -> dict:
+        """Prove a terminal allocation once under its lock, fence, then remove it."""
+        run_id, command_id, plan_id = params["runId"], params["commandId"], params["planId"]
+        request_key = {"runId": run_id, "planId": plan_id, "confirmPath": params["confirmPath"]}
         with self.db.read() as connection:
-            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
-            owner = self._run_row(connection, run_id)
-            self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
-            receipt = self.board._receipt_response(connection, receipt_entry)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
-            self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
-            run_id = target_id
-            target_snapshot = run_row
-            plan = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
-            ).fetchone()
+            plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?",
+                                      (plan_id, run_id)).fetchone()
             if plan is None:
                 raise BoardError("NOT_FOUND", "Unknown cleanup plan for this run", planId=plan_id)
-            if confirm_path != plan["path"]:
+            if params["confirmPath"] != plan["path"]:
                 raise BoardError("INVALID_ARGUMENT", "confirmPath must exactly match the planned checkout path",
                                  plannedPath=plan["path"])
-            resume = self._cleanup_apply_precheck(connection, run_row, plan)
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            manifest = json.loads(run_row["workspace_manifest_json"])
-            retained = self._allocation_provenance(connection, run_row)
-            from .checkout_processes import first_execution_time
-            first_execution_at = first_execution_time(connection, manifest)
-            allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
-            sealed = self._latest_handoff(connection, run_row, manifest)
-            # Board eligibility proves the whole owned lineage stopped. Reclaim
-            # only sessions bound to the checkout being removed, including
-            # routing tasks and helpers that borrowed this exact allocation.
-            private_micro_tasks = [run_id]
-            for child in self._owned_children(connection, run_id):
-                child_run = connection.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?",
-                                               (child['child_task_id'],)).fetchone()
-                if child_run is not None:
-                    child_manifest = json.loads(child_run['workspace_manifest_json'])
-                    if child_manifest.get('checkoutRoot') == plan['path']:
-                        private_micro_tasks.append(child['child_task_id'])
-            for micro_task_id in list(private_micro_tasks):
-                private_micro_tasks.extend(task['task_id'] for task in self._routing_tasks(connection, micro_task_id))
-            failed_attempts = {micro_task_id: self._failed_attempt_ids(connection, micro_task_id)
-                               for micro_task_id in dict.fromkeys(private_micro_tasks)}
-        with self._cleanup_allocation_lock(self.board.directory, allocation):
+        with self._cleanup_allocation_lock(self.board.directory, {"workspaceId": plan["workspace_id"]}):
             with self.db.read() as connection:
-                reject_deleting_run(connection, target_id)
-            path = Path(plan["path"])
-            inspection = None
-            if path.exists() or path.is_symlink():
-                inspection = workspace_module().cleanup_inspect(
-                    self.board.directory, manifest, sealed=sealed,
-                    retained=retained, allowed=self._board_adopted_paths(run_id, manifest), resume=resume)
-                # The registered owner of this allocation may complete the same removal
-                # while the eligibility is proven, or the checkout may already have been
-                # deleted out of band. A path that is factually gone leaves nothing to
-                # delete, so its reasons cannot block; anything still occupying the exact
-                # planned path keeps every NOT_READY reason.
-            blocked = inspection is not None and bool(inspection["reasons"]) and (path.exists() or path.is_symlink())
-            if blocked:
-                details = self._bounded_path_fields(
-                    {"reasons": inspection["reasons"], "unsealedPaths": inspection["unsealedPaths"]},
-                    ("unsealedPaths",))
-                if inspection.get("attachedBranch") is not None:
-                    details["attachedBranch"] = inspection["attachedBranch"]
-                refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
-            if not blocked and (path.exists() or path.is_symlink()):
-                from .checkout_processes import require_idle_checkout
-                require_idle_checkout(path, first_execution_at=first_execution_at)
-            now = self.now()
-            with self.db.write() as connection:
-                receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
-                owner = self._run_row(connection, owner_run_id)
-                self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
-                receipt = self.board._receipt_response(connection, receipt_entry)
+                reject_deleting_run(connection, run_id)
+                receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
-                self._expect_revision(owner, expected)
-                run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
-                run_id = run_row["run_id"]
-                self._expect_revision(run_row, target_snapshot["revision"])
-                plan = connection.execute(
-                    "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
-                ).fetchone()
+                run_row = self._run_row(connection, run_id)
+                snapshot_revision = run_row["revision"]
+                plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
                 if plan["state"] == "applied":
                     return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan),
+                            "removed": True, "retention": json.loads(plan["retention_json"]),
                             "targetRunId": run_id, "targetRevision": run_row["revision"]}
-                self._cleanup_apply_precheck(connection, run_row, plan)
-                if blocked and plan["state"] == "applying":
-                    # A started removal keeps its fence even when its resumption is
-                    # refused; no part of that journal may be rewritten here.
-                    raise refusal
-                if plan["state"] == "planned":
-                    evidence = json.loads(plan["evidence_json"])
-                    retention = json.loads(plan["retention_json"])
-                    if inspection is not None:
-                        evidence["workspace"] = {key: inspection.get(key) for key in
-                                                 ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
-                                                  "locked", "unsealedPaths", "sealedObservation", "workspaceId",
-                                                  "manifestWorkspaceId", "allocation", "attachedBranch")}
-                        retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
-                        retention["checkoutRoot"] = inspection["path"]
-                        retention["cwd"] = inspection["cwd"]
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+                manifest = json.loads(run_row["workspace_manifest_json"])
+                retained = self._allocation_provenance(connection, run_row)
+                identity = next((item for item in (manifest, *retained)
+                                 if item.get("workspaceId") == plan["workspace_id"]), None)
+                path = Path(plan["path"])
+                if (identity is None or plan["path"] != identity["checkoutRoot"]
+                        or any(plan[column] != identity[field] for column, field in
+                               (("checkout_id", "checkoutId"), ("repository_id", "repositoryId")))):
+                    raise BoardError("CONFLICT", "The cleanup plan no longer matches the allocation", planId=plan_id)
+                reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
+                resume = plan["state"] == "applying"
+                sealed = self._latest_handoff(connection, run_row, manifest)
+                from .checkout_processes import first_execution_time
+                first_execution_at = first_execution_time(connection, manifest)
+            inspection = None
+            details = {}
+            if not reasons and workspace_module()._path_present(path):
+                inspection = workspace_module().cleanup_inspect(
+                    self.board.directory, manifest, sealed=sealed, retained=retained,
+                    allowed=self._board_adopted_paths(run_id, manifest), resume=resume)
+                if workspace_module()._path_present(path):
+                    reasons.extend(inspection["reasons"])
+                    details = self._bounded_path_fields({"unsealedPaths": inspection["unsealedPaths"]}, ("unsealedPaths",))
+                    if inspection["attachedBranch"] is not None:
+                        details["attachedBranch"] = inspection["attachedBranch"]
+                if not reasons and workspace_module()._path_present(path):
+                    from .checkout_processes import require_idle_checkout
+                    try:
+                        require_idle_checkout(path, first_execution_at=first_execution_at)
+                    except BoardError as error:
+                        if error.code != "NOT_READY":
+                            raise
+                        reasons.extend(error.details.get("reasons") or [error.details["reason"]["code"]])
+                        details.update({key: value for key, value in error.details.items() if key != "reasons"})
+            reasons = sorted(set(reasons))
+            now = self.now()
+            with self.db.write() as connection:
+                reject_deleting_run(connection, run_id)
+                run_row = self._run_row(connection, run_id)
+                self._expect_revision(run_row, snapshot_revision)
+                if reasons and resume:
+                    # An interrupted removal keeps its complete original journal and fence.
+                    raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons, **details)
+                evidence["workspace"] = inspection or json.loads(plan["evidence_json"])["workspace"]
+                if "reason" in details:
+                    evidence["workspace"]["reason"] = details["reason"]
+                retention.update(workspaceDirectory=str(self.board.directory / "workspaces" / plan["workspace_id"]),
+                                 checkoutRoot=str(path), cwd=manifest["path"])
+                if inspection is not None:
+                    retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
+                state = "blocked" if reasons else "applying"
+                previous_workspace = json.loads(plan["evidence_json"])["workspace"]
+                detail_changed = (inspection is not None and any(
+                    inspection.get(key) != previous_workspace.get(key) for key in ("unsealedPaths", "attachedBranch")))
+                detail_changed = detail_changed or details.get("reason") != previous_workspace.get("reason")
+                if state != plan["state"] or reasons != json.loads(plan["reasons_json"]) or detail_changed:
                     connection.execute(
-                        "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
-                        " command_id=?, revision=revision+1 WHERE plan_id=? AND state='planned'",
-                        ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
-                         canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
-                    )
+                        "UPDATE workspace_cleanup_plans SET state=?,evidence_json=?,retention_json=?,reasons_json=?,"
+                        "command_id=?,revision=revision+1 WHERE plan_id=?",
+                        (state, canonical_json(evidence), canonical_json(retention), canonical_json(reasons), command_id, plan_id))
+                    self.board._append_event(connection, "workflow.cleanup_blocked" if reasons else "workflow.cleanup_applying",
+                                             task_id=run_id, payload={"planId": plan_id, "reasons": reasons})
                 head = self.board._head_of(connection)
             self.board._notify(head)
-        if blocked:
-            raise refusal
-        removed = None
-        if path.exists() or path.is_symlink():
-            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume)
-        from ... import private_dirs
-        for micro_task_id, attempt_ids in failed_attempts.items():
-            for adapter in private_dirs.ADAPTERS:
-                private_dirs.remove_tree(
-                    private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
-                    keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)
-                                   for attempt_id in attempt_ids))
-        with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            plan = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
-            ).fetchone()
-            if plan["state"] not in ("applying", "applied"):
-                raise BoardError("REVISION_CONFLICT", "The cleanup plan changed while the removal ran", planId=plan_id)
-            already_removed = removed is None or bool(removed.get("alreadyRemoved"))
-            if plan["state"] == "applying":
+            if reasons:
+                raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons, **details)
+            removed = None
+            if workspace_module()._path_present(path):
+                removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
+                                                             resume=resume, proof=inspection)
+            with self.db.write() as connection:
+                run_row = self._run_row(connection, run_id)
+                already_removed = removed is None or bool(removed["alreadyRemoved"])
                 connection.execute(
-                    "UPDATE workspace_cleanup_plans SET state='applied', applied_at=?, result_json=?, revision=revision+1"
+                    "UPDATE workspace_cleanup_plans SET state='applied',applied_at=?,result_json=?,revision=revision+1"
                     " WHERE plan_id=? AND state='applying'",
-                    (now, canonical_json({"alreadyRemoved": already_removed}), plan_id),
-                )
-                self.board._append_event(
-                    connection,
-                    "workflow.cleanup_applied",
-                    task_id=run_id,
-                    revision=run_row["revision"] + 1,
-                    payload={"planId": plan_id, "path": plan["path"], "alreadyRemoved": already_removed},
-                )
+                    (now, canonical_json({"alreadyRemoved": already_removed}), plan_id))
+                self._release_reservations(connection, run_id, now)
+                self.board._append_event(connection, "workflow.cleanup_applied", task_id=run_id,
+                                         revision=run_row["revision"] + 1,
+                                         payload={"planId": plan_id, "path": str(path), "alreadyRemoved": already_removed})
                 run_row = self._bump_run(connection, run_row, now)
-            plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
-            run_row = self._run_row(connection, run_id)
-            plan_view = self._plan_view(plan)
-            response = {**self.compact(connection, run_row), "duplicate": False, "plan": plan_view,
-                        "removed": True, "retention": plan_view["retention"],
-                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
-            self.board._store_receipt(connection, command_id, "workflow.cleanup_apply", request_key, response, task_id=run_id)
-            head = self.board._head_of(connection)
-        self.board._notify(head)
-        return response
-
-    def _cleanup_apply_precheck(self, connection, run_row, plan) -> bool:
-        """Recheck plan state, expiry, acceptance and dependencies; True means resume."""
-        if plan["state"] == "blocked":
-            raise BoardError("NOT_READY", "This cleanup plan was blocked and never authorized a deletion",
-                             reasons=json.loads(plan["reasons_json"]))
-        # Expiry limits admission of a deletion, not completion of one already
-        # recorded as applying. A crash after removal must still be recoverable;
-        # current authority, identity and dependency checks below remain required.
-        if plan["state"] == "planned" and self.now() > plan["expires_at"]:
-            raise BoardError("PLAN_EXPIRED", "This cleanup plan expired; plan again before deleting anything",
-                             planId=plan["plan_id"], expiresAt=plan["expires_at"])
-        task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)).fetchone()
-        manifest = json.loads(run_row["workspace_manifest_json"])
-        # The plan is bound to the physical allocation, not to whatever logical
-        # turn/input snapshot currently runs on it; both must still agree here.
-        retained = self._allocation_provenance(connection, run_row)
-        allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
-        identity = allocation or manifest
-        path = Path(plan["path"])
-        if (plan["workspace_id"] != identity["workspaceId"]
-                or plan["checkout_id"] != identity["checkoutId"]
-                or plan["repository_id"] != identity["repositoryId"]
-                or plan["path"] != identity["path" if allocation else "checkoutRoot"]
-                or (allocation is None and (path.exists() or path.is_symlink()))):
-            raise BoardError("CONFLICT", "The cleanup plan no longer matches the run's workspace allocation",
-                             planId=plan["plan_id"])
-        resume = plan["state"] == "applying"
-        reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest)
-        planned = json.loads(plan["evidence_json"])
-        if ((not resume and planned["ownerGeneration"] != run_row["owner_generation"])
-                or planned["acceptance"]["state"] != run_row["state"]):
-            reasons.append("review-changed")
-        if reasons:
-            raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons)
-        return resume
+                plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
+                plan_view = self._plan_view(plan)
+                response = {**self.compact(connection, run_row), "duplicate": False, "plan": plan_view,
+                            "removed": True, "retention": plan_view["retention"],
+                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
+                self.board._store_receipt(connection, command_id, "workflow.cleanup_apply", request_key, response, task_id=run_id)
+                head = self.board._head_of(connection)
+            self.board._notify(head)
+            return response
 
     # -- agent suggestion ----------------------------------------------------
     def suggest(self, params: dict, *, scope: dict | None = None) -> dict:
@@ -6285,18 +6083,25 @@ class WorkflowCoordinator:
         checkout_id = manifest.get("checkoutId")
         if not checkout_id:
             return None
+        provenance = [manifest, *self._allocation_provenance(connection, run_row)]
+        for child in connection.execute(
+            "SELECT r.* FROM workflow_runs r JOIN workflow_children c ON c.child_task_id=r.run_id"
+            " WHERE c.parent_run_id=?", (run_row["run_id"],)
+        ):
+            provenance.extend(self._allocation_provenance(connection, child))
+        digests = {item["manifestSha256"] for item in provenance
+                   if item.get("checkoutId") == checkout_id
+                   and item.get("repositoryId") == manifest["repositoryId"]
+                   and item.get("checkoutRoot") == manifest["checkoutRoot"]}
         for row in connection.execute(
-            "SELECT a.manifest_json, t.input_json FROM workflow_artifacts a"
-            " JOIN workflow_turns t ON t.run_id=a.run_id AND t.attempt_id=a.attempt_id"
+            "SELECT a.manifest_json FROM workflow_artifacts a"
             " WHERE a.kind IN ('output','resolved-output','partial-output')"
             " AND (a.run_id=? OR EXISTS (SELECT 1 FROM workflow_children c"
             " WHERE c.parent_run_id=? AND c.child_task_id=a.run_id)) ORDER BY a.rowid DESC",
             (run_row["run_id"], run_row["run_id"]),
         ):
             sealed = json.loads(row["manifest_json"])
-            execution = json.loads(row["input_json"]).get("executionWorkspace") or {}
-            if (execution.get("checkoutId") == checkout_id
-                    and execution.get("manifestSha256") == sealed.get("manifestSha256")):
+            if sealed.get("manifestSha256") in digests:
                 return sealed
         return None
 

@@ -5,6 +5,7 @@ stale helper command, and only the control root's revision authorizes the
 helper's reclamation.
 """
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 import json
 from pathlib import Path
 from unittest import mock
@@ -21,12 +22,13 @@ class RootControlLifecycleTests(LifecycleTestCase):
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         root_view, artifact = flow["rootView"], flow["artifact"]
         target = self.target_with_artifact(artifact)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-            "note": "reviewed the helper output",
-            "target": {"path": str(target["path"]), "ref": "HEAD"},
-            "beforeCommit": target["before"], "keepCheckout": True, **self.control(root_view),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+                "note": "reviewed the helper output",
+                "target": {"path": str(target["path"]), "ref": "HEAD"},
+                "beforeCommit": target["before"],  **self.control(root_view),
+            })
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["targetRunId"], helper_id)
         self.assertEqual(accepted["integration"]["state"], "verified")
@@ -61,11 +63,12 @@ class RootControlLifecycleTests(LifecycleTestCase):
         board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
         artifact = flow["artifact"]
         target = self.target_with_artifact(artifact)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
-            "note": "helper reviewed before the control root changes", "keepCheckout": True,
-            "target": {"path": str(target["path"]), "ref": "HEAD"}, **self.control(flow["rootView"]),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+                "note": "helper reviewed before the control root changes",
+                "target": {"path": str(target["path"]), "ref": "HEAD"}, **self.control(flow["rootView"]),
+            })
         self.assertEqual(accepted["state"], "accepted")
         # Only the controlling root advances; the helper keeps its own revision.
         for index in range(2):
@@ -114,11 +117,12 @@ class RootControlLifecycleTests(LifecycleTestCase):
         first_parent_artifact = next(row for row in flow["rootView"]["artifacts"] if row["kind"] == "output")
         parent_target = self.target_with_artifact(parent_artifact, name="parent-target",
                                                   previous=(first_parent_artifact,))
-        parent_accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": parent_artifact["artifactId"], "note": "parent reviewed",
-            "target": {"path": str(parent_target["path"]), "ref": "HEAD"},
-            "beforeCommit": parent_target["before"], "keepCheckout": True, **self.control(root_view),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            parent_accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": parent_artifact["artifactId"], "note": "parent reviewed",
+                "target": {"path": str(parent_target["path"]), "ref": "HEAD"},
+                "beforeCommit": parent_target["before"],  **self.control(root_view),
+            })
         self.assertEqual(parent_accepted["state"], "accepted")
         # The accepted helper allocation is still owned and still removable.
         root_view = self.view(board, run_id)
