@@ -19,8 +19,10 @@ import { useViewport } from "../timeline/useViewport";
 import { SETTLING_EVENTS, stepForItem } from "./steps";
 import type { Step, Steps } from "./steps";
 import { modelEffort } from "./names";
+import type { Interval } from "../timeline/labels";
 
 const STRIP_PX = 44;
+const STEP_SELECTION_RADIUS_PX = 8;
 
 /** Where a step's slice sits, from recorded facts only; a step with no instant of its own anchors on the wait that leads to it. */
 function anchorOf(step: Step | null, spans: readonly { spanId: string; startAt: string | null }[], acceptanceStart: number | null): number | null {
@@ -62,9 +64,15 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
   const centered = useRef(false);
   const previousSelected = useRef(selected);
+  const trackSelection = useRef<Interval | null>(null);
   const spans = useMemo(() => timeline.spans.filter(span => span.runId === row.runId), [timeline, row.runId]);
   const events = useMemo(() => timeline.events.filter(event => event.runId === row.runId), [timeline, row.runId]);
   const wait = acceptanceInterval(row, spans, nowMs);
+  const step = steps.steps[selected] ?? null;
+  // A settled acceptance selects its settling mark; a pending one and a change of buddy are the overlays below.
+  const selectedKey = step?.kind === "acceptance" && !step.pending
+    ? (mark => mark ? `event:${mark.seq}` : null)(step.events.find(event => SETTLING_EVENTS.includes(event.kind)))
+    : step?.kind === "handoff" || step?.kind === "acceptance" ? null : step?.key ?? null;
   // The opening anchor is decided from the first presented state and never revisited.
   const initialAnchor = useRef<number | null | undefined>(undefined);
   if (initialAnchor.current === undefined) initialAnchor.current = anchorOf(steps.steps[selected] ?? null, spans, wait?.startMs ?? null);
@@ -84,24 +92,24 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   useEffect(() => {
     if (previousSelected.current === selected) return;
     previousSelected.current = selected;
-    const view = viewport!;
-    const selection = view.querySelector<SVGGraphicsElement>('[data-slot="selected-item"]')!;
-    const frame = selection.getBoundingClientRect();
-    // Track clips the selection frame at the SVG's ends; follow only what is drawn.
-    const canvas = selection.ownerSVGElement!.getBoundingClientRect();
-    const slice = { left: Math.max(frame.left, canvas.left), right: Math.min(frame.right, canvas.right) };
-    const left = view.getBoundingClientRect().left + view.clientLeft;
+    if (!scale || !viewport) return;
+    let range = trackSelection.current;
+    if (step?.kind === "delegation" || step?.kind === "handoff" || step?.kind === "acceptance" && step.pending) {
+      const at = anchorOf(step, spans, wait?.startMs ?? null);
+      if (at === null) return;
+      const x = scale.toX(at)!;
+      range = { left: x - STEP_SELECTION_RADIUS_PX, right: x + STEP_SELECTION_RADIUS_PX };
+    }
+    if (range === null) return;
+    const slice = { left: range.left + SLACK, right: range.right + SLACK };
+    const view = viewport;
+    const left = view.scrollLeft;
     const right = left + view.clientWidth;
     const delta = slice.right - slice.left > view.clientWidth || slice.left < left ? slice.left - left
       : slice.right > right ? slice.right - right : 0;
     if (delta !== 0) view.scrollTo({ left: view.scrollLeft + delta,
       behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
   }, [selected, viewport]);
-  const step = steps.steps[selected] ?? null;
-  // A settled acceptance selects its settling mark; a pending one and a change of buddy are the overlays below.
-  const selectedKey = step?.kind === "acceptance" && !step.pending
-    ? (mark => mark ? `event:${mark.seq}` : null)(step.events.find(event => SETTLING_EVENTS.includes(event.kind)))
-    : step?.kind === "handoff" || step?.kind === "acceptance" ? null : step?.key ?? null;
   const selectKey = (key: string) => {
     const index = stepForItem(steps, key, timeline);
     if (index !== null && index >= 0) onStep(index + 1);
@@ -117,7 +125,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
     onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onStep(index + 1); } }}
     className={selected === index ? "pointer-events-auto outline-none" : "pointer-events-auto outline-none focus-visible:[&_.hit]:stroke-ring focus-visible:[&_.hit]:stroke-2"}>
     <rect className="hit" fill="transparent" x={Math.max(0, Math.min(scale!.widthPx + SLACK * 2 - hit.w, hit.x))} y={hit.y} width={hit.w} height={hit.h}/>
-    {selected === index && <rect data-slot="selected-item" x={at - 8} y={STRIP_PX / 2 - 8} width={16} height={16} fill="none" className="pointer-events-none stroke-focus"/>}
+    {selected === index && <rect data-slot="selected-item" x={at - STEP_SELECTION_RADIUS_PX} y={STRIP_PX / 2 - STEP_SELECTION_RADIUS_PX} width={STEP_SELECTION_RADIUS_PX * 2} height={STEP_SELECTION_RADIUS_PX * 2} fill="none" className="pointer-events-none stroke-focus"/>}
     {mark}
   </g></Hint>;
   const middle = STRIP_PX / 2;
@@ -145,7 +153,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
         </ZoomRuler>
         <div className="relative">
           <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd}
-            selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX}
+            selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX} selectionRef={trackSelection}
             onOpen={(_runId, key) => selectKey(key)} onSelect={(_runId, key) => selectKey(key ?? "")}
             onHover={() => {}} onFocusSpan={() => {}} onMarker={() => {}}/>
           {overlay(x => <>
