@@ -102,7 +102,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                     }), env=self.env())
                     self.assertNotEqual(code, 0, response)
                     self.assertEqual(response['error']['code'], 'INVALID_ARGUMENT')
-                    self.assertIn('execution-submit', response['error']['message'])
+                    self.assertIn('Micro tasks do not accept', response['error']['message'])
             code, listing = self.cli('list', '{}', env=self.env())
             self.assertEqual(code, 0, listing)
             self.assertEqual(listing['runs'], [])

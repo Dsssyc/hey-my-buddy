@@ -48,7 +48,6 @@ CONTROL_OPERATIONS = (
     "storage_plan",
     "storage_apply",
     "worker_sessions",
-    "task_submit",
     "task_get",
     "task_list",
     "task_result",
@@ -842,9 +841,6 @@ class BoardService(_BaseResource):
         return self.console_public_identity(session_id) is not None
 
     # -- tasks --------------------------------------------------------------
-    def task_submit(self, request_json: str) -> str:
-        return self._guard("task.submit", request_json, self.store.task_submit)
-
     def task_get(self, request_json: str) -> str:
         return self._guard("task.get", request_json, self.store.task_get)
 

@@ -16,7 +16,7 @@ class ReminderFacts(BoardTestCase):
         self.client = self.fixture.client()
 
     def claim(self, expected=10, adapter='command'):
-        self.task = self.client.submit(requestId='reminder', task='observe', cwd=str(self.workdir()),
+        self.task = self.fixture.submit_execution(requestId='reminder', task='observe', cwd=str(self.workdir()),
                                        adapter=adapter, **({'argv': ['echo', 'test']} if adapter == 'command' else {}),
                                        expectedSeconds=expected)['task']
         self.nonce = 'n' * 32

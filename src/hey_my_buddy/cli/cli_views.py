@@ -39,7 +39,7 @@ MICRO_TASK_RECEIPTS = frozenset(
     }
 )
 #: Commands whose response is one execution task view.
-TASK_VIEWS = frozenset({"status", "execution-submit", "execution-cancel", "execution-retry", "execution-acknowledge"})
+TASK_VIEWS = frozenset({"status", "execution-cancel", "execution-retry", "execution-acknowledge"})
 
 _TITLE_LIMIT = 120
 

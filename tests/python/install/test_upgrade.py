@@ -247,7 +247,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_nonidle_preflight_refuses_without_cancelling(self):
         board=self.board()
-        run=board.call('task_submit', {'requestId':'busy', 'task':'protected work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})['task']['runId']
+        run=board.submit_execution(**{'requestId':'busy', 'task':'protected work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})['task']['runId']
         with self.assertRaises(BoardError) as caught:
             upgrade.idle_snapshot(board.directory)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
@@ -258,7 +258,7 @@ class UpgradeTests(BoardTestCase):
         marker=board.directory/'upgrade.json';marker.write_text('{}')
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
-            board.call('task_submit', {'requestId':'blocked', 'task':'work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})
+            board.call('task_retry', {'runId': 'blocked'})
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
         self.assertEqual(board.store.count_tasks(),0)
 
@@ -431,7 +431,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_retained_event_prefix_detects_rewrites_but_allows_new_events(self):
         board=self.board()
-        board.call('task_submit',{'requestId':'event-fixture','task':'private','cwd':str(self.workdir()),'adapter':'command','argv':['/bin/true']})
+        board.submit_execution(**{'requestId':'event-fixture','task':'private','cwd':str(self.workdir()),'adapter':'command','argv':['/bin/true']})
         with board.store.db.connect() as connection:
             before=backup.database_snapshot(connection)
         with board.store.db.write() as connection:

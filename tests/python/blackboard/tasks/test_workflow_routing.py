@@ -77,7 +77,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         for harness in (None, "dsh", "zcode"):
             with self.subTest(harness=harness):
                 with self.assertRaises(BoardError) as raised:
-                    board.call("task_submit", {"requestId": f"bypass-{harness}", "task": "code",
+                    board.submit_execution(**{"requestId": f"bypass-{harness}", "task": "code",
                                                "cwd": str(self.workdir("bypass")),
                                                **({"adapter": harness} if harness else {})})
                 self.assertEqual(raised.exception.code, "MICRO_TASK_REQUIRED")
@@ -192,7 +192,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board)
         self.select(board, self.router_claim(board, submitted))
         self.catalog_validation.side_effect = BoardError("CATALOG_UNAVAILABLE", "installed tuple disappeared")
-        other = board.call("task_submit", {"requestId": "plain", "adapter": "command", "argv": ["true"],
+        other = board.submit_execution(**{"requestId": "plain", "adapter": "command", "argv": ["true"],
                                            "task": "ordinary", "cwd": str(self.workdir("plain"))})
         self.register(board)
         claim = self.claim(board)
@@ -418,7 +418,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.seed(board)
         submitted = self.routed(board)
         self.select(board, self.router_claim(board, submitted))
-        blocker = board.call("task_submit", {"requestId": "capacity-holder", "adapter": "command", "argv": ["true"],
+        blocker = board.submit_execution(**{"requestId": "capacity-holder", "adapter": "command", "argv": ["true"],
                                              "task": "occupy one slot", "cwd": str(self.workdir("capacity-holder"))})
         self.register(board, "holder")
         held = self.claim(board, "holder", run_id=blocker["task"]["runId"], claim_request_id="capacity-holder")["claim"]

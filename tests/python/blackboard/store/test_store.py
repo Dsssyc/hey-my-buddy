@@ -127,7 +127,7 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
         client = board.client()
         for index in range(2):
             pass  # Admission is owned by the service.
-            submitted = client.submit(
+            submitted = board.submit_execution(
                 requestId=f"cmd-{index}",
                 task="no model",
                 cwd=str(self.workdir(f"cmd-{index}")),
@@ -135,7 +135,7 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
                 argv=["/bin/true"],
             )
             claim = admit_execution(client, f"{index}" * 32, task_id=submitted["task"]["runId"])
-        third = client.submit(
+        third = board.submit_execution(
             requestId="cmd-2", task="no model either", cwd=str(self.workdir("cmd-2")),
             adapter="command", argv=["/bin/true"],
         )["task"]
@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
 class ExpectedDurationTests(BoardTestCase):
     def submit(self, board, request_id, **duration):
-        return board.client().submit(requestId=request_id, task="duration fixture", cwd=str(self.workdir()),
+        return board.submit_execution(requestId=request_id, task="duration fixture", cwd=str(self.workdir()),
                                      adapter="command", argv=["/bin/true"], **duration)["task"]
 
     def test_command_default_and_explicit_duration_are_authoritative_board_facts(self):
@@ -314,15 +314,15 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         board = self.board(max_concurrent=2, clock=clock)
         client = board.client()
         held = self.workdir('held')
-        client.submit(requestId='held', task='hold', cwd=str(held), adapter='command',
+        board.submit_execution(requestId='held', task='hold', cwd=str(held), adapter='command',
                       argv=['true'], exclusiveResources=['exclusive-fixture'])
         admit_execution(client, 'held-nonce-0000000000000000000')
         for index in range(board.store.CLAIM_CANDIDATE_LIMIT + 2):
             clock.advance(1)
-            client.submit(requestId=f'blocked-{index}', task='blocked', cwd=str(self.workdir(f'blocked-{index}')),
+            board.submit_execution(requestId=f'blocked-{index}', task='blocked', cwd=str(self.workdir(f'blocked-{index}')),
                           adapter='command', argv=['true'], exclusiveResources=['exclusive-fixture'])
         clock.advance(1)
-        runnable = client.submit(requestId='runnable', task='free', cwd=str(self.workdir('free')),
+        runnable = board.submit_execution(requestId='runnable', task='free', cwd=str(self.workdir('free')),
                                  adapter='command', argv=['true'])['task']
         admitted = admit_execution(client, 'free-nonce-0000000000000000000')['claim']
         self.assertIsNotNone(admitted)
@@ -336,6 +336,6 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         for _ in range(3):
             self.assertIsNone(board.service.admit_execution('empty-nonce-0000000000000')['claim'])
         changed.assert_not_called()
-        board.client().submit(requestId='new-work', task='new', cwd=str(self.workdir()),
+        board.submit_execution(requestId='new-work', task='new', cwd=str(self.workdir()),
                               adapter='command', argv=['true'])
         changed.assert_called_once()

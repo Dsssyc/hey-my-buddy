@@ -43,12 +43,11 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                   f"release=pathlib.Path({str(release)!r})\n"
                   "while not release.exists(): time.sleep(.05)\n"
                   "print('released after service restart', flush=True)\n")
-        code, submitted = self.cli("execution-submit", json.dumps({
+        submitted = self.submit_execution(**{
             "requestId": name, "task": "Wait behind a private gate",
             "cwd": str(self.workdir(name)), "adapter": "command",
             "argv": [sys.executable, "-c", script],
-        }))
-        self.assertEqual(code, 0, submitted)
+        })["task"]
         run_id = submitted["runId"]
         self.assertTrue(wait_for(started.exists, timeout=60),
                         f"command did not start: {submitted}")

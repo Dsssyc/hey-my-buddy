@@ -22,7 +22,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board = InProcessBoard(self.directory / f'case-{self.case_index}')
         self._stack.append(board)
         client = board.client()
-        task = client.submit(requestId='interruption', task='work', adapter='command',
+        task = board.submit_execution(requestId='interruption', task='work', adapter='command',
                              cwd=str(self.workdir()), argv=['echo', 'work'])['task']
         claim = admit_execution(client, 'n' * 32)['claim']
         actor = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'],
@@ -307,7 +307,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         for name, bad, code in cases:
             with self.subTest(case=name):
                 board, client, task, _, actor = self.claimed()
-                good_task = client.submit(requestId='later', task='later', adapter='command',
+                good_task = board.submit_execution(requestId='later', task='later', adapter='command',
                     cwd=str(self.workdir(name + '-later')), argv=['echo', 'later'])['task']
                 good = admit_execution(client, 'g' * 32)['claim']
                 good_actor = {'attemptId': good['attempt']['attemptId'], 'generation': 1, 'nonce': 'g' * 32}

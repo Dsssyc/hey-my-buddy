@@ -352,7 +352,7 @@ class PreparationTests(WorkflowTestCase):
     def test_workspace_drift_becomes_attention_and_another_task_can_be_claimed(self):
         board, run_id, _, cont = self.pending()
         (self.repo / "tracked.txt").write_text("unreviewed post-seal drift\n")
-        ordinary = board.call("task_submit", {"requestId": "ordinary", "adapter": "command", "argv": ["/bin/true"], "task": "independent", "cwd": str(self.workdir("ordinary"))})["task"]
+        ordinary = board.submit_execution(**{"requestId": "ordinary", "adapter": "command", "argv": ["/bin/true"], "task": "independent", "cwd": str(self.workdir("ordinary"))})["task"]
         claimed = self.claim(board, claim_request_id="scan")
         self.assertEqual(claimed["claim"]["task"]["taskId"], ordinary["taskId"])
         view = board.call("workflow_get", {"runId": run_id, "includeAudit": True})

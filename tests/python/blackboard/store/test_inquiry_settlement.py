@@ -13,7 +13,7 @@ class InquirySettlementTests(BoardTestCase):
     def claimed(self):
         board = self.board()
         client = board.client()
-        task = client.submit(requestId="inquiry-settlement", task="work",
+        task = board.submit_execution(requestId="inquiry-settlement", task="work",
             cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
         attempt = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]["attempt"]
         client.post_question("q-pending", "Status?", runId=task["taskId"])

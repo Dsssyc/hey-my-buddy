@@ -175,7 +175,7 @@ class LeadOwnedTests(WorkflowTestCase):
         self.assertEqual([row["runId"] for row in listing["runs"]], [owned["runId"]])
         filtered = board.call("task_list", {"credential": claim["agentCredential"], "hostId": "host-1"})
         self.assertEqual(filtered["total"], 0)
-        for operation in ("workflow_takeover", "macro_task_stop", "task_submit", "task_cancel", "user_policy_publish", "selection_request", "service_control"):
+        for operation in ("workflow_takeover", "macro_task_stop", "task_cancel", "user_policy_publish", "selection_request", "service_control"):
             with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
                 board.call(operation, {"runId": owned["runId"], "credential": claim["agentCredential"]})
             self.assertEqual(caught.exception.code, "FORBIDDEN")

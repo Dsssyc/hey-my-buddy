@@ -40,7 +40,7 @@ class ReceiptStopTests(WorkflowTestCase):
     def test_execution_result_named_turn_is_opaque_data(self):
         board = self.board()
         self.register(board)
-        run = board.call("task_submit", {"requestId": "execution", "task": "opaque data", "cwd": str(self.workdir()),
+        run = board.submit_execution(**{"requestId": "execution", "task": "opaque data", "cwd": str(self.workdir()),
                                        "adapter": "command", "argv": ["true"]})
         attempt = self.claim(board)["claim"]["attempt"]
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {'turn': {'outcome': {'disposition': 'assistance'}}}})

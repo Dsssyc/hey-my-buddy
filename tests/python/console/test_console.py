@@ -324,16 +324,13 @@ class ConsoleSecurityTests(ConsoleTestCase):
 
     def test_commands_use_the_same_validated_operations(self):
         board = self.board()
-        submitted = board.call(
-            "task_submit",
-            {
+        submitted = board.submit_execution(**{
                 "requestId": "console-task",
                 "task": "keep working",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/echo", "hi"],
-            },
-        )
+            })
         run_id = submitted["task"]["runId"]
         _, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -427,16 +424,13 @@ def snapshot_of(board) -> dict:
 
     def test_task_detail_route_returns_the_existing_view(self):
         board = self.board()
-        submitted = board.call(
-            "task_submit",
-            {
+        submitted = board.submit_execution(**{
                 "requestId": "detail-task",
                 "task": "produce a detail view",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/echo", "detail"],
-            },
-        )
+            })
         run_id = submitted["task"]["runId"]
         client = board.client()
         client.register_worker("worker-1", adapter="command", capabilities=["command"])
@@ -468,16 +462,13 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
     """The read-only ``GET /api/tasks`` history route over the named task_list."""
 
     def execution_task(self, board, request_id: str, *, cwd=None):
-        return board.call(
-            "task_submit",
-            {
+        return board.submit_execution(**{
                 "requestId": request_id,
                 "task": f"ordinary {request_id}",
                 "cwd": str(cwd or self.workdir()),
                 "adapter": "command",
                 "argv": ["/bin/echo", request_id],
-            },
-        )["task"]
+            })["task"]
 
     def test_history_route_serves_the_same_named_operation_and_session(self):
         board = self.board()
@@ -856,16 +847,13 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
 
     def test_workflow_get_routing_history_is_reachable_over_the_console_boundary(self):
         board = self.board()
-        plain = board.call(
-            "task_submit",
-            {
+        plain = board.submit_execution(**{
                 "requestId": "console-plain",
                 "task": "ordinary",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["true"],
-            },
-        )
+            })
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
         status, _headers, data = browser.command(
@@ -888,16 +876,13 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
 
     def test_message_list_reads_the_inquiries_of_one_run_over_the_console_boundary(self):
         board = self.board()
-        run = board.call(
-            "task_submit",
-            {
+        run = board.submit_execution(**{
                 "requestId": "console-inquiry",
                 "task": "ordinary",
                 "cwd": str(self.workdir()),
                 "adapter": "command",
                 "argv": ["true"],
-            },
-        )["task"]["runId"]
+            })["task"]["runId"]
         posted = board.call("message_post", {"runId": run, "inquiryId": "ask-1", "question": "Status?"})["message"]
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]

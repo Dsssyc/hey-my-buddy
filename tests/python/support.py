@@ -328,6 +328,10 @@ class InProcessBoard:
     def client(self, **kwargs) -> BoardClient:
         return BoardClient(self.directory, call=self.call, **kwargs)
 
+    def submit_execution(self, **params) -> dict:
+        """Seed an execution through the service's store, outside the Host API."""
+        return self.store.task_submit(params)
+
     def close(self) -> None:
         self.live_registry.close()
         if self.console is not None:
@@ -424,6 +428,22 @@ class BoardTestCase(unittest.TestCase):
         return _child_environment(self.directory, explicit)
 
     # -- real daemon helpers -------------------------------------------------
+    def submit_execution(self, **params) -> dict:
+        """Write a queued execution to this fixture's existing private board.
+
+        Do not initialize a second store: startup reconciliation belongs to the
+        daemon holding board-owner.lock. SQLite serializes this short transaction
+        with the daemon's writes, and its scheduler picks up the row on its next
+        two-second scan without a cross-process notification or submission RPC.
+        Read its actual capacity so the initial queue reason uses the same limit.
+        """
+        capacity = BoardClient(self.directory, autostart=False).health()["capacity"]
+        store = BoardStore(self.directory, max_concurrent=capacity["totalLimit"])
+        try:
+            return store.task_submit(params)
+        finally:
+            store.db.close()
+
     @contextmanager
     def daemon(self, *, env: dict | None = None):
         """Start the real daemon in a child process and wait for health."""

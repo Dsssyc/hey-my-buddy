@@ -46,9 +46,6 @@ class BoardClient:
         return self.call("capabilities")
 
     # -- tasks --------------------------------------------------------------
-    def submit(self, **params: Any) -> dict:
-        return self.call("task_submit", params)
-
     def get(self, **selector: Any) -> dict:
         return self.call("task_get", selector)["task"]
 

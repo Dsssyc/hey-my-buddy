@@ -4,12 +4,11 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...protocol import schemas
 from ...errors import BoardError
 from ..store.store import BoardStore
-from ..service.live_registry import LiveRegistry
 from ...private_dirs import attempt_root
 from ...protocol.inquiry import (
     BRIDGE_ERRORS,
@@ -20,6 +19,9 @@ from ...protocol.inquiry import (
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
 from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveRequest, LiveReply, LiveSnapshot
+
+if TYPE_CHECKING:
+    from ..service.live_registry import LiveRegistry
 
 MAX_WAIT_MS = 30000
 MAX_JOURNAL_BYTES = 1024 * 1024

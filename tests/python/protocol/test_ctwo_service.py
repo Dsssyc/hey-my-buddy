@@ -93,20 +93,10 @@ class TestNamedContract(BoardTestCase):
             capacity = self._wait_call(endpoint, "wait_capacity", {})
             self.assertEqual(capacity["capacity"], 1)
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
-                reply = json.loads(
-                    board.task_submit(
-                        json.dumps(
-                            {
-                                "token": endpoint["token"],
-                                "requestId": "wait-route",
-                                "task": "do",
-                                "cwd": str(self.workdir()),
-                                "adapter": "command",
-                                "argv": [sys.executable, "-c", "import time; time.sleep(30)"],
-                                "expectedSeconds": 60,
-                            }
-                        )
-                    )
+                reply = self.submit_execution(
+                    requestId="wait-route", task="do", cwd=str(self.workdir()),
+                    adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(30)"],
+                    expectedSeconds=60,
                 )
                 self.assertEqual(reply["task"]["status"], "queued")
                 task_id = reply["task"]["runId"]
@@ -129,11 +119,10 @@ class TestNamedContract(BoardTestCase):
                         time.sleep(0.02)
 
                     # An unrelated event must not release the scoped wait slot.
-                    unrelated = json.loads(board.task_submit(json.dumps({
-                        "token": endpoint["token"], "requestId": "wait-route-unrelated",
-                        "task": "unrelated", "cwd": str(self.workdir()),
-                        "adapter": "command", "argv": [sys.executable, "-c", "pass"],
-                    })))
+                    unrelated = self.submit_execution(
+                        requestId="wait-route-unrelated", task="unrelated", cwd=str(self.workdir()),
+                        adapter="command", argv=[sys.executable, "-c", "pass"],
+                    )
                     self.assertNotIn("error", unrelated)
                     overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
                     self.assertIn("error", overloaded, overloaded)
@@ -156,16 +145,19 @@ class TestNamedContract(BoardTestCase):
     def test_multiple_clients_share_one_authoritative_task(self):
         with self.daemon():
             endpoint = self._endpoint()
-            payload = json.dumps(
-                {"token": endpoint["token"], "requestId": "shared", "task": "do", "cwd": str(self.workdir()),
-                 "adapter": "command", "argv": [sys.executable, "-c", "pass"]}
-            )
+            params = {"requestId": "shared", "task": "do", "cwd": str(self.workdir()),
+                      "adapter": "command", "argv": [sys.executable, "-c", "pass"]}
+            one = self.submit_execution(**params)
+            two = self.submit_execution(**params)
+            self.assertEqual(one["task"]["runId"], two["task"]["runId"])
+            self.assertTrue(two["duplicate"])
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as first:
                 with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as second:
-                    one = json.loads(first.task_submit(payload))
-                    two = json.loads(second.task_submit(payload))
-                    self.assertEqual(one["task"]["runId"], two["task"]["runId"])
-                    self.assertTrue(two["duplicate"])
+                    selector = json.dumps({"token": endpoint["token"], "requestId": "shared"})
+                    first_view = json.loads(first.task_get(selector))
+                    second_view = json.loads(second.task_get(selector))
+                    self.assertEqual(first_view["task"]["runId"], one["task"]["runId"])
+                    self.assertEqual(second_view["task"]["runId"], one["task"]["runId"])
 
     def test_a_second_daemon_refuses_to_share_the_state_directory(self):
         with self.daemon():

@@ -258,7 +258,7 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "NOT_FOUND")
         message = str(failure.exception)
         self.assertIn("hey-my-buddy submit", message)
-        self.assertIn("execution-submit", message)
+        self.assertNotIn("execution-submit", message)
         self.assertNotIn("buddy run", message)
         self.assertEqual(service.calls, ["status"])
 
