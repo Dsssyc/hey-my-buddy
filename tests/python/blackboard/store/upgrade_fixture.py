@@ -19,6 +19,7 @@ import tempfile
 from hey_my_buddy.blackboard.tasks.workspace import _git_command
 
 FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-floor"
+FIXTURE_ROOT_TOKEN = "__hmb_fixture_root_6e21f754c8724c12a88250e88a0dd503__"
 
 
 def complete_fixture_cleanup(connection):
@@ -122,11 +123,11 @@ def load_fixture(state: Path) -> dict:
 
         def substitute(match):
             token = match[0]
-            if not token.startswith('<fixture-root>'):
+            if not token.startswith(FIXTURE_ROOT_TOKEN):
                 return bindings.get(token, token)
             # Bind the complete template path, including its separators and
             # digest components. Never interpret tokens in the private root.
-            relative = token.removeprefix('<fixture-root>')
+            relative = token.removeprefix(FIXTURE_ROOT_TOKEN)
             if relative == '/state' or relative.startswith('/state/'):
                 root, relative = state, relative.removeprefix('/state')
             else:
@@ -136,7 +137,7 @@ def load_fixture(state: Path) -> dict:
 
         # Substitute each source token once; a private directory name can itself
         # contain a placeholder or a hex digest without being interpreted again.
-        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|" + identity_token, substitute, text)
+        return re.sub(re.escape(FIXTURE_ROOT_TOKEN) + r"(?:/[\w.-]+)*|" + identity_token, substitute, text)
 
     for template in resources["checkouts"].values():
         _git(repository, "worktree", "add", "--quiet", "--detach", replace(template), commit)
@@ -236,9 +237,9 @@ def load_delivered_stock(fixture: dict) -> None:
     def replace(text, *, ascii_json=False, json_payload=False):
         def substitute(match):
             token = match[0]
-            if not token.startswith("<fixture-root>"):
+            if not token.startswith(FIXTURE_ROOT_TOKEN):
                 return bindings.get(token, token)
-            relative = token.removeprefix("<fixture-root>")
+            relative = token.removeprefix(FIXTURE_ROOT_TOKEN)
             if relative == "/state" or relative.startswith("/state/"):
                 root, relative = state, relative.removeprefix("/state")
             else:
@@ -247,7 +248,7 @@ def load_delivered_stock(fixture: dict) -> None:
             path = root.joinpath(*relative.lstrip("/").split("/")) if relative else root
             return json.dumps(str(path), ensure_ascii=ascii_json)[1:-1] if json_payload else str(path)
 
-        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|" + identity_token, substitute, text)
+        return re.sub(re.escape(FIXTURE_ROOT_TOKEN) + r"(?:/[\w.-]+)*|" + identity_token, substitute, text)
 
     for recipe in resources["hashBindings"]:
         payload = replace(recipe["template"], ascii_json=recipe["asciiJson"], json_payload=True)

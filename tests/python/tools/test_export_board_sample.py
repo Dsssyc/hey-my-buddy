@@ -45,12 +45,12 @@ class ExportBoardSampleTests(WorkflowTestCase):
 
     def assert_only_upgrade_project_marker_changed(self, before, after, fixture, project_id):
         repository = fixture['fixtureRoot'] / 'repository'
-        relative = repository.relative_to(fixture['state']).as_posix()
-        ref = relative + '/.git/refs/hey-my-buddy/project'
+        relative = str(repository.relative_to(fixture['state']))
+        ref = str(Path(relative) / '.git/refs/hey-my-buddy/project')
         self.assertNotIn(ref, before)
         self.assertIn(ref, after)
         oid = after[ref].decode('ascii').strip()
-        blob = relative + '/.git/objects/' + oid[:2] + '/' + oid[2:]
+        blob = str(Path(relative) / '.git/objects' / oid[:2] / oid[2:])
         self.assertNotIn(blob, before)
         self.assertIn(blob, after)
         self.assertEqual(zlib.decompress(after[blob]),
@@ -305,8 +305,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 'SELECT COUNT(*) FROM attempts a JOIN router_dispatches d ON d.task_id=a.task_id'
             ).fetchone()[0], 0)
         self.assertLess(len(selected_attempts), len(attempts))
-        self.assertEqual({path.relative_to(native_path(output)).as_posix() for path in native_path(output).rglob('inquiry.results.jsonl')},
-                         {f'attempts/{task}/{attempt}/inquiry.results.jsonl'
+        self.assertEqual({str(path.relative_to(native_path(output))) for path in native_path(output).rglob('inquiry.results.jsonl')},
+                         {str(Path('attempts') / task / attempt / 'inquiry.results.jsonl')
                           for task, attempt in selected_attempts})
         for task, attempt in selected_attempts:
             relative = Path('attempts') / task / attempt / 'inquiry.results.jsonl'

@@ -161,6 +161,20 @@ class FocusedChecksTests(unittest.TestCase):
                     self.assertIn(arguments[0], errors)
                 self.assertEqual(list(self.temporary.iterdir()), [])
 
+    def test_rejected_private_root_is_removed_before_any_suite_runs(self):
+        error = BoardError("PRIVATE_PATH_UNSAFE", "State root has an untrusted ancestor")
+        with (patch.object(checks.state_root, "check_state_root", side_effect=error) as checked,
+              patch.object(checks, "run_suites_parallel") as run):
+            code, output, errors = self.invoke(["tests/python/test_first.py"])
+        self.assertEqual(code, 2, errors + output)
+        checked.assert_called_once()
+        rejected = checked.call_args.args[0]
+        self.assertIn(str(rejected), errors)
+        self.assertIn(error.message, errors)
+        self.assertFalse(rejected.exists())
+        self.assertEqual(list(self.temporary.iterdir()), [])
+        run.assert_not_called()
+
     def test_focused_serial_and_parallel_runs_start_each_selected_file_once(self):
         for jobs in (1, 2):
             for paths, expected in (
@@ -591,7 +605,9 @@ class SweepTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX account ownership")
     def test_sweep_does_not_touch_another_users_directory(self):
-        root = self.abandoned()
+        # A retained root belongs to an earlier runner, so this process has
+        # never checked or cached its private boundary.
+        root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=self.directory))
         original = Path.stat
         def foreign(path, *args, **kwargs):
             metadata = original(path, *args, **kwargs)
@@ -608,7 +624,8 @@ class SweepTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX owner-private mode")
     def test_sweep_rejects_shared_permissions_without_repair(self):
-        root = self.abandoned()
+        root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-checks-", dir=self.directory))
+        (root / checks.CREATOR_FILE_NAME).write_text("999999999\n", encoding="utf-8", newline="\n")
         root.chmod(0o755)
         code, output = self.sweep([])
         self.assertEqual(code, 3, output)

@@ -35,6 +35,7 @@ WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
 THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
+FIXTURE_ROOT_TOKEN = "__hmb_fixture_root_6e21f754c8724c12a88250e88a0dd503__"
 
 
 def json_text(value):
@@ -71,7 +72,7 @@ def generate(args):
     # Frozen writers include source paths in IDs, refs and Git commit messages.
     # Generate at one private canonical path, then retain the whole work tree
     # at the caller's fresh destination. Each run still starts from empty stock.
-    work = root / "tmp" / ".upgrade-fixture-generation-active"
+    work = root / "tmp" / "schema33-stub" / ".upgrade-fixture-generation-active"
     work.mkdir(exist_ok=False)
     try:
         generate_in_canonical_slot(args, root, work)
@@ -250,7 +251,7 @@ def populate(args):
         # synthetic inode while generating stock; load_fixture rebinds every
         # identity to the restored directory's real path and inode.
         directory = Path(path).resolve(strict=True)
-        fixture_path = str(directory).replace(str(work), "<fixture-root>")
+        fixture_path = str(directory).replace(str(work), FIXTURE_ROOT_TOKEN)
         payload = json.dumps([fixture_path, 0], sort_keys=True,
                              separators=(",", ":"), ensure_ascii=True).encode()
         return hashlib.sha256(payload).hexdigest()
@@ -1025,7 +1026,7 @@ def populate(args):
             row_counts = {row[1]: connection.execute(f'SELECT COUNT(*) FROM "{row[1]}"').fetchone()[0]
                           for row in source_schema if row[0] == "table" and row[1] != "sqlite_sequence"}
         (work / "raw.sql").write_bytes(raw_sql.encode("utf-8"))
-        redactions = [(str(work), "<fixture-root>")]
+        redactions = [(str(work), FIXTURE_ROOT_TOKEN)]
         sql = raw_sql
         for old, new in redactions:
             sql = sql.replace(old, new)
@@ -1036,7 +1037,7 @@ def populate(args):
         sql_path = output / "board.sql"
         sql_path.write_bytes((header + sql).encode("utf-8"))
         (output / "catalog.json").write_bytes((json_text(catalog) + "\n").encode("utf-8"))
-        operations_text = json_text(operations).replace(str(work), "<fixture-root>")
+        operations_text = json_text(operations).replace(str(work), FIXTURE_ROOT_TOKEN)
         (output / "operations.json").write_bytes((operations_text + "\n").encode("utf-8"))
         resources = export_resources(work, workspace, preimages)
         (output / "workspace-resources.json").write_bytes(
@@ -1062,7 +1063,7 @@ def populate(args):
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
             "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
-            "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
+            "pythonInterpreter": FIXTURE_ROOT_TOKEN + "/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {FLOOR_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode("utf-8")),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
@@ -1107,10 +1108,10 @@ def populate(args):
                       "DELETE FROM macro_task_deletions;\n"
                       f"INSERT INTO workspace_cleanup_plans({columns}) VALUES({values});\n")
         (output / "schema-31-cleanup-stock.sql").write_text(
-            supplement.replace(str(work), "<fixture-root>"), encoding="utf-8", newline="\n")
+            supplement.replace(str(work), FIXTURE_ROOT_TOKEN), encoding="utf-8", newline="\n")
         if args.cleanup_stock_for:
             fixed = args.cleanup_stock_for.resolve()
-            row = {name: value.replace(str(work), "<fixture-root>") if isinstance(value, str) else value
+            row = {name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
                    for name, value in dict(journal).items()}
             stock = bind_cleanup_stock((fixed / "board.sql").read_text(encoding="utf-8"),
                                        sql_path.read_text(encoding="utf-8"), row)
@@ -1168,7 +1169,7 @@ def populate(args):
                 if added:
                     stock[table] = added
         clock[0] = previous_time
-        stock = {table: [{name: value.replace(str(work), "<fixture-root>") if isinstance(value, str) else value
+        stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
                           for name, value in row.items()} for row in rows] for table, rows in stock.items()}
         if args.reservation_stock_for:
             fixed = args.reservation_stock_for.resolve()
@@ -1236,7 +1237,7 @@ def populate(args):
                     added = [row for row in rows if row['rowid'] not in before[table]]
                     if added:
                         stock[table] = added
-            stock = {table: [{name: value.replace(str(work), '<fixture-root>') if isinstance(value, str) else value
+            stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN) if isinstance(value, str) else value
                               for name, value in row.items()} for row in rows] for table, rows in stock.items()}
             fixed = args.delivered_stock_for.resolve()
             stock = bind_floor_stock((fixed / 'board.sql').read_text(encoding='utf-8'),
@@ -1288,7 +1289,7 @@ def populate(args):
 
 def export_resources(work, workspace, preimages):
     def template(text):
-        return text.replace(str(work), "<fixture-root>")
+        return text.replace(str(work), FIXTURE_ROOT_TOKEN)
 
     identities, checkouts = {}, {}
     for label in ("delivered", "accepted", "failed", "cancelled", "adopted",
@@ -1487,7 +1488,7 @@ def verify(output, restored):
                              ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal")}}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
-        assert "<fixture-root>" in (output / "board.sql").read_text(encoding="utf-8")
+        assert FIXTURE_ROOT_TOKEN in (output / "board.sql").read_text(encoding="utf-8")
         assert "/Users/" not in (output / "board.sql").read_text(encoding="utf-8")
         return {"integrity": "ok", "foreignKeyViolations": 0, "schema": FLOOR_SCHEMA, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),

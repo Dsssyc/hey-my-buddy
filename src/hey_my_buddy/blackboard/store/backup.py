@@ -213,8 +213,10 @@ def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path]:
     incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
     journal = root / '.publish.json'
     for path in (incoming, current, previous):
+        _guard(path)
         if path.exists() and not path.is_dir():
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
+    _guard(journal)
     if journal.exists() and not journal.is_file():
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
     return incoming, current, previous, journal

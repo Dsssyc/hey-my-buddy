@@ -208,6 +208,11 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
     parent = private_root_directory() if directory is None else directory
     root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-checks-", directory=parent).resolve()
+    try:
+        state_root.check_state_root(root)
+    except BoardError as error:
+        root.rmdir()
+        raise ValueError(f"private test root {root}: {error.message}") from error
     (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
     (root / "tmp").mkdir(mode=private_dirs.directory_mode())
     if os.name == "nt":
@@ -1064,7 +1069,10 @@ def main(argv: list[str] | None = None) -> None:
         modules = selected_test_modules(root, options.paths)
     except ValueError as error:
         parser.error(str(error))
-    private_root = create_private_root(directory=private_root_directory())
+    try:
+        private_root = create_private_root(directory=private_root_directory())
+    except ValueError as error:
+        parser.error(str(error))
     print(f"hey_my_buddy.cli.checks: private test root {private_root}", file=sys.stderr)
     failure: str | None = None
     evidence: dict | None = None
