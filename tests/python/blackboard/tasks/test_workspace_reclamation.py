@@ -213,6 +213,57 @@ class ReclamationTests(LifecycleTestCase):
         Reclamation(board.store).run()
         self.assertFalse(directory.exists())
 
+    def test_hundreds_of_shells_can_be_inspected_and_reclaimed_with_256_descriptors(self):
+        import os
+        from unittest.mock import patch
+        if os.name == 'nt':
+            self.skipTest('POSIX descriptor limit')
+        import resource
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        board = self.board()
+        directories = []
+        for index in range(600):
+            request_id = 'low-descriptor-shell-' + str(index)
+            _, directory = workspace._workspace_directory(board.directory, request_id)
+            (directory / '.lock').touch()
+            (directory / 'request.json').write_bytes(workspace._json({'requestId': request_id}))
+            directories.append(directory)
+        previous = resource.getrlimit(resource.RLIMIT_NOFILE)
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, previous[1]))
+            with patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+                 patch.object(storage, '_workspace_reference_rows', side_effect=AssertionError('Shells need no reference scan')):
+                inventory = board.call('storage_plan', {})
+                self.assertFalse(any(row['category'] == 'workspaces' for row in inventory['candidates']))
+                reclamation.Reclamation(board.store).run()
+                self.assertFalse(any(directory.exists() for directory in directories))
+                self.assertEqual(board.store.service_issues(), [])
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, previous)
+
+    def test_transient_allocation_lock_and_record_failures_retry_without_an_entry_change(self):
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        for operation in ('_lock', '_record'):
+            with self.subTest(operation=operation):
+                board = self.board()
+                request_id = 'transient-' + operation
+                _, directory = workspace._workspace_directory(board.directory, request_id)
+                (directory / '.lock').touch()
+                (directory / 'request.json').write_bytes(workspace._json({'requestId': request_id}))
+                maintenance = Reclamation(board.store)
+                before = maintenance._allocation_entry(directory)
+                with patch.object(workspace, operation, side_effect=OSError(errno.EMFILE, 'temporary descriptor exhaustion')):
+                    maintenance.run()
+                self.assertTrue(directory.exists())
+                self.assertEqual(maintenance._allocation_entry(directory), before)
+                self.assertEqual([(issue['stage'], issue['code']) for issue in board.store.service_issues()],
+                                 [('allocation-reclamation', 'OSError')])
+                maintenance.run()
+                self.assertFalse(directory.exists())
+                self.assertEqual(board.store.service_issues(), [])
+
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
         from unittest.mock import patch
         board = self.board()
@@ -500,7 +551,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(observed, ['git', 'process', 'checkout', 'refs', 'records'])
         self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())
 
-    def test_unproven_allocations_share_one_scan_and_wait_for_entry_or_related_task_changes(self):
+    def test_unproven_allocations_are_scanned_once_each_and_wait_for_entry_or_related_task_changes(self):
         import os
         from unittest.mock import patch
         from hey_my_buddy.blackboard.tasks import reclamation, storage
@@ -513,15 +564,15 @@ class ReclamationTests(LifecycleTestCase):
         maintenance = reclamation.Reclamation(board.store)
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
             maintenance.run()
-            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(scan.call_count, 2)
             maintenance.run()
             maintenance.changed(['unrelated-task'])
             maintenance.run()
-            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(scan.call_count, 2)
             directory = Path(manifests[0]['checkoutRoot']).parent
             os.utime(directory, None)
             maintenance.run()
-            self.assertEqual(scan.call_count, 2)
+            self.assertEqual(scan.call_count, 3)
         self.assertEqual(board.store.service_issues(), [])
         submitted, _, _, _, _, _, _ = self.run_worktree(board, request_id='reference-source')
         third = workspace.prepare(board.directory, 'reference-retained', intent)

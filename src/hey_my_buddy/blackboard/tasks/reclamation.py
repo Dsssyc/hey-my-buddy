@@ -1,7 +1,7 @@
 """Service reclamation from terminal tasks and physical allocation ownership."""
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing
 from datetime import datetime, timedelta
 import hashlib
 import threading
@@ -186,67 +186,53 @@ def allocation_record(store, directory):
             if manifest['workspaceId'] != directory.name or not _record_proven(store.directory, manifest):
                 raise ValueError('Unproven allocation records')
         result.update(manifest=manifest, requestId=request_id)
-    except (BoardError, OSError, ValueError, TypeError, KeyError):
+    except (BoardError, ValueError, TypeError, KeyError):
         result['reasons'] = ['allocation-unproven']
     return result
 
 
-@contextmanager
-def allocation_batch(store, directories, *, stopping=lambda: False):
-    """Fence candidate allocations while one read snapshot checks retained uses.
+def allocation_records(store, directories, *, stopping=lambda: False):
+    """Inspect one allocation at a time, holding only its own allocation lock.
 
-    Allocation and storage locks are nonblocking. A competing storage operation
-    makes this pass yield its allocations, never wait while holding their locks.
+    A manifest's retained uses are checked in a read snapshot under that lock.
+    Shells need no retained-reference scan. The caller closes the iterator before
+    leaving, so interruption releases the current lock as well.
     """
     from .storage import _allocation_reference_sets, _workspace_reference_rows
-    records = []
-    with ExitStack() as ownership:
-        pending = []
-        for directory in directories:
-            if stopping():
-                break
+    for directory in directories:
+        if stopping():
+            break
+        with ExitStack() as ownership:
             try:
                 if private_dirs.linked(directory) or workspace.allocation_lock_directory(store.directory, directory.name) != directory:
                     raise BoardError('WORKSPACE_UNSAFE', 'Unproven allocation directory or lock')
-                lock = ExitStack()
-                ownership.callback(lock.close)
-                lock.enter_context(workspace._lock(directory, create=False))
-            except (BoardError, OSError) as error:
-                records.append({'directory': directory, 'manifest': None, 'requestId': None,
-                                'owner': None, 'tasks': set(), 'reasons': [
-                                    'WORKSPACE_BUSY' if isinstance(error, BoardError) and error.code == 'WORKSPACE_BUSY'
-                                    else 'allocation-unproven']})
-                continue
-            item = allocation_record(store, directory)
-            item['ownership'] = lock
-            records.append(item)
-            if not item['reasons']:
-                with store.db.read() as connection:
-                    run = _request_run(connection, item['requestId'])
-                if run is not None and (item['manifest'] is not None or run['state'] not in ('accepted', 'concluded')):
-                    item['owner'] = run['task_id']
-                    item['tasks'].add(run['task_id'])
-                    item['reasons'] = ['request-task-retained']
-                elif item['manifest'] is not None:
-                    pending.append(item)
+                ownership.enter_context(workspace._lock(directory, create=False))
+            except BoardError as error:
+                if error.code not in ('WORKSPACE_BUSY', 'WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
+                    raise
+                item = {'directory': directory, 'manifest': None, 'requestId': None,
+                        'owner': None, 'tasks': set(), 'reasons': [
+                            'WORKSPACE_BUSY' if error.code == 'WORKSPACE_BUSY' else 'allocation-unproven']}
+            else:
+                item = allocation_record(store, directory)
+                if not item['reasons']:
+                    with store.db.read() as connection:
+                        run = _request_run(connection, item['requestId'])
+                        if run is not None and (item['manifest'] is not None or run['state'] not in ('accepted', 'concluded')):
+                            item['owner'] = run['task_id']
+                            item['tasks'].add(run['task_id'])
+                            item['reasons'] = ['request-task-retained']
+                        elif item['manifest'] is not None:
+                            def referenced(index, table, row):
+                                item['tasks'].update(value for key in row.keys()
+                                                     if (key.endswith('task_id') or key.endswith('run_id'))
+                                                     and isinstance(value := row[key], str))
+                            item['reasons'] = _allocation_reference_sets(_workspace_reference_rows(connection),
+                                [(item['manifest'], item['requestId'])],
+                                directories=[str(directory)], on_reference=referenced)[0]
             if item['reasons']:
-                lock.close()
-        with store.db.read() as connection:
-            def referenced(index, table, row):
-                item = pending[index]
-                item['tasks'].update(value for key in row.keys()
-                                     if (key.endswith('task_id') or key.endswith('run_id'))
-                                     and isinstance(value := row[key], str))
-            if pending:
-                reasons = _allocation_reference_sets(_workspace_reference_rows(connection),
-                    [(item['manifest'], item['requestId']) for item in pending],
-                    directories=[str(item['directory']) for item in pending], on_reference=referenced)
-                for item, retained in zip(pending, reasons):
-                    item['reasons'].extend(retained)
-        for item in records:
-            if item['reasons'] and 'ownership' in item:
-                item['ownership'].close()
-        yield records
+                ownership.close()
+            yield item
 
 
 def allocation_proof(store, item):
@@ -282,7 +268,7 @@ def allocation_proof(store, item):
 
 
 def reclaim_allocation(store, item):
-    """Remove a batch-proven object while its original allocation lock is held."""
+    """Remove a proven object while its original allocation lock is held."""
     from .macro_task_deletion_workspace import _delete_refs
     from .storage import locked
     with locked(store):
@@ -303,7 +289,7 @@ def allocation_inventory(store, directories):
     """List only allocations automatic reclamation cannot presently prove."""
     from .macro_task_deletion_workspace import _refs
     result = []
-    with allocation_batch(store, directories) as records:
+    with closing(allocation_records(store, directories)) as records:
         for item in records:
             if item['owner'] is not None:
                 continue
@@ -462,7 +448,7 @@ class Reclamation:
         self._discover_allocations()
         failure = None
         try:
-            with allocation_batch(store, tuple(self._allocations), stopping=stopping) as records:
+            with closing(allocation_records(store, tuple(self._allocations), stopping=stopping)) as records:
                 for item in records:
                     if stopping():
                         return
@@ -486,9 +472,6 @@ class Reclamation:
                             continue
                         if failure is None:
                             failure = error
-                    finally:
-                        if 'ownership' in item:
-                            item['ownership'].close()
         except Exception as error:
             failure = error
         if failure is None:
