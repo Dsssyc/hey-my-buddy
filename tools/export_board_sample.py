@@ -102,9 +102,12 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
 
 def _validate(connection) -> None:
     # Finished is not enough on its own: an unconfirmed stop must never escape.
+    # ownership is not judged: a lost connection freezes it at 'uncertain' even
+    # for finished, shutdown-confirmed executions, and recovery only touches
+    # unfinished ones.
     if connection.execute(
             "SELECT 1 FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1 "
-            "OR ownership!='owned' OR cleanup_pending!=0 LIMIT 1").fetchone():
+            "OR cleanup_pending!=0 LIMIT 1").fetchone():
         raise ValueError('Sample contains an unfinished or unconfirmed execution')
     if connection.execute(
             "SELECT 1 FROM tasks WHERE state NOT IN ('completed','concluded','failed','cancelled') "
