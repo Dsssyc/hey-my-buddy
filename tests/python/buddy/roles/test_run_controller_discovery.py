@@ -30,8 +30,8 @@ class ControllerDiscoveryStopTests(unittest.TestCase):
         control = {'operation': 'discover',
                    'arguments': {}, 'harness': 'zcode', 'cwd': '/fixture',
                    'privateRoot': '/fixture', 'nativeRoot': '/fixture/native', 'timeoutSeconds': 1}
-        with patch.object(run_controller, 'run_seam', return_value=SimpleNamespace(run_discovery=read)):
-            frame, code = run_controller.execute(control, threading.Event(), Path('/fixture/state'))
+        with patch('hey_my_buddy.buddy.harnesses.registry.run_seam', return_value=SimpleNamespace(run_discovery=read)):
+            frame, code = run_controller.execute(control, threading.Event())
         self.assertEqual(code, 1)
         return json.loads(frame)
 

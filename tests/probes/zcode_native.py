@@ -120,14 +120,17 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertTrue(any(name in self.requests[0]["tools"] for name in ("Agent", "Task")), self.requests[0]["tools"])
         resumed = self.context(index=2, previous=first_turn["sessionId"], timeout=30)
         resumed.spec["model"] = "GLM-5.3-Flash"
-        _, second = self.execute(resumed)
+        second_handle, second = self.execute(resumed)
         self.assertEqual(second.status, "ok", second.to_report())
         second_turn = second.result["turn"]
         self.assertEqual(second_turn["sessionId"], first_turn["sessionId"])
         self.assertNotEqual(second_turn["provenance"]["nativeTurnId"], first_turn["provenance"]["nativeTurnId"])
-        self.assertEqual(second.result["resolved"]["effort"], "low")
-        self.assertEqual(second.result["requested"], second.result["resolved"])
-        self.assertIsNone(second.result["observed"])
+        self.assertEqual(second_handle.result.buddy.checked.effort.value, "low")
+        self.assertEqual(second.result["requested"], {
+            key: value.value for key in ("provider", "model", "effort")
+            if (value := getattr(second_handle.result.buddy.checked, key)) is not None})
+        self.assertNotIn("observed", second.result)
+        self.assertNotIn("resolved", second.result)
         finish_names = {name for request in self.requests for name in request["tools"] if name.endswith("__hey_my_buddy_finish_turn")}
         self.assertEqual(len(finish_names), 2, "continuation did not receive its own private finish bridge")
 
@@ -158,13 +161,13 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.omit_first_request = False
         recovered = self.context(index=2, mode="reconstructed-new-session", effort="high", timeout=30)
         recovered.spec["model"] = "GLM-5.3-Flash"
-        _, second = self.execute(recovered)
+        second_handle, second = self.execute(recovered)
         self.assertEqual(second.status, "ok", second.to_report())
         turn = second.result["turn"]
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
         self.assertIsNone(turn["previousSessionId"])
         self.assertNotEqual(turn["sessionId"], previous)
-        self.assertEqual(second.result["resolved"]["effort"], "high")
+        self.assertEqual(second_handle.result.buddy.checked.effort.value, "high")
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
 
     def test_native_catalog_has_per_model_efforts_without_model_requests(self):

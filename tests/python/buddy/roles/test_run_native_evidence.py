@@ -10,6 +10,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.buddy.roles import router, run_execution, structured_call, turn_io
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from buddy.harnesses.test_run_contract import full_request, full_result
 
 
@@ -64,13 +65,11 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def test_worker_permission_merges_with_the_shared_facts(self):
         result = self.result(evidence=rc.NativeEvidence(unconfirmed=["tool-scope"]))
-        declaration = {"source": "harness-permission-declaration", "binding": result.identity.to_payload(),
-                       "permission": {"level": "write", "enforcement": "convention"}}
-        with mock.patch.object(run_execution, "_evidence", side_effect=lambda _r, kind:
-                               declaration if kind == "worker-permission" else None):
-            payload = run_execution._worker_facts(result)
+        request = self.request().model_copy(update={"permission": "write"})
+        payload = run_execution._worker_facts(result, request)
         self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["tool-scope"],
-                                                    "permission": declaration["permission"]})
+                                                    "permission": {"level": "write",
+                                                                   "enforcement": PERMISSION_LEVELS["zcode"]["write"]}})
 
     def test_unknown_worker_end_keeps_facts_and_partial_artifacts_without_delivery(self):
         result = self.result(status="unknown", evidence=rc.NativeEvidence(unconfirmed=["thread-receipt"]))
@@ -85,13 +84,12 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
                                      role_run_original_identity=result.identity, result=result,
                                      role_run_active_control=control, role_run_active_identity=result.identity,
-                                     cancel_requested=False, log_paths={},
+                                     cancel_requested=False, turn_record=None, error=None,
                                      exit_code=0, shutdown_confirmed=lambda: True)
             partial = [{"kind": "partial-workspace", "location": directory}]
             with mock.patch.object(run_execution, "_read_request", return_value=self.request()), \
                     mock.patch.object(run_execution, "_artifacts", return_value=partial), \
                     mock.patch.object(run_execution, "worker_delivery") as delivery, \
-                    mock.patch.object(turn_io, "read_turn", return_value=(None, None)), \
                     mock.patch.object(turn_io, "seal_workspace") as seal:
                 outcome = executor.collect(handle, context)
             delivery.assert_not_called()

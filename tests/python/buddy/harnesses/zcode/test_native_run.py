@@ -741,7 +741,8 @@ class WorkerSeamTests(MockNativeCase):
         return {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                 "generation": 1, "turnId": "turn-1",
                 "resumeMode": mode or ("native-session" if previous else "initial"),
-                "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                "previousSessionId": previous, "context": {},
+                "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
 
     def test_native_events_reach_the_activity_callback_with_original_counts_and_order(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint

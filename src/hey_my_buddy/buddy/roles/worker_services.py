@@ -53,7 +53,6 @@ from ..harnesses.session_receipts import (
     sign_receipt,
 )
 
-MAX_ATTENTION_BYTES = 64 * 1024
 MAX_PENDING_IN_FINISH_REFUSAL = 4
 
 STRINGS = {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 4096}}
@@ -154,19 +153,12 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
 
 
 def attention_requests(configuration: dict) -> int:
-    """Count refused native interactive requests, metadata only and never fatal."""
-    path_value = configuration.get("attentionPath")
-    if not isinstance(path_value, str) or not path_value:
-        return 0
+    """Count refused native requests; only an absent file means none."""
     try:
-        path = Path(path_value)
-        if path.stat().st_size > MAX_ATTENTION_BYTES:
-            return 1  # an oversized record still means an unresolved request
-        value = json.loads(read_text(path))
-    except (OSError, ValueError, BoardError):
+        value = json.loads(read_text(Path(configuration["attentionPath"])))
+    except FileNotFoundError:
         return 0
-    requests = value.get("requests") if isinstance(value, dict) else None
-    return len(requests) if isinstance(requests, list) else 0
+    return len(value["requests"])
 
 
 def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:

@@ -13,6 +13,7 @@ by recomputing the one shared HMAC rule.
 from __future__ import annotations
 
 import hashlib
+from unittest import mock
 import json
 import os
 import subprocess
@@ -323,16 +324,18 @@ class InquiryToolTests(WorkerServicesCase):
                 envelope = self.envelope(result, name)
                 self.assertEqual(envelope["reason"], "inquiry-channel-absent")
 
-    def test_an_attention_record_is_counted_but_never_fatal(self):
+    def test_only_a_missing_attention_record_means_no_requests(self):
         self.assertEqual(worker_services.attention_requests(self.configuration), 0)
         self.attention.write_text(json.dumps({"version": 1, "requests": [
             {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}), encoding="utf-8", newline="\n")
         self.assertEqual(worker_services.attention_requests(self.configuration), 1)
         self.attention.write_text("not json", encoding="utf-8", newline="\n")
-        self.assertEqual(worker_services.attention_requests(self.configuration), 0)
-        oversize = self.root / "oversize.json"
-        oversize.write_bytes(b"0" * (worker_services.MAX_ATTENTION_BYTES + 1))
-        self.assertEqual(worker_services.attention_requests({**self.configuration, "attentionPath": str(oversize)}), 1)
+        with self.assertRaises(ValueError):
+            worker_services.attention_requests(self.configuration)
+        with mock.patch.object(worker_services, "read_text", side_effect=PermissionError("cannot read attention")):
+            with self.assertRaises(PermissionError):
+                worker_services.attention_requests(self.configuration)
+
 
 
 if __name__ == "__main__":

@@ -119,13 +119,11 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
     def test_out_of_bounds_choice_is_not_corrected(self):
         outcome = self.execute("enum")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(outcome.result["correctionCount"], 0)
 
     def test_unknown_event_keeps_a_valid_answer(self):
         outcome = self.execute("unknown")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertTrue(outcome.result["answerValid"])
 
     def test_tool_and_truncated_stream_fail_closed(self):
         for case, code in (("tool", "no-tool-violation"), ("post-close-tool", "no-tool-violation"),

@@ -1091,7 +1091,8 @@ class WorkerSeamTests(CodexSeamCase):
                                        turn_id="turn-check", input_sha256="a" * 64)
                 root = ensure_private_dir(Path(request.private_state.invocation_root))
                 turn_input = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
-                              "generation": request.identity.generation, "turnId": request.identity.turn_id}
+                              "generation": request.identity.generation, "turnId": request.identity.turn_id,
+                              "resumeMode": "initial"}
                 input_file = root / "turn-input.json"
                 native_run.private_json(input_file, turn_input, exclusive=True)
                 request = request.model_copy(update={"identity": request.identity.model_copy(
@@ -1104,11 +1105,11 @@ class WorkerSeamTests(CodexSeamCase):
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
                     result, _request, _verdict, code = inline_run.execute(
-                        control, handle, Path(os.environ["HMB_STATE_DIR"]))
+                        control, handle)
                 self.assertEqual(code, 0, result.end.message)
                 sandbox, policy = self.expected_worker_policy(level)
                 self.assertEqual(result.effective_policy.tools.requested.value, policy)
-                facts = run_execution._worker_facts(result)
+                facts = run_execution._worker_facts(result, request)
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], policy)
                 self.assertEqual(facts["nativeEvidence"]["permission"],
                                  {"level": level, "enforcement": "enforced"})

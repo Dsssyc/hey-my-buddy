@@ -37,15 +37,14 @@ class ExecutionContext:
     #: file (never into the model-visible turn input) and exported by path.
     agent_credential: str | None = None
     session_record_path: str | None = None
+    effective_workspace: dict | None = field(default=None, init=False)
 
     @property
     def cwd(self) -> str:
         """The effective execution directory: the resolved workspace path when present."""
         turn_input = self.turn_input
         if turn_input is not None:
-            manifest = turn_input.get("executionWorkspace")
-            if manifest:
-                return manifest["path"]
+            return turn_input["executionWorkspace"]["path"]
         return self.spec["cwd"]
 
     @property

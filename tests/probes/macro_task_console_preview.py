@@ -2384,7 +2384,7 @@ def decision_view(router: dict) -> dict:
     return {"decisionId": router["decisionId"], "requestId": router["requestId"],
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
-            "decisionModel": {"requested": ROUTER_BUDDY, "resolved": None, "observed": None},
+            "decisionModel": {"requested": ROUTER_BUDDY},
             "reason": routing["reason"], "note": routing["note"], "evidence": [],
             "constraints": routing["constraints"], "requiredCapabilities": [], "routingBasis": routing.get("routingBasis"),
             "routerCalled": True,
@@ -2417,7 +2417,7 @@ def selection_get(params: dict, state: PreviewState | None = None) -> dict:
         view.update({"attemptId": None, "generation": 1,
                                           "requested": {"constraints": routing["constraints"]}, "input": None,
                      "inputSha256": None, "output": decision_result(routing),
-                     "requestedBuddy": ROUTER_BUDDY, "resolvedBuddy": None, "observedBuddy": None})
+                     "requestedBuddy": ROUTER_BUDDY})
     return {"decision": view}
 
 

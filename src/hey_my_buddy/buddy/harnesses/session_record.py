@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import logging
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -89,10 +88,7 @@ class SessionRecord:
                                   truncated=len(encoded) > 8192)
         fd, self._fd = self._fd, None
         if fd is not None:
-            try:
-                os.close(fd)
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to close session record after its first failure")
+            os.close(fd)
 
     def append(self, update: SessionUpdate) -> None:
         if self.failure is not None:

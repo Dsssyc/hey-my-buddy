@@ -194,18 +194,24 @@ class RoleStopTests(unittest.TestCase):
                 handle.force_cancelled.set()
             return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None
         module = SimpleNamespace()
+        def publish(selected, _control, _turn_input, _prompt):
+            if invalid_summary:
+                raise ValueError("invalid summary")
+            return {"sessionId": selected.native_identity.session_id,
+                    "outcome": {"disposition": "assistance", "summary": "selected summary"}}
         with mock.patch.object(inline_run, "run_seam", return_value=module), \
              mock.patch.object(inline_run, "adapter", return_value=SimpleNamespace(interrupted_resume=True)), \
              mock.patch.object(run_execution, "worker_request", side_effect=prepare), \
              mock.patch.object(inline_run, "_inline_live", side_effect=lambda *args: nullcontext(None)), \
              mock.patch.object(inline_run, "run_harness", side_effect=run), \
              mock.patch.object(inline_run.time, "monotonic", side_effect=clock), \
-             mock.patch.object(run_execution, "_worker_result",
-                               side_effect=ValueError("invalid summary") if invalid_summary else lambda *args: None):
-            result, used_request, verdict, code = inline_run.execute(control, handle, self.root)
+             mock.patch.object(run_execution, "_worker_result", side_effect=publish) as publication:
+            result, used_request, verdict, code = inline_run.execute(control, handle)
         self.last_request = used_request
         self.last_verdict = verdict
         self.last_active_control = handle.role_run_active_control
+        self.last_turn_record = handle.turn_record
+        self.last_publication = publication.call_args_list
         return result, code, calls
 
     def _finished_handle(self, result, code, *, initiator="host", **values):
@@ -214,6 +220,7 @@ class RoleStopTests(unittest.TestCase):
         handle.result = result
         handle.request = self.last_request
         handle.verdict = self.last_verdict
+        handle.turn_record = self.last_turn_record
         handle.role_run_active_control = self.last_active_control
         handle.role_run_active_identity = self.last_request.identity
         handle.exit_code = code
@@ -319,6 +326,32 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(result.identity, second.identity)
         self.assertTrue((self.invocation / "stop-summary").is_dir())
 
+    def test_cancelled_first_run_publishes_only_the_selected_summary(self):
+        result, code, calls = self._execute()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.last_publication), 1)
+        self.assertIs(self.last_publication[0].args[0], result)
+        self.assertEqual(self.last_turn_record["outcome"]["summary"], "selected summary")
+        self.assertIs(self.last_verdict["wrapUpDelivered"], True)
+
+    def test_conflicting_turn_publication_keeps_the_first_record(self):
+        control = {**self.control, "timeoutSeconds": 60}
+        turn_input = {"taskId": "task-stop", "attemptId": "attempt-stop", "generation": 1,
+                      "turnId": "turn-stop", "resumeMode": "initial"}
+        result = result_for(request_for(control), status="ok")
+        first_outcome = {"disposition": "completed", "summary": "first"}
+        second_outcome = {"disposition": "completed", "summary": "second"}
+        with mock.patch.object(run_execution, "worker_delivery", side_effect=[
+                (first_outcome, {"source": "first"}, {}),
+                (second_outcome, {"source": "second"}, {})]):
+            first = run_execution._worker_result(result, control, turn_input, "prompt")
+            original = Path(control["outputFile"]).read_bytes()
+            with self.assertRaises(FileExistsError):
+                run_execution._worker_result(result, control, turn_input, "prompt")
+        self.assertEqual(Path(control["outputFile"]).read_bytes(), original)
+        self.assertEqual(first["outcome"], first_outcome)
+
     def test_summary_request_explicitly_carries_the_first_recording_failure(self):
         failure = rc.SessionRecordFailure.from_payload({
             "code": "session-record-write-failed",
@@ -382,10 +415,8 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
-             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+        with mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
-        read_turn.assert_not_called()
         self.assertEqual(outcome.status, "cancelled")
         self.assertNotIn("turn", outcome.result)
         self.assertNotIn("wrapUpDelivered", outcome.result)
@@ -457,9 +488,8 @@ class RoleStopTests(unittest.TestCase):
                                                                        "sessionId": session},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution, "_worker_result"), \
-             mock.patch.object(run_execution.turn_io, "read_turn", return_value=(turn, None)), \
-             mock.patch.object(run_execution.turn_io, "seal_workspace") as seal, \
+        handle.turn_record = turn
+        with mock.patch.object(run_execution.turn_io, "seal_workspace") as seal, \
              mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled")
@@ -513,9 +543,9 @@ class RoleStopTests(unittest.TestCase):
         for initiator in ("host", "console"):
             with self.subTest(initiator=initiator):
                 context.turn_output_file().unlink(missing_ok=True)
-                run_execution._worker_result(result, control, turn_input, request.input_text,
-                                             {"sessionId": "session-complete"})
+                record = run_execution._worker_result(result, control, turn_input, request.input_text)
                 handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
+                handle.turn_record = record
                 handle.request = request
                 handle.result = result
                 handle.verdict = {"stopReason": None, "elapsedMs": 1,
@@ -526,8 +556,10 @@ class RoleStopTests(unittest.TestCase):
                 handle.cancel_requested = True
                 handle.exit_code = 0
                 handle.done.set()
-                collected = executor.collect(handle, context)
-                self.assertEqual(collected.status, "ok")
+                with mock.patch.object(run_execution.turn_io, "seal_workspace", return_value=(None, None)) as seal:
+                    collected = executor.collect(handle, context)
+                seal.assert_called_once_with(context)
+                self.assertEqual(collected.status, "ok", collected.result)
                 self.assertTrue(collected.shutdown_confirmed)
                 self.assertEqual(collected.result["turn"]["outcome"], outcome)
                 self.assertNotIn("stopReason", collected.result)
@@ -542,9 +574,7 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution, "_worker_result"), \
-             mock.patch.object(run_execution.turn_io, "read_turn", return_value=(None, None)), \
-             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+        with mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertIs(outcome.result["wrapUpDelivered"], True)
@@ -558,8 +588,7 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution.turn_io, "read_turn", return_value=({"sessionId": "native-session"}, None)), \
-             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+        with mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
         self.assertIs(outcome.result["wrapUpDelivered"], True)
         self.assertIs(outcome.result["graceExpired"], False)
@@ -577,10 +606,8 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
-             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+        with mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
-        read_turn.assert_not_called()
         self.assertNotIn("turn", outcome.result)
         self.assertEqual(outcome.status, "cancelled")
 
@@ -596,10 +623,8 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
-             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+        with mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
-        read_turn.assert_not_called()
         self.assertEqual(outcome.status, "cancelled")
         self.assertNotIn("turn", outcome.result)
         self.assertIs(outcome.result["wrapUpDelivered"], False)

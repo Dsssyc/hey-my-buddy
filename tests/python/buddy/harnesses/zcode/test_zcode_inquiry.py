@@ -1064,6 +1064,7 @@ class LiveActivityTests(ZcodeFixtureCase):
 
     def test_running_same_phase_native_events_refresh_the_published_observation(self):
         context = self.context("live-activity", timeout=30)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         channel = self.activity_channel(handle)
@@ -1086,6 +1087,7 @@ class LiveActivityTests(ZcodeFixtureCase):
 
     def test_the_runner_publishes_real_bound_metadata_only_live_activity(self):
         context = self.context("live-activity", timeout=20)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         channel = self.activity_channel(handle)

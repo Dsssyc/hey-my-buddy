@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 import threading
 import time
 import uuid
@@ -12,16 +13,16 @@ from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
 from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 
 
-def prepare_input(manifest, directory):
+def prepare_input(manifest, directory, *, deadline):
     from hey_my_buddy.buddy.roles.router_input import digest
     root = directory / "mock-frozen-input"
     root.mkdir(mode=0o700, parents=True)
     (root / "input.txt").write_text("private service-protocol fixture\n", encoding="utf-8", newline="\n")
-    return root, digest(root)
+    return root, digest(root, deadline=deadline)
 
 
-def verify_input(manifest, root, expected):
-    result = verify_frozen_input(None, root, expected)
+def verify_input(manifest, root, expected, *, deadline):
+    result = verify_frozen_input(None, root, expected, deadline=deadline)
     result["manifestSha256"] = (manifest or {}).get("manifestSha256")
     return result
 
@@ -107,7 +108,7 @@ def start(harness, context, request, fixture, options):
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
-    built_request, *_ = run_execution.review_request(control, None)
+    built_request, *_ = run_execution.review_request(control, SimpleNamespace(prepare_run_services=None))
     handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
     handle.request = built_request
     mode = options.get("mode", "select_first")

@@ -1,8 +1,6 @@
 """Materialize only immutable managed input; never give a Router the live checkout."""
 from __future__ import annotations
 
-from ...private_dirs import directory_mode
-
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -12,25 +10,23 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from ...errors import BoardError
 from ...blackboard.tasks import workspace
-from ...private_dirs import remove_tree
+from ...private_dirs import directory_mode, remove_tree
 
 
-# Independent bound for preparing and checking the private mirror.
-MATERIALIZE_SECONDS = 120
-
-
-def _remaining(deadline: float) -> float:
+def _remaining(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise BoardError("router-input-unknown", "The frozen input read did not finish within its wait")
     return remaining
 
 
-def digest(root: Path) -> str:
-    return _digest(root, time.monotonic() + MATERIALIZE_SECONDS)
+def digest(root: Path, *, deadline: float | None) -> str:
+    return _digest(root, deadline)
 
 
-def _digest(root: Path, deadline: float) -> str:
+def _digest(root: Path, deadline: float | None) -> str:
     value = hashlib.sha256()
     for directory, names, files in os.walk(root, followlinks=False):
         _remaining(deadline)
@@ -49,11 +45,12 @@ def _digest(root: Path, deadline: float) -> str:
                         value.update(block)
             else:
                 value.update(b"directory\0")
+    _remaining(deadline)
     return value.hexdigest()
 
 
-def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
-    deadline = time.monotonic() + MATERIALIZE_SECONDS
+def prepare(manifest: dict | None, directory: Path, *, deadline: float | None) -> tuple[Path, str]:
+    _remaining(deadline)
     if manifest is None:
         # Public standalone selection has no filesystem input. Freeze an empty
         # private directory rather than borrowing any caller checkout.
@@ -82,7 +79,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         command = ["git", "-C", manifest["checkoutRoot"], *arguments]
         try:
             result = subprocess.run(command, capture_output=True, env=environment,
-                                    timeout=min(30, _remaining(deadline)), check=False)
+                                    timeout=_remaining(deadline), check=False)
         except subprocess.TimeoutExpired as error:
             raise BoardError("router-input-unknown", "The frozen Git object read timed out") from error
         if result.returncode:
@@ -167,7 +164,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             except OSError:
                 pass
             try:
-                reader.wait(timeout=5)
+                reader.wait(timeout=(None if deadline is None else max(0, deadline - time.monotonic())))
             except subprocess.TimeoutExpired:
                 reader.kill()
                 reader.wait()
@@ -183,9 +180,9 @@ def discard(root: Path) -> None:
         remove_tree(root)
 
 
-def verify(manifest: dict, root: Path, expected: str) -> dict:
-    deadline = time.monotonic() + MATERIALIZE_SECONDS
+def verify(manifest: dict | None, root: Path, expected: str, *, deadline: float | None) -> dict:
     try:
+        _remaining(deadline)
         if manifest is not None:
             workspace.verify(manifest, require_unchanged=True)
         _remaining(deadline)

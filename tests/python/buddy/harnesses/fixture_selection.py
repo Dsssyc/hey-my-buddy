@@ -3,6 +3,25 @@
 import json
 import sys
 from pathlib import Path
+from unittest import mock
+
+
+def mock_role_workspace(test_case) -> None:
+    """Keep native protocol fixtures independent of workspace storage.
+
+    Workspace verification and sealing have their own tests; these fixtures
+    exercise the registered role and native harness protocol with a hand-made
+    execution workspace manifest.
+    """
+    from hey_my_buddy.buddy.roles import turn_io
+
+    def verify(context):
+        context.effective_workspace = context.turn_input["executionWorkspace"]
+
+    for patcher in (mock.patch.object(turn_io, "verify_workspace", side_effect=verify),
+                    mock.patch.object(turn_io, "seal_workspace", return_value=(None, None))):
+        patcher.start()
+        test_case.addCleanup(patcher.stop)
 
 
 def select_fixture(environment: dict[str, str], directory: Path, harness: str,

@@ -1,7 +1,6 @@
 """A registered native run owned by the execution process itself."""
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import time
@@ -11,25 +10,23 @@ from dataclasses import replace
 from pathlib import Path
 
 from ...errors import BoardError
-from ...json_codec import canonical_json, decode_strict_json
-from ...private_files import read_bytes
-from ...protocol.capabilities import PERMISSION_LEVELS
+from ...json_codec import decode_strict_json
+from ...private_files import publish_bytes, read_bytes
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
-    EvidenceRef, FrozenJson, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
+    FrozenJson, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
     ResumeCheckpoint, RunBudget, RunContinuation,
 )
 from . import run_execution
 from .controller import run_harness
 from .prompts import wrap_up_prompt
-from ...private_files import publish_bytes
 
 
 @contextmanager
-def _inline_live(control, request, services, state_dir: Path, handle):
-    capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
+def _inline_live(request, services, handle):
+    capabilities = (EXISTING_CAPABILITIES[request.harness] if services is not None and services.inquiry is not None
                     else LiveCapabilities(inquiry_delivery="unsupported"))
     endpoint = CTwoLiveEndpoint(request.identity, capabilities)
     server = run_execution.execution_live_server()
@@ -64,7 +61,7 @@ def _stop_checkpoint(result: RunResult, request) -> ResumeCheckpoint | None:
                             input_sha256=request.identity.input_sha256)
 
 
-def _summary_run(control, request, result, module, state_dir, deadline, handle):
+def _summary_run(control, request, result, module, deadline, handle):
     """Resume one stopped native session while the Host grace remains."""
     from ...private_dirs import ensure_private_dir
 
@@ -85,9 +82,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
     next_control = {**control, "privateRoot": str(root), "taskFile": str(task_path),
                     "invocationId": uuid.uuid4().hex,
                     "timeoutSeconds": min(86400, math.ceil(remaining))}
-    next_request, services, observer, error = run_execution.worker_request(next_control, module)
-    if error is not None:
-        return control, request, result, False, time.monotonic() >= deadline
+    next_request, services, observer, _ = run_execution.worker_request(next_control, module)
     next_request = next_request.model_copy(update={
         "continuation": RunContinuation(mode="native-session", previous_session_id=identity.session_id,
                                         checkpoint=checkpoint),
@@ -102,7 +97,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
     if summary_cancelled():
         return control, request, result, False, time.monotonic() >= deadline
     try:
-        with _inline_live(next_control, next_request, services, state_dir, handle) as live_services:
+        with _inline_live(next_request, services, handle) as live_services:
             summary = run_harness(module, next_request, observer=observer, services=live_services,
                                   cancelled=summary_cancelled)
     except Exception as error:
@@ -138,7 +133,7 @@ def _wrap_up_usage(first: RunResult, summary: RunResult) -> FrozenJson | None:
     return FrozenJson(combined)
 
 
-def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, dict, int]:
+def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     module = run_seam(control["harness"])
     started = time.monotonic()
     input_error = None
@@ -154,7 +149,7 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
     handle.request = request
     original_identity = request.identity
     if input_error is None:
-        with _inline_live(control, request, services, state_dir, handle) as live_services:
+        with _inline_live(request, services, handle) as live_services:
             result = run_harness(module, request, observer=observer, services=live_services,
                                  cancelled=handle.cancelled.is_set)
     else:
@@ -170,35 +165,25 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
         if deadline is not None:
             first = result
             active_control, request, result, wrap_up_candidate, grace_expired = _summary_run(
-                control, request, result, module, state_dir, deadline, handle)
+                control, request, result, module, deadline, handle)
             handle.role_run_active_control = active_control
             if result.identity != first.identity:
                 result = result.model_copy(update={
                     "usage": _wrap_up_usage(first, result),
                     "session_record_failure": first.session_record_failure or result.session_record_failure,
                 })
-    if control["operation"] == "worker":
-        path = Path(request.private_state.invocation_root) / "worker-permission.json"
-        declaration = {"source": "harness-permission-declaration",
-                       "binding": request.identity.to_payload(),
-                       "permission": {"level": request.permission,
-                                      "enforcement": PERMISSION_LEVELS[request.harness][request.permission]}}
-        raw = canonical_json(declaration).encode()
-        publish_bytes(path, raw, immutable=True)
-        ref = EvidenceRef(kind="worker-permission", location=str(path),
-                          size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
-        result = result.model_copy(update={"evidence_refs": (*result.evidence_refs, ref)})
     verdict = {"stopReason": correction.stop_reason if correction is not None else None,
                "elapsedMs": round((time.monotonic() - started) * 1000)}
     code = 0 if result.end.status == "ok" else 1
     if control["operation"] == "worker":
         delivered = False
         wrap_up_run = result.identity != original_identity
-        if code == 0 and (not wrap_up_run or wrap_up_candidate):
+        if (code == 0 and result.stop_evidence.native.group_state == "gone"
+                and (not wrap_up_run or wrap_up_candidate)):
             try:
                 turn_input = decode_strict_json(read_bytes(Path(control["inputFile"])))
-                facts = {"sessionId": result.native_identity.session_id if result.native_identity else None}
-                run_execution._worker_result(result, control, turn_input, request.input_text, facts)
+                handle.turn_record = run_execution._worker_result(
+                    result, control, turn_input, request.input_text)
                 delivered = wrap_up_candidate
             except (BoardError, OSError, ValueError, RecursionError) as error:
                 verdict["workerError"] = ({"code": error.code, "message": error.message}

@@ -2,11 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
-from typing import Callable
 
-from ...private_files import publish_bytes, open_read
+from ...private_files import publish_bytes
 from ...errors import BoardError
 from ...protocol.usage import MAX_ASSISTANT_MESSAGE_BYTES
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
@@ -30,15 +28,15 @@ def private_json(path: Path, value: object, *, exclusive: bool = False) -> None:
 
 
 def prepare_turn(context: ExecutionContext) -> None:
+    if not context.environment.get("HMB_STATE_DIR"):
+        raise BoardError("INVALID_ARGUMENT", "The turn requires its private state directory")
+    verify_workspace(context)
     ensure_private_dir(context.directory)
     publish_bytes(context.task_file(), context.spec["task"].encode())
     write_turn_files(context)
-    verify_workspace(context)
 
 
 def write_turn_files(context: ExecutionContext) -> None:
-    if context.turn_input is None:
-        return
     if len(canonical_json(context.turn_input).encode()) > MAX_INPUT_BYTES:
         raise BoardError("INVALID_ARGUMENT", "the micro task turn input exceeds its byte bound")
     private_json(context.turn_input_file(), context.turn_input)
@@ -51,11 +49,6 @@ def write_turn_files(context: ExecutionContext) -> None:
         })
 
 
-def workspace_cwd(context: ExecutionContext) -> str:
-    manifest = getattr(context, "effective_workspace", None)
-    return str(manifest["path"]) if isinstance(manifest, dict) and manifest.get("path") else context.cwd
-
-
 def inquiry_paths(context: ExecutionContext) -> dict:
     """The durable checkpoint journal of one attempt; live credentials stay in memory."""
     private_root = ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
@@ -64,13 +57,10 @@ def inquiry_paths(context: ExecutionContext) -> dict:
 
 
 def verify_workspace(context: ExecutionContext) -> None:
-    manifest = (context.turn_input or {}).get("executionWorkspace")
-    if not isinstance(manifest, dict) or not manifest:
-        context.effective_workspace = None
-        return
+    manifest = context.turn_input.get("executionWorkspace")
     from ...blackboard.tasks.workflow import workspace_module
     routing = (context.turn_input.get("context") or {}).get("routing") or {}
-    workspace_module().verify(manifest, require_unchanged=manifest.get("access") == "read" or bool(routing.get("decisionId")))
+    workspace_module().verify(manifest, require_unchanged=bool(routing.get("decisionId")))
     context.effective_workspace = manifest
 
 
@@ -151,53 +141,9 @@ def validate_outcome(outcome: object, *, delegation_authority: bool = False) -> 
     return None
 
 
-def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: int | None,
-              validate_provenance: Callable[[dict], str | None] | None = None) -> tuple[dict | None, str | None]:
-    turn_input = context.turn_input
-    if turn_input is None:
-        return None, None
-    if exit_code != 0:
-        return None, "the runner did not exit zero"
-    if not shutdown_confirmed:
-        return None, "runner shutdown is not confirmed, so no turn outcome is imported"
-    try:
-        with open_read(context.turn_output_file()) as stream:
-            raw = stream.read(MAX_RECORD_BYTES + 1)
-        if len(raw) > MAX_RECORD_BYTES:
-            return None, "the turn record exceeds its byte bound"
-        record = json.loads(raw)
-    except (OSError, ValueError):
-        return None, "the micro task runner wrote no valid JSON turn output"
-    if not isinstance(record, dict) or record.get("version") != 1:
-        return None, "the turn output version is not supported"
-    expected = {"taskId": context.task_id, "attemptId": context.attempt_id,
-                "generation": context.generation, "turnId": context.turn_id,
-                "resumeMode": turn_input.get("resumeMode"), "previousSessionId": turn_input.get("previousSessionId")}
-    for key, value in expected.items():
-        if record.get(key) != value:
-            return None, f"the turn record {key} does not match the service-owned execution identity"
-    if record.get("inputSha256") != input_hash(turn_input):
-        return None, "the turn record inputSha256 does not match the turn input the service wrote"
-    error = validate_outcome(record.get("outcome"), delegation_authority=turn_input.get(
-        "context", {}).get("delegationAuthority") is True)
-    if error:
-        return None, error
-    if not isinstance(record.get("sessionId"), str) or not record["sessionId"]:
-        return None, "the turn record carries no session identity"
-    if validate_provenance is None:
-        from ..harnesses.registry import adapter
-        validate_provenance = adapter(context.spec["harness"]).validate_turn_provenance
-    error = validate_provenance(record)
-    return (None, error) if error else (record, None)
-
-
 def seal_workspace(context: ExecutionContext) -> tuple[dict | None, str | None]:
-    manifest = getattr(context, "effective_workspace", None) or (context.turn_input or {}).get("executionWorkspace")
-    if not isinstance(manifest, dict) or not manifest:
-        return None, None
-    state_dir = context.environment.get("HMB_STATE_DIR")
-    if not state_dir:
-        return None, "the attempt has no private state directory to seal into"
+    manifest = context.effective_workspace
+    state_dir = context.environment["HMB_STATE_DIR"]
     try:
         from ...blackboard.tasks.workflow import workspace_module
         seal = workspace_module().seal(Path(state_dir), manifest, context.task_id, context.attempt_id)

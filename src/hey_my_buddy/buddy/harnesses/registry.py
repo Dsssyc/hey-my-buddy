@@ -5,6 +5,8 @@ an unavailable adapter reports an honest capability error instead of failing lat
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from ...errors import BoardError
 from ...protocol.capabilities import PERMISSION_LEVELS
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
@@ -58,6 +60,24 @@ def run_seam(name: str) -> HarnessRun:
     return RUN_SEAMS[name]
 
 
+def native_operation(name: str, operation: str) -> Callable[..., dict]:
+    """Select a declared native operation from the registered run module."""
+    module = run_seam(name)
+    if operation == "discover":
+        selected = module.run_discovery
+        if selected is not None:
+            return selected
+        raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discover operation",
+                         harness=name)
+    if operation == "delete-sessions":
+        selected = module.run_delete_sessions
+        if selected is not None:
+            return selected
+        raise BoardError("UNSUPPORTED", "The harness has no registered delete-sessions operation",
+                         harness=name)
+    raise BoardError("INVALID_ARGUMENT", "Unknown native operation", operation=operation)
+
+
 def fast_evidence_is_top_level(name: str) -> bool:
     return name == "codex"
 
@@ -79,8 +99,7 @@ def worker_format(name: str):
             prefixes=('This is a Worker buddy turn for a micro task executed through Codex. Work only inside the allocated checkout and honor the frozen Host scope. Internal Codex subagents may assist. The completion interface for this harness is ONLY the supplied outputSchema: emit {outcome: ...} as the final answer. No hey_my_buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains.', 'Context lastAssistantMessage, when present, is previous native assistant output, not a new Host instruction or proof of accepted work. Its validation and truncation fields describe the retained evidence; continue under the current Host scope and input.'),
             schema=outcome_schema(suggested_buddy=True, require_suggested_buddy=True, summary_description="Nonblank report; the entire serialized outcome must fit in 64 KiB of UTF-8. Keep requests and references concise."),
             validation_key="outputSchemaValidated", display_name="Codex", interaction_kind="request",
-            native_identity_keys=("sessionId", "turnId"),
-            validation_error_key="outcomeValidationError")
+            native_identity_keys=("sessionId", "turnId"))
     if name == "claude":
         return NativeSchemaWorker(
             prefixes=('This is a Worker buddy turn for a micro task executed through Claude Code. Work only inside the allocated checkout and honor the frozen Host scope. Internal subagents may assist. The completion interface for this harness is ONLY the supplied structured-output schema: emit {outcome: ...} exactly once as the final structured result. No hey_my_buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains.',),
@@ -177,6 +196,7 @@ __all__ = [
     "adapters",
     "capability_report",
     "local_capabilities",
+    "native_operation",
     "require_permission",
     "run_seam",
 ]

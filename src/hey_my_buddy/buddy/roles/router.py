@@ -1,14 +1,12 @@
 """Router attempts over the harness-neutral read-only structured-call protocol."""
 from __future__ import annotations
 
-from ...private_dirs import directory_mode
-
-
 from dataclasses import replace
+import time
 
 from ...errors import BoardError
 from ...protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities
-from ...private_dirs import context_root, ensure_private_dir
+from ...private_dirs import context_root, directory_mode, ensure_private_dir
 from ...blackboard.routing import router
 from . import router_input
 from .prompts import router_prompt
@@ -51,7 +49,9 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
     call exists, and the binding the collection re-verifies is frozen here.
     """
     manifest = document.get("executionWorkspace")
-    root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
+    root, digest = router_input.prepare(
+        manifest, ensure_private_dir(context_root(context, native.name)),
+        deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
     try:
         request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
                                             document["budget"], capture_evidence=document.get("captureEvidence") is True)
@@ -120,7 +120,8 @@ class DecisionAdapter(Adapter):
             except OSError:
                 pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
-            verification = router_input.verify(*handle.router_input)
+            verification = router_input.verify(
+                *handle.router_input, deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
             if verification["unchanged"] is None:
                 raise BoardError("router-input-unknown", "The frozen Router input could not yet be verified")
             # The mirror is a full copy of the frozen input. Once the native group is
@@ -136,7 +137,6 @@ class DecisionAdapter(Adapter):
         result = {
             "operation": "select", "status": "ok" if outcome.status == "ok" else "error",
             "requested": document["buddy"],
-            "resolved": native_result.get("resolved"), "observed": native_result.get("observed"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
             "toolEvidence": native_result.get("toolEvidence"),

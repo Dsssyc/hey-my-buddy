@@ -132,7 +132,8 @@ class NativeRunCase(unittest.TestCase):
         identity = {"taskId": "task", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                     "generation": 1, "turnId": "turn-1"}
         turn_input = {"taskId": identity["taskId"], "attemptId": identity["attemptId"],
-                      "generation": 1, "turnId": "turn-1", "context": {}, "executionWorkspace": {}}
+                      "generation": 1, "turnId": "turn-1", "context": {},
+                      "executionWorkspace": {"path": str(self.base / "cwd"), "access": "write"}}
         attention = self.base / f"attention-{uuid.uuid4().hex[:8]}.json"
         invocation = self.base / f"worker-invocation-{uuid.uuid4().hex[:8]}"
         inquiry_credentials = None

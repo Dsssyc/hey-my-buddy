@@ -52,6 +52,10 @@ class CandidatePrepareTests(BoardTestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if key not in cleared and not key.startswith("ANTHROPIC_")}
         self.environment["HMB_STATE_DIR"] = str(self.state)
+        workspace = mock.patch("hey_my_buddy.buddy.roles.turn_io.verify_workspace",
+            side_effect=lambda context: setattr(context, "effective_workspace", context.turn_input["executionWorkspace"]))
+        workspace.start()
+        self.addCleanup(workspace.stop)
 
     def candidate_executor(self) -> WorkerRunExecutor:
         # Candidate-only injection: a fresh instance carries native_resume True,
@@ -76,7 +80,7 @@ class CandidatePrepareTests(BoardTestCase):
     def context(self, task_id: str, attempt_id: str, *, mode: str, previous: str | None = None) -> ExecutionContext:
         identity = {"version": 1, "taskId": task_id, "attemptId": attempt_id, "generation": 1,
                     "turnId": "turn-1", "resumeMode": mode, "previousSessionId": previous,
-                    "context": {}, "executionWorkspace": {}}
+                    "context": {}, "executionWorkspace": {"path": str(self.workdir()), "access": "write"}}
         return ExecutionContext(
             task_id=task_id, attempt_id=attempt_id, generation=1,
             spec={"cwd": str(self.workdir()), "task": "fixture micro task task", "expectedSeconds": 30,

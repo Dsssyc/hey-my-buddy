@@ -444,7 +444,6 @@ class Batch4FactsTests(NativeRunCase):
                         self.assertEqual(payload["status"], "unknown")
                         self.assertEqual(payload["code"], "native-terminal-unread")
                         self.assertNotIn("rawAnswer", payload)
-                    output = self.base / f"unread-{case}-{scope}.json"
                     payload = run_execution._worker_facts(result)
                     if case == "unknown-initialize-with-unread-terminal":
                         expected = {"unknownEvents": {"countsByType": {
@@ -454,10 +453,6 @@ class Batch4FactsTests(NativeRunCase):
                                           run_execution._fast_result(result, request, verdict),
                                           run_execution._review_result(result, request, verdict)):
                             self.assertEqual(projected["nativeEvidence"], expected)
-                    with mock.patch.object(run_execution, "worker_delivery") as delivery:
-                        run_execution._worker_result(result, {"outputFile": str(output)}, {}, "", payload)
-                    delivery.assert_not_called()
-                    self.assertFalse(output.exists())
 
     def test_unread_terminal_still_requires_confirmed_native_stop(self):
         self.fixture_case("bad-subtype")

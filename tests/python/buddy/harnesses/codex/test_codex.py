@@ -18,7 +18,7 @@ import time
 import unittest
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
-from buddy.harnesses.fixture_selection import select_command, select_fixture
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_command, select_fixture
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
@@ -42,6 +42,7 @@ class CodexAdapterTests(unittest.TestCase):
         (self.root / "state").mkdir(mode=0o700)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
+        mock_role_workspace(self)
         self.home = self.root / 'native-account'
         self.home.mkdir()
         self.environment = {key: value for key, value in os.environ.items()
@@ -57,7 +58,8 @@ class CodexAdapterTests(unittest.TestCase):
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
-                      "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                      "previousSessionId": previous, "context": {},
+                      "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(session_record_path=str(self.root / f"session-{index}.jsonl"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
@@ -67,6 +69,7 @@ class CodexAdapterTests(unittest.TestCase):
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
     def execute(self, context):
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
@@ -110,6 +113,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_completed_native_turn_has_structured_provenance_and_preserved_final_activity(self):
         context = self.context()
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
@@ -416,6 +420,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context("ok", timeout=None)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
@@ -427,6 +432,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_absent_budget_still_honors_explicit_user_cancellation(self):
         context = self.context("hang", timeout=None)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
@@ -443,6 +449,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
         context = self.context(timeout=8)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertGreater(handle.deadline, time.monotonic())
@@ -450,6 +457,7 @@ class CodexAdapterTests(unittest.TestCase):
 
     def test_user_cancel_interrupts_the_owned_native_turn(self):
         context = self.context("hang", timeout=12)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_native_turn_start()
@@ -464,6 +472,7 @@ class CodexAdapterTests(unittest.TestCase):
         from hey_my_buddy.protocol.session_content import SessionNotification
 
         context = self.context("wrap-up", timeout=None)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         started = self.wait_native_turn_start()

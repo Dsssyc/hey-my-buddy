@@ -19,8 +19,8 @@ these facts.
 from __future__ import annotations
 
 import re
-
 from functools import partial
+from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Mapping, Optional, Protocol, runtime_checkable
 
 from ...errors import BoardError
@@ -639,12 +639,25 @@ class HarnessRun(Protocol):
     carried next input text as one in-run correction on the same native process
     and total deadline). ``services`` are the role-held narrow session service
     instances (completion, inquiry, checkpoint); their method surface belongs to
-    the roles. ``cancelled`` is the outer cancel check. Model discovery is not
-    part of this step's seam; the later ADR-025 steps place it through the Host.
+    the roles. ``cancelled`` is the outer cancel check. Optional native
+    capabilities are declared as a callable or ``None`` on every registered
+    module, so callers do not inspect module shape or function signatures.
     """
+
+    supported_request_controls: tuple[str, ...]
+    prepare_run_services: Callable[..., Any] | None
+    native_evidence: Callable[[RunResult], dict] | None
+    run_discovery: Callable[..., dict] | None
+    run_delete_sessions: Callable[..., dict[str, str]] | None
 
     def run(self, request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
             services: Any, cancelled: Callable[[], bool]) -> RunResult: ...
+
+    def check_preparation(self, spec: dict, environment: dict) -> None: ...
+
+    def session_facts(self, native_root: Path, session_id: str | None) -> dict: ...
+
+    def validate_turn_provenance(self, record: dict) -> str | None: ...
 
 
 __all__ = [

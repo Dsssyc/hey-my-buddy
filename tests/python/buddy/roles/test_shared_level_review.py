@@ -75,7 +75,7 @@ class _ReviewCases:
                                invocation_id=control["invocationId"])
         handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
         with mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
-            result, request, verdict, code = inline_run.execute(control, handle, self.base / "state")
+            result, request, verdict, code = inline_run.execute(control, handle)
         payload = run_execution._review_result(result, request, verdict)
         self.assertEqual(code, 0)
         self.assertEqual(request.permission, "read")
@@ -83,7 +83,6 @@ class _ReviewCases:
         self.assertEqual(self.native_prompts(), [request.input_text])
         self.assertEqual(json.loads(payload["rawAnswer"]),
                          {"buddyId": "legal", "note": "fixture", "evidence": []})
-        self.assertTrue(payload["answerValid"])
         self.assertEqual(payload["usage"]["toolCalls"], 0)
         self.assertLessEqual(payload["usage"]["toolCalls"], control["readOnlyRequest"]["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read"))

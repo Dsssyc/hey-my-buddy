@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import argparse
 import io
-import os
 import signal
 import sys
 import threading
 from pathlib import Path
+
+from ...errors import BoardError
+from ...json_codec import canonical_json, decode_strict_json
+from ...private_files import read_bytes
+from ...protocol import schemas
+from ..harnesses.run_contract import HARNESS_NAMES
+from ..harnesses.registry import native_operation
 
 _cancelled = threading.Event()
 
@@ -16,33 +22,19 @@ def _interrupt(_sig, _frame):
     _cancelled.set()
 
 
-if __name__ == "__main__":
-    for _signal in (signal.SIGTERM, signal.SIGINT,
-                    *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
-        signal.signal(_signal, _interrupt)
-
-from ...errors import BoardError
-from ...json_codec import canonical_json, decode_strict_json
-from ...private_files import read_bytes
-from ...protocol import schemas
-from ..harnesses.run_contract import HARNESS_NAMES
-from ..harnesses.registry import run_seam
-
-
 NATIVE_OPERATIONS = {
     "discover": {
-        "seam": "run_discovery", "resultKey": "catalog", "allowUnknown": True,
-        "unavailableCode": "CATALOG_UNAVAILABLE",
+        "resultKey": "catalog", "allowUnknown": True,
         "stopUnconfirmedCode": "HARNESS_DISCOVERY_STOP_UNCONFIRMED",
     },
     "delete-sessions": {
-        "seam": "run_delete_sessions", "resultKey": "sessions", "allowUnknown": False,
-        "unavailableCode": "UNSUPPORTED", "stopUnconfirmedCode": "HARNESS_DELETE_STOP_UNCONFIRMED",
+        "resultKey": "sessions", "allowUnknown": False,
+        "stopUnconfirmedCode": "HARNESS_DELETE_STOP_UNCONFIRMED",
     },
 }
 
 
-def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
+def execute(control: dict, cancelled: threading.Event) -> tuple[str, int]:
     operation = control.get("operation")
     if not isinstance(operation, str) or operation not in NATIVE_OPERATIONS:
         raise BoardError("INVALID_ARGUMENT", "Unknown native controller operation")
@@ -51,12 +43,9 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
     if control.get("harness") not in HARNESS_NAMES:
         raise BoardError("INVALID_ARGUMENT", "Unknown native controller harness")
     specification = NATIVE_OPERATIONS[operation]
-    seam = specification["seam"]
-    module = run_seam(control["harness"])
-    if not callable(getattr(module, seam, None)):
-        raise BoardError("ROLE_RUN_UNREGISTERED", f"The harness has no registered {operation} operation")
+    seam = native_operation(control["harness"], operation)
     try:
-        value = getattr(module, seam)(
+        value = seam(
             cwd=control["cwd"], invocation_root=Path(control["privateRoot"]),
             native_root=Path(control["nativeRoot"]), timeout_seconds=control["timeoutSeconds"],
             cancelled=cancelled.is_set, **control["arguments"])
@@ -78,15 +67,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
-    selected = os.environ.get("HMB_STATE_DIR")
-    if not selected:
-        parser.error("HMB_STATE_DIR is required")
     for sig in (signal.SIGTERM, signal.SIGINT,
                 *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, _interrupt)
     try:
         control = decode_strict_json(read_bytes(Path(args.control)))
-        frame, code = execute(control, _cancelled, Path(selected))
+        frame, code = execute(control, _cancelled)
     except BoardError as error:
         frame, code = canonical_json({"status": "error", "modelStarted": False, **error.payload(),
                                       "processState": {"shutdownConfirmed": True}}), 1

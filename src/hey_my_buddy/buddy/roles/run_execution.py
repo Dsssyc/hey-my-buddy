@@ -18,12 +18,12 @@ from contextvars import copy_context
 from functools import partial
 from pathlib import Path
 
-from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
-from ...private_files import open_read, read_bytes, read_text
+from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
+from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext
 from ..harnesses.controller import (
@@ -37,7 +37,7 @@ from . import turn_io, worker_services
 from .run_observers import FastCorrection, ReviewObserver, worker_observer
 from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
-    _NoToolEvidence, structured_prompt, valid_answer,
+    _NoToolEvidence, structured_prompt,
 )
 from .turn_io import input_hash, private_json, validate_outcome, canonical_json
 
@@ -68,8 +68,8 @@ class InlineRunHandle:
         self.result: RunResult | None = None
         self.request: RunRequest | None = None
         self.verdict: dict | None = None
+        self.turn_record: dict | None = None
         self.exit_code: int | None = None
-        self.log_paths: dict = {}
         self.cancel_requested = False
         self.force_stop_requested = False
         self.wrap_up_started = False
@@ -127,23 +127,15 @@ def _evidence(result, kind: str) -> dict | None:
 
 
 def _base_result(result) -> dict:
-    """The legacy receipt's common head, projected from the common result."""
+    """The role receipt's common head, projected from the common result."""
     payload = {
         "status": result.end.status, "mode": result.harness,
         "harnessVersion": result.harness_version or "unknown",
         "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
-        # The legacy receipts carry ``observed`` as a None placeholder; the
-        # native readback is the checked block, never a look-alike observed
-        # value, so this key stays a projection constant.
-        "resolved": None, "observed": None,
         "modelStarted": result.model_started is True,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
-    checked = result.buddy.checked
-    if checked.provider is not None and checked.model is not None and checked.effort is not None:
-        payload["resolved"] = {"provider": checked.provider.value, "model": checked.model.value,
-                               "effort": checked.effort.value}
     if result.native_identity is not None:
         payload["sessionId"] = result.native_identity.session_id
     if result.end.status != "ok":
@@ -190,7 +182,6 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     if payload["status"] == "ok":
         raw = result.value.raw if result.value is not None else None
         payload["rawAnswer"] = raw
-        payload["answerValid"] = valid_answer(raw, request.output_schema.value)
         payload["correctionCount"] = result.value.correction_count if result.value else 0
         if result.native_identity is not None:
             payload["nativeIdentity"] = result.native_identity.to_payload()
@@ -200,9 +191,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     top_level = fast_evidence_is_top_level(result.harness)
     if top_level or request.capture_evidence and payload["status"] == "ok":
         module = run_seam(result.harness)
-        if not callable(getattr(module, "native_evidence", None)):
-            raise BoardError("ROLE_RUN_UNREGISTERED", "The registered run has no native evidence projection")
-        evidence = module.native_evidence(result)
+        evidence = module.native_evidence(result) if module.native_evidence is not None else {}
         if top_level:
             payload.update(evidence)
         else:
@@ -212,7 +201,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     return payload
 
 
-def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
+def _worker_facts(result, request: RunRequest | None = None, *, delegation_authority: bool = False) -> dict:
     from ..harnesses.registry import worker_format
 
     format = worker_format(result.harness)
@@ -229,18 +218,11 @@ def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
             and isinstance(check.get("selected"), dict):
         payload["selectedModelListed"] = False
         payload["selectedModel"] = check["selected"]
-    declaration = _evidence(result, "worker-permission")
-    if declaration is not None:
-        if (set(declaration) != {"source", "binding", "permission"}
-                or declaration["source"] != "harness-permission-declaration"
-                or declaration["binding"] != result.identity.to_payload()):
-            raise BoardError("INVALID_ARGUMENT", "The Worker permission declaration does not bind this run")
-        permission = declaration["permission"]
-        level = permission.get("level") if isinstance(permission, dict) else None
-        if (level not in ("read", "write", "full") or set(permission) != {"level", "enforcement"}
-                or permission["enforcement"] not in ("enforced", "convention")):
-            raise BoardError("INVALID_ARGUMENT", "The Worker permission declaration is invalid")
-        payload.setdefault("nativeEvidence", {})["permission"] = permission
+    if request is not None:
+        payload.setdefault("nativeEvidence", {})["permission"] = {
+            "level": request.permission,
+            "enforcement": PERMISSION_LEVELS[request.harness][request.permission],
+        }
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)
@@ -272,13 +254,13 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     if payload["status"] == "ok":
         raw = (result.value.parsed.value if result.value.parsed is not None else result.value.raw
                ) if result.value is not None else None
-        payload.update(rawAnswer=raw, answerValid=valid_answer(raw, request.output_schema.value),
+        payload.update(rawAnswer=raw,
                        correctionCount=(result.value.correction_count or 0) if result.value is not None else 0)
         if result.native_identity is not None:
             payload["nativeIdentity"] = result.native_identity.to_payload()
     from ..harnesses.registry import run_seam
     module = run_seam(result.harness)
-    if callable(getattr(module, "native_evidence", None)):
+    if module.native_evidence is not None:
         payload.update(module.native_evidence(result))
     return payload
 
@@ -318,32 +300,23 @@ def _worker_reports(result, payload: dict) -> bool:
     return invalid
 
 
-def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload: dict) -> dict:
-    if result.end.status == "ok":
-        completion = result.completion_evidence
-        if completion is not None and result.native_identity is not None:
-            payload["nativeTurnId"] = result.native_identity.turn_id
-        outcome, provenance, truncated = worker_delivery(
-            result, delegation_authority=turn_input.get("context", {}).get("delegationAuthority") is True)
-        if isinstance(outcome, dict) and isinstance(provenance, dict):
-            # The micro task turn record is this role's document: the attempt
-            # identity, input hash and prompt hash are the role's own facts,
-            # the outcome and ordered provenance are the driver's evidence
-            # parts, and the published record lands exactly where the role's
-            # reader expects it.
-            identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
-            record = {"version": 1, **identity, "inputSha256": input_hash(turn_input),
-                      "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
-                      "sessionId": payload.get("sessionId"),
-                      "previousSessionId": turn_input.get("previousSessionId"),
-                      "resumeMode": turn_input.get("resumeMode"),
-                      "outcome": outcome, "provenance": provenance}
-            if truncated:
-                record["outcomeTruncated"] = truncated
-            if not Path(control["outputFile"]).exists():
-                private_json(Path(control["outputFile"]), record, exclusive=True)
-            payload["nativeTurnId"] = provenance.get("nativeTurnId")
-    return payload
+def _worker_result(result, control: dict, turn_input: dict, prompt: str) -> dict:
+    outcome, provenance, truncated = worker_delivery(
+        result, delegation_authority=turn_input.get("context", {}).get("delegationAuthority") is True)
+    identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
+    record = {"version": 1, **identity, "inputSha256": input_hash(turn_input),
+              "promptSha256": hashlib.sha256(prompt.encode()).hexdigest(),
+              "sessionId": result.native_identity.session_id if result.native_identity else None,
+              "previousSessionId": turn_input.get("previousSessionId"),
+              "resumeMode": turn_input["resumeMode"],
+              "outcome": outcome, "provenance": provenance}
+    if truncated:
+        record["outcomeTruncated"] = truncated
+    raw = canonical_json(record).encode()
+    if len(raw) > turn_io.MAX_RECORD_BYTES:
+        raise BoardError("invalid-result", "the turn record exceeds its byte bound")
+    publish_bytes(Path(control["outputFile"]), raw, immutable=True)
+    return record
 
 
 def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict, dict, dict]:
@@ -386,7 +359,7 @@ def worker_request(control: dict, module):
     task_text = read_text(Path(control["taskFile"]))
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
-    permission = turn_input["executionWorkspace"].get("access", "write")
+    permission = turn_input["executionWorkspace"]["access"]
     if format is None:
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
@@ -417,7 +390,7 @@ def worker_request(control: dict, module):
                        f"{inquiry_services.answer_tool}, using its exact "
                        "inquiryId and answer text. Assistant prose does not count as an answer. "
                        "Questions never open a new turn or extend this turn's deadline.\n")
-        services = _native_services(control, module, permission, inquiry=inquiry_services)
+        services = _native_services(module, inquiry=inquiry_services)
         descriptions = ()
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
@@ -450,16 +423,10 @@ def worker_request(control: dict, module):
     return request, services, worker_observer, error
 
 
-def _native_services(control: dict, module, tool_scope: str, *, inquiry=None):
-    """Supply only the registered factory's actual inputs, without workflow authority."""
-    factory = getattr(module, "prepare_run_services", None)
-    if factory is None:
-        return None
-    import inspect
-    values = dict(tool_scope=tool_scope, inquiry=inquiry)
-    # These are this project's registered factories, not vendor qualification.
-    parameters = inspect.signature(factory).parameters
-    return factory(**{key: value for key, value in values.items() if key in parameters})
+def _native_services(module, *, inquiry=None):
+    """Use the service factory declared by the registered driver."""
+    factory = module.prepare_run_services
+    return factory(inquiry=inquiry) if factory is not None else None
 
 
 def fast_request(control: dict, module):
@@ -482,7 +449,7 @@ def fast_request(control: dict, module):
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
     correction = FastCorrection(request_values["outputSchema"], base_prompt)
-    return request, _native_services(control, module, "none"), correction.observer, correction
+    return request, _native_services(module), correction.observer, correction
 
 
 def review_request(control: dict, module):
@@ -501,7 +468,7 @@ def review_request(control: dict, module):
         capture_evidence=values.get("captureEvidence") is True)
     observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], prompt,
                               can_correct=control["canCorrect"])
-    return request, _native_services(control, module, "read"), observer.observer, observer
+    return request, _native_services(module), observer.observer, observer
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
@@ -515,7 +482,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
         from .inline_run import execute
         try:
             handle.result, handle.request, handle.verdict, handle.exit_code = execute(
-                control, handle, Path(environment["HMB_STATE_DIR"]))
+                control, handle)
             handle.role_run_active_identity = handle.request.identity
         except BaseException as error:
             handle.error = error
@@ -532,12 +499,14 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
 
 
 def _read_run(handle: InlineRunHandle) -> RunResult:
-    assert handle.result is not None
+    if handle.error is not None:
+        raise handle.error
     return handle.result
 
 
 def _read_request(handle: InlineRunHandle) -> RunRequest:
-    assert handle.request is not None
+    if handle.error is not None:
+        raise handle.error
     return handle.request
 
 
@@ -551,7 +520,6 @@ def read_review_result(handle: InlineRunHandle) -> dict:
 
 def _read_structured_result(handle, project):
     result = _read_run(handle)
-    assert handle.verdict is not None
     return project(result, _read_request(handle), handle.verdict)
 
 
@@ -559,18 +527,6 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
     """Run the selected fast role with no turn, tools or blackboard authority."""
     native_environment = context.environment
     cwd = Path(request.cwd)
-    if (context.turn is not None or context.agent_credential is not None
-            or type(request.timeout_seconds) is not int or not 0 < request.timeout_seconds <= 60
-            or not isinstance(request.prompt, str) or not request.prompt.strip()
-            or not isinstance(request.output_schema, dict)):
-        raise BoardError("INVALID_ARGUMENT", "no-tool call requires a bounded prompt, schema and no workflow authority")
-    try:
-        if not is_absolute_path(cwd) or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
-            raise ValueError("not an empty private directory")
-        from ...private_dirs import validate_private_dir
-        validate_private_dir(cwd)
-    except (OSError, ValueError, BoardError):
-        raise BoardError("INVALID_ARGUMENT", "no-tool cwd must be an existing empty private directory") from None
     module.check_preparation(context.spec, native_environment)
     directory = ensure_private_dir(context.directory)
     invocation_name = "no-tool-" + uuid.uuid4().hex
@@ -649,10 +605,10 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", harness=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
             raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", harness=self.name)
-        state = context.environment["HMB_STATE_DIR"]
         if context.turn_output_file().exists():
             raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", harness=self.name)
         turn_io.prepare_turn(context)
+        state = context.environment["HMB_STATE_DIR"]
         root = ensure_private_dir(native_root(Path(state), self.name, context.task_id)
                                   if self.description.native_resume else
                                   context_root(context, self.name) / (self.name + "-private"))
@@ -662,7 +618,7 @@ class WorkerRunExecutor:
             "directory": str(context.directory.resolve()),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "sessionRecordPath": context.session_record_path,
-            "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
+            "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": context.timeout_seconds,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
@@ -671,7 +627,6 @@ class WorkerRunExecutor:
         }
 
     def start(self, context: ExecutionContext) -> InlineRunHandle:
-        self.prepare(context)
         control = context.role_run_control
         invocation_id = uuid.uuid4().hex
         control["privateRoot"] = str(ensure_private_dir(
@@ -687,10 +642,10 @@ class WorkerRunExecutor:
         verdict = None
         wrap_up_result = result.identity != handle.role_run_original_identity
         try:
-            payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
+            request = _read_request(handle)
+            payload = _worker_facts(result, request, delegation_authority=(context.turn_input or {}).get(
                 "context", {}).get("delegationAuthority") is True)
             reports_invalid = _worker_reports(result, payload)
-            request = _read_request(handle)
             if reports_invalid:
                 raise BoardError("INVALID_ARGUMENT", "A native report could not be verified")
             if shutdown:
@@ -705,7 +660,6 @@ class WorkerRunExecutor:
                     raise BoardError("INVALID_ARGUMENT", "The summary run changed its native session")
                 if result.end.status == "ok" or handle.cancel_requested or wrap_up_result:
                     verdict = handle.verdict
-                    assert verdict is not None
                     error = verdict.get("workerError")
                     if error is not None:
                         raise BoardError(error["code"], error["message"])
@@ -719,7 +673,7 @@ class WorkerRunExecutor:
         checkpoint = turn_io.validated_checkpoint(payload, context.turn_input) if shutdown else None
         if checkpoint is None:
             payload.pop("nativeCheckpoint", None)
-            if result is not None and any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
+            if any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
                 payload["lastAssistantMessage"] = None
         payload["tokenUsage"] = usage.normalize_token_usage(payload.get("tokenUsage"))
         from ..harnesses.registry import worker_message_source
@@ -732,8 +686,13 @@ class WorkerRunExecutor:
             status = "ok"
         if wrap_up_result and not payload.get("wrapUpDelivered"):
             record, error = None, "the wrap-up did not deliver a valid result within its deadline"
+        elif exit_code != 0:
+            record, error = None, "the runner did not exit zero"
+        elif not shutdown:
+            record, error = None, "runner shutdown is not confirmed, so no turn outcome is imported"
         else:
-            record, error = turn_io.read_turn(context, shutdown, exit_code, self.module.validate_turn_provenance)
+            record = handle.turn_record
+            error = None if record is not None else "the run delivered no turn outcome"
         attention = payload.get("nativeAttention") if isinstance(payload.get("nativeAttention"), dict) else {}
         attention_requests = attention.get("requests")
         if format is None:
@@ -744,7 +703,7 @@ class WorkerRunExecutor:
         if payload.get("attentionRequired") is True and record is not None and record["outcome"]["disposition"] in ("completed", "waiting"):
             error = ("a native interactive request was refused during this turn; a completed or waiting outcome "
                      "cannot stand in for the Host attention that request requires")
-        original_completed = (result is not None and payload.get("status") == "ok"
+        original_completed = (payload.get("status") == "ok"
                               and result.identity == handle.role_run_original_identity and exit_code == 0 and shutdown
                               and record is not None and error is None)
         if original_completed:
@@ -758,13 +717,13 @@ class WorkerRunExecutor:
             session_id = (record or {}).get("sessionId")
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
-            "resumable": bool(facts.get("bindingPresent", True) and shutdown and result is not None
+            "resumable": bool(facts.get("bindingPresent", True) and shutdown
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
         if self.receipt_options.capture_session_from_validated_turn:
             payload["nativeSession"]["sessionIdSource"] = "validated-turn" if session_id else "none"
-        if isinstance(getattr(context, "effective_workspace", None), dict):
+        if context.effective_workspace is not None:
             payload["workspaceManifest"] = context.effective_workspace
         if error:
             payload["turnError"] = error
@@ -781,7 +740,7 @@ class WorkerRunExecutor:
                     payload["workspaceSeal"] = seal
         return AdapterOutcome(status=status, result=payload, error=payload.get("error") or error or seal_error,
                               exit_code=exit_code, signal=signal_name(exit_code), shutdown_confirmed=shutdown,
-                              artifacts=_artifacts(context, handle) if shutdown else [])
+                              artifacts=_artifacts(context) if shutdown else [])
 
     def stop(self, handle: InlineRunHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
@@ -796,10 +755,9 @@ class WorkerRunExecutor:
     def cancel(self, handle: InlineRunHandle, *, grace_seconds: float = WORKER_STOP_GRACE_SECONDS) -> None:
         handle.terminate(grace_seconds=grace_seconds)
 
-def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]:
+def _artifacts(context: ExecutionContext) -> list[dict]:
     paths = [("task-specification", context.task_file()), ("turn-result", context.turn_output_file()),
-             ("native-attention", context.directory / "attention.json"),
-             *(("runner-" + key, Path(value)) for key, value in handle.log_paths.items() if key in ("stdout", "stderr"))]
+             ("native-attention", context.directory / "attention.json")]
     artifacts = []
     for kind, path in paths:
         if path.is_file():
@@ -824,7 +782,7 @@ def delete_sessions(name: str, session_ids: list[str]) -> dict[str, str]:
 
 
 def _native_operation(name: str, operation: str, **arguments) -> dict:
-    from ..harnesses.registry import run_seam
+    from ..harnesses.registry import native_operation
     from ..harnesses.runtime_selection import controller_environment
 
     specification = NATIVE_OPERATIONS[operation]
@@ -832,10 +790,7 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
     stopped = True  # No controller exists during control-file preparation.
     try:
         try:
-            module = run_seam(name)
-            if not callable(getattr(module, specification["seam"], None)):
-                raise BoardError(specification["unavailableCode"],
-                                 f"The harness has no registered {operation} operation", harness=name)
+            native_operation(name, operation)
             directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-")
             control = directory / _NATIVE_CONTROL
             private_json(control, {"operation": operation, "arguments": arguments,
@@ -878,7 +833,6 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
                 message = (collection.payload or {}).get("error")
                 if not isinstance(message, str) or not message:
                     message = f"Native {operation} did not settle successfully"
-                message = message.encode("utf-8")[:512].decode("utf-8", errors="ignore")
                 raise BoardError("HARNESS_UNAVAILABLE", message, harness=name,
                                  **({"nativeError": payload["nativeError"]} if "nativeError" in payload else {}))
             return payload.get(specification["resultKey"])

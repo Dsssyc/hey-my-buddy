@@ -161,10 +161,15 @@ def check(status, evidence):
     return {"status": status, "evidence": evidence}
 
 
-def evaluate(report, result, handle_stopped, marker, before, after, sentinel_before, sentinel_after):
+def evaluate(report, result, handle_stopped, marker, before, after, sentinel_before, sentinel_after, checked):
     raw = result.result.get("rawAnswer")
-    valid = read_only.valid_answer(raw, SCHEMA)
-    answer = json.loads(raw) if isinstance(raw, str) and valid else raw if valid else {}
+    try:
+        answer = json.loads(raw) if isinstance(raw, str) else raw
+        valid = not read_only.schema_errors(answer, SCHEMA)
+    except (ValueError, RecursionError):
+        valid = False
+    if not valid:
+        answer = {}
     usage = result.result.get("usage") or {}
     elapsed, tools, byte_count = (usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead"))
     limits = report["request"]["budget"]
@@ -178,16 +183,15 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
                                       (tools, limits["toolCalls"]), (byte_count, limits["bytesRead"])))
     over = over or (rounds is not None and rounds > report["cost"]["maxNativeTurns"])
     native_identity = result.result.get("nativeIdentity") or {}
-    resolved = result.result.get("resolved") or {}
     identity_matches = (isinstance(native_identity.get("sessionId"), str)
                         and bool(native_identity["sessionId"])
-                        and all(resolved.get(key) == value for key, value in report["buddy"].items()))
+                        and all(checked.get(key) == value for key, value in report["buddy"].items()))
     if report["harness"] == "codex":
         identity_matches = identity_matches and isinstance(native_identity.get("turnId"), str) \
             and bool(native_identity["turnId"])
     checks = {
         "requestIdentity": check("passed" if identity_matches else "failed",
-                                 {"nativeIdentity": native_identity, "resolved": resolved}),
+                                 {"nativeIdentity": native_identity, "checked": checked}),
         "nativePolicy": check("unverified", result.result.get('nativePolicy') or "缺少原生策略回执；模型自述不作证据。"),
         "forbiddenTools": check("unverified", "Host 必须核对原生工具事件及策略回执，确认没有写入或未知工具调用。"),
         "writeDenials": check("unverified", result.result.get('nativeToolEvents') or "缺少关联原生写入请求/拒绝记录。"),
@@ -205,7 +209,7 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
     }
     if valid and any(answer.get(key) == "succeeded" for key in ("insideWrite", "outsideWrite")):
         checks["writeDenials"] = check("failed", "模型报告有写入成功；须检查原生证据。")
-    report.update(checks=checks, answerValid=valid, modelSelfReport=answer,
+    report.update(checks=checks, modelSelfReport=answer,
                   result=result.to_report(),
                   nativeEvidence={"identity": result.result.get("nativeIdentity"),
                                   "activity": report.pop("activity", None),
@@ -325,8 +329,11 @@ def run(args):
                     report["activity"] = json.loads(activity.read_text())
                 except (ValueError, OSError):
                     report["activity"] = None
+            readback = handle.result.buddy.checked
+            checked = {key: value.value for key in ("provider", "model", "effort")
+                       if (value := getattr(readback, key)) is not None}
             evaluate(report, result, handle.shutdown_confirmed(), marker, before, input_hashes(frozen),
-                     sentinel_before, file_hash(sentinel))
+                     sentinel_before, file_hash(sentinel), checked)
     except (Exception, KeyboardInterrupt) as error:
         report.update(status="failed", error=type(error).__name__,
                       reason="探针中断或失败；不自动重试，检查私有证据。")

@@ -68,20 +68,9 @@ def schema_errors(value, schema: dict) -> list[str]:
     return errors
 
 
-def _decode(raw):
-    return json.loads(raw) if isinstance(raw, str) else raw
-
-
-def valid_answer(raw, schema: dict) -> bool:
-    try:
-        return not schema_errors(_decode(raw), schema)
-    except (ValueError, RecursionError):
-        return False
-
-
 def correction_code(raw, schema: dict) -> str | None:
     try:
-        value = _decode(raw)
+        value = json.loads(raw) if isinstance(raw, str) else raw
     except (ValueError, RecursionError):
         return "answer-invalid-json"
     errors = schema_errors(value, schema)

@@ -13,7 +13,7 @@ import json
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
@@ -201,8 +201,9 @@ class SelectionRequestTests(DecisionTestCase):
         # parameters, and the decision run itself is not an execution permit.
         self.assertEqual(decision["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(decision["requestedBuddy"]["effort"], CATALOG_BUDDY["effort"])
-        self.assertIsNone(decision["resolvedBuddy"])
-        self.assertIsNone(decision["observedBuddy"])
+        self.assertEqual(decision["decisionModel"], {"requested": decision["requestedBuddy"]})
+        self.assertNotIn("resolvedBuddy", decision)
+        self.assertNotIn("observedBuddy", decision)
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assert_code("UNSUPPORTED", board.call, "task_retry", {"runId": request["runId"]})
         self.assert_code(
@@ -472,7 +473,7 @@ class DecisionFailureTests(DecisionTestCase):
         return self.decision(board, request["decisionId"])
 
     def test_changed_input_before_spawn_keeps_its_router_boundary_code(self):
-        from unittest.mock import patch
+        from unittest.mock import ANY, patch
         board = self.board()
         self.seed(board)
         with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
@@ -732,8 +733,6 @@ class DecisionFailureTests(DecisionTestCase):
             "status": "ok",
             "operation": "select",
             "requested": {"provider": CATALOG_BUDDY["provider"], "model": CATALOG_BUDDY["model"], "reasoningEffort": CATALOG_BUDDY["effort"]},
-            "resolved": None,
-            "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
@@ -793,8 +792,6 @@ class DecisionFailureTests(DecisionTestCase):
             "status": "ok",
             "operation": "select",
             "requested": document["buddy"],
-            "resolved": None,
-            "observed": None,
             "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": 0},
             "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
@@ -945,11 +942,11 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.assertEqual(request_view.cwd, str(frozen_root))
         from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, harness)
-        self.input_prepare.assert_called_once_with(manifest, private_root)
+        self.input_prepare.assert_called_once_with(manifest, private_root, deadline=ANY)
         self.assertTrue(Path(frozen_root).is_relative_to(private_root))
         self.assertFalse(private_root.is_relative_to(context.directory))
         self.assertFalse((context.directory / "frozen-input").exists())
-        self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest)
+        self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest, deadline=ANY)
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
         snapshot = board.call("console_snapshot", {})

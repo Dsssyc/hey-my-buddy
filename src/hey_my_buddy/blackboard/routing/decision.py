@@ -1382,12 +1382,10 @@ class DecisionCoordinator:
             "buddyId": row["buddy_id"],
             # The frozen execution identity the Host can delegate with directly,
             # captured from the admitted input. ``decisionModel`` is the decision
-            # call's own requested/resolved identity and is deliberately separate.
+            # call's own requested identity and is deliberately separate.
             "selectedBuddy": selected,
             "decisionModel": {
                 "requested": actor["buddy"] if actor else None,
-                "resolved": (output or {}).get("resolved"),
-                "observed": (output or {}).get("observed"),
             },
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "note": row["note"],
@@ -1432,8 +1430,6 @@ class DecisionCoordinator:
                     # The decision call's own buddy, kept separate from the
                     # selected worker buddy above.
                     "requestedBuddy": actor["buddy"] if actor else None,
-                    "resolvedBuddy": (output or {}).get("resolved"),
-                    "observedBuddy": (output or {}).get("observed"),
                     "usage": (output or {}).get("usage"),
                     "elapsedSeconds": (output or {}).get("elapsedSeconds"),
                     "helperShutdownConfirmed": (output or {}).get("shutdownConfirmed"),

@@ -18,6 +18,8 @@ names through the real root-turn tracker.
 """
 from __future__ import annotations
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from hey_my_buddy.buddy.harnesses.dsh.protocol import (
@@ -168,8 +170,11 @@ class DshReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="dsh-receipt-attention-")
+        self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
-                       "inputSha256": "a" * 64, "key": "b" * 64}
+                       "inputSha256": "a" * 64, "key": "b" * 64,
+                       "attentionPath": str(Path(temporary.name) / "absent-attention.json")}
         self.outcome = {"disposition": "completed", "summary": "done", "remaining": [], "decisions": [], "artifacts": [], "request": None}
         self.native = "mcp__buddy_x__hey_my_buddy_finish_turn"
 

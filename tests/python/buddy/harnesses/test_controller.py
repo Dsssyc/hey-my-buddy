@@ -650,7 +650,7 @@ def _review_handle(root, outer=True):
         "nativeFailure": None,
         "value": {"schemaStatus": "valid", "parsed": {"answer": "ok"}},
     })
-    return SimpleNamespace(exit_code=0, result=result, request=request,
+    return SimpleNamespace(exit_code=0, error=None, result=result, request=request,
                            verdict={"stopReason": None, "elapsedMs": 1},
                            shutdown_confirmed=lambda: outer, role_run_identity=request.identity,
                            role_run_original_identity=request.identity, role_run_active_identity=request.identity,
@@ -682,13 +682,16 @@ class RouterCollectCoercionTests(unittest.TestCase):
                 self.assertEqual(outcome.status, status)
                 self.assertIs(outcome.shutdown_confirmed, confirmed)
 
-    def test_a_missing_in_process_router_result_violates_the_handle_invariant(self):
+    def test_a_failed_in_process_router_run_propagates_its_error(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-router-bad-")
         self.addCleanup(temporary.cleanup)
         handle = _review_handle(Path(temporary.name))
         handle.result = None
-        with self.assertRaises(AssertionError):
+        error = RuntimeError("fixture router run failed")
+        handle.error = error
+        with self.assertRaises(RuntimeError) as caught:
             structured_call.collect(handle)
+        self.assertIs(caught.exception, error)
 
 
 class SignalNameTests(unittest.TestCase):

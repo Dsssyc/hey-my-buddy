@@ -552,7 +552,6 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertTrue(evidence["streamComplete"])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"], evidence["truncated"]), (2, 0, False))
         self.assertEqual(len(evidence["events"]), 4)
-        self.assertTrue(receipt["answerValid"])
         self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read"))
 
     def test_replayed_and_stream_projected_calls_count_once_in_the_receipt(self):

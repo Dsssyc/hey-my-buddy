@@ -2379,9 +2379,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(replay_seal, first_seal)
         router_directory = self.directory / "router-seam"
         router_directory.mkdir()
-        frozen, digest = router_input.prepare(original, router_directory)
+        frozen, digest = router_input.prepare(original, router_directory, deadline=None)
         self.assertEqual((frozen / "tracked.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertTrue(router_input.verify(original, frozen, digest)["unchanged"])
+        self.assertTrue(router_input.verify(original, frozen, digest, deadline=None)["unchanged"])
         self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
         continued = board.call("workflow_continue", {

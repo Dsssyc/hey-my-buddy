@@ -197,8 +197,6 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
     Eligibility and the selected description stay frozen at preparation. A
     native harness takes the generic role controller path.
     """
-    if not isinstance(preparation, (FastPreparation, ReviewPreparation)):
-        raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
     module = preparation.run_module
     if isinstance(preparation, FastPreparation):
         from .run_execution import start_fast
@@ -230,7 +228,7 @@ def run_harness(
                          harness=request.harness, requiredCapability=f"permission:{request.permission}")
     requested_controls = ({"resume_checkpoint"} if request.continuation is not None
                           and request.continuation.checkpoint is not None else set())
-    unsupported = requested_controls - set(getattr(module, "supported_request_controls", ()))
+    unsupported = requested_controls - set(module.supported_request_controls)
     if unsupported:
         raise BoardError("ROLE_RUN_UNSUPPORTED_CONTROL",
                          "The registered run does not support the requested native controls",

@@ -49,7 +49,7 @@ def _prepare(root, buddy):
     path = root / 'prepared.json'
     if path.exists():
         packet = json.loads(path.read_text())
-        if packet['buddy'] != buddy or router_input.digest(root / 'frozen') != packet['inputDigest']:
+        if packet['buddy'] != buddy or router_input.digest(root / 'frozen', deadline=None) != packet['inputDigest']:
             raise ValueError('the prepared buddy or input changed; use a new packet')
         return packet
     frozen = root / 'frozen'
@@ -64,7 +64,7 @@ def _prepare(root, buddy):
         'binding': {'harness': buddy['harness'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
-        'inputDigest': router_input.digest(frozen),
+        'inputDigest': router_input.digest(frozen, deadline=None),
         'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['harness'] == 'codex'
                               else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
                               'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
@@ -158,7 +158,7 @@ def run(args):
             handle.wait(timeout=15)
         outcome = read_only.collect(handle)
         report.update(evaluate(packet, outcome, elapsed_ms=round((time.monotonic() - started) * 1000),
-                               unchanged=router_input.digest(root / 'frozen') == packet['inputDigest']))
+                               unchanged=router_input.digest(root / 'frozen', deadline=None) == packet['inputDigest']))
     except (Exception, KeyboardInterrupt) as error:
         report.update(error=type(error).__name__, reason='The probe failed; no automatic retry is authorized')
     finally:

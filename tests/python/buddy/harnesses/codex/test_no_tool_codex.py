@@ -192,7 +192,6 @@ class NoToolCodexTests(unittest.TestCase):
     def test_unknown_event_keeps_a_valid_answer(self):
         outcome, _control, _directory = self.run_case("unknown")
         self.assertEqual(outcome.status, "ok", outcome.result)
-        self.assertTrue(outcome.result["answerValid"])
         self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"],
                          {"countsByType": {"account/updated": 1, "futureThing": 1}, "total": 2})
         self.assertNotIn("unknownEvents", outcome.result)
@@ -219,7 +218,6 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 2)
         outcome, _control, directory = self.run_case("outside")
         self.assertEqual(outcome.status, 'ok', outcome.result)
-        self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 1)
         bounded = {"type": "object", "additionalProperties": False, "required": ["reason"],
                    "properties": {"reason": {"type": "string", "maxLength": 2}}}

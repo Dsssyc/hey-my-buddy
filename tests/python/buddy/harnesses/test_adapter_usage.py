@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from buddy.harnesses.fixture_selection import select_fixture
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
@@ -24,19 +24,6 @@ FIXTURES = Path(__file__).parent
 MOCK_CODEX = FIXTURES / "codex/fixtures/mock_codex.py"
 CODEX_NATIVE = json.loads((FIXTURES / "codex/fixtures/native-usage-codex.json").read_text(encoding="utf-8"))
 
-TURN_INPUT = {
-    "version": 1,
-    "taskId": "task",
-    "attemptId": "attempt",
-    "generation": 1,
-    "turnId": "turn-1",
-    "resumeMode": "initial",
-    "previousSessionId": None,
-    "context": {},
-    "executionWorkspace": {},
-}
-
-
 class CodexUsageContractTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-usage-")
@@ -44,6 +31,7 @@ class CodexUsageContractTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
+        mock_role_workspace(self)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment.update(HMB_CONSOLE_PORT="0",
@@ -56,7 +44,8 @@ class CodexUsageContractTests(unittest.TestCase):
     def context(self, case: str, *, index: int = 1, previous: str | None = None) -> ExecutionContext:
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": "native-session" if previous else "initial",
-                      "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                      "previousSessionId": previous, "context": {},
+                      "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 8,
                                       "provider": "openai", "model": "fixture-model", "effort": "low"},
@@ -66,6 +55,7 @@ class CodexUsageContractTests(unittest.TestCase):
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
     def execute(self, context: ExecutionContext):
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(15), "Codex fixture controller did not exit")
@@ -247,7 +237,7 @@ class DshUsageContractTests(DshRoleCase):
         context.turn = None
         self.micro_task_record(context)
         with self.assertRaises(BoardError):
-            worker_executor("dsh").start(context)
+            worker_executor("dsh").prepare(context)
         self.assertFalse(self.log.exists(), "a native child must not start without the micro task input")
 
 

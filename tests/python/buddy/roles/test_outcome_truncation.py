@@ -7,8 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
-from hey_my_buddy.buddy.harnesses.registry import run_seam, worker_format
+from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.harnesses.run_contract import NativeIdentity
 from hey_my_buddy.buddy.harnesses.session_receipts import verify_receipt
 from hey_my_buddy.buddy.roles import run_execution, turn_io, worker_services
 from hey_my_buddy.errors import BoardError
@@ -40,14 +42,13 @@ class OutcomeTruncationTests(unittest.TestCase):
         return SimpleNamespace(harness=harness, end=SimpleNamespace(status="ok"),
             value=SimpleNamespace(raw=canonical_json(wrapper), schema_status="valid",
                                   parsed=SimpleNamespace(value=wrapper) if parsed else None),
-            evidence_refs=[ref], completion_evidence=None, native_identity=None)
+            evidence_refs=[ref], completion_evidence=None, native_identity=NativeIdentity(session_id="native-session"))
 
     def record(self, result):
         path = self.root / "output.json"
         path.unlink(missing_ok=True)
-        payload = {"sessionId": "native-session"}
-        run_execution._worker_result(result, {"outputFile": str(path)}, self.turn, "prompt", payload)
-        return json.loads(path.read_bytes()), path.read_bytes()
+        record = run_execution._worker_result(result, {"outputFile": str(path)}, self.turn, "prompt")
+        return record, path.read_bytes()
 
     def test_waiting_native_outcome_is_bound_to_the_lead_turn(self):
         for harness in ("codex", "claude"):
@@ -110,12 +111,6 @@ class OutcomeTruncationTests(unittest.TestCase):
                 policy = worker_format(harness)
                 self.assertEqual(record["provenance"],
                                  {**facts, "turnEnd": "completed", policy.validation_key: True})
-                context = SimpleNamespace(turn_input=self.turn, task_id="task", attempt_id="attempt",
-                    generation=1, turn_id="turn", turn_output_file=lambda: self.root / "output.json")
-                imported, error = turn_io.read_turn(context, True, 0, run_seam(harness).validate_turn_provenance)
-                self.assertIsNone(error)
-                self.assertEqual(imported, record)
-
     def test_untruncated_record_is_byte_identical_and_has_no_metadata(self):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness):
@@ -145,6 +140,16 @@ class OutcomeTruncationTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, "invalid-result")
                     self.assertFalse((self.root / "output.json").exists())
 
+    def test_complete_turn_record_is_bounded_before_publication(self):
+        result = self.result("codex", outcome())
+        oversized = {"nativeData": "x" * turn_io.MAX_RECORD_BYTES}
+        with mock.patch.object(run_execution, "worker_delivery", return_value=(outcome(), oversized, {})):
+            with self.assertRaises(BoardError) as caught:
+                self.record(result)
+        self.assertEqual(caught.exception.code, "invalid-result")
+        self.assertIn("byte bound", caught.exception.message)
+        self.assertFalse((self.root / "output.json").exists())
+
     def test_original_overall_byte_bound_remains_strict(self):
         for harness in ("codex", "claude"):
             for value in (outcome(summary="s" * 65536, decisions=["d"] * 33),
@@ -164,12 +169,12 @@ class OutcomeTruncationTests(unittest.TestCase):
                     self.assertEqual(record["outcome"]["request"], request)
                     self.assertEqual(record["outcome"]["disposition"], disposition)
 
-    def test_receipt_diagnostic_accepts_truncated_final_message(self):
+    def test_receipt_fields_do_not_reparse_the_final_message(self):
         for harness in ("codex", "claude"):
             with self.subTest(harness=harness):
                 policy = worker_format(harness)
                 fields = policy.receipt_fields(self.result(harness, outcome(decisions=["d"] * 33)))
-                self.assertEqual(fields, {})
+                self.assertNotIn("outcomeValidationError", fields)
 
     def test_controller_attention_replaces_outcome_without_stale_truncation_metadata(self):
         for harness, facts in (("codex", {"nativeRequestMethod": "interaction/request"}),
@@ -199,7 +204,8 @@ class OutcomeTruncationTests(unittest.TestCase):
                 self.assertEqual(canonical_json(worker_format(harness).attention_outcome(facts)), canonical_json(expected))
 
     def test_completion_tools_refuse_oversize_and_accept_corrected_retry(self):
-        configuration = {"identity": self.turn, "inputSha256": "a" * 64, "key": "b" * 64}
+        configuration = {"identity": self.turn, "inputSha256": "a" * 64, "key": "b" * 64,
+                         "attentionPath": str(self.root / "attention.json")}
         for field in ("remaining", "decisions"):
             for items in (["item"] * 33, ["汉" * 1366]):
                 with self.subTest(field=field, item_count=len(items)):
