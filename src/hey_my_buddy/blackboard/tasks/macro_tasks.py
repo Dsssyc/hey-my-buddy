@@ -663,9 +663,9 @@ def _run_spans(connection, row) -> list[dict]:
     for attempt in attempts:
         continuation = continuations.get(attempt["attempt_id"])
         queue_start = continuation["created_at"] if continuation is not None else queued_from
-        claimed = attempt["created_at"]
-        if queue_start and claimed and queue_start != claimed:
-            spans.append(_span("queue", f"queue:{attempt['attempt_id']}", run_id, queue_start, claimed, "claimed",
+        admitted = attempt["created_at"]
+        if queue_start and admitted and queue_start != admitted:
+            spans.append(_span("queue", f"queue:{attempt['attempt_id']}", run_id, queue_start, admitted, "admitted",
                                attempt_id=attempt["attempt_id"]))
         state, confirmed, uncertain = _attempt_state(attempt)
         buddy = _turn_buddy(attempt["input_json"]) or (
@@ -695,8 +695,8 @@ def _run_spans(connection, row) -> list[dict]:
         for later in (closed, pending):
             if later and (not queued_from or later > queued_from):
                 queued_from = later
-        # Waiting for a claim right now: the queue interval is still open. A run
-        # parked on its Host is not waiting for a Worker; its open host span
+        # Waiting for admission right now: the queue interval is still open. A
+        # run parked on its Host is not waiting for a Worker; its open host span
         # below is that interval, and a second open span would cover its label.
         spans.append(_span("queue", f"queue:open:{run_id}", run_id, queued_from, None, "queued"))
     for request in connection.execute(

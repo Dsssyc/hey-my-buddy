@@ -35,7 +35,7 @@ describe("macroTask metrics", () => {
   it("counts only execution: queue, routing and waiting-Host never contribute", () => {
     const timeline = withSpans([
       { ...macroTaskTimelineFixture().spans[0]!, spanId: "q", runId: "r1", kind: "queue",
-        startAt: "2026-09-26T01:00:00Z", endAt: "2026-09-26T01:05:00Z", state: "claimed" },
+        startAt: "2026-09-26T01:00:00Z", endAt: "2026-09-26T01:05:00Z", state: "admitted" },
       { ...macroTaskTimelineFixture().spans[3]!, spanId: "r", runId: "r1", kind: "routing",
         startAt: "2026-09-26T01:05:00Z", endAt: "2026-09-26T01:08:00Z", state: "finished", decisionTaskId: "d1" },
       { ...macroTaskTimelineFixture().spans[5]!, spanId: "w", runId: "r1", kind: "host",

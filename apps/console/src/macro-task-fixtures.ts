@@ -72,7 +72,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
 function span(spanId: string, runId: string, kind: TimelineSpan["kind"], startAt: string | null, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan {
   return {
     spanId, runId, kind, startAt, endAt,
-    state: kind === "queue" ? "claimed" : kind === "host" ? "approved" : "finished",
+    state: kind === "queue" ? "admitted" : kind === "host" ? "approved" : "finished",
     attemptId: null, turnId: null, turnIndex: null, requestId: null,
     buddy: null, shutdownConfirmed: null, uncertain: false, clockSkew: false,
     ...overrides,
@@ -129,7 +129,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     span("s-r5-q", "r5", "queue", "2026-09-26T05:30:00Z", "2026-09-26T05:31:00Z"),
     span("s-r5-e", "r5", "execution", "2026-09-26T05:31:00Z", "2026-09-26T05:50:00Z",
       { turnIndex: 1, attemptId: "att-r5", buddy: GLM, resultStatus: "cancelled", shutdownConfirmed: true }),
-    span("s-r4-q", "r4", "queue", "2026-09-26T06:38:00Z", "2026-09-26T06:40:00Z", { state: "claimed" }),
+    span("s-r4-q", "r4", "queue", "2026-09-26T06:38:00Z", "2026-09-26T06:40:00Z", { state: "admitted" }),
     span("s-r4-e", "r4", "execution", "2026-09-26T06:40:00Z", null,
       { state: "executing", turnIndex: 1, attemptId: "att-r4", buddy: SONNET, shutdownConfirmed: false }),
     span("s-r6-e", "r6", "execution", "2026-09-26T07:05:00Z", "2026-09-26T07:38:00Z",
