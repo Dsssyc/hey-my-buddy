@@ -12,7 +12,9 @@ def _role_prompt(resource: str, sections: tuple[str, ...]) -> str:
 
 def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]) -> str:
     """Shared Worker assembly; delivery describes its native completion channel."""
-    return _role_prompt("roles.worker", (*delivery, task_text, canonical_json(turn_input)))
+    lead = ((resource_path("roles.lead").read_text(encoding="utf-8"),)
+            if turn_input.get("context", {}).get("delegationAuthority", False) else ())
+    return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(turn_input)))
 
 
 def router_prompt(call_text: str) -> str:

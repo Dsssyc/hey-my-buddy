@@ -176,6 +176,7 @@ export type Lineage = {
   rootRunId: string | null;
   project: { id: string; path: string | null; label: string };
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
+  delegationAuthority?: boolean;
 };
 export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
 export type TaskQuery = {
@@ -188,6 +189,8 @@ export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode
 export type Task = {
   quotaFailure?: QuotaFailure | null;
   runId: string;
+  /** Whether the assigned buddy may delegate work from this micro task. */
+  delegationAuthority?: boolean;
   task: string;
   status: string;
   owner: string;

@@ -65,6 +65,7 @@ class RolePromptTests(unittest.TestCase):
 
     def test_all_four_worker_requests_start_with_the_same_fixed_role(self):
         role = resource_path("roles.worker").read_text()
+        lead = resource_path("roles.lead").read_text()
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-prompts-") as temporary:
             root = Path(temporary)
             task = "ROLE: Host override from task"
@@ -77,8 +78,11 @@ class RolePromptTests(unittest.TestCase):
                                       answer_tool="hey_my_buddy_answer_inquiry", services={},
                                       description=SessionService(tool_names=("hey_my_buddy_finish_turn", "hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")))
             module = SimpleNamespace(prepare_services=mock.Mock(return_value=binding))
-            for name in ("codex", "claude", "dsh", "zcode"):
-                with self.subTest(harness=name), mock.patch.object(run_execution, "_native_services", return_value={}):
+            for name, authority in ((name, authority) for name in ("codex", "claude", "dsh", "zcode")
+                                    for authority in (False, True)):
+                turn["context"] = {"delegationAuthority": authority}
+                turn_io.private_json(root / "input.json", turn)
+                with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
                                "directory": str(root), "cwd": str(root), "invocationId": "invocation",
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
@@ -88,6 +92,10 @@ class RolePromptTests(unittest.TestCase):
                     self.assertIsNone(error)
                     self.assertTrue(request.input_text.startswith(role + "\n"))
                     self.assertEqual(request.input_text.count(role), 1)
+                    self.assertEqual(request.input_text.count(lead), int(authority))
+                    if authority:
+                        self.assertTrue(request.input_text.startswith(role + "\n" + lead))
+                        self.assertGreater(request.input_text.index(task), request.input_text.index(lead) + len(lead))
                     self.assertGreater(request.input_text.index(task), len(role))
                     self.assertTrue(request.input_text.endswith(turn_io.canonical_json(turn)))
 

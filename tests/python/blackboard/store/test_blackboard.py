@@ -1566,6 +1566,7 @@ class TestTaskHistory(BoardTestCase):
         "rootRunId",
         "project",
         "buddy",
+        "delegationAuthority",
     )
 
     def submit_one(self, board, request_id: str, *, name: str = "work"):
@@ -1594,6 +1595,7 @@ class TestTaskHistory(BoardTestCase):
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
         self.assertIsNone(metadata["buddy"])
+        self.assertFalse(metadata["delegationAuthority"])
         self.assertEqual(sorted(metadata["project"]), sorted(["id", "path", "label"]))
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
         self.assertEqual(board.call("task_get", {"runId": created["runId"]})["task"]["lineage"], metadata)

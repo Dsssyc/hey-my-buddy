@@ -78,6 +78,14 @@ def _turn(connection: sqlite3.Connection, row: dict) -> dict:
     return row
 
 
+def _run(row: dict) -> dict:
+    spec, _, _ = _spec(json.loads(row['micro_task_json']))
+    row['micro_task_json'] = canonical_json(spec)
+    row['micro_task_fingerprint'] = schemas.spec_fingerprint(spec)
+    row['delegation_authority'] = 0
+    return row
+
+
 def _attempt(row: dict) -> dict:
     receipt = json.loads(row['result_json']) if row['result_json'] is not None else None
     old_stop = isinstance(receipt, dict) and receipt.get('terminationReason') == 'user-cancel'
@@ -197,10 +205,7 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'tasks', _task)
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', _attempt)
-            for row in connection.execute('SELECT run_id,micro_task_json FROM workflow_runs').fetchall():
-                spec, _, _ = _spec(json.loads(row['micro_task_json']))
-                connection.execute('UPDATE workflow_runs SET micro_task_json=?,micro_task_fingerprint=? WHERE run_id=?',
-                                   (canonical_json(spec), schemas.spec_fingerprint(spec), row['run_id']))
+            _rebuild(connection, 'workflow_runs', _run)
             for row in connection.execute('SELECT decision_id,requested_json FROM decision_requests').fetchall():
                 request = json.loads(row['requested_json'])
                 old = request.pop('timeoutSeconds', None)
