@@ -14,6 +14,7 @@ from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mock_codex.py"
 SOURCE = Path(__file__).resolve().parents[5] / "src"
@@ -47,6 +48,50 @@ class CodexToolEventProjectionTests(unittest.TestCase):
 
     def observe_root(self, projector):
         projector.observe_root("thread-1", "turn-1")
+
+    def test_protocol_variants_and_future_items_in_both_router_modes(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        for name, _carrier, _fields, calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
+            with self.subTest(name=name):
+                projector = new_projector()
+                self.observe_root(projector)
+                for method, item in item_frames(name):
+                    projector.observe_notification(frame(method, item))
+                package = projector.finish(True)
+                self.assertEqual(package["toolCalls"], calls)
+                self.assertEqual(tuple(event["phase"] for event in package["events"]), phases)
+                self.assertEqual(package["streamComplete"], complete)
+                self.assertEqual(package["unsettledToolCalls"], int(phases == ("start",)))
+                self.assertEqual({event["category"] for event in package["events"]}, {"other"} if phases else set())
+                for mode in ("fast", "review"):
+                    for sandbox in (False, True):
+                        self.assertEqual(judge_tool_evidence(package, mode, sandbox),
+                                         "router-tool-evidence-unverified" if not complete
+                                         else "router-tools-forbidden" if phases else None)
+
+    def test_typed_function_output_ends_a_correlated_request_without_a_new_start(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        projector = new_projector()
+        self.observe_root(projector)
+        projector.observe_notification(raw({"type": "function_call", "call_id": "item-1", "name": "shell"}))
+        for method, item in item_frames("functionCallOutput"):
+            projector.observe_notification(frame(method, item))
+        package = projector.finish(True)
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
+        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
+                         [("shell", "start"), ("shell", "end")])
+        self.assertIsNone(judge_tool_evidence(package, "review", True))
+        self.assertEqual(judge_tool_evidence(package, "fast", True), "router-tools-forbidden")
+
+    def test_raw_tool_search_result_settles_only_its_actual_call(self):
+        projector = new_projector()
+        self.observe_root(projector)
+        for name in ("tool_search_call", "tool_search_output"):
+            for method, item in item_frames(name):
+                projector.observe_notification(frame(method, item))
+        package = projector.finish(True)
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
+        self.assertEqual({event["toolName"] for event in package["events"]}, {"tool_search_call"})
 
     def test_typed_execution_and_raw_native_call_join_by_actual_call_id(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -373,6 +418,22 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context
+
+    def test_protocol_variants_retain_answers_and_report_tools_for_publication(self):
+        from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
+        for index, (name, _carrier, _fields, calls, phases, complete) in enumerate(PROTOCOL_ITEMS + FUTURE_ITEMS):
+            with self.subTest(name=name):
+                outcome, _context = self.run_review("protocol-" + name, index="protocol-" + str(index))
+                self.assertEqual(outcome.status, "ok", outcome.result)
+                self.assertEqual(json.loads(outcome.result["rawAnswer"])["profileId"], "legal")
+                evidence = outcome.result["toolEvidence"]
+                self.assertEqual(evidence["toolCalls"], calls)
+                self.assertEqual(outcome.result["usage"]["toolCalls"], calls)
+                self.assertEqual(tuple(event["phase"] for event in evidence["events"]), phases)
+                self.assertEqual(evidence["streamComplete"], complete)
+                self.assertEqual(judge_tool_evidence(evidence, "review", True),
+                                 "router-tool-evidence-unverified" if not complete
+                                 else "router-tools-forbidden" if phases else None)
 
     def test_settled_typed_and_raw_calls_project_as_two_counted_calls(self):
         outcome, context = self.run_review("readonly-evidence", index=1)

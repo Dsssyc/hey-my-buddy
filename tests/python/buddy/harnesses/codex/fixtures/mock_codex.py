@@ -7,6 +7,8 @@ import time
 import tomllib
 from pathlib import Path
 
+from protocol_items import item_frames
+
 
 def send(value):
     sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
@@ -301,6 +303,10 @@ def main():
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send_usage(case, thread_id, turn_id, turn_index)
+            if case.startswith("protocol-"):
+                for method, protocol_item in item_frames(case.removeprefix("protocol-")):
+                    send({"method": method, "params": {"threadId": thread_id, "turnId": turn_id,
+                          "item": protocol_item}})
             if case in ("schema-failure", "long-schema-failure"):
                 turn = {"id": turn_id, "status": "failed", "items": [], "error": {
                     "message": "Invalid schema: required is missing suggestedProfileId" if case == "schema-failure" else "原生格式错误𝄞" * 2000,

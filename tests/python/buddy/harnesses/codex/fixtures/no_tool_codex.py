@@ -7,6 +7,8 @@ import time
 import tomllib
 from pathlib import Path
 
+from protocol_items import item_frames
+
 
 def send(value):
     sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
@@ -113,6 +115,9 @@ def main():
             if case == "foreign-thread-started":
                 send({"method": "thread/started", "params": {"thread": {"id": "thread-foreign"}}})
             event("turn/started", turn_id, turn={"id": turn_id})
+            if case.startswith("protocol-"):
+                for method, item in item_frames(case.removeprefix("protocol-")):
+                    event(method, turn_id, item=item)
             if case == "connection-notification":
                 send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
             if case == "native-failure":
@@ -150,6 +155,9 @@ def main():
             final = {"type": "agentMessage", "id": f"final-{turns}", "phase": "final_answer", "text": answer}
             event("item/completed", turn_id, item=final)
             items = [final]
+            if case.startswith("protocol-"):
+                items.extend(item for method, item in item_frames(case.removeprefix("protocol-"))
+                             if method == "item/completed")
             if case == "turn-item":
                 items.append({"type": "dynamicToolCall"})
             event("turn/completed", turn_id, turn={"id": turn_id, "status": "completed", "items": items})
