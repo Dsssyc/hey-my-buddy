@@ -68,7 +68,7 @@ function harness(options: StopOptions = {}) {
           stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
     : options.secondMacroTask
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
-        title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
+        title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", goal: null, lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
         counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
           stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]

@@ -35,6 +35,7 @@ MICRO_TASK_RECEIPTS = frozenset(
         "conclude",
         "reclaim",
         "scope-amend",
+    "goal-amend",
         "workspace-resolve",
     }
 )
@@ -224,6 +225,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "providerCooling",
                 "providerRejection",
                 "macroTaskId",
+                "goal",
                 "title",
                 "fixes",
                 "fixedBy",
@@ -392,6 +394,7 @@ _KNOWN_MICRO_TASK_FIELDS = frozenset(
         "integration",
         "plan",
         "macroTaskId",
+        "goal",
         "title",
     }
 )

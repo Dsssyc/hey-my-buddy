@@ -19,7 +19,7 @@ from hey_my_buddy.paths import native_path
 class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def fixture(self, *, count=0, harness='codex', record=True, macro=False):
         board = self.board()
-        run = self.submit(board, **({'macroTask': {'title': 'Session fixture'}} if macro else {}))
+        run = self.submit(board, **({'macroTask': {'title': 'Session fixture', 'goal': 'Session fixture'}} if macro else {}))
         task_id, attempt_id = run['runId'], 'session-attempt'
         now = board.store.now()
         with board.store.db.write() as connection:

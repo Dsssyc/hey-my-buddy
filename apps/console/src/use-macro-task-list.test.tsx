@@ -11,7 +11,7 @@ import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-ta
 import { useMacroTaskList } from "./use-macro-task-list";
 
 const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary => ({
-  macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", description: null, summary: null,
+  macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", goal: null, summary: null,
   project: { id: "p1", label: "项目一", path: "/p1" }, sourceHostId: "host-a", currentHostIds: [],
   createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
   state: "active", counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,

@@ -10,7 +10,9 @@ export type MacroTaskFilter = "all" | "active" | "host" | "review";
 type MacroTaskCategory = MacroTaskSummary["state"];
 const macroTaskSummarySchema = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
-  titleSource: z.enum(["macro-task", "title", "task", "none"]), description: z.string().nullable(), summary: z.string().nullable(),
+  titleSource: z.enum(["macro-task", "title", "task", "none"]),
+  goal: z.looseObject({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString }).nullable(),
+  summary: z.string().nullable(),
   project: z.looseObject({ id: z.string(), path: z.string().nullable(), label: z.string() }).nullable(),
   sourceHostId: z.string().nullable(), currentHostIds: z.array(z.string()), createdAt: z.string().nullable(),
   lastActivityAt: z.string().nullable(), lastActivitySeq: safeCount, state: z.enum(["host", "active", "review", "ended"]),

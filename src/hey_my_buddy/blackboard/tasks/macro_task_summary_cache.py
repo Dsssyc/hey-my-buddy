@@ -4,7 +4,7 @@ The list still discovers membership, matching and ordering on every changed
 read. Only _summary is reused. Markers contain derived scalar facts, receipt
 presence/stop facts and bounded presentation fields, never execution results,
 turn inputs, request bodies or manifests. Events are not a substitute for SQL
-facts: correcting an existing description event also invalidates its group.
+facts: changing the current goal also invalidates its group.
 """
 from __future__ import annotations
 
@@ -150,26 +150,19 @@ def dependencies(connection, members):
     for group in groups:
         if group.startswith("macro-"):
             row = connection.execute(
-                "SELECT macro_task_id,title,project_id,project_path,source_host_id,created_at,activity_seq,activity_at"
+                "SELECT macro_task_id,title,project_id,source_host_id,created_at,activity_seq,activity_at"
                 " FROM macro_tasks WHERE macro_task_id=?", (group,),
             ).fetchone()
             groups[group].append(("macro-task", *tuple(row)))
-            # The first run follows the same created_at/rowid ordering as _summary.
-            # The original event's description is part of the summary marker.
-            event = connection.execute(
-                "SELECT e.seq," + _bounded("json_extract(e.payload_json,'$.macroTaskId')",
-                                           kind="json_type(e.payload_json,'$.macroTaskId')") + ","
-                + _bounded("json_extract(e.payload_json,'$.description')",
-                           kind="json_type(e.payload_json,'$.description')") +
-                " FROM events e WHERE e.kind='workflow.macro_task_created' AND e.task_id=("
-                " SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1)"
-                " ORDER BY e.seq LIMIT 1", (group,),
+            from .macro_tasks import project
+            groups[group].append(("project", *project(connection, group).values()))
+            goal = connection.execute(
+                "SELECT revision,created_at," + _bounded("body") +
+                " FROM macro_task_goals WHERE macro_task_id=? ORDER BY revision DESC LIMIT 1", (group,),
             ).fetchone()
-            if event is not None:
-                groups[group].append(("description", *tuple(event)))
-                reusable[group] = all(
-                    length is None or length <= TEXT_BOUND for length in (event[2], event[5])
-                )
+            if goal is not None:
+                groups[group].append(("goal", *tuple(goal)))
+                reusable[group] = goal[3] <= TEXT_BOUND
 
         else:
             row = connection.execute(

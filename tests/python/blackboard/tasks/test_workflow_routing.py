@@ -48,18 +48,18 @@ class TestWorkflowRouting(WorkflowTestCase):
         owned = claim["claim"]
         return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': shutdown, 'native': {'shutdownConfirmed': shutdown}}, 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
-    def test_macro_task_description_never_enters_selector_or_worker(self):
+    def test_macro_task_goal_never_enters_selector_or_worker(self):
         board = self.board()
         self.seed(board)
-        view = self.routed(board, macroTask={'title': 'Human-only group', 'description': 'Hidden description sentinel'}, title='Human-only title')
+        view = self.routed(board, macroTask={'title': 'Human-only group', 'goal': 'Hidden goal sentinel'}, title='Human-only title')
         claim = self.router_claim(board, view)
         serialized = json.dumps(claim)
-        for hidden in ('Hidden description sentinel', 'Human-only group', 'Human-only title'):
+        for hidden in ('Hidden goal sentinel', 'Human-only group', 'Human-only title'):
             self.assertNotIn(hidden, serialized)
         self.select(board, claim)
         self.register(board)
         worker_claim = self.claim(board)
-        for hidden in ('Hidden description sentinel', 'Human-only group', 'Human-only title'):
+        for hidden in ('Hidden goal sentinel', 'Human-only group', 'Human-only title'):
             self.assertNotIn(hidden, json.dumps(worker_claim))
         for owned in (claim['claim'], worker_claim['claim']):
             self.assertNotIn('lineage', owned['task'])

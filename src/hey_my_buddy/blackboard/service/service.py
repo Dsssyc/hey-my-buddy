@@ -84,6 +84,7 @@ CONTROL_OPERATIONS = (
     "workflow_conclude",
     "workflow_reclaim",
     "workflow_scope_amend",
+    "workflow_goal_amend",
     "workflow_workspace_resolve",
     "workflow_suggest",
     "macro_task_list",
@@ -775,6 +776,9 @@ class BoardService(_BaseResource):
             )
 
         return self._guard("workflow.reclaim", request_json, handler)
+
+    def workflow_goal_amend(self, request_json: str) -> str:
+        return self._guard("workflow.goal_amend", request_json, self.store.workflow.goal_amend)
 
     def workflow_scope_amend(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

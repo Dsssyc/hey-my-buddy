@@ -14,7 +14,7 @@ from ..store.db import sha256_text
 
 _CURRENT_VIEW_KINDS = frozenset({
     "workflow.decide", "workflow.continue", "workflow.takeover", "workflow.cancel",
-    "workflow.accept", "workflow.conclude", "workflow.scope_amend",
+    "workflow.accept", "workflow.conclude", "workflow.scope_amend", "workflow.goal_amend",
     "workflow.workspace_resolve",
 })
 
@@ -41,6 +41,8 @@ def stored_response(kind: str, response: dict) -> dict:
             stored["resolutionConflictId"] = response["resolutionDelivery"]["conflictId"]
     elif kind == "workflow.conclude":
         stored["conclusionId"] = response["conclusion"]["conclusionId"]
+    elif kind == "workflow.goal_amend":
+        stored["goalRevision"] = response["goalRevision"]
     elif kind == "workflow.scope_amend":
         stored.update(targetRunId=response["targetRunId"], scopeVersion=response["scopeVersion"])
     elif kind == "workflow.workspace_resolve":
@@ -114,6 +116,8 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
         result.update(verdict="concluded", conclusion=host_conclusions.view(conclusion),
                       partialArtifactId=conclusion["artifact_id"],
                       targetRunId=stored["runId"], targetRevision=run["revision"])
+    elif kind == "workflow.goal_amend":
+        result.update(previousGoalRevision=stored["goalRevision"] - 1, goalRevision=stored["goalRevision"])
     elif kind == "workflow.scope_amend":
         target_id = stored["targetRunId"]
         scope = connection.execute(

@@ -897,7 +897,7 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
 
     def test_macro_task_list_and_timeline_routes(self):
         board = self.board()
-        first = self.submit(board, request_id="macro-task-http-1", kind="worktree", macroTask={"title": "HTTP group"})
+        first = self.submit(board, request_id="macro-task-http-1", kind="worktree", macroTask={"title": "HTTP group", 'goal': "HTTP group"})
         loose = self.submit(board, request_id="macro-task-http-2", kind="worktree", task="loose root")
         _stated, browser = self.open_console(board)
         status, headers, body = browser.get("/api/macro-tasks?limit=5&filter=all")

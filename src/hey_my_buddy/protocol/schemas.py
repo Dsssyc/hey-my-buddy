@@ -445,10 +445,9 @@ def normalize_presentation(params: dict) -> dict:
                                                 pattern=re.compile(r"^macro-[A-Za-z0-9-]+$"))
     if "macroTask" in params:
         macro_task = require_object(params["macroTask"], "macroTask")
-        reject_unknown(macro_task, {"title", "description"}, "macroTask")
+        reject_unknown(macro_task, {"title", "goal"}, "macroTask")
         result["macroTask"] = {"title": " ".join(required_string(macro_task, "title", max_length=200).split())}
-        if "description" in macro_task:
-            result["macroTask"]["description"] = " ".join(required_string(macro_task, "description", max_length=300).split())
+        result["macroTask"]["goal"], _size = bounded_text(macro_task, "goal", max_bytes=MAX_TASK_BYTES)
     return result
 
 

@@ -62,7 +62,8 @@ describe("macro task time statistics", () => {
 
   it("uses the current macro task's facts after the selected task changes", async () => {
     const first = macroTaskTimelineFixture();
-    const second = { ...first, macroTask: { ...first.macroTask, macroTaskId: "macro-second", description: "第二个宏任务" } };
+    const second = { ...first, macroTask: { ...first.macroTask, macroTaskId: "macro-second",
+      goal: { ...first.macroTask.goal!, body: "第二个宏任务" } } };
     const overview = (timeline: typeof first) => <section className="timeline-view">
       <MacroTaskOverview timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}} />
     </section>;
@@ -99,7 +100,8 @@ describe("macro task time statistics", () => {
     const view = render(<MacroTaskOverview timeline={first} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
     await userEvent.setup().click(screen.getByRole("button", { name: "时间统计" }));
     const dialog = screen.getByRole("dialog", { name: "时间统计" });
-    const revised = { ...first, macroTask: { ...first.macroTask, description: "轮询后的记录" } };
+    const revised = { ...first, macroTask: { ...first.macroTask,
+      goal: { ...first.macroTask.goal!, body: "轮询后的记录", revision: 2 } } };
     view.rerender(<MacroTaskOverview timeline={revised} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
     expect(screen.getByRole("dialog", { name: "时间统计" })).toBe(dialog);
     expect(dialog.textContent).toContain("轮询后的记录");

@@ -18,7 +18,7 @@ class TimelineConclusionTests(WorkflowTestCase):
         group = None
         for status in ("failed", "cancelled", "delivered"):
             submitted = self.submit(board, request_id=f"conclusion-{status}", title=status, kind="worktree",
-                                    **({"macroTaskId": group} if group else {"macroTask": {"title": "Conclusion facts"}}))
+                                    **({"macroTaskId": group} if group else {"macroTask": {"title": "Conclusion facts", 'goal': "Conclusion facts"}}))
             group = submitted["macroTaskId"]
             claim = self.claim(board, run_id=submitted["runId"])
             if status == "cancelled":

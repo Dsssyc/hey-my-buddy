@@ -17,7 +17,7 @@ class DeletionAdmissionTests(LifecycleTestCase):
         owner = board.call("workflow_submit", {
             **BUDDY, "requestId": "deleting-managed-owner", "hostId": "host-1",
             "task": "Own the managed checkout", "cwd": str(self.repo),
-            "submissionToken": "a" * 32, "macroTask": {"title": "Deleting owner"},
+            "submissionToken": "a" * 32, "macroTask": {"title": "Deleting owner", 'goal': "Deleting owner"},
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
         self.controls[owner["runId"]] = owner["control"]
@@ -49,7 +49,7 @@ class DeletionAdmissionTests(LifecycleTestCase):
                 board.call("workflow_submit", {
                     **BUDDY, "requestId": request_id, "hostId": "host-2",
                     "task": "Borrow the deleting managed checkout", "cwd": str(cwd),
-                    "submissionToken": "b" * 32, "macroTask": {"title": "Independent borrower"},
+                    "submissionToken": "b" * 32, "macroTask": {"title": "Independent borrower", 'goal': "Independent borrower"},
                     "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
                 })
             self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")

@@ -26,7 +26,7 @@ class HostAdmissionTests(WorkflowTestCase):
 
     def test_macro_task_of_is_atomic_scoped_and_idempotent(self):
         board = self.board()
-        first = self.submit(board, kind="worktree", macroTask={"title": "Host agenda"})
+        first = self.submit(board, kind="worktree", macroTask={"title": "Host agenda", 'goal': "Host agenda"})
         second = self.submit(board, kind="worktree", request_id="second", macroTaskOf=first["runId"])
         self.assertEqual(second["macroTaskId"], first["macroTaskId"])
         replay = self.submit(board, kind="worktree", request_id="second", macroTaskOf=first["runId"])
@@ -293,7 +293,7 @@ class HostCompletionTests(WorkflowTestCase):
             with self.subTest(source=source):
                 board = self.board()
                 submitted = self.submit(board, kind="worktree", request_id="close-" + source,
-                                        macroTask={"title": "Close " + source})
+                                        macroTask={"title": "Close " + source, 'goal': "Close " + source})
                 self.register(board)
                 if source == "cancelled":
                     current = board.call("workflow_cancel", {"runId": submitted["runId"], **self.control(submitted)})

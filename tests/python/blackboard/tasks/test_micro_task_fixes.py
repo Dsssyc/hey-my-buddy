@@ -46,7 +46,7 @@ class MicroTaskFixTests(WorkflowTestCase):
 
     def test_host_correction_chain_reads_status_list_and_timeline(self):
         board = self.board()
-        original = self.accepted_host_run(board, "original", macroTask={"title": "Corrections"})
+        original = self.accepted_host_run(board, "original", macroTask={"title": "Corrections", 'goal': "Corrections"})
         for view in (board.call("workflow_get", {"runId": original["runId"]}),
                      board.call("task_get", {"runId": original["runId"]})["task"]):
             self.assertNotIn("fixes", view)
@@ -112,8 +112,8 @@ class MicroTaskFixTests(WorkflowTestCase):
 
     def test_host_rejections_and_replay_are_atomic(self):
         board = self.board()
-        original = self.accepted_host_run(board, "original", macroTask={"title": "Original group"})
-        other = self.accepted_host_run(board, "other", macroTask={"title": "Other group"})
+        original = self.accepted_host_run(board, "original", macroTask={"title": "Original group", 'goal': "Original group"})
+        other = self.accepted_host_run(board, "other", macroTask={"title": "Other group", 'goal': "Other group"})
         pending = self.submit(board, request_id="pending", cwd=str(self.project_workdir("pending")))
         invalid = ((None, "INVALID_ARGUMENT"), ([], "INVALID_ARGUMENT"), ("", "INVALID_ARGUMENT"),
                    ("unknown-run", "NOT_FOUND"), (pending["runId"], "INVALID_STATE"))
@@ -139,8 +139,8 @@ class MicroTaskFixTests(WorkflowTestCase):
 
     def test_explicit_matching_macro_selectors_and_different_group_rejection(self):
         board = self.board()
-        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group"})
-        different = self.accepted_host_run(board, "different", macroTask={"title": "Different group"})
+        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group", 'goal': "Target group"})
+        different = self.accepted_host_run(board, "different", macroTask={"title": "Different group", 'goal': "Different group"})
         by_id = self.submit(board, request_id="by-id", cwd=str(self.project_workdir("by-id")),
                             fixes=target["runId"], macroTaskId=target["macroTaskId"])
         by_run = self.submit(board, request_id="by-run", cwd=str(self.project_workdir("by-run")),
@@ -152,11 +152,11 @@ class MicroTaskFixTests(WorkflowTestCase):
                                            macroTaskOf=different["runId"])
         self.assert_rejected_without_stock(board, "CONFLICT", request_id="new-group",
                                            cwd=str(self.project_workdir("new-group")), fixes=target["runId"],
-                                           macroTask={"title": "New group"})
+                                           macroTask={"title": "New group", 'goal': "New group"})
 
     def test_cross_project_fix_rejects_implicit_and_explicit_macro_selection(self):
         board = self.board()
-        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group"})
+        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group", 'goal': "Target group"})
         for name, selector in (("implicit", {}),
                                ("by-id", {"macroTaskId": target["macroTaskId"]}),
                                ("by-run", {"macroTaskOf": target["runId"]})):
@@ -168,7 +168,7 @@ class MicroTaskFixTests(WorkflowTestCase):
 
     def test_macro_task_of_standalone_run_keeps_required_error(self):
         board = self.board()
-        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group"})
+        target = self.accepted_host_run(board, "target", macroTask={"title": "Target group", 'goal': "Target group"})
         standalone = self.accepted_host_run(board, "standalone")
         self.assert_rejected_without_stock(board, "MACRO_TASK_REQUIRED", request_id="standalone-source",
                                            cwd=str(self.project_workdir("standalone-source")),
@@ -177,7 +177,7 @@ class MicroTaskFixTests(WorkflowTestCase):
     def test_accepted_helper_follows_current_root_host_after_takeover(self):
         board = self.board()
         parent = self.submit(board, request_id="parent", cwd=str(self.project_workdir("parent")),
-                             macroTask={"title": "Taken over group"})
+                             macroTask={"title": "Taken over group", 'goal': "Taken over group"})
         self.register(board)
         self.finish_turn(board, self.claim(board, claim_request_id="claim-parent", run_id=parent["runId"]),
                          disposition="assistance")
@@ -242,7 +242,7 @@ class MicroTaskFixTests(WorkflowTestCase):
 
     def test_lead_fix_requires_its_own_accepted_target_and_uses_its_macro_task(self):
         board = self.board(max_concurrent=4)
-        lead, claim = lead_owned.LeadOwnedTests.lead(self, board, macroTask={"title": "Lead work"})
+        lead, claim = lead_owned.LeadOwnedTests.lead(self, board, macroTask={"title": "Lead work", 'goal': "Lead work"})
         target = self.accepted_lead_run(board, claim, "owned-target")
         fixed = lead_owned.LeadOwnedTests.owned(self, board, claim, "owned-fix", fixes=target["runId"])
         self.assertEqual(fixed["fixes"], target["runId"])

@@ -1215,7 +1215,8 @@ def populate(args):
                 'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
                 'cwd': str(work / 'workspaces' / 'accepted'),
                 'executionWorkspace': {'kind': 'existing', 'access': 'read'},
-                'macroTask': {'title': 'Schema 33 delivered v3 stock'},
+                'macroTask': {'title': 'Schema 33 delivered v3 stock',
+                              'description': '  Goal from the 0.54.1 writer.\nPreserve this line.  '},
             })
             delivered_claim = admit(nonce, delivered['runId'])
             delivered_manifest = delivered_claim['turn']['input']['executionWorkspace']
