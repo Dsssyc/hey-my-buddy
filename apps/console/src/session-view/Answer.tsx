@@ -30,6 +30,6 @@ export function Answer({ content, copyText, id, routing }: { content: AnswerCont
     <Message><MessageContent className="text-[14.5px] leading-[1.72]"><div className="pr-7">
       {content.format === "markdown" ? <MessageResponse>{content.text}</MessageResponse> : entries.length ? <Fields entries={entries} router={routing}/> : <Value value={content.value}/>}
     </div></MessageContent></Message>
-    <div className="absolute top-12 right-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100"><Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={copyText} data-session-focus={`${id}:copy`}/></Hint></div>
+    <div className="absolute top-12 right-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100"><Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={copyText}/></Hint></div>
   </div>;
 }

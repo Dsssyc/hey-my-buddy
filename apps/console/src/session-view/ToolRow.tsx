@@ -33,9 +33,9 @@ export function Output({ text, id, expansion, language = "text", preview = true 
   return <div className="group/output relative min-w-0" data-slot="session-output">
     <HighlightedCode code={!preview || open ? text : lines.slice(0, 14).join("\n")} language={language}/>
     <CodeBlockActions className="absolute top-1 right-1 opacity-0 group-hover/output:opacity-100 group-focus-within/output:opacity-100">
-      <Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={text} data-session-focus={`${id}:copy`}/></Hint>
+      <Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={text}/></Hint>
     </CodeBlockActions>
-    {preview && remaining > 0 && <button type="button" className="disclosure-trigger py-1 text-xs text-ink2" data-session-focus={id} aria-expanded={open} onClick={() => expansion.toggle(id, !open)}>{t(open ? "sessionView.collapseOutput" : "sessionView.moreLines", { count: remaining })}</button>}
+    {preview && remaining > 0 && <button type="button" className="disclosure-trigger py-1 text-xs text-ink2" aria-expanded={open} onClick={() => expansion.toggle(id, !open)}>{t(open ? "sessionView.collapseOutput" : "sessionView.moreLines", { count: remaining })}</button>}
   </div>;
 }
 export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { block: ToolBlock; expansion: Expansion; checkoutRoot: string; markers?: Extract<import("./blocks").SessionBlock, { type: "message" }>[] }) {
@@ -59,7 +59,7 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
   const output = [...block.segments.values()].join("");
   const result = tool.rawOutput !== null && typeof tool.rawOutput === "object" && !Array.isArray(tool.rawOutput) ? Object.entries(tool.rawOutput).filter(([, value]) => value !== null) : tool.rawOutput == null ? [] : [[t("sessionView.resultValue"), tool.rawOutput] as [string, unknown]];
   return <TraceCollapsible open={open} onOpenChange={value => expansion.toggle(key, value)} data-session-tool={key}>
-    <TraceCollapsibleTrigger className="h-[30px] w-full rounded-none" data-session-focus={key}>
+    <TraceCollapsibleTrigger className="h-[30px] w-full rounded-none">
       <TraceLine className="w-full gap-2 text-[13px]">
         <TraceIcon><Hint text={t(`sessionView.kind.${tool.kind ?? "other"}`)}><Icon size={13}/></Hint></TraceIcon>
         <TraceTitle ref={titleRef} className="flex-1 text-left font-mono text-ink">{title}</TraceTitle>

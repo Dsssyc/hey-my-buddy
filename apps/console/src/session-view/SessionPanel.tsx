@@ -55,8 +55,10 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
     observer.observe(node);
     return () => observer.disconnect();
   }, [data !== null && !error, active]);
-  // Reaching the top of the transcript reads the next earlier page. The observer is
-  // rebuilt once per prepend, so a sentinel that stays in view keeps reading.
+  // Reaching the top of the transcript reads the next earlier page. The sentinel
+  // exists only while an earlier page can be read, so a session with none never
+  // touches the reading position; the observer is rebuilt once per prepend, so a
+  // sentinel that stays in view keeps reading.
   useEffect(() => {
     const trigger = sentinel.current;
     const node = viewport.current;
@@ -84,14 +86,14 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>
           : <div className="relative flex min-h-0 flex-1 flex-col">
-            <MessageScrollerProvider defaultScrollPosition="start"><MessageScroller><MessageScrollerViewport preserveScrollOnPrepend={false} ref={viewport} tabIndex={0} data-session-focus="viewport" aria-label={t("sessionView.content")} className="[overflow-anchor:none]" onScroll={() => {
+            <MessageScrollerProvider defaultScrollPosition="start"><MessageScroller><MessageScrollerViewport preserveScrollOnPrepend={false} ref={viewport} tabIndex={0} aria-label={t("sessionView.content")} className="[overflow-anchor:none]" onScroll={() => {
               if (!active) return;
               const node = viewport.current!;
               atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
               if (atBottom.current) setNewContent(false);
             }}>
               <MessageScrollerContent ref={content} className="mx-auto w-full max-w-[868px] gap-0 px-4 pt-4 pb-8 sm:px-6">
-                <div ref={sentinel} aria-hidden="true" className="h-0 w-full" />
+                {data.hasEarlier && <div ref={sentinel} aria-hidden="true" className="h-0 w-full" />}
                 {rows.length ? <SessionBlocks routingMode={routingMode} rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
                   setExpanded(previous => { const next = new Set(previous); if (open) next.add(key); else next.delete(key); return next; });
                   // The disclosure keeps the viewport where the reader is interacting.

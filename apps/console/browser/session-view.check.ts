@@ -76,7 +76,7 @@ test.describe("session content and navigation", () => {
 
     await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
     await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
-    await panel(page).locator('[data-session-focus="calls:tool:codex-no-output-command"]').click();
+    await panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"] [data-slot="trace-collapsible-trigger"]').first().click();
     const failed = await expandTool(page, "codex-failed-command");
     await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
     await expect(failed).toContainText("command not found");
@@ -94,7 +94,7 @@ test.describe("session content and navigation", () => {
 
   test("shows one output for duplicate Codex results and only non-null fields without a body", async ({ page }) => {
     await openSession(page, long);
-    const completed = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-setup-00"]') });
+    const completed = panel(page).locator('[data-session-block="calls:tool:codex-setup-00"]');
     await expect(completed.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "completed");
     await completed.locator('[data-slot="trace-collapsible-trigger"]').first().click();
     const command = await expandTool(page, "codex-setup-00");
@@ -102,7 +102,7 @@ test.describe("session content and navigation", () => {
     await expect(command.locator('[data-slot="session-result"]')).toHaveCount(0);
     await expect(command.locator('[data-slot="session-output"]')).toContainText("fixture-0: checked");
 
-    const mixed = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-no-output-command"]') });
+    const mixed = panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"]');
     await expect(mixed.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "failed");
     await mixed.locator('[data-slot="trace-collapsible-trigger"]').first().click();
     const noOutput = await expandTool(page, "codex-no-output-command");
@@ -120,7 +120,7 @@ test.describe("session content and navigation", () => {
 
   test("shows active status on a running call group", async ({ page }) => {
     await openSession(page, session("preview-run-a3", 3));
-    const group = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:claude-running-read"]') });
+    const group = panel(page).locator('[data-session-block="calls:tool:claude-running-read"]');
     await expect(group.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "in_progress");
   });
 
@@ -413,6 +413,39 @@ test.describe("the quiet reading line", () => {
   });
 });
 
+for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) test.describe(`a running session without earlier pages grows past a short viewport (${opening} rows at open)`, () => {
+  test.use({ locale: "en-US", viewport: { width: 1440, height }, reducedMotion: "reduce", colorScheme: "dark" });
+
+  test("keeps following additions without any scrolling", async ({ page }) => {
+    await page.clock.install();
+    const message = (text: string) => ({ sessionId: "att-a3-1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+    const row = (index: number) => message(`运行中的第 ${index} 行。\n第二行内容，占一点高度。\n`);
+    let grown = false;
+    await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
+      const params = new URL(route.request().url()).searchParams;
+      const starts = params.get("before") === null && params.get("after") === null;
+      const events = starts
+        ? opening === 1 ? [message("运行中的唯一一行。")] : Array.from({ length: opening }, (_, index) => row(index + 1))
+        : grown ? [] : Array.from({ length: growth }, (_, index) => row(opening + index + 1));
+      if (!starts) grown = true;
+      const after = starts ? opening : opening + growth;
+      await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before: 0, after, hasEarlier: false, events } });
+    });
+    await openSession(page, session("preview-run-a3", 3));
+    await expect(panel(page).getByText(opening === 1 ? "运行中的唯一一行。" : "运行中的第 1 行。")).toBeVisible();
+    const overflow = await viewport(page).evaluate(node => node.scrollHeight - node.clientHeight);
+    if (opening === 1) expect(overflow, "the opening page fits the viewport").toBeLessThanOrEqual(0);
+    else {
+      expect(overflow, "the opening page barely exceeds the viewport").toBeGreaterThan(0);
+      expect(overflow).toBeLessThanOrEqual(320);
+    }
+    await page.clock.fastForward(12_000);
+    await expect(panel(page).getByText(`运行中的第 ${opening + growth} 行。`)).toBeVisible();
+    await expect(panel(page).getByRole("button", { name: "New content" })).toHaveCount(0);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
+  });
+});
+
 test.describe("four harness preview records", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
 
@@ -519,9 +552,9 @@ for (const language of ["en", "zh"] as const) for (const theme of ["dark", "ligh
     test("counts each type and names it inside the group", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await openSession(page, long);
-      const completed = panel(page).locator('[data-session-focus="calls:tool:codex-setup-00"] [data-slot="session-call-status"]');
+      const completed = panel(page).locator('[data-session-block="calls:tool:codex-setup-00"] [data-slot="session-call-status"]');
       await expect(completed.locator(".lucide-check")).toHaveCount(1);
-      const group = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-no-output-command"]') });
+      const group = panel(page).locator('[data-session-block="calls:tool:codex-no-output-command"]');
       const summary = group.locator('[data-slot="trace-collapsible-trigger"]').first();
       const text = await summary.innerText();
       if (language === "zh") {
@@ -551,12 +584,12 @@ for (const language of ["en", "zh"] as const) for (const theme of ["dark", "ligh
         await page.screenshot({ path: `${correctionShots}/session-view-corrections-${theme}.png`, fullPage: true });
       }
       await page.evaluate(hash => { location.hash = hash; }, session("preview-run-b10", 2, B));
-      await panel(page).locator('[data-session-focus="calls:tool:claude-read-guide"]').click();
+      await panel(page).locator('[data-session-block="calls:tool:claude-read-guide"] [data-slot="trace-collapsible-trigger"]').first().click();
       await expect(tool(page, "claude-search-path").locator('[data-slot="trace-collapsible-trigger"]'))
         .toContainText("“synthetic/path” docs/**/*.md");
       await page.emulateMedia({ reducedMotion: "no-preference" });
       await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a3", 3));
-      const running = panel(page).locator('[data-session-focus="calls:tool:claude-running-read"] [data-slot="session-call-status"]');
+      const running = panel(page).locator('[data-session-block="calls:tool:claude-running-read"] [data-slot="session-call-status"]');
       await expect(running).toHaveAttribute("data-status", "in_progress");
       await expect(running.locator(".lucide-loader-circle")).toHaveCSS("animation-name", "spin");
     });

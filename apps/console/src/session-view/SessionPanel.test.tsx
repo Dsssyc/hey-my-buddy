@@ -38,7 +38,7 @@ beforeEach(async () => {
   i18n = createInstance();
   await i18n.init({ lng: "zh", resources: { zh: { taskDetail: zh } } });
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); observers.length = 0; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 function renderPanel(client: SessionClient) {
   return render(<TooltipProvider><I18nextProvider i18n={i18n}><SessionPanel client={client} taskId="task" attemptId="attempt" harness="zcode" taskText="任务" checkoutRoot="/project" active/></I18nextProvider></TooltipProvider>);
@@ -85,5 +85,19 @@ describe("reaching the top of the transcript", () => {
     await reachTop();
     await act(async () => { await Promise.resolve(); });
     expect(viewport.scrollTop).toBe(120 + 3 * 100);
+  });
+
+  it("keeps following additions when the session has no earlier page", async () => {
+    const session = vi.fn().mockResolvedValueOnce(page(0, 2, false)).mockResolvedValueOnce(page(2, 2, false));
+    renderPanel({ session });
+    expect(await screen.findByText("第 1 条记录")).toBeTruthy();
+    // No earlier page can be read, so the top sentinel is not even attached and
+    // no intersection can disturb the follow state.
+    expect(observers.filter(item => item.targets.some(target => target.getAttribute("aria-hidden") === "true"))).toEqual([]);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 3400)); });
+    expect(session).toHaveBeenCalledTimes(2);
+    expect(session.mock.calls[1][2]).toEqual({ after: 2, limit: SESSION_PAGE_SIZE });
+    expect(screen.getByText("第 3 条记录")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "有新内容" })).toBeNull();
   });
 });
