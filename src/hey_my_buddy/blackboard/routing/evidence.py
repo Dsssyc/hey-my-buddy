@@ -1,7 +1,8 @@
 """Read-time routing facts from the blackboard's existing records.
 
 Outcomes belong to a buddy kind; infrastructure failures belong to the full
-buddy identity. Load uses the same unresolved attempts and effective queued
+buddy identity. Each counted sample adds the complete harness-reported usage of
+its ability turns. Load uses the same unresolved attempts and effective queued
 model identities as admission, including Router executions.
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ NEITHER = frozenset({"service-stop", "console-stop", "transport-error",
 PROVIDER_REJECTIONS = frozenset({"overloaded", "quota-exceeded", "rate-limited"})
 IDENTITY = ("harness", "provider", "model", "effort")
 KIND = ("harness", "model", "effort")
+USAGE_FIELDS = ("inputTokens", "cachedInputTokens", "outputTokens")
 
 
 def round_classification(receipt: dict | None) -> str:
@@ -47,6 +49,20 @@ def _time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _usage_totals(turns):
+    """One sample's summed usage, or None unless every ability turn is complete."""
+    if any((turn["usage"] or {}).get("completeness") != "complete" for turn in turns):
+        return None
+    return tuple(sum(turn["usage"][field] for turn in turns) for field in USAGE_FIELDS)
+
+
+def _usage_fact(usages):
+    return {"samples": len(usages),
+            "medianInputTokens": median([item[0] for item in usages]) if usages else None,
+            "medianCachedInputTokens": median([item[1] for item in usages]) if usages else None,
+            "medianOutputTokens": median([item[2] for item in usages]) if usages else None}
+
+
 def _statistics(connection):
     groups = defaultdict(list)
     infrastructure = defaultdict(lambda: {"count": 0, "lastAt": None})
@@ -65,7 +81,8 @@ def _statistics(connection):
         result = (receipt["result"] or {}) if receipt is not None else {}
         turn = result.get("turn") or {}
         delivered = row["state"] == "returned" and turn["outcome"]["disposition"] == "completed"
-        fact = {**dict(row), "category": category, "delivered": delivered}
+        fact = {**dict(row), "category": category, "delivered": delivered,
+                "usage": result.get("tokenUsage")}
         groups[(row["run_id"], _key(buddy, KIND))].append(fact)
         if category == "infrastructure":
             failures = infrastructure[_key(buddy, IDENTITY)]
@@ -91,10 +108,12 @@ def _statistics(connection):
         " WHERE r.state='accepted'"
     )}
     statistics = defaultdict(lambda: {"samples": 0, "successes": 0, "failures": 0,
-                                      "firstPasses": 0, "reworkRounds": 0, "durations": []})
+                                      "firstPasses": 0, "reworkRounds": 0, "durations": [],
+                                      "usages": []})
     for (run_id, kind), turns in groups.items():
+        ability = [turn for turn in turns if turn["category"] == "ability"]
         run = terminal.get(run_id)
-        if run is None or not any(turn["category"] == "ability" for turn in turns):
+        if run is None or not ability:
             continue
         success = run["state"] == "accepted" and any(
             turn["attempt_id"] == run["final_attempt_id"]
@@ -131,6 +150,9 @@ def _statistics(connection):
         stats["durations"].extend(
             (_time(turn["finished_at"]) - _time(turn["started_at"])).total_seconds()
             for turn in deliveries)
+        usage = _usage_totals(ability)
+        if usage is not None:
+            stats["usages"].append(usage)
     return statistics, infrastructure
 
 
@@ -187,13 +209,15 @@ def candidate_facts(store, connection, buddies, *, now: str) -> dict:
     for buddy in buddies:
         stats = statistics[_key(buddy, KIND)]
         samples = stats["samples"]
+        usages = stats["usages"]
         facts[buddy["buddy_id"]] = {
             "billing": for_provider(connection, buddy["harness"], buddy["provider"]),
             "load": loads[_key(buddy, ("harness", "provider", "model"))],
-            "statistics": {**{key: value for key, value in stats.items() if key != "durations"},
+            "statistics": {**{key: value for key, value in stats.items() if key not in ("durations", "usages")},
                            "firstPassRate": stats["firstPasses"] / samples if samples else None,
                            "failureRate": stats["failures"] / samples if samples else None,
-                           "medianDeliverySeconds": median(stats["durations"]) if stats["durations"] else None},
+                           "medianDeliverySeconds": median(stats["durations"]) if stats["durations"] else None,
+                           "usage": _usage_fact(usages)},
             "infrastructureFailures": infrastructure[_key(buddy, IDENTITY)],
         }
     return facts

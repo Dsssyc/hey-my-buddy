@@ -37,11 +37,22 @@ class FastRouterProbeTests(unittest.TestCase):
         handle.wait.return_value = 0
         handle.shutdown_confirmed.return_value = True
         outcome = AdapterOutcome(status='ok', result={}, shutdown_confirmed=True)
-        with patch.object(probe.DecisionAdapter, 'start', return_value=handle) as start, \
+        order = []
+
+        def prepared(context):
+            order.append('prepare')
+
+        def started(context):
+            order.append('start')
+            return handle
+
+        with patch.object(probe.DecisionAdapter, 'prepare', side_effect=prepared), \
+                patch.object(probe.DecisionAdapter, 'start', side_effect=started) as start, \
                 patch.object(probe.DecisionAdapter, 'collect', return_value=outcome):
             self.assertEqual(probe.run(self.args)['status'], 'passed')
             with self.assertRaises(FileExistsError):
                 probe.run(self.args)
+        self.assertEqual(order, ['prepare', 'start'])
         start.assert_called_once()
         context = start.call_args.args[0]
         self.assertIsNone(context.agent_credential)

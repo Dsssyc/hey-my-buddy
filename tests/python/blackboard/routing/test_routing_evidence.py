@@ -6,6 +6,11 @@ from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from support import FakeClock
 from hey_my_buddy.blackboard.routing.evidence import candidate_facts, round_classification, NEITHER
 from hey_my_buddy.protocol.stop import TERMINATION_REASONS
+from hey_my_buddy.protocol.usage import normalize_token_usage
+
+
+NO_USAGE = {"samples": 0, "medianInputTokens": None,
+            "medianCachedInputTokens": None, "medianOutputTokens": None}
 
 
 class ClassificationTests(unittest.TestCase):
@@ -42,7 +47,13 @@ class RoutingEvidenceTests(WorkflowTestCase):
     def view(self, run):
         return self.board_.call("workflow_get", {"runId": run["runId"]})
 
-    def end_turn(self, run, *, seconds=10, failed=False, category=None, disposition="completed"):
+    @staticmethod
+    def usage(input_tokens, cached_tokens, output_tokens, *, completeness="complete"):
+        return normalize_token_usage({
+            "inputTokens": input_tokens, "cachedInputTokens": cached_tokens,
+            "outputTokens": output_tokens, "completeness": completeness})
+
+    def end_turn(self, run, *, seconds=10, failed=False, category=None, disposition="completed", usage=None):
         claim = self.claim(self.board_, run_id=run["runId"])
         self.assertIsNotNone(claim["claim"])
         self.clock.advance(seconds)
@@ -54,6 +65,8 @@ class RoutingEvidenceTests(WorkflowTestCase):
             receipt["terminationReason"] = category or ("harness-error" if failed else "completed")
             # Explicit false must not erase ability evidence under the revised rule.
             receipt["result"]["modelStarted"] = False
+            if usage is not None:
+                receipt["result"]["tokenUsage"] = usage
             db.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", (json.dumps(receipt), attempt_id))
         return self.view(run), attempt_id
 
@@ -74,6 +87,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertEqual(empty["statistics"]["samples"], 0)
         self.assertIsNone(empty["statistics"]["failureRate"])
         self.assertIsNone(empty["statistics"]["medianDeliverySeconds"])
+        self.assertEqual(empty["statistics"]["usage"], NO_USAGE)
         self.assertEqual(empty["billing"]["kind"], "unknown")
         run, _ = self.end_turn(self.new_run(), seconds=12)
         self.accept_run(self.board_, run)
@@ -83,9 +97,33 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.assertEqual(same["statistics"], other_provider["statistics"])
         self.assertEqual(same["statistics"], {"samples": 1, "successes": 1, "failures": 0,
                          "firstPasses": 1, "reworkRounds": 0, "firstPassRate": 1,
-                         "failureRate": 0, "medianDeliverySeconds": 12})
+                         "failureRate": 0, "medianDeliverySeconds": 12, "usage": NO_USAGE})
         self.assertEqual(other_effort["statistics"]["samples"], 0)
         self.assertEqual(other_harness["statistics"]["samples"], 0)
+
+    def test_usage_sums_ability_turns_per_sample_and_reports_medians(self):
+        first, _ = self.end_turn(self.new_run(), disposition="assistance",
+                                 usage=self.usage(10, 2, 3))
+        self.continue_run(self.board_, first)
+        first, _ = self.end_turn(first, usage=self.usage(20, 4, 5))
+        self.accept_run(self.board_, first)
+        second, _ = self.end_turn(self.new_run(), usage=self.usage(100, 10, 6))
+        self.accept_run(self.board_, second)
+        stats = self.facts()[0]["statistics"]
+        self.assertEqual(stats["samples"], 2)
+        self.assertEqual(stats["usage"], {"samples": 2, "medianInputTokens": 65,
+                                          "medianCachedInputTokens": 8, "medianOutputTokens": 7})
+
+    def test_partial_or_missing_usage_keeps_the_sample_out(self):
+        mixed, _ = self.end_turn(self.new_run(), usage=self.usage(10, 2, 3))
+        self.continue_run(self.board_, mixed)
+        mixed, _ = self.end_turn(mixed, usage=self.usage(20, 4, 5, completeness="partial"))
+        self.accept_run(self.board_, mixed)
+        missing, _ = self.end_turn(self.new_run())
+        self.accept_run(self.board_, missing)
+        stats = self.facts()[0]["statistics"]
+        self.assertEqual(stats["samples"], 2)
+        self.assertEqual(stats["usage"], NO_USAGE)
 
     def test_unsettled_delivery_is_not_a_sample(self):
         self.end_turn(self.new_run())

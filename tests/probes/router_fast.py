@@ -88,6 +88,7 @@ def run(args):
     report = {'status': 'failed', 'inputSha256': digest, 'routingBuddy': document['buddy'],
               'startedAt': datetime.now(timezone.utc).isoformat(), 'privateRoot': str(root)}
     try:
+        implementation.prepare(context)
         handle = implementation.start(context)
         if handle.wait(timeout=70) is None:
             implementation.cancel(handle)

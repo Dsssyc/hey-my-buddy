@@ -136,7 +136,9 @@ class SelectionRequestTests(DecisionTestCase):
                           "wait": {"seconds": 0, "atLeast": False, "overdue": 0}},
                  "statistics": {"samples": 1, "successes": 1, "failures": 0,
                                 "firstPasses": 1, "firstPassRate": 1.0, "failureRate": 0.0,
-                                "reworkRounds": 0, "medianDeliverySeconds": 30},
+                                "reworkRounds": 0, "medianDeliverySeconds": 30,
+                                "usage": {"samples": 1, "medianInputTokens": 100,
+                                          "medianCachedInputTokens": 50, "medianOutputTokens": 10}},
                  "infrastructureFailures": {"count": 0, "lastAt": None}}
         with patch("hey_my_buddy.blackboard.routing.decision.evidence.candidate_facts",
                    return_value={BUDDY_ID: facts, SECOND_BUDDY_ID: facts}) as gather:
@@ -268,9 +270,10 @@ class SelectionRequestTests(DecisionTestCase):
         )
         self.assertNotIn("cards", document)
         self.assertNotIn("evidence", document)
-        # The persisted audit input carries only the bounded table and task facts.
+        # The persisted audit input carries only the bounded table and task facts;
+        # token counters appear only inside each candidate's usage statistics.
         rendered = json.dumps(document)
-        self.assertNotIn("token", rendered.lower())
+        self.assertNotIn("test-token", rendered)
         self.assertNotIn(str(self.directory), rendered)
         self.assertNotIn("inputSha256", decision)
         # The decision task completed as ordinary work with a durable receipt.
