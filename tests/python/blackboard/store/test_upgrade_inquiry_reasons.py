@@ -32,7 +32,8 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         return BoardStore._append_event(writer, self.db, kind, task_id=self.task_id,
                                         attempt_id=attempt_id, payload=payload)
 
-    def message(self, inquiry_id, state, reason, *, actor=None, answer=None, posted_state="queued"):
+    def message(self, inquiry_id, state, reason, *, actor=None, answer=None, posted_state="queued",
+                updated_state=None, updated_inquiry_id=None):
         message_id = 'message-' + inquiry_id
         self.db.execute(
             'INSERT INTO messages(message_id,task_id,attempt_id,inquiry_id,direction,author,body,'
@@ -43,7 +44,8 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
              'upgrade-test', 'upgrade-test'))
         self.event('message.posted', {'inquiryId': inquiry_id, 'state': posted_state})
         if actor:
-            self.event('message.updated', {'inquiryId': inquiry_id, 'state': state,
+            self.event('message.updated', {'inquiryId': updated_inquiry_id or inquiry_id,
+                                           'state': updated_state or state,
                                            'actor': {'role': actor[0], 'id': actor[1]}},
                        attempt_id=self.attempt_id)
         return message_id
@@ -63,7 +65,7 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
             ('closed', 'unavailable', 'the micro task root turn ended before this inquiry was answered',
              ('bridge', 'bridge-journal'), 'inquiry-root-turn-ended', {}),
             ('refused', 'unavailable', 'the bridge cannot deliver this question (agent-gone)',
-             ('bridge', 'live-bridge'), 'bridge-refused', {'error': 'agent-gone'}),
+             ('bridge', 'live-bridge'), 'bridge-refused', {'errorCode': 'agent-gone'}),
         )
         for inquiry_id, state, old, actor, _, _ in cases:
             self.message(inquiry_id, state, old, actor=actor)
@@ -127,6 +129,31 @@ class InquiryReasonUpgradeTests(unittest.TestCase):
         self.upgrade()
         row = self.db.execute("SELECT reason_code,reason_params_json FROM messages WHERE inquiry_id='answered-unattributed'").fetchone()
         self.assertEqual(tuple(row), (None, None))
+
+    def test_live_closed_frame_without_reason_has_a_structured_reason(self):
+        self.message('live-closed', 'unavailable', None, actor=('bridge', 'live-bridge'))
+        self.upgrade()
+        row = self.db.execute("SELECT reason_code,reason_params_json FROM messages WHERE inquiry_id='live-closed'").fetchone()
+        self.assertEqual(tuple(row), ('inquiry-root-turn-ended', '{}'))
+
+    def test_unavailable_without_a_matching_live_closed_event_aborts(self):
+        cases = (
+            ('absent', {}),
+            ('wrong-actor', {'actor': ('bridge', 'bridge-journal')}),
+            ('wrong-state', {'actor': ('bridge', 'live-bridge'), 'updated_state': 'delivered'}),
+            ('wrong-inquiry', {'actor': ('bridge', 'live-bridge'), 'updated_inquiry_id': 'another-inquiry'}),
+        )
+        for inquiry_id, options in cases:
+            with self.subTest(inquiry=inquiry_id):
+                previous_seq = self.db.execute('SELECT COALESCE(MAX(seq), 0) FROM events').fetchone()[0]
+                self.message(inquiry_id, 'unavailable', None, **options)
+                with self.assertRaises(BoardError) as caught:
+                    self.upgrade()
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(self.db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '24')
+                self.db.execute('DELETE FROM events WHERE seq>?', (previous_seq,))
+                self.db.execute('DELETE FROM messages WHERE inquiry_id=?', (inquiry_id,))
+                self.db.commit()
 
     def test_ended_attempt_queued_question_settles_without_new_event(self):
         self.message('old-queued', 'queued', None)

@@ -112,34 +112,11 @@ class BoardClient:
         )
 
     # -- messages -----------------------------------------------------------
-    def post_question(self, inquiry_id: str, question: str, *, author: str = "external", **selector: Any) -> dict:
-        return self.call(
-            "message_post",
-            {**selector, "inquiryId": inquiry_id, "question": question, "author": author},
-        )
-
-    def update_message(self, inquiry_id: str, *, state: str | None = None, delivery: dict | None = None, answer: dict | None = None, **selector: Any) -> dict:
-        return self.call(
-            "message_update",
-            {
-                **selector,
-                "inquiryId": inquiry_id,
-                "state": state,
-                "delivery": delivery,
-                "answer": answer,
-            },
-        )
-
     def get_message(self, inquiry_id: str, **selector: Any) -> dict:
         return self.call("message_get", {**selector, "inquiryId": inquiry_id})["message"]
 
     def list_messages(self, **params: Any) -> dict:
         return self.call("message_list", params)
-
-    def wait_message(self, inquiry_id: str, timeout_ms: int = 30000, **selector: Any) -> dict:
-        return self.call(
-            "message_wait", {**selector, "inquiryId": inquiry_id, "timeoutMs": timeout_ms}, resource="wait"
-        )
 
     # -- events -------------------------------------------------------------
     def read_events(self, after: int = 0, limit: int = 100, **selector: Any) -> dict:

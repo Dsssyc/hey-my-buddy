@@ -118,15 +118,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     recorded = None
     duplicate = False
     if inquiry_id is not None:
-        posted = store.message_post(
-            {
-                "runId": view["taskId"],
-                "inquiryId": inquiry_id,
-                "question": question,
-                "author": "cli",
-                "waitMs": 0,
-            }
-        )
+        posted = store._message_post(view["taskId"], inquiry_id, question)
         recorded = posted["message"]
         duplicate = bool(posted.get("duplicate"))
 
@@ -224,8 +216,8 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         journal = (read_journal(str(evidence_journal) if evidence_journal else None) if attempt_ended
                    else {"available": False, "reason": "no-live-channel", "entries": {}})
     # Import every existing question's latest source fact even for run-only
-    # observation. message_update refuses unknown ids, so orphan source records
-    # cannot create questions or consume the run's inquiry allowance.
+    # observation. Unknown ids are rejected before the internal writer runs, so
+    # orphan records cannot create questions or consume the inquiry allowance.
     records = ({key: _journal_record(entry) for key, entry in projected.items()}
                if channel is not None else journal["entries"]
                if isinstance(journal["entries"], dict) else {})
@@ -407,9 +399,8 @@ def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: st
     if not _known_question(store, task_id, inquiry_id):
         return "journal-question-unknown"
     reason = (make_reason("inquiry-observe-only") if code == "unsupported"
-              else make_reason("bridge-refused", error=code))
-    store._message_update({"runId": task_id, "inquiryId": inquiry_id,
-                           "actor": "live-bridge", "state": "unavailable"}, reason=reason)
+              else make_reason("bridge-refused", errorCode=code))
+    store._message_update(task_id, inquiry_id, actor="live-bridge", state="unavailable", reason=reason)
     return None
 
 
@@ -446,12 +437,15 @@ def normalize_journal_answer(record: dict) -> dict | None:
     text = answer.get("text")
     if not isinstance(text, str) or not text.strip():
         return None
+    size = len(text.encode("utf-8"))
+    if size > schemas.MAX_ANSWER_BYTES:
+        raise BoardError("INVALID_ARGUMENT", "answer exceeds the size limit")
     return {
         "text": text,
-        "bytes": answer.get("bytes") if isinstance(answer.get("bytes"), int) else len(text.encode("utf-8")),
-        "via": answer.get("via"),
-        "toolCallId": answer.get("toolCallId"),
-        "at": answer.get("at"),
+        "bytes": size,
+        "via": answer.get("via") if isinstance(answer.get("via"), str) else None,
+        "toolCallId": answer.get("toolCallId") if isinstance(answer.get("toolCallId"), str) else None,
+        "at": answer.get("at") if isinstance(answer.get("at"), str) else None,
         "truncated": answer.get("truncated") is True,
         "source": "bridge-journal",
     }
@@ -464,15 +458,22 @@ def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dic
 def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, record: dict, *, actor: str) -> str | None:
     if not _known_question(store, task_id, inquiry_id):
         return "journal-question-unknown"
-    patch: dict[str, Any] = {"runId": task_id, "inquiryId": inquiry_id, "actor": actor}
+    patch: dict[str, Any] = {}
     if isinstance(record.get("delivery"), dict):
-        patch["delivery"] = record["delivery"]
+        patch["delivery"] = {
+            key: str(value)[:200] for key in (
+                "messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt",
+                "deliveredAt", "observedAt", "observedAgentStatus")
+            if (value := record["delivery"].get(key)) not in (None, "")
+        }
     answer = normalize_journal_answer(record)
     if answer is not None:
         patch["answer"] = {**answer, "source": actor}
     state = record.get("state")
     reason = None
-    if isinstance(state, str):
+    if state is not None and state not in ("queued", "claimed", "delivered", "answered", "discarded", "unavailable"):
+        raise BoardError("INVALID_ARGUMENT", "Unknown message state")
+    if state is not None:
         if state == "answered" and answer is None:
             patch["state"] = "delivered"
             reason = make_reason("inquiry-answer-empty")
@@ -480,8 +481,8 @@ def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, reco
             patch["state"] = state
             if state == "unavailable":
                 reason = make_reason("inquiry-root-turn-ended")
-    if patch.keys() - {"runId", "inquiryId", "actor"}:
-        store._message_update(patch, reason=reason)
+    if patch:
+        store._message_update(task_id, inquiry_id, actor=actor, reason=reason, **patch)
     return None
 
 

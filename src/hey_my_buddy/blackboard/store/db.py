@@ -247,6 +247,7 @@ CREATE TABLE IF NOT EXISTS messages (
         OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
             AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'
             AND state IN ('delivered','unavailable'))),
+    CHECK (state != 'unavailable' OR reason_code IS NOT NULL),
     UNIQUE(task_id, inquiry_id)
 );
 CREATE INDEX IF NOT EXISTS messages_task_idx ON messages(task_id, created_at);

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from contextlib import closing
-from importlib.resources import files
 from pathlib import Path
 import json
 import re
@@ -12,13 +11,10 @@ from .db import (COMMAND_DELETION_COLUMN, CORE_SCHEMA, HOST_CONCLUSION_INDEX, HO
                  MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL,
                  EVALUATION_TABLES, WORKFLOW_TABLES, canonical_json)
 from ...errors import BoardError
-from ...protocol.reasons import reason as make_reason
+from ...protocol.reasons import REGISTERED_REASON_PARAMETERS, reason as make_reason
 
 
 UPGRADE_BASE_SCHEMA = 24
-_REGISTERED_REASON_PARAMETERS = json.loads(
-    files('hey_my_buddy.protocol').joinpath('reason-codes.json').read_text(encoding='utf-8'))
-
 _CATALOG_FACTS = {
     'not present in the latest confirmed native discovery': 'catalog.model-absent',
     'not present in the latest complete native discovery': 'catalog.effort-retired',
@@ -861,7 +857,7 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
         return make_reason('decision-publication-failed'), None
     if error:
         code = error if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', error) else error.split(':', 1)[0]
-        if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', code) and code in _REGISTERED_REASON_PARAMETERS:
+        if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', code) and code in REGISTERED_REASON_PARAMETERS:
             if code == 'router-out-of-bounds':
                 bounds = {
                     'removed from the candidate table': 'removed', 'is disabled': 'disabled',
@@ -875,7 +871,7 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
                         make_reason('history.reason-unavailable', recordId=row['decision_id'])), None
             if code == 'router-input-too-large':
                 return _oversize_reason(connection, row['decision_id'], request), None
-            if _REGISTERED_REASON_PARAMETERS[code]:
+            if REGISTERED_REASON_PARAMETERS[code]:
                 return make_reason('history.reason-unavailable', recordId=row['decision_id']), None
             return {'code': code, 'params': {}}, None
     preflight_owner = (status == 'needs-host' and request is not None and
@@ -1023,21 +1019,29 @@ def _message_reason(connection: sqlite3.Connection, row: sqlite3.Row) -> dict | 
     if row['state'] == 'answered':
         return None
     old = row['reason']
-    if old is None:
+    if old is None and row['state'] != 'unavailable':
         return None
     events = connection.execute(
         "SELECT kind,payload_json,actor_role,actor_id FROM events WHERE task_id=? "
         "AND kind IN ('message.posted','message.updated')", (row['task_id'],))
     sources = set()
     posted_unavailable = False
+    live_closed_without_reason = False
     for event in events:
         payload = json.loads(event['payload_json'])
         if payload.get('inquiryId') != row['inquiry_id']:
             continue
         if event['kind'] == 'message.updated':
             sources.add((event['actor_role'], event['actor_id']))
+            if (event['actor_role'], event['actor_id']) == ('bridge', 'live-bridge') \
+                    and payload.get('state') == 'unavailable':
+                live_closed_without_reason = True
         elif payload.get('state') == 'unavailable':
             posted_unavailable = True
+    if old is None:
+        if live_closed_without_reason:
+            return make_reason('inquiry-root-turn-ended')
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Unavailable message has no recognized writer')
     program = bool(sources & _INQUIRY_PROGRAM_ACTORS)
     if posted_unavailable and old == 'no live agent to receive this question':
         return make_reason('inquiry-no-live-agent')
@@ -1049,7 +1053,7 @@ def _message_reason(connection: sqlite3.Connection, row: sqlite3.Row) -> dict | 
                 return {'code': code, 'params': {}}
         match = re.fullmatch(r'the bridge cannot deliver this question \((agent-gone|agent-not-running|journal-unavailable)\)', old)
         if match:
-            return make_reason('bridge-refused', error=match[1])
+            return make_reason('bridge-refused', errorCode=match[1])
     raise BoardError('UPGRADE_INVALID_BOARD', 'Message reason has no recognized writer')
 
 

@@ -217,7 +217,11 @@ class ActivityProjection(BoardTestCase):
         self.assertEqual(client.get(runId=task['runId'])['activity']['waitingReason'], waiting['waitingReason'])
         for reason in ('native permission requested', {'code': 'unregistered-wait', 'params': {}},
                        {'code': 'native-authority-required', 'params': {'unexpected': 'permission'}},
-                       {'code': 'native-authority-required', 'params': {}}):
+                       {'code': 'native-authority-required', 'params': {}},
+                       {'code': 'router-input-unknown', 'params': {}},
+                       {'code': 'native-authority-required', 'params': {'kind': 'permission.requested'}},
+                       {'code': 'native-authority-required', 'params': {'kind': 'tool'}},
+                       {'code': 'native-authority-required', 'params': {'kind': []}}):
             invalid = {'phase': 'waiting-host', 'eventSeq': 2, 'waitingReason': reason}
             with self.subTest(reason=reason), self.assertRaises(BoardError) as error:
                 self.post_activity(client, identity, {'activity': invalid})

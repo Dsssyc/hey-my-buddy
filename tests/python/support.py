@@ -316,7 +316,7 @@ class InProcessBoard:
         return self.console.start()
 
     def call(self, operation: str, params: dict) -> dict:
-        service = self.wait_service if operation.startswith("events_wait") or operation == "message_wait" or operation == "wait_capacity" else self.service
+        service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
         return dispatch_local(service, operation, params)
 
     def console_call(self, operation: str, params: dict) -> dict:

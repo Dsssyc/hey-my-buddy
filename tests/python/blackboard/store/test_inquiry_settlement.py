@@ -16,7 +16,7 @@ class InquirySettlementTests(BoardTestCase):
         task = board.submit_execution(requestId="inquiry-settlement", task="work",
             cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
         attempt = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]["attempt"]
-        client.post_question("q-pending", "Status?", runId=task["taskId"])
+        board.store._message_post(task["taskId"], "q-pending", "Status?")
         return board, client, task, attempt
 
     def assert_settled_once(self, board, client, task, attempt):

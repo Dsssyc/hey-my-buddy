@@ -57,8 +57,6 @@ CONTROL_OPERATIONS = (
     "task_wait",
     "execution_progress",
     "execution_result",
-    "message_post",
-    "message_update",
     "message_get",
     "message_list",
     "inquiry_observe",
@@ -88,7 +86,7 @@ CONTROL_OPERATIONS = (
     "macro_task_deletion_preview",
     "macro_task_delete",
 )
-WAIT_OPERATIONS = ("events_wait", "task_wait", "message_wait", "wait_capacity")
+WAIT_OPERATIONS = ("events_wait", "task_wait", "wait_capacity")
 
 
 class WaitAdmission:
@@ -916,12 +914,6 @@ class BoardService(_BaseResource):
         return self._guard("execution.result", request_json, self.store.execution_result)
 
     # -- messages -----------------------------------------------------------
-    def message_post(self, request_json: str) -> str:
-        return self._guard("message.post", request_json, self.store.message_post)
-
-    def message_update(self, request_json: str) -> str:
-        return self._guard("message.update", request_json, self.store.message_update)
-
     def message_get(self, request_json: str) -> str:
         return self._guard("message.get", request_json, self.store.message_get)
 
@@ -972,9 +964,6 @@ class WaitService(_BaseResource):
 
     def task_wait(self, request_json: str) -> str:
         return self._bounded("task.wait", request_json, self.store.task_wait)
-
-    def message_wait(self, request_json: str) -> str:
-        return self._bounded("message.wait", request_json, self.store.message_wait)
 
     def wait_capacity(self, request_json: str) -> str:
         return self._guard("wait.capacity", request_json, lambda params: self.admission.stats())

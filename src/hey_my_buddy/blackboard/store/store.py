@@ -18,7 +18,7 @@ from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
-from ...protocol.reasons import reason as make_reason, reason_from_json, validate_reason
+from ...protocol.reasons import reason as make_reason, reason_from_json, validate_waiting_reason
 from .db import (
     ACTIVE_ATTEMPT_STATES,
     ATTEMPT_STATES,
@@ -1939,12 +1939,9 @@ class BoardStore:
             if data.get("activity") is not None:
                 activity = activity_module.normalize_activity(data["activity"])
                 if 'waitingReason' in activity:
-                    validate_reason(activity['waitingReason'], 'activity.waitingReason')
+                    validate_waiting_reason(activity['waitingReason'], activity=True)
             if data.get('waitingReason') is not None:
-                waiting_reason = validate_reason(data['waitingReason'], 'data.waitingReason')
-                if waiting_reason['code'] != 'router-input-unknown':
-                    raise BoardError('INVALID_ARGUMENT', 'data.waitingReason must be router-input-unknown',
-                                     field='data.waitingReason.code')
+                waiting_reason = validate_waiting_reason(data['waitingReason'])
         with self.db.write() as connection:
             attempt = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
@@ -2533,33 +2530,12 @@ class BoardStore:
         return {"task": self._task_view(task_row), "released": True}
 
     # -- messages ------------------------------------------------------------
-    def message_post(self, params: dict, *, command_id: str | None = None) -> dict:
-        schemas.reject_unknown(
-            params,
-            {"runId", "taskId", "requestId", "inquiryId", "question", "author", "recipient", "correlationId", "waitMs"},
-            "message.post",
-        )
-        inquiry_id = schemas.required_string(
-            params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN
-        )
-        question, question_bytes = schemas.bounded_text(params, "question", max_bytes=schemas.MAX_QUESTION_BYTES)
-        author = schemas.optional_string(params, "author") or "cli"
-        recipient = schemas.optional_string(params, "recipient")
-        correlation_id = schemas.optional_string(params, "correlationId") or inquiry_id
-        wait_ms = schemas.optional_int(params, "waitMs", 0, 0, 30000)
+    def _message_post(self, task_id: str, inquiry_id: str, question: str) -> dict:
+        """Retain the validated question admitted by inquire."""
         payload_hash = sha256_text(question)
-        request = {
-            "inquiryId": inquiry_id,
-            "questionSha256": payload_hash,
-            "author": author,
-            "taskId": params.get("runId") or params.get("taskId") or params.get("requestId"),
-        }
+        question_bytes = len(question.encode("utf-8"))
         with self.db.write() as connection:
-            if command_id:
-                receipt = self._receipt(connection, command_id, "message.post", request)
-                if receipt is not None:
-                    return receipt
-            task = self._task_row(connection, params)
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             existing = connection.execute(
                 "SELECT * FROM messages WHERE task_id=? AND inquiry_id=?", (task["task_id"], inquiry_id)
             ).fetchone()
@@ -2571,11 +2547,6 @@ class BoardStore:
                         inquiryId=inquiry_id,
                     )
                 response = {"message": self._message_view(existing), "duplicate": True}
-                settled = existing["state"] in ("answered", "delivered", "discarded", "unavailable")
-                if command_id:
-                    self._store_receipt(
-                        connection, command_id, "message.post", request, response, task_id=task["task_id"]
-                    )
                 head = self._head_of(connection)
             else:
                 count = connection.execute(
@@ -2590,7 +2561,7 @@ class BoardStore:
                 attempt = self._selected_attempt(connection, task)
                 now = self.now()
                 active = task["state"] in ("running", "cancelling")
-                state = "queued" if active and task["adapter"] == "dsh" else ("unavailable" if not active else "queued")
+                state = "queued" if active else "unavailable"
                 reason_code = None if state == "queued" else "inquiry-no-live-agent"
                 message_id = str(uuid.uuid4())
                 connection.execute(
@@ -2603,9 +2574,9 @@ class BoardStore:
                         attempt["attempt_id"] if attempt else None,
                         inquiry_id,
                         "question",
-                        author,
-                        recipient,
-                        correlation_id,
+                        "cli",
+                        None,
+                        inquiry_id,
                         question,
                         question_bytes,
                         payload_hash,
@@ -2626,62 +2597,18 @@ class BoardStore:
                 )
                 row = connection.execute("SELECT * FROM messages WHERE message_id=?", (message_id,)).fetchone()
                 response = {"message": self._message_view(row), "duplicate": False}
-                settled = state in ("answered", "delivered", "discarded", "unavailable")
-                if command_id:
-                    self._store_receipt(
-                        connection, command_id, "message.post", request, response, task_id=task["task_id"]
-                    )
                 head = self._head_of(connection)
         self._notify(head)
-        # The wait is strictly outside the write transaction: holding BEGIN
-        # IMMEDIATE here would block cancel, renew and result commits.
-        if wait_ms:
-            return {
-                **self.message_wait({"runId": task["task_id"], "inquiryId": inquiry_id, "timeoutMs": wait_ms}),
-                "duplicate": not settled,
-            }
         return response
 
-    def message_update(self, params: dict) -> dict:
-        return self._message_update(params)
-
-    def _message_update(self, params: dict, *, reason: dict | None = None) -> dict:
-        """Apply one bounded delivery/answer observation.
-
-        Every field is validated on a candidate copy before anything is written, a
-        recorded answer is terminal, and an ``answered`` state without a nonblank
-        answer is rejected instead of being committed half-answered.
-        """
-        schemas.reject_unknown(
-            params,
-            {"runId", "taskId", "messageId", "inquiryId", "state", "delivery", "answer", "actor"},
-            "message.update",
-        )
-        inquiry_id = schemas.optional_string(params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN)
-        message_id = schemas.optional_string(params, "messageId", max_length=128)
-        if inquiry_id is None and message_id is None:
-            raise BoardError("INVALID_ARGUMENT", "inquiryId or messageId is required")
-        state = params.get("state")
-        if state is not None and state not in MESSAGE_STATES:
-            raise BoardError("INVALID_ARGUMENT", "Unknown message state")
-        delivery = params.get("delivery")
-        if delivery is not None and not isinstance(delivery, dict):
-            raise BoardError("INVALID_ARGUMENT", "delivery must be an object or null")
-        answer = params.get("answer")
-        if answer is not None and not isinstance(answer, dict):
-            raise BoardError("INVALID_ARGUMENT", "answer must be an object or null")
-        actor = {"role": "bridge", "id": schemas.optional_string(params, "actor") or "bridge"}
+    def _message_update(self, task_id: str, inquiry_id: str, *, actor: str,
+                        state: str | None = None, reason: dict | None = None,
+                        delivery: dict | None = None, answer: dict | None = None) -> dict:
+        """Apply the service's normalized delivery and answer facts."""
         with self.db.write() as connection:
-            if inquiry_id is not None:
-                task = self._task_row(connection, params)
-                row = connection.execute(
-                    "SELECT * FROM messages WHERE task_id=? AND inquiry_id=?", (task["task_id"], inquiry_id)
-                ).fetchone()
-            else:
-                row = connection.execute("SELECT * FROM messages WHERE message_id=?", (message_id,)).fetchone()
-                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone() if row else None
-            if row is None:
-                raise BoardError("NOT_FOUND", "Unknown inquiryId or messageId")
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            row = connection.execute("SELECT * FROM messages WHERE task_id=? AND inquiry_id=?",
+                                     (task_id, inquiry_id)).fetchone()
             candidate = self._message_view(row)
             answered = candidate["answer"] is not None
             terminal = candidate["state"] in ("answered", "discarded", "unavailable")
@@ -2690,35 +2617,10 @@ class BoardStore:
             if reason is not None:
                 candidate["reason"] = reason
             if delivery is not None:
-                bounded = dict(candidate["delivery"] or {})
-                for key in ("messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt", "deliveredAt", "observedAt", "observedAgentStatus"):
-                    value = delivery.get(key)
-                    if value in (None, ""):
-                        continue
-                    bounded[key] = str(value)[:200]
-                candidate["delivery"] = bounded
-            if answer is not None:
-                text = answer.get("text")
-                if not isinstance(text, str) or not text.strip():
-                    raise BoardError("INVALID_ARGUMENT", "answer must carry nonblank text")
-                size = len(text.encode("utf-8"))
-                if size > schemas.MAX_ANSWER_BYTES:
-                    raise BoardError("INVALID_ARGUMENT", "answer exceeds the size limit")
-                if not answered:
-                    candidate["answer"] = {
-                        "text": text,
-                        "bytes": size,
-                        "via": (answer.get("via") or None) if isinstance(answer.get("via"), str) else None,
-                        "toolCallId": (answer.get("toolCallId") or None) if isinstance(answer.get("toolCallId"), str) else None,
-                        "at": (answer.get("at") or None) if isinstance(answer.get("at"), str) else None,
-                        "truncated": answer.get("truncated") is True,
-                        "source": (answer.get("source") or None) if isinstance(answer.get("source"), str) else None,
-                    }
-                    candidate["state"] = "answered"
-            if candidate["state"] == "answered" and not (candidate["answer"] or {}).get("text", "").strip():
-                raise BoardError("INVALID_ARGUMENT", "answered requires a nonblank answer")
-            if candidate["state"] not in MESSAGE_STATES:
-                raise BoardError("INVALID_ARGUMENT", "Unknown message state")
+                candidate["delivery"] = {**(candidate["delivery"] or {}), **delivery}
+            if answer is not None and not answered:
+                candidate["answer"] = answer
+                candidate["state"] = "answered"
             if candidate["state"] not in ("delivered", "unavailable"):
                 candidate["reason"] = None
             now = self.now()
@@ -2740,8 +2642,8 @@ class BoardStore:
                 "message.updated",
                 task_id=row["task_id"],
                 attempt_id=row["attempt_id"],
-                revision=task["revision"] if task else None,
-                payload={"inquiryId": row["inquiry_id"], "state": candidate["state"], "actor": actor},
+                revision=task["revision"],
+                payload={"inquiryId": row["inquiry_id"], "state": candidate["state"], "actor": {"role": "bridge", "id": actor}},
             )
             updated = connection.execute("SELECT * FROM messages WHERE message_id=?", (row["message_id"],)).fetchone()
             head = self._head_of(connection)
@@ -2787,29 +2689,6 @@ class BoardStore:
             ).fetchall()
             head = self._head_of(connection)
         return {"messages": [self._message_view(row) for row in rows], "cursor": head}
-
-    def message_wait(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "inquiryId", "timeoutMs"}, "message.wait")
-        inquiry_id = schemas.required_string(params, "inquiryId", max_length=128, pattern=schemas.INQUIRY_ID_PATTERN)
-        timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
-        deadline = self._monotonic() + timeout_ms / 1000.0
-        while True:
-            message = self.message_get({**{k: params[k] for k in ("runId", "taskId") if k in params}, "inquiryId": inquiry_id})["message"]
-            if message["state"] in ("answered", "delivered", "discarded", "unavailable"):
-                return {"message": message, "timedOut": False}
-            remaining = deadline - self._monotonic()
-            if remaining <= 0:
-                return {"message": message, "timedOut": True}
-            try:
-                self.events_wait(
-                    {"after": self.head(), "timeoutMs": int(min(1000, remaining * 1000)), "taskId": message["taskId"], "limit": 1}
-                )
-            except BoardError as error:
-                if error.code != "WAIT_ABANDONED":
-                    raise
-            if self._monotonic() >= deadline:
-                message = self.message_get({"inquiryId": inquiry_id, "runId": message["taskId"]})["message"]
-                return {"message": message, "timedOut": message["state"] not in ("answered", "delivered", "discarded", "unavailable")}
 
     # -- artifacts -----------------------------------------------------------
     def artifact_list(self, params: dict) -> dict:
