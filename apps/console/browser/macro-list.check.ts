@@ -252,6 +252,59 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
   });
 }
 
+for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
+  test.describe(`macro text clipping, ${width}px, ${theme}`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
+    test("fades only clipped project names and titles and reveals their full text on hover", async ({ page }) => {
+      const labels = [
+        { id: A, project: "c-two", title: "检查名称", clipped: false },
+        { id: B, project: "c-two-research-and-development-for-multi-agent-console-project-name-that-does-not-fit", title: "检查宏任务列表中项目名称与标题被截断时的渐隐、全文提示以及完整的悬停显示", clipped: true },
+      ];
+      await themeBeforeLoad(page, theme);
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        const original = data.macroTasks.find((row: { kind: string }) => row.kind === "macro-task");
+        data.macroTasks = labels.map(({ id, project, title }, index) => ({ ...original,
+          macroTaskId: id, project: { ...original.project, id: `project-${index}`, label: project },
+          title, titleSource: "macro-task", lastActivitySeq: 100 - index,
+        }));
+        data.totals = { all: 2, active: 2, host: 2, review: 2 };
+        data.nextCursor = null; data.changed = false;
+        await route.fulfill({ response, json: data });
+      });
+      await open(page, "#tasks");
+      const list = page.locator("[data-slot=macro-list]");
+      await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(2);
+      for (const [index, { id, project, title, clipped }] of labels.entries()) {
+        const group = list.locator("[data-slot=macro-group-heading]").nth(index);
+        const entry = list.locator(`[data-macro-task-id="${id}"] [data-slot=macro-entry]`);
+        for (const [button, text] of [[group, project], [entry, title]] as const) {
+          const label = button.getByText(text, { exact: true });
+          expect(await label.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
+          await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient/ : "none");
+          if (clipped) await expect(button).toHaveAttribute("aria-description", text);
+          else await expect(button).not.toHaveAttribute("aria-description");
+          await label.hover();
+          if (clipped) await expect(page.getByRole("tooltip")).toHaveText(text);
+          else {
+            await page.waitForTimeout(700);
+            await expect(page.getByRole("tooltip")).toHaveCount(0);
+          }
+          await page.mouse.move(width - 8, 8);
+          await expect(page.getByRole("tooltip")).toBeHidden();
+        }
+        await expect(group).toHaveAttribute("aria-expanded", "true");
+        await group.click();
+        await expect(group).toHaveAttribute("aria-expanded", "false");
+        await group.click();
+        await expect(group).toHaveAttribute("aria-expanded", "true");
+      }
+      await expectNoSidewaysScroll(page);
+    });
+  });
+}
+
 // The former interaction probe: a poll refreshes facts in place, and the reader
 // decides when a new activity order can move under the pointer or a scroll.
 for (const w of words) test.describe(`stable macro task order in ${w.locale}`, () => {

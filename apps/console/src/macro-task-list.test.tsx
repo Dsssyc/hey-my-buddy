@@ -13,8 +13,28 @@ const props = (): MacroTaskListProps => ({
   filter: "all", query: "", selected: null, listNavigation: <span>宏任务</span>,
   onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 describe("macro task list", () => {
+  it.each([{ clipped: false, scrollWidth: 80 }, { clipped: true, scrollWidth: 140 }])("uses the same fade and full-text hint rule for project names and titles when clipped=$clipped", async ({ clipped, scrollWidth }) => {
+    // jsdom supplies only the overflow condition; real glyph widths are checked in the browser.
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(scrollWidth);
+    const p = props();
+    p.rows = [{ ...p.rows[0], project: { id: "c-two", label: "c-two", path: null }, title: "检查项目名称", titleSource: "macro-task" }];
+    render(<MacroTaskList {...p}/>);
+    const group = screen.getByRole("button", { name: "c-two 1" });
+    const entry = screen.getByRole("button", { name: /检查项目名称/ });
+    for (const [button, text] of [[group, "c-two"], [entry, "检查项目名称"]] as const) {
+      const label = within(button).getByText(text);
+      expect(label.classList.contains("text-fade")).toBe(clipped);
+      expect(label.classList.contains("truncate")).toBe(!clipped);
+      expect(button.getAttribute("aria-description")).toBe(clipped ? text : null);
+      await userEvent.hover(label);
+      if (clipped) expect((await screen.findByRole("tooltip")).textContent).toBe(text);
+      else expect(screen.queryByRole("tooltip")).toBeNull();
+      await userEvent.unhover(label);
+    }
+  });
   it("collapses every project and the standalone group and never toggles them open", async () => {
     const user = userEvent.setup(); render(<MacroTaskList {...props()}/>);
     await user.click(screen.getByRole("button", { name: /独立微任务/ }));
