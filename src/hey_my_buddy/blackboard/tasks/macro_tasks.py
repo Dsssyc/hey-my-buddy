@@ -787,8 +787,10 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
             return value[:SUMMARY_LIMIT] if isinstance(value, str) and value else None
 
         micro_task = payload.get("microTask") if isinstance(payload.get("microTask"), dict) else {}
-        actor = row["actor_id"] or text("newHostId") or (
+        fallback_host = text("newHostId") or (
             micro_task.get("sourceHostId") if isinstance(micro_task.get("sourceHostId"), str) else None)
+        actor = ({"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else
+                 {"role": "host", "id": fallback_host} if fallback_host else None)
         details = [part for part in (text("decision"), text("verdict"), text("state"), text("strategy"),
                                      text("reason")) if part]
         markers.append({

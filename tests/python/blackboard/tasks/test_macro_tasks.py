@@ -399,7 +399,30 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertTrue(by_run[second['runId']]['uncertain'])
         self.assertEqual([row['depth'] for row in timeline['rows']], [0, 0])
         self.assertEqual(timeline['events'][0]['label'], '派发')
+        self.assertEqual(timeline['events'][0]['actor'], {'role': 'host', 'id': 'host-1'})
         self.assertNotIn('controlToken', json.dumps(timeline))
+
+    def test_timeline_markers_keep_actor_roles_and_explicit_host_fallbacks(self):
+        board = self.board()
+        run = self.submit(board, kind='worktree')
+        run_id = run['runId']
+        with board.store.db.write() as connection:
+            lead = board.store._append_event(connection, 'workflow.request_approved', task_id=run_id,
+                                             payload={'actor': {'role': 'lead', 'id': 'lead-run'}})
+            console = board.store._append_event(connection, 'workflow.continued', task_id=run_id,
+                                                payload={'actor': {'role': 'console', 'id': 'session-1'}})
+            takeover = board.store._append_event(connection, 'workflow.takeover', task_id=run_id,
+                                                 payload={'newHostId': 'next-host'})
+            submitted = board.store._append_event(connection, 'task.submitted', task_id=run_id,
+                                                  payload={'microTask': {'sourceHostId': 'source-host'}})
+            unknown = board.store._append_event(connection, 'workflow.cancelled', task_id=run_id)
+        timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
+        actors = {event['seq']: event['actor'] for event in timeline['events']}
+        self.assertEqual(actors[lead], {'role': 'lead', 'id': 'lead-run'})
+        self.assertEqual(actors[console], {'role': 'console', 'id': 'session-1'})
+        self.assertEqual(actors[takeover], {'role': 'host', 'id': 'next-host'})
+        self.assertEqual(actors[submitted], {'role': 'host', 'id': 'source-host'})
+        self.assertIsNone(actors[unknown])
 
     def test_lead_owned_waits_count_as_active_and_timeline_projects_ownership(self):
         board = self.board()

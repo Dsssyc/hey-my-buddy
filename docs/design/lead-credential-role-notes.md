@@ -22,6 +22,20 @@ Python 验证统一使用 `PYTHONPATH=src <prepared-python> -m hey_my_buddy.cli.
 
 升级与中断恢复一组涵盖 `blackboard/store/test_upgrade_fixture.py`、`test_interruption_recovery.py`、`test_interruption_native_tree.py`、`test_worker_orphan_settlement.py`，以及 `install/test_upgrade.py`、`test_upgrade_archive.py`、`test_upgrade_service.py`、`test_backup.py`，最终整组 8 个文件 58 项通过，退出码 0，检查器确认私有根已清理；其中已包含旧事件类别、已结清存量回执与普通执行取消回执换算，样板文件单独复测也有 6 项通过。样板覆盖 schema 21 与新建看板结构完全相同、无关系的同名前缀 Host 保留、实际 Host 接管身份保留、未结清存量拒绝且原件字节不变、模型不透明内容与历史文件不改写。
 
-与要求不一致的情形：控制台前端的角色消费尚未同步。`apps/console/src/task-activity.tsx` 仍从取消归因的字符串前缀解析角色，`host-workflow.ts` 只接受字符串发起者，整合显示及相关类型仍使用字符串；新结构会使部分身份显示丢失或显示为对象文本。`apps/console/` 不在本微任务写入范围内，需 Host 处理或授权补齐。`docs/decisions/030-harness-layer-scope.md` 中 2026-10-14 追加的 Lead 环境传递说明也被本次实现取代，该文件不在文档写入范围内，交由 Host 同步。未运行前端或浏览器测试，未使用真实 harness 或模型，未安装产品，也未操作日常服务与 Worker。
+上一回合在控制台前端与 ADR-030 的写入边界交回 Host；本回合 Host 已将 `apps/console` 与打包资源纳入 scope 2，控制台相关工作在下节记录，ADR-030 由 Host 同步。
 
 `git diff --check` 最终通过；本微任务没有提交、分支或标签改动，也未操作共享 stash。
+
+## 控制台补齐（scope 2）
+
+控制台的取消归因、Host 结论、整合记录、宏任务时间轴标记与检查卡片统一读取 `{role, id}`，类型与前端夹具同步更新，没有保留字符串发起者的读法。Host 名称包含 `lead:` 时仍按其明确的 Host 角色显示，Lead 角色独立显示；时间轴事件句子也按记录角色写出发起者。角色名称、身份格式、取消归因与事件句子均经中英文 i18n。
+
+`Workflow.hostId` 与微任务视图中的 `hostId` 明确允许 NULL。控制台在有名下关系时显示关联的 Lead，没有管理身份时显示未记录；当前 Host 接管后仍显示明确的 Host 名称。结论、整合与标记的显示不再将对象直接拼入文字，也不会显示 `[object Object]`。
+
+宏任务标记读取事件的 `actor_role`、`actor_id` 并返回结构化身份；原始 Host 提交与接管的明确 Host 字段仍可提供有依据的归因。微任务新提交时在同一事务内记录由凭据确定的 Lead 或 Host 发起者，schema 20 的提交事件升级时按名下关系与原始 Host 字段补齐，保留同名前缀 Host 的真实身份。合成预览同步更换取消、结论、整合与标记的 actor 形状，并包含空 Host 的 Lead 持有展示；保留既有时间轴几何，用于展示和契约检查，不作为真实 Lead 执行时序的证据。
+
+按 Host 指定顺序使用本机已有、符合 `package.json` 约束的 Node 24.21.0 执行 `npm --prefix apps/console ci`，退出码 0；随后运行前端全量 `npm --prefix apps/console test`，79 个测试文件、1106 项全部通过。`npm --prefix apps/console run test:browser` 在编译阶段发现新增浏览器测试的 expect 导入错误，修正后完整重跑，98 项全部通过，含中英文真实浏览器里结构化 Lead 发起者与空 Host 的显示。测试使用私有合成预览，未操作日常看板。
+
+浏览器检查之后再运行 `npm --prefix apps/console run build`，退出码 0；已替换打包的 JavaScript 资源与 `index.html` 引用，样式内容未变。之后以规定的检查运行器和解释器执行 `tests/python/cli/test_host_preview.py`、`tests/python/blackboard/tasks/test_macro_tasks.py`、`test_console_macro_task_fixture.py` 与 `tests/python/console/test_console.py`，4 个文件、58 项通过；补齐真实提交事件的角色写入和升级换算后，运行 `test_lead_owned.py`、`test_macro_tasks.py` 与 `blackboard/store/test_upgrade_fixture.py`，3 个文件、53 项通过。两批检查退出码均为 0，私有根均已清理，默认进程数未改，`git diff --check` 通过。
+
+与本回合要求不一致的情形：没有。未跑完整 Python 检查，未安装产品，未操作日常服务或 Worker；ADR-030 的同步由 Host 负责。

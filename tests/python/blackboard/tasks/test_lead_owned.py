@@ -60,6 +60,9 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertIsNotNone(groups[lead["runId"]])
             self.assertEqual(groups[lead["runId"]], groups[child["runId"]])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
+            self.assertEqual(tuple(db.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
+                (child["runId"],)).fetchone()), ("lead", lead["runId"]))
             self.assertEqual(db.execute("SELECT owner FROM tasks WHERE task_id=?", (child["runId"],)).fetchone()[0],
                              lead["runId"])
         replay = self.owned(board, claim)

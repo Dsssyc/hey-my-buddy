@@ -19,7 +19,7 @@ function verified(partial: Partial<IntegrationRecord>): IntegrationRecord {
     integrationId: "int", runId: "run", artifactId: "artifact", attemptId: "attempt",
     state: "verified", strategy: "patch", target: null, sourceCommit: null, sourceTree: null,
     beforeCommit: null, afterCommit: null, beforeTree: null, afterTree: null,
-    verification: {}, notRequired: false, reason: "", actor: "host", createdAt: "2026-09-25",
+    verification: {}, notRequired: false, reason: "", actor: { role: "host", id: "host" }, createdAt: "2026-09-25",
     ...partial,
   };
 }

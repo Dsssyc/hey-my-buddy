@@ -1,3 +1,4 @@
+import type { Actor } from "./types";
 import type { RoutingMode } from "./types";
 
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
@@ -114,7 +115,7 @@ export type TimelineEvent = {
   seq: number; runId: string;
   /** One of TimelineEventKind from the current service; kept open for newer kinds. */
   kind: string; at: string;
-  label: string; summary: string; actor: string | null;
+  label: string; summary: string; actor: Actor | null;
   attemptId: string | null; requestId: string | null; artifactId: string | null;
   integrationId?: string | null; continuationId?: string | null; eventKind?: string;
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;

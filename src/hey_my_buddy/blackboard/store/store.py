@@ -965,7 +965,10 @@ class BoardStore:
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-worker",
                         "inputFingerprint": fingerprint,
-                        **({"microTask": {"sourceHostId": micro_task["hostId"]}} if micro_task is not None else {}),
+                        **({"microTask": {"sourceHostId": micro_task["hostId"]},
+                            "actor": ({"role": "lead", "id": micro_task["lead"]["runId"]}
+                                      if micro_task.get("lead") else {"role": "host", "id": micro_task["hostId"]})}
+                           if micro_task is not None else {}),
                     },
                 )
                 row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()

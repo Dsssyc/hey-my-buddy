@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { workflowOwnerText } from "./actor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
@@ -88,7 +90,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const project = taskProject(task);
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
-    <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>当前 Host</dt><dd>{task.lineage?.currentHostId || task.workflow?.hostId || "未记录"}</dd>
+    <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>{i18n.t("shell:actor.currentOwner")}</dt><dd>{workflowOwnerText(task)}</dd>
     <dt>来源项目</dt><dd>{project.path || "未记录"}</dd><dt>微任务 ID</dt><dd>{task.runId}</dd>
     <dt>上级微任务</dt><dd>{task.lineage?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
   </dl></details>;

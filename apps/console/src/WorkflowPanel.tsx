@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { actorText, workflowOwnerText } from "./actor";
 import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
@@ -106,7 +108,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           <h3>Host 结论</h3>
           <dl className="facts">
             <dt>微任务结果</dt><dd>{conclusion.statusLabel} · 不计入验收</dd>
-            <dt>记录 Host</dt><dd>{conclusion.actor}{conclusion.ownerGeneration === null ? "" : ` · 第 ${conclusion.ownerGeneration} 代`}</dd>
+            <dt>{i18n.t("shell:actor.recordedBy")}</dt><dd>{conclusion.actor}{conclusion.ownerGeneration === null ? "" : ` · 第 ${conclusion.ownerGeneration} 代`}</dd>
             <dt>记录时间</dt><dd>{formatDate(conclusion.createdAt)}</dd>
             <dt>微任务版本</dt><dd>{conclusion.runRevision === null ? "未记录" : `V${conclusion.runRevision}`}</dd>
             {conclusion.references.map(reference => <Fragment key={reference.label}>
@@ -122,7 +124,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           <div className="record-facts-body">
             <Status status={displayWorkflowState(value.state, value.task.lineage?.rootLeadRunId ?? null)} />
             <dl className="facts">
-              <dt>当前 Host</dt><dd>{value.task.lineage?.currentHostId || value.hostId}</dd>
+              <dt>{i18n.t("shell:actor.currentOwner")}</dt><dd>{workflowOwnerText(value.task, value.hostId)}</dd>
               <dt>协作版本</dt><dd>V{value.revision}</dd>
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
@@ -218,7 +220,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
           {hostPaths.length > 0 && <><dt>Host 补充改动</dt><dd className="wrap">{
             `与成果路径分开记录（${hostPaths.length} 项）：${hostPaths.join("、")}`
           }</dd></>}
-          <dt>记录来源</dt><dd>{`${integration.actor} · ${formatDate(integration.createdAt)}`}</dd>
+          <dt>{i18n.t("shell:actor.recordedBy")}</dt><dd>{`${actorText(integration.actor)} · ${formatDate(integration.createdAt)}`}</dd>
         </dl> : <p className="banner guard-banner" role="status">
           整合证明未记录；请由 Host 完成整合与验收。
         </p>}
@@ -226,7 +228,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       </div>
       <div id={tabsId + "-execution"} role="tabpanel" aria-labelledby={tabsId + "-execution-tab"} hidden={selectedSection !== "execution"}>
       {recordInfo}
-      <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{value.hostId} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
+      <h3>执行记录</h3><dl className="facts"><dt>本记录权限</dt><dd>{workflowOwnerText(value.task, value.hostId)} · 第 {value.ownerGeneration} 代</dd><dt>执行位置</dt><dd>{value.workspace?.path || "未记录"}</dd><dt>当前回合</dt><dd>{value.currentTurn?.turnId || "尚未开始"}</dd><dt>执行尝试</dt><dd>{value.currentTurn?.attemptId || "尚未开始"}</dd><dt>回合会话</dt><dd>{value.currentTurn?.sessionId || "未记录"}</dd></dl>
       <section className="detail-section" aria-label="每次执行的用量">
         <h4>每次执行的用量</h4>
         {usageTurns.length === 0 ? <p className="small muted">暂无执行记录</p> : <ul className="token-usage-list">

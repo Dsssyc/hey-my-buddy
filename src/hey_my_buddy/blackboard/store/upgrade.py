@@ -182,6 +182,11 @@ def _rebuild(connection: sqlite3.Connection, table: str, sql: str, indexes: list
             actor = payload.pop('actor', None)
             role, identifier = (_event_actor(connection, row, actor, inherited, first_takeover)
                                 if isinstance(actor, str) else (None, None))
+            if row['kind'] == 'task.submitted' and isinstance(payload.get('microTask'), dict):
+                if row['task_id'] in owned:
+                    role, identifier = 'lead', owned[row['task_id']]
+                elif isinstance(payload['microTask'].get('sourceHostId'), str):
+                    role, identifier = 'host', payload['microTask']['sourceHostId']
             _remove_legacy_evidence(payload)
             row['payload_json'] = canonical_json(payload)
             row['actor_role'], row['actor_id'] = role, identifier

@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { actorText } from "./actor";
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { TimelineEvent, TimelineRow } from "./macro-task-types";
@@ -83,18 +85,19 @@ export function MarkerPopover({ cluster, anchor, rowsById, selectedEventKey, onS
         // P1.7: one natural-language sentence per event, the recorded summary
         // as a second weak line.
         const sentence = eventSentence(event, row ?? null);
+        const actor = event.actor ? actorText(event.actor) : null;
         return <div key={item.key}
           className={"marker-popover-row" + (selected ? " selected" : "")}>
           <button type="button" className="marker-popover-main" data-row-index={index}
-            title={event.actor ? `${sentence} · ${event.actor}` : sentence}
-            aria-label={`${sentence}${event.actor ? `，actor ${event.actor}` : ""}`}
+            title={actor ? `${sentence} · ${actor}` : sentence}
+            aria-label={actor ? i18n.t("shell:actor.markerIdentity", { sentence, actor }) : sentence}
             onClick={() => onSelect(item)}
             onDoubleClick={() => onOpen(item)}
             onKeyDown={keyboard => onKeyDown(keyboard, item)}>
             <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
             <time>{clockTime(event.at)}</time>
             <span className="marker-popover-title">{sentence}</span>
-            {event.actor && <span className="muted">{event.actor}</span>}
+            {actor && <span className="muted">{actor}</span>}
             {event.summary && <span className="marker-popover-summary muted">{event.summary}</span>}
           </button>
           <button type="button" className="button small-button" aria-label={`打开 ${item.head}`}

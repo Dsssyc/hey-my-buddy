@@ -273,6 +273,12 @@ class UpgradeFixtureTests(unittest.TestCase):
                 (owned, helper, unrelated, lead))),
                 {owned: None, helper: None, unrelated: 'lead:' + lead, lead: 'lead:literal-host'})
             self.assertEqual(upgraded.execute('SELECT owner FROM tasks WHERE task_id=?', (owned,)).fetchone()[0], lead)
+            self.assertEqual(tuple(upgraded.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
+                (owned,)).fetchone()), ('lead', lead))
+            self.assertEqual(tuple(upgraded.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
+                (lead,)).fetchone()), ('host', 'fixture-host'))
             self.assertEqual({tuple(row) for row in upgraded.execute(
                 'SELECT actor_role,actor_id FROM workflow_scope_versions WHERE run_id IN (?,?) AND scope_version=1',
                 (owned, unrelated))}, {('lead', lead)})

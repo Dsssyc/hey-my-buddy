@@ -1,3 +1,5 @@
+import { actorText } from "./actor";
+import i18n from "i18next";
 /**
  * Pure card models for the pinned timeline inspector (0.15 C2, restructured
  * 0.16 P1.6). One selection — a span, a Host event, a settlement flag or a
@@ -241,7 +243,7 @@ export function buildInspectorCard(
       { label: "时间", value: clockTime(event.at) },
       { label: "结果", value: event.summary || UNRECORDED, title: event.summary || undefined },
     ];
-    if (event.actor) fields.push({ label: "记录", value: `actor ${event.actor}`, tone: "muted" });
+    if (event.actor) fields.push({ label: i18n.t("shell:actor.recordedBy"), value: actorText(event.actor), tone: "muted" });
     return {
       key: selection.key,
       head: `Host 事件：${event.label || event.kind}`,

@@ -1,3 +1,4 @@
+import { actorText, parseActor } from "./actor";
 /**
  * ADR-018 Host-workflow facts for the read-only console: per-execution token
  * usage, recorded harness quota observations, the independent Host conclusion
@@ -246,7 +247,7 @@ export function hostConclusionView(value: unknown): HostConclusionView | null {
     cancelled: status === "cancelled",
     note: nonempty(row.note) ?? "未记录",
     evidence: stringList(row.evidence),
-    actor: nonempty(row.actor) ?? "未记录",
+    actor: actorText(parseActor(row.actor)),
     createdAt: nonempty(row.createdAt) ?? "",
     references,
     ownerGeneration: typeof row.ownerGeneration === "number" && Number.isInteger(row.ownerGeneration)

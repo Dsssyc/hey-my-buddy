@@ -21,7 +21,7 @@ const span = (overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
 
 const event = (offsetMs: number, overrides: Partial<TimelineEvent> = {}): TimelineEvent => ({
   seq: 1, runId: "run-1", kind: "host-note", at: at(offsetMs), label: "标记", summary: "Host 记录",
-  actor: "host", attemptId: null, requestId: null, artifactId: null,
+  actor: { role: "host", id: "host" }, attemptId: null, requestId: null, artifactId: null,
   ...overrides,
 });
 

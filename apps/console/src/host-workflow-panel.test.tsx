@@ -34,7 +34,7 @@ function workflow(overrides: Partial<Workflow> = {}): Workflow {
     hostConclusion: {
       conclusionId: "concl-1", attemptId: "attempt-2", executionStatus: "failed",
       note: "额度耗尽前已把改动提取为部分成果", evidence: ["部分成果已封存", "检出内容已保留"],
-      artifactId: "art-partial", integrationId: null, actor: "host-a",
+      artifactId: "art-partial", integrationId: null, actor: { role: "host", id: "host-a" },
       createdAt: "2026-09-29T09:00:00.000Z", ownerGeneration: 2, runRevision: 7,
     },
     buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" },
@@ -80,6 +80,18 @@ async function openTab(name: string) {
 }
 
 describe("ADR-018 Host workflow in the microTask detail", () => {
+  it("renders structured actors and an unnamed Lead-owned micro task without object text", async () => {
+    const value = workflow({ hostId: null });
+    value.task.lineage = { ...task().lineage!, currentHostId: null, rootLeadRunId: "lead-manager" };
+    value.task.workflow = { ...task().workflow!, hostId: null };
+    value.hostConclusion = { ...value.hostConclusion!, actor: { role: "host", id: "lead:literal-host" } };
+    const rendered = render(<WorkflowPanel {...fixture(value).props} />);
+    const block = await screen.findByRole("region", { name: "Host 结论" });
+    expect(block.textContent).toContain("Host · lead:literal-host");
+    expect(rendered.container.textContent).toContain("Lead · lead-manager");
+    expect(rendered.container.textContent).not.toContain("[object Object]");
+  });
+
   it("shows the Host conclusion of a failed micro task as an independent record, not an acceptance", async () => {
     render(<WorkflowPanel {...fixture().props} />);
     const block = await screen.findByRole("region", { name: "Host 结论" });
@@ -101,7 +113,7 @@ describe("ADR-018 Host workflow in the microTask detail", () => {
         state: "not-required", strategy: "none", target: null, sourceCommit: null, sourceTree: null,
         beforeCommit: null, afterCommit: null, beforeTree: null, afterTree: null,
         verification: { notRequired: true, reason: "未整合", hostPaths: ["docs/reference/console.md"] },
-        notRequired: true, reason: "Host 已提取部分成果", actor: "host-a", createdAt: "2026-09-29T09:00:00.000Z",
+        notRequired: true, reason: "Host 已提取部分成果", actor: { role: "host", id: "host-a" }, createdAt: "2026-09-29T09:00:00.000Z",
       }],
     });
     render(<WorkflowPanel {...fixture(value).props} />);
