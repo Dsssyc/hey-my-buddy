@@ -198,7 +198,9 @@ class FastRegisteredRunTests(FakeAppServerTests):
         with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "discovery"}, clear=True), \
                 mock.patch.object(module, "run", side_effect=AssertionError("model run")), \
                 mock.patch.object(module, "prepare_services", side_effect=AssertionError("session service")):
-            raw, code = run_controller.execute({"operation": "discover", "harness": "zcode",
+            raw, code = run_controller.execute({"operation": "discover", "specification": {
+                "seam": "run_discovery", "resultKey": "catalog", "unknownResult": {}},
+                "arguments": {}, "harness": "zcode",
                 "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
                 "timeoutSeconds": WIRING_TIMEOUT}, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         result = json.loads(raw)

@@ -377,6 +377,7 @@ class NativeRpcErrorTests(unittest.TestCase):
                                       "data": {"accountPlan": "must never appear"}})
         self.assertEqual(error.code, "native-rpc-error")
         self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
+        self.assertEqual(error.native_error, {"code": -32000, "message": "model not found: fixture-model"})
 
     def test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept(self):
         # The Host probe's shape: a native reason of repeated three-byte CJK
@@ -390,6 +391,7 @@ class NativeRpcErrorTests(unittest.TestCase):
         self.assertEqual(error.code, "native-rpc-error")
         self.assertTrue(error.args[0].startswith("Codex rejected turn/start: 模型不可用"))
         self.assertNotIn("accountPlan", error.args[0])
+        self.assertEqual(error.native_error, {"code": -32000, "message": "模型不可用" * 80 + "\U0001D11E" * 10})
         self.assertLessEqual(len(error.args[0].encode("utf-8")), MAX_NATIVE_REFUSAL_BYTES)
         self.assertNotIn("\N{REPLACEMENT CHARACTER}", error.args[0])
 
@@ -401,13 +403,21 @@ class NativeRpcErrorTests(unittest.TestCase):
         error = self.call_with_error({"code": -32000, "message": reason})
         self.assertEqual(error.args[0], "Codex rejected turn/start: " + reason)
 
-    def test_an_error_without_a_usable_message_keeps_the_method_fallback(self):
+    def test_malformed_rpc_errors_fail_at_the_generic_boundary(self):
         for error in ({"code": -32000}, {"code": -32000, "message": None},
-                      {"code": -32000, "message": 47}, {"code": -32000, "message": "   "}):
+                      {"code": -32000, "message": 47}, {"code": True, "message": "reason"},
+                      {"code": "-32600", "message": "reason"}, None):
             with self.subTest(error=error):
                 failure = self.call_with_error(error)
-                self.assertEqual(failure.code, "native-rpc-error")
-                self.assertEqual(failure.args[0], "Codex rejected turn/start")
+                self.assertEqual(failure.code, "invalid-protocol")
+                self.assertIsNone(failure.native_error)
+
+    def test_empty_or_blank_messages_remain_structured_native_errors(self):
+        for message in ("", "   "):
+            with self.subTest(message=message):
+                failure = self.call_with_error({"code": -32000, "message": message})
+                self.assertEqual(failure.native_error, {"code": -32000, "message": message})
+                self.assertEqual(failure.args[0], "Codex rejected turn/start: " + message)
 
 
 if __name__ == "__main__":

@@ -60,16 +60,21 @@ class DeleteSessionTests(unittest.TestCase):
             with self.subTest(session_id=session_id), self.assertRaises(BoardError) as caught:
                 CodexAdapter().delete_sessions(["owned", session_id, "must-not-delete"])
             self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message})
-            self.assertIn(str(code), str(caught.exception))
-            self.assertIn(message, str(caught.exception))
+            self.assertTrue(str(caught.exception).startswith("Codex rejected thread/delete: "))
+            self.assertLessEqual(len(str(caught.exception).encode("utf-8")), 512)
+            if len(message.encode("utf-8")) < 400:
+                self.assertIn(message, str(caught.exception))
         self.assertNotIn("must-not-delete", [frame.get("params", {}).get("threadId") for frame in self.requests()])
 
     def test_malformed_native_replies_fail_at_protocol_boundary(self):
-        for session_id in ("malformed-error", "missing-message", "invalid-result", "missing-result", "extra-result"):
+        for session_id in ("malformed-error", "missing-message", "invalid-result", "missing-result"):
             with self.subTest(session_id=session_id), self.assertRaises(CodexProtocolError) as caught:
                 self.native_delete([session_id])
             self.assertEqual(caught.exception.code, "invalid-protocol")
             self.assertTrue(caught.exception.discovery_shutdown_confirmed)
+
+    def test_additional_native_result_fields_do_not_block_deletion(self):
+        self.assertEqual(CodexAdapter().delete_sessions(["extra-result"]), {"extra-result": "deleted"})
 
     def test_unsupported_harness_fails_without_an_empty_default(self):
         with self.assertRaises(BoardError) as caught:

@@ -134,34 +134,15 @@ class Connection:
             self.pump()
         response = self.responses.pop(request_id)
         self.pending_ids.discard(request_id)
-        if method == "thread/delete":
-            if "error" in response:
-                error = response["error"]
-                if (not isinstance(error, dict) or type(error.get("code")) is not int
-                        or not isinstance(error.get("message"), str)):
-                    raise CodexProtocolError("invalid-protocol", "Codex returned an invalid thread/delete error")
-                native_error = {"code": error["code"], "message": error["message"]}
-                raise CodexProtocolError("native-rpc-error",
-                    f"Codex rejected {method} ({error['code']}): {error['message']}", native_error=native_error)
-            if response.get("result") != {}:
-                raise CodexProtocolError("invalid-protocol", "Codex returned an invalid thread/delete result")
-            return {}
         if "error" in response:
-            # The native refusal keeps its own message beside the stable
-            # machine code, cut on UTF-8 byte safety with the prefix included
-            # (the checkpoint's retained-message idiom): a long native reason
-            # reaches the caller truncated and readable instead of being
-            # erased by the public bound. An error without a usable message
-            # keeps the method-only fallback, and nothing else is expanded.
-            error = response.get("error")
-            native = error.get("message") if isinstance(error, dict) else None
-            if isinstance(native, str) and native.strip():
-                text = f"Codex rejected {method}: {native}"
-                raw = text.encode("utf-8")
-                if len(raw) > MAX_NATIVE_REFUSAL_BYTES:
-                    text = raw[:MAX_NATIVE_REFUSAL_BYTES].decode("utf-8", errors="ignore")
-                raise CodexProtocolError("native-rpc-error", text)
-            raise CodexProtocolError("native-rpc-error", f"Codex rejected {method}")
+            error = response["error"]
+            if (not isinstance(error, dict) or type(error.get("code")) is not int
+                    or not isinstance(error.get("message"), str)):
+                raise CodexProtocolError("invalid-protocol", "Codex returned an invalid RPC error")
+            native_error = {"code": error["code"], "message": error["message"]}
+            text = f"Codex rejected {method}: {error['message']}"
+            text = text.encode("utf-8")[:MAX_NATIVE_REFUSAL_BYTES].decode("utf-8", errors="ignore")
+            raise CodexProtocolError("native-rpc-error", text, native_error=native_error)
         result = response.get("result")
         self.last_result_readable = isinstance(result, dict)
         if not self.last_result_readable:
