@@ -384,8 +384,10 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
     if group_id.startswith("obj-"):
         objective = connection.execute("SELECT * FROM objectives WHERE objective_id=?", (group_id,)).fetchone()
         title, title_source = objective["title"], "objective"
+        repository_path = next((row["project_repository_path"] for row in members
+                                if row["project_repository_path"]), None)
         project = {"id": workspace_identity.canonical(objective["project_id"], mapping=workspace_identity.load_alias_map(connection)), "path": objective["project_path"],
-                   "label": delegation.project_label(objective["project_path"], "未记录项目")}
+                   "label": delegation.project_label(objective["project_path"], repository_path, "未记录项目")}
         identity_reason = workspace_identity.identity_reason(connection, objective["project_id"])
         if identity_reason:
             project["identityReason"] = identity_reason

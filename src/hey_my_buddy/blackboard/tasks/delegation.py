@@ -199,6 +199,13 @@ SELECT
         json_extract(root_task.spec_json, '$.cwd'),
         json_extract(t.spec_json, '$.cwd')
     ) END AS recorded_project_id,
+    COALESCE(
+        (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath') FROM workflow_artifacts artifact
+          WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
+            AND json_extract(artifact.manifest_json, '$.snapshot.repositoryPath') IS NOT NULL
+          ORDER BY artifact.rowid LIMIT 1),
+        json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
+    ) AS project_repository_path,
     COALESCE(json_extract(r.goal_json, '$.task'), json_extract(t.spec_json, '$.task')) AS objective,
     COALESCE(json_extract(r.execution_configuration_json, '$.adapter'), t.adapter) AS effective_adapter,
     COALESCE(json_extract(r.execution_configuration_json, '$.model'), json_extract(t.spec_json, '$.model'))
@@ -260,8 +267,12 @@ def _complete_configuration(value: Any) -> dict | None:
     return configuration
 
 
-def project_label(path: str | None, fallback: str) -> str:
-    """Display label for a project path; never a fabricated identity."""
+def project_label(path: str | None, repository_path: str | None, fallback: str) -> str:
+    """Name the repository, falling back to the submitted directory without Git."""
+    if repository_path:
+        path = repository_path.rstrip("/")
+        if os.path.basename(path) == ".git":
+            path = os.path.dirname(path)
     if not path:
         return fallback
     name = os.path.basename(path.rstrip("/"))
@@ -293,7 +304,8 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         "project": {
             "id": identifier or path or row["task_id"],
             "path": path,
-            "label": project_label(path, "内部决策" if kind == "decision" and root_run is None else "未记录项目"),
+            "label": project_label(path, row["project_repository_path"],
+                                   "内部决策" if kind == "decision" and root_run is None else "未记录项目"),
         },
         "configuration": configuration,
     }

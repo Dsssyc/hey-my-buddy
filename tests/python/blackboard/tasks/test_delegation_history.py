@@ -349,6 +349,7 @@ class GoalProvenanceTests(DelegationTestCase):
         self.assertIsNone(metadata["rootRunId"])
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
         self.assertEqual(metadata["project"]["id"], os.path.realpath(str(self.workdir())))
+        self.assertEqual(metadata["project"]["label"], "work")
         # The command adapter has no complete execution configuration, so none is
         # invented for it.
         self.assertIsNone(metadata["configuration"])

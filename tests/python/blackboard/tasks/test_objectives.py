@@ -4,7 +4,83 @@ from unittest.mock import patch
 
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from blackboard.tasks.test_workflow import WorkflowTestCase
+
+
+class ProjectLabelTests(WorkflowTestCase):
+    """Read saved Git provenance using the workflow suite's workspace double."""
+
+    def submit_from_repository(self, board, cwd, repository, *, request_id, grouped=True):
+        original = self.workspace._manifest
+
+        def manifest(**params):
+            value = original(**params)
+            if repository is None:
+                value["snapshot"].pop("repositoryPath")
+            else:
+                value["snapshot"]["repositoryPath"] = repository
+            value["manifestSha256"] = sha256_text(canonical_json({
+                key: item for key, item in value.items() if key != "manifestSha256"
+            }))
+            return value
+
+        with patch.object(self.workspace, "_manifest", side_effect=manifest):
+            return self.submit(board, request_id=request_id, cwd=str(cwd), kind="worktree",
+                               **({"objective": {"title": request_id}} if grouped else {}))
+
+    def assert_projects(self, board, submitted, *, label, path, identifier):
+        expected = {"id": identifier, "path": str(path), "label": label}
+        metadata = board.call("task_get", {"runId": submitted["runId"]})["task"]["delegation"]
+        self.assertEqual(metadata["project"], expected)
+        group_id = submitted.get("objectiveId") or f"run:{submitted['runId']}"
+        summary = next(row for row in board.call("objective_list", {})["objectives"]
+                       if row["objectiveId"] == group_id)
+        self.assertEqual(summary["project"], expected)
+        timeline = board.call("objective_timeline", {"objectiveId": group_id})
+        self.assertEqual(timeline["objective"]["project"], expected)
+
+    def test_main_worktree_and_managed_checkout_share_repository_name_and_identity(self):
+        board = self.board()
+        main = self.workdir("repository-name")
+        worktree = self.workdir("other-worktree")
+        # The double supplies one repository identity for the three source
+        # checkouts; the read side consumes the persisted common Git directory.
+        with patch.object(self.workspace, "_repository_root", return_value=str(main)):
+            first = self.submit_from_repository(board, main, str(main / ".git"), request_id="checkout-0")
+            self.assert_projects(board, first, label="repository-name", path=main,
+                                 identifier=f"repo:{main}")
+            managed = board.call("task_get", {"runId": first["runId"]})["task"]["cwd"]
+            for index, cwd in enumerate((worktree, managed), 1):
+                with self.subTest(checkout=str(cwd)):
+                    submitted = self.submit_from_repository(
+                        board, cwd, str(main / ".git"), request_id=f"checkout-{index}",
+                    )
+                    self.assert_projects(board, submitted, label="repository-name", path=cwd,
+                                         identifier=f"repo:{main}")
+
+    def test_bare_repository_uses_its_own_name_for_grouped_and_standalone_runs(self):
+        board = self.board()
+        cwd = self.workdir("execution-checkout")
+        for grouped in (True, False):
+            with self.subTest(grouped=grouped):
+                submitted = self.submit_from_repository(
+                    board, cwd, "/fictional/repositories/repository.git/",
+                    request_id=f"bare-{grouped}", grouped=grouped,
+                )
+                self.assert_projects(board, submitted, label="repository.git", path=cwd,
+                                     identifier=f"repo:{cwd}")
+
+    def test_missing_repository_location_keeps_submitted_directory_name(self):
+        board = self.board()
+        cwd = self.workdir("plain-directory")
+        for grouped in (True, False):
+            with self.subTest(grouped=grouped):
+                submitted = self.submit_from_repository(
+                    board, cwd, None, request_id=f"plain-{grouped}", grouped=grouped,
+                )
+                self.assert_projects(board, submitted, label="plain-directory", path=cwd,
+                                     identifier=f"repo:{cwd}")
 
 
 class ObjectiveAdmissionTests(WorkflowTestCase):
