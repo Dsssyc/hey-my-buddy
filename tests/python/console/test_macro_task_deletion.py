@@ -120,9 +120,20 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             workspace_fixtures.WorkspaceTests._seed_repository(self)
             replacement = {str(path.relative_to(self.repo)): path.read_bytes()
                            for path in self.repo.rglob('*') if path.is_file()}
+        retained_files = ({str(path.relative_to(retained)): path.read_bytes()
+                           for path in retained.rglob('*') if path.is_file()}
+                          if mode != 'deleted' else None)
         _, browser = self.open_console(board)
         params = {'macroTaskId': run['macroTaskId'], 'microTaskCount': 2, 'confirm': True}
-        with patch.object(workspace, '_git', side_effect=AssertionError('unavailable repository was opened')):
+        original_git = workspace._git
+
+        def read_only_git(root, *args, **kwargs):
+            self.assertTrue(args[0] in {'rev-parse', 'for-each-ref', 'cat-file'}
+                            or args[:2] == ('worktree', 'list'),
+                            f'Deletion wrote to an unavailable repository: {args}')
+            return original_git(root, *args, **kwargs)
+
+        with patch.object(workspace, '_git', side_effect=read_only_git):
             result = self.command(browser, DELETE, params)
         self.assertEqual(result['state'], 'deleted')
         self.assertNotIn('failures', result)
@@ -146,6 +157,8 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
                               for path in self.repo.rglob('*') if path.is_file()}, replacement)
         if mode != 'deleted':
             self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix, cwd=retained), refs)
+            self.assertEqual({str(path.relative_to(retained)): path.read_bytes()
+                              for path in retained.rglob('*') if path.is_file()}, retained_files)
 
     def test_service_host_and_worker_credentials_do_not_authorize_either_operation(self):
         board = self.board()
