@@ -49,10 +49,14 @@ from . import workspace as _workspace_module
 
 # Errors from _requeue and its automatic-path callees: lineage, admission and
 # task/run transitions. Manual workspace reclamation is not on either path.
-_AUTO_CONTINUE_FAILURE_CODES = frozenset({
-    "ANCESTOR_TERMINAL", "CONFLICT", "SHUTDOWN_UNCONFIRMED", "REVISION_CONFLICT",
-    "UPGRADE_IN_PROGRESS", "ILLEGAL_TRANSITION",
-})
+_AUTO_CONTINUE_FAILURE_CODES = {
+    "ANCESTOR_TERMINAL": "ANCESTOR_TERMINAL",
+    "CONFLICT": "CONFLICT",
+    "SHUTDOWN_UNCONFIRMED": "SHUTDOWN_UNCONFIRMED",
+    "REVISION_CONFLICT": "REVISION_CONFLICT",
+    "UPGRADE_IN_PROGRESS": "UPGRADE_IN_PROGRESS",
+    "ILLEGAL_TRANSITION": "ILLEGAL_TRANSITION",
+}
 
 
 #: Operations an attempt-scoped credential may call at all.
@@ -6570,11 +6574,9 @@ class WorkflowCoordinator:
             self._requeue(connection, task, lead, actor={"role": "workflow", "id": "auto"},
                           now=now, continuation_id=continuation_id)
         except BoardError as error:
-            if error.code not in _AUTO_CONTINUE_FAILURE_CODES:
-                raise KeyError(error.code) from error
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                                (continuation_id,))
-            self._record_helper_report(connection, lead, [], reason=make_reason(error.code), now=now)
+            self._record_helper_report(connection, lead, [], reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
             return
         self.board._append_event(connection, "workflow.auto_continued", task_id=lead["run_id"],
                                  revision=lead["revision"] + 1,
@@ -7512,15 +7514,13 @@ class WorkflowCoordinator:
                     payload={"continuationId": auto["continuation_id"], "helpers": [item["taskId"] for item in outcomes]},
                 )
             except BoardError as error:
-                if error.code not in _AUTO_CONTINUE_FAILURE_CODES:
-                    raise KeyError(error.code) from error
                 # One-use authority stays recorded if the run cannot continue yet
                 # (for example the parent's stop is not proven); the Host decides.
                 connection.execute(
                     "UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                     (auto["continuation_id"],),
                 )
-                self._record_helper_report(connection, parent, outcomes, reason=make_reason(error.code), now=now)
+                self._record_helper_report(connection, parent, outcomes, reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
             return
         if parent["state"] == "waiting-helpers":
             self._record_helper_report(connection, parent, outcomes, reason=make_reason("helpers-settled"), now=now)
