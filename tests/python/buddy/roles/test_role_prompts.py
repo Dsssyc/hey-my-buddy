@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.harnesses.registry import adapter
+from hey_my_buddy.buddy.harnesses.registry import adapter, worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION
@@ -32,7 +32,7 @@ class RolePromptTests(unittest.TestCase):
                 "You are working for a Host agent, not for a person",
                 "Rules about the code itself still apply",
                 "Do not ask questions, offer choices or wait for input",
-                "Do not start or hand out other buddy tasks",
+                "Do not create micro tasks or hand work to other buddies",
                 "your harness's own subagents are fine inside this task's scope",
                 "hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn",
                 "Where these tools are absent, your final message is the result",
@@ -110,6 +110,28 @@ class RolePromptTests(unittest.TestCase):
                         self.assertNotIn(str(root / "agent-credential.json"), request.input_text)
                     self.assertGreater(request.input_text.index(task), len(role))
                     self.assertTrue(request.input_text.endswith(turn_io.canonical_json(turn)))
+                    self.assertNotIn("Do not create another micro task.", request.input_text)
+
+    def test_delegation_restriction_belongs_to_worker_role_and_lead_overrides_it(self):
+        restriction = "Do not create micro tasks or hand work to other buddies"
+        worker = resource_path("roles.worker").read_text()
+        lead = resource_path("roles.lead").read_text()
+        self.assertIn(restriction, worker)
+        self.assertNotIn("Do not start or hand out other buddy tasks", worker)
+        for harness in ("codex", "claude"):
+            for authority in (False, True):
+                with self.subTest(harness=harness, authority=authority):
+                    turn = {"context": {"delegationAuthority": authority}}
+                    prompt = worker_format(harness).for_turn(turn).prompt("Task", turn)
+                    self.assertEqual(prompt.count(restriction), 1)
+                    self.assertNotIn(restriction, prompt[len(worker):])
+                    self.assertNotIn("Do not create another micro task.", prompt)
+                    if authority:
+                        self.assertTrue(prompt.startswith(worker + "\n" + lead))
+                        self.assertGreater(prompt.index("except that you may hand out work"),
+                                           prompt.index(restriction))
+                    else:
+                        self.assertNotIn(lead, prompt)
 
     def test_fast_and_review_router_requests_keep_the_role_before_host_input_for_every_harness(self):
         role = resource_path("roles.router").read_text()
