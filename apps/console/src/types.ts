@@ -273,7 +273,7 @@ export type ActivityCounts = {
   toolCalls?: number | null;
 };
 /**
- * Bounded `worker_progress` activity. Unknown fields stay absent instead of being
+ * Bounded `execution_progress` activity. Unknown fields stay absent instead of being
  * invented; there is deliberately no percentage or completion estimate here.
  */
 export type TaskActivity = {

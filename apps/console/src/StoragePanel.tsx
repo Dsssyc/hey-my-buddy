@@ -292,7 +292,7 @@ export function StoragePanel({ api, csrfToken, connectionError, active = true }:
         <p className="small muted">清理不会停止这些进程。</p>
         <ul>
           {plan.orphanProcesses.map(process => <li key={process.pid}>
-            <span>{process.kind === "daemon" ? "服务" : process.kind === "supervisor" ? "执行进程" : process.kind || "未记录类型"}</span>
+            <span>{process.kind === "daemon" ? "服务" : process.kind === "execution" ? "执行进程" : process.kind || "未记录类型"}</span>
             <code>pid {process.pid}</code>
             {(process.stateDir || process.runtimeDir) && <span className="mono storage-orphan-path"
               title={[process.stateDir, process.runtimeDir].filter(Boolean).join("\n")}>
