@@ -104,7 +104,7 @@ class CTwoIntegrationTests(unittest.TestCase):
             self.assertEqual(process.wait(timeout=5), 0)
         submitted = self.client.call("workflow_submit", {**BUDDY,
             "requestId": "ctwo-integration", "hostId": "integration-host",
-            "task": "model-free live transport fixture", "cwd": str(work), "timeoutSeconds": 30,
+            "task": "model-free live transport fixture", "cwd": str(work), "expectedSeconds": 30,
             "executionWorkspace": {"kind": "existing", "access": "write"}})
         self.run_id = submitted["runId"]
         self.worker = self.spawn([sys.executable, str(SELF), "worker", "--root", str(self.root)],

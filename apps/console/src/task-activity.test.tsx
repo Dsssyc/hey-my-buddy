@@ -80,8 +80,8 @@ describe("bounded activity projection", () => {
     expect(countsText({ phase: "unknown", counts: { modelTurns: 3, toolCalls: null } })).toBe("模型回合 3 · 工具调用未记录");
   });
 
-  it("labels deadline and user cancellation separately and never invents a cause", () => {
-    expect(terminationText(task({ status: "cancelled", terminationReason: "deadline" }))).toBe("执行时限到期");
+  it("labels Router budget exhaustion and user cancellation separately and never invents a cause", () => {
+    expect(terminationText(task({ status: "cancelled", terminationReason: "deadline" }))).toBe("Router 预算用完");
     expect(terminationText(task({ status: "cancelled", terminationReason: "user-cancel" }))).toBe("取消（发起者未知）");
     expect(terminationText(task({ status: "failed", terminationReason: "harness-error" }))).toBe("Harness 错误");
     expect(terminationText(task({ status: "completed", terminationReason: "completed" }))).toBe("正常完成");
@@ -99,7 +99,7 @@ describe("bounded activity projection", () => {
     expect(terminationText(task({ status: "completed", selectedAttempt: { result: {} } }))).toBe("未记录终止原因（未知）");
     const rendered = render(<TaskActivityView task={task({ status: "cancelled",
       selectedAttempt: { result: { terminationReason: "deadline" } } })} />);
-    expect(rendered.container.textContent).toContain("执行时限到期");
+    expect(rendered.container.textContent).toContain("Router 预算用完");
     expect(rendered.container.textContent).not.toContain("用户取消");
   });
 
@@ -188,9 +188,9 @@ describe("activity rendering", () => {
 
   it("shows the recorded termination cause beside the activity", () => {
     render(<TaskActivityView task={task({ status: "cancelled", terminationReason: "deadline",
-      activity: { phase: "unknown", waitingReason: "执行时限到期" } })} />);
+      activity: { phase: "unknown", waitingReason: "Router 预算用完" } })} />);
     const view = screen.getByRole("region", { name: "执行活动（只读）" });
-    expect(view.textContent).toContain("执行时限到期");
+    expect(view.textContent).toContain("Router 预算用完");
     expect(view.textContent).not.toContain("用户取消");
   });
 });

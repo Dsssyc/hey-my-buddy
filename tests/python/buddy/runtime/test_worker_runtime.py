@@ -163,7 +163,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
 
         waiting = "import pathlib,time; gate=pathlib.Path(" + repr(str(self.work / "release-local")) + "); end=time.monotonic()+110\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)"
         held = self.staged_cli("execution-submit", {"requestId": "hold-local", "task": "occupy the existing local worker", "cwd": str(self.local_work),
-                                         "adapter": "command", "argv": [sys.executable, "-c", waiting], "timeoutSeconds": 120})
+                                         "adapter": "command", "argv": [sys.executable, "-c", waiting], "expectedSeconds": 120})
         self.assertEqual(self.wait_status(held["runId"], "running")["workerId"], "local")
 
         started = self.staged_cli("worker-start", {"workerId": "acceptance-extra"}, extra_env={
@@ -173,7 +173,7 @@ class StagedWorkerRuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(local_status.read_text())["supervisorPid"], original_local_pid)
         probe = "import pathlib,time,json,os,sys; gate=pathlib.Path(" + repr(str(self.work / "release-extra")) + "); end=time.monotonic()+35\nwhile not gate.exists() and time.monotonic()<end: time.sleep(0.05)\nfrom hey_my_buddy.install import runtime\nr=runtime.resolve_runtime(); print(json.dumps({k:r[k] for k in ('identity','stable','actual','leaks','resourcesMissing')} | {'workerPython':sys.executable,'virtualEnv':os.environ.get('VIRTUAL_ENV'),'uvEnvironment':os.environ.get('UV_PROJECT_ENVIRONMENT')}))"
         submitted = self.staged_cli("execution-submit", {"requestId": "probe-extra", "task": "report only local runtime paths", "cwd": str(self.extra_work),
-                                              "adapter": "command", "argv": ["python", "-c", probe], "timeoutSeconds": 60})
+                                              "adapter": "command", "argv": ["python", "-c", probe], "expectedSeconds": 60})
         # `local` is busy and the spare pool slots are lock-held by this test, so the
         # probe has exactly one possible owner: the explicit worker just started.
         self.assertEqual(self.wait_status(submitted["runId"], "running")["workerId"], "acceptance-extra")

@@ -21,12 +21,9 @@ FINGERPRINT_VERSION_CURRENT = 2
 MAX_TASK_BYTES = 1024 * 1024
 MAX_REQUEST_ID = 128
 MAX_METADATA = 256
-MIN_TIMEOUT_SECONDS = 10
-MAX_TIMEOUT_SECONDS = 86400
-DEFAULT_TIMEOUT_SECONDS = 1800
-#: An explicit execution-only sentinel. Caller wait windows and internal
-#: decision requests retain their independent finite bounds.
-UNLIMITED_TIMEOUT_SECONDS = 0
+MIN_EXPECTED_SECONDS = 1
+MAX_EXPECTED_SECONDS = 86400
+DEFAULT_EXPECTED_SECONDS = 1800
 MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES_PER_RUN = 32
@@ -88,7 +85,7 @@ SUBMIT_FIELDS = frozenset(
         "model",
         "provider",
         "effort",
-        "timeoutSeconds",
+        "expectedSeconds",
         "owner",
         "requiredCapabilities",
         "exclusiveResources",
@@ -117,6 +114,8 @@ def require_object(value: Any, what: str) -> dict:
 
 
 def reject_unknown(params: dict, allowed: frozenset[str] | set[str], what: str) -> None:
+    if "expectedSeconds" in allowed and "timeoutSeconds" in params:
+        raise BoardError("INVALID_ARGUMENT", "timeoutSeconds has been renamed to expectedSeconds; it is an expected duration, not an execution deadline", field="timeoutSeconds")
     unknown = sorted(set(params) - set(allowed))
     if unknown:
         raise BoardError("INVALID_ARGUMENT", f"Unknown {what} parameter: {unknown[0]}", field=unknown[0])
@@ -157,11 +156,8 @@ def optional_int(params: dict, name: str, default: int, minimum: int, maximum: i
     return value
 
 
-def execution_timeout(params: dict) -> int:
-    value = params.get("timeoutSeconds")
-    if type(value) is int and value == UNLIMITED_TIMEOUT_SECONDS:
-        return UNLIMITED_TIMEOUT_SECONDS
-    return optional_int(params, "timeoutSeconds", DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
+def expected_duration(params: dict) -> int:
+    return optional_int(params, "expectedSeconds", DEFAULT_EXPECTED_SECONDS, MIN_EXPECTED_SECONDS, MAX_EXPECTED_SECONDS)
 
 
 def optional_positive_int(params: dict, name: str) -> int | None:
@@ -260,7 +256,7 @@ def normalize_spec(params: dict) -> dict:
         "adapter": adapter,
         "cwd": _canonical_cwd(params.get("cwd")),
         "task": task_text,
-        "timeoutSeconds": execution_timeout(params),
+        "expectedSeconds": expected_duration(params),
         "requiredCapabilities": string_list(params, "requiredCapabilities", limit=MAX_CAPABILITIES),
         "exclusiveResources": string_list(
             params, "exclusiveResources", limit=MAX_RESOURCES, pattern=RESOURCE_ID_PATTERN

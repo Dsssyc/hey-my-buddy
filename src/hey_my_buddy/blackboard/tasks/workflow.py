@@ -262,6 +262,7 @@ class WorkflowCoordinator:
         view = {
             "turnId": row["turn_id"],
             "turnIndex": row["turn_index"],
+            "expectedSeconds": row["expected_seconds"],
             "access": row["access"],
             "accessReason": row["access_reason"],
             "attemptId": row["attempt_id"],
@@ -746,7 +747,7 @@ class WorkflowCoordinator:
             "state": decorated["state"],
             "queueReason": decorated["queueReason"],
             "revision": decorated["revision"],
-            "timeoutSeconds": decorated["timeoutSeconds"],
+            "expectedSeconds": decorated["expectedSeconds"],
             "selectedAttemptId": decorated["selectedAttemptId"],
             "activeAttemptId": decorated["activeAttemptId"],
             "resultAvailable": decorated["resultAvailable"],
@@ -2549,7 +2550,7 @@ class WorkflowCoordinator:
             return
         connection.execute(
             "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
-            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, timeout_seconds,"
+            " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
             " state, queue_reason, revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (
                 helper_task_id,
@@ -2563,7 +2564,7 @@ class WorkflowCoordinator:
                 canonical_json(spec.get("requiredCapabilities", [])),
                 effective_cwd,
                 canonical_json(spec.get("exclusiveResources", [])),
-                spec["timeoutSeconds"],
+                spec["expectedSeconds"],
                 "queued",
                 blocker or "awaiting-worker",
                 now,
@@ -5845,8 +5846,8 @@ class WorkflowCoordinator:
         input_json = canonical_json(turn_input)
         connection.execute(
             "INSERT INTO workflow_turns(turn_id, run_id, attempt_id, generation, turn_index, resume_mode,"
-            " previous_session_id, input_json, access, access_reason, state, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
+            " previous_session_id, input_json, access, access_reason, expected_seconds, state, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
             (
                 turn_id,
                 run_row["run_id"],
@@ -5858,6 +5859,7 @@ class WorkflowCoordinator:
                 input_json,
                 execution_workspace["access"],
                 execution_workspace.get("accessReason"),
+                task["expected_seconds"],
                 now,
                 now,
             ),

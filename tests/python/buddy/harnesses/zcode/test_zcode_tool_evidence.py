@@ -525,7 +525,7 @@ class FakeAppServerTests(unittest.TestCase):
         previous_input = ready.read_text() if ready.exists() else ""
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
-             "timeoutSeconds": timeout}, self.root / "attempt", {},
+             "routerBudgetSeconds": timeout}, self.root / "attempt", {},
             {**self.environment, "HMB_ZCODE_TEST_CASE": case})
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))

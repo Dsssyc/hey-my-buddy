@@ -236,7 +236,7 @@ class _WriteJob:
 def _wait_seconds(remaining: float) -> float | None:
     """An event wait budget where an infinite deadline means wait without one.
 
-    The normalized ``timeoutSeconds=0`` sentinel arrives here as an infinite
+    An absent hard timeout arrives here as an infinite
     remaining budget; a bounded ``Event.wait`` cannot take it, and the honest
     translation is a wait with no timeout, never an immediate expiry.
     """

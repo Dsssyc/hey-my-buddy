@@ -66,11 +66,11 @@ class SingleRouterRequestTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         self.configure(board, defaultRoutingMode="fast", routingBudget="deep")
-        view = self.audit(board, self.request(board, timeoutSeconds=500))
+        view = self.audit(board, self.request(board))
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routingMode"], "fast")
         self.assertEqual(view["budget"], router.FAST_BUDGET)
-        self.assertEqual(view["requested"]["timeoutSeconds"], 60)
+        self.assertEqual(view["requested"]["routerBudgetSeconds"], 60)
         self.assertNotIn("executionWorkspace", view["input"])
         self.assertNotIn("evidence", view["input"])
         self.assertNotIn("file", view["input"]["outputSchema"]["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
@@ -85,17 +85,17 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["routerBuddy"]["effort"], "off")
         self.assertEqual({item["buddyId"] for item in view["input"]["buddies"]}, {SECOND_BUDDY_ID, THIRD_BUDDY_ID})
 
-    def test_review_timeout_override_is_frozen_and_can_be_rechecked(self):
+    def test_review_settings_budget_is_frozen_and_can_be_rechecked(self):
         board = self.board()
         self.seed(board)
-        view = self.audit(board, self.request(board, timeoutSeconds=77))
-        self.assertEqual(view["budget"], {**router.budget(), "timeoutSeconds": 77})
+        view = self.audit(board, self.request(board))
+        self.assertEqual(view["budget"], router.budget())
         with board.store.db.read() as connection:
             resolution = router.current_router(connection, frozen=view["requested"])
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
-        self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 77)
-        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 77)
+        self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 300)
+        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 300)
 
     def test_replay_after_setting_and_candidate_changes_keeps_every_snapshot(self):
         board = self.board()
@@ -118,7 +118,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_internal_create_does_not_mutate_its_input_or_conflict_on_replay(self):
         board = self.board()
         self.seed(board)
-        request = {"kind": "select", "task": "change", "requiredCapabilities": [], "timeoutSeconds": None}
+        request = {"kind": "select", "task": "change", "requiredCapabilities": []}
         before = dict(request)
         first = board.store.decisions._create("internal", request)
         self.assertEqual(request, before)

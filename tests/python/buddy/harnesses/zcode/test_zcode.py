@@ -56,7 +56,8 @@ class ZcodeFixtureCase(unittest.TestCase):
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
-                                spec={"cwd": str(self.cwd), "task": "fixture task", "timeoutSeconds": timeout,
+                                spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
+                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
@@ -65,7 +66,7 @@ class ZcodeFixtureCase(unittest.TestCase):
     def execute(self, context):
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10), "controller did not exit within its deadline and shutdown grace")
+        self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
 
@@ -409,16 +410,16 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result.get("code"), "timeout")
         self.assertTrue(outcome.shutdown_confirmed)
 
-    def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
-        context = self.context("ok", timeout=0)
+    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+        context = self.context("ok", timeout=None)
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["outcome"]["summary"], "fixture work completed")
         self.assertEqual(handle.deadline, math.inf)
 
-    def test_zero_timeout_still_honors_explicit_cancellation(self):
-        context = self.context("hang", timeout=0)
+    def test_absent_budget_still_honors_explicit_cancellation(self):
+        context = self.context("hang", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)

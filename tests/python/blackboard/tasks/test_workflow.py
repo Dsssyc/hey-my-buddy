@@ -1174,11 +1174,29 @@ class BoundedViewTests(WorkflowTestCase):
 
 
 class NestedSpecTests(WorkflowTestCase):
-    def test_micro_task_can_explicitly_omit_an_execution_deadline(self):
+    def test_expected_duration_defaults_and_is_frozen_on_each_turn(self):
         board = self.board()
-        submitted = self.submit(board, request_id="no-deadline", timeoutSeconds=0)
-        self.assertEqual(submitted["task"]["timeoutSeconds"], 0)
-        self.assertEqual(board.call("workflow_get", {"runId": submitted["runId"]})["task"]["timeoutSeconds"], 0)
+        submitted = self.submit(board, request_id="expected-default")
+        self.assertEqual(submitted["task"]["expectedSeconds"], 1800)
+        self.register(board)
+        claim = self.claim(board)["claim"]
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(view["task"]["expectedSeconds"], 1800)
+        self.assertEqual(view["turns"][0]["expectedSeconds"], 1800)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT expected_seconds FROM workflow_turns WHERE attempt_id=?",
+                                               (claim["attempt"]["attemptId"],)).fetchone()[0], 1800)
+
+    def test_expected_duration_is_positive_and_old_name_is_rejected(self):
+        board = self.board()
+        for value in (0, -1, True, None, 1.5):
+            with self.subTest(value=value), self.assertRaises(BoardError):
+                self.submit(board, request_id="bad-expected", expectedSeconds=value)
+        with self.assertRaises(BoardError) as raised:
+            self.submit(board, request_id="old-duration", timeoutSeconds=60)
+        self.assertIn("renamed to expectedSeconds", raised.exception.message)
+        submitted = self.submit(board, request_id="positive-expected", expectedSeconds=1)
+        self.assertEqual(submitted["task"]["expectedSeconds"], 1)
 
     def test_nested_spec_shape_is_rejected_in_favor_of_the_flat_form(self):
         # The retired duplicate spelling was accepted when both places agreed and
@@ -1189,7 +1207,7 @@ class NestedSpecTests(WorkflowTestCase):
             board.call("workflow_submit", {
                 "requestId": "req-nested",
                 "hostId": "host-1",
-                "spec": {"task": "nested task", "cwd": str(self.workdir("nested")), "timeoutSeconds": 600},
+                "spec": {"task": "nested task", "cwd": str(self.workdir("nested")), "expectedSeconds": 600},
                 "executionWorkspace": {"kind": "worktree", "access": "write"},
                 "submissionToken": "n" * 32,
             })

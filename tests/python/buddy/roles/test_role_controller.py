@@ -304,7 +304,7 @@ class RouterCallPointTests(unittest.TestCase):
 
     def context(self, **kwargs):
         values = dict(task_id="task-router", attempt_id="attempt-router", generation=1,
-                      spec={"cwd": str(self.root), "task": "choose", "timeoutSeconds": 60},
+                      spec={"cwd": str(self.root), "task": "choose", "routerBudgetSeconds": 60},
                       directory=self.root / "attempt",
                       environment={"HMB_STATE_DIR": str(self.root / "state")}, runtime={})
         values.update(kwargs)

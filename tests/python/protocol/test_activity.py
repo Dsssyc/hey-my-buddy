@@ -185,7 +185,7 @@ class ActivityProjection(BoardTestCase):
             cwd=str(cwd),
             adapter="command",
             argv=list(argv),
-            timeoutSeconds=120,
+            expectedSeconds=120,
         )["task"]
         client.register_worker("w-activity", adapter="command", capabilities=["command"])
         nonce = "a" * 32
@@ -317,7 +317,7 @@ class WorkerActivityForwarding(BoardTestCase):
     by an in-process endpoint; this provides no cross-process/native receipt.
     """
 
-    def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), timeout_seconds: int = 120):
+    def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), expected_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
         client = board.client()
         worker = Worker("w-forward", self.directory, client=client, lease_seconds=lease_seconds, log=lambda _m: None)
@@ -329,7 +329,7 @@ class WorkerActivityForwarding(BoardTestCase):
             cwd=str(cwd),
             adapter="command",
             argv=list(argv),
-            timeoutSeconds=timeout_seconds,
+            expectedSeconds=expected_seconds,
         )["task"]
         nonce = "c" * 32
         claim = client.claim("w-forward", "claim-forward-1", nonce, worker_instance=worker.instance_id)["claim"]

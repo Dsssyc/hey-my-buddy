@@ -58,7 +58,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         self.index += 1
         context = ExecutionContext("task", f"attempt-{self.index}", self.index,
             {"adapter": "codex", "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
-             "cwd": str(self.cwd), "timeoutSeconds": 3},
+             "cwd": str(self.cwd), "routerBudgetSeconds": 3},
             self.root / "state" / "attempts" / "task" / f"attempt-{self.index}", {},
             {"HMB_STATE_DIR": str(self.root / "state"), "HMB_RUNTIME_ROOT": str(self.root / "runtime"),
              "HMB_DEV_SOURCE": "1"})
@@ -257,7 +257,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         evidence = state / "attempts/task/attempt-1"
         context = ExecutionContext("task", "attempt-1", 1,
             {"adapter": "dsh", "harness": "dsh", **dsh_tests.SPEC,
-             "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
+             "cwd": str(fixture.cwd), "routerBudgetSeconds": 3}, evidence, {}, fixture.environment)
         request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
@@ -271,7 +271,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
 
         command_evidence = state / "attempts/command-task/attempt-2"
         command = ExecutionContext("command-task", "attempt-2", 1,
-            {"adapter": "command", "cwd": str(fixture.cwd), "task": "fixture command", "timeoutSeconds": 3,
+            {"adapter": "command", "cwd": str(fixture.cwd), "task": "fixture command", "expectedSeconds": 3,
              "argv": [sys.executable, "-c", "print('ok')"]}, command_evidence, {}, fixture.environment)
         adapter = CommandAdapter()
         child = adapter.start(command)
@@ -298,7 +298,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
                 evidence = Path(environment["HMB_STATE_DIR"]) / "attempts/task/attempt"
                 context = ExecutionContext("task", "attempt", 1,
-                    {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
+                    {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "routerBudgetSeconds": 3},
                     evidence, {}, environment)
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
@@ -364,7 +364,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 context = ExecutionContext("task", "attempt", 1,
-                    {"adapter": "decision", "cwd": str(fixture.cwd), "timeoutSeconds": 60},
+                    {"adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 60},
                     Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     decision_input={"buddy": {"harness": name, **spec},
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",

@@ -12,6 +12,7 @@ import json
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
@@ -675,7 +676,8 @@ class DecisionFailureTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         self.use_helper(mode="sleep", sleep="40")
-        request = board.call("selection_request", {"requestId": "pick-deadline", "task": "slow", "timeoutSeconds": 5})
+        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 5}):
+            request = board.call("selection_request", {"requestId": "pick-deadline", "task": "slow"})
         started = time.monotonic()
         self.run_worker(board, worker_id="w-deadline")
         self.assertLess(time.monotonic() - started, 30)

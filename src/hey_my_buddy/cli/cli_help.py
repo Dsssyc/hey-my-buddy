@@ -234,8 +234,8 @@ _HELPER_NOTES: dict[str, tuple[str, ...]] = {
         "hostId, ownerGeneration and controlToken are one Host control triple: supply all three or none "
         "(schemas.normalize_control)",
     ),
-    "execution_timeout": (
-        "timeoutSeconds 0 (the explicit sentinel) means no wall-clock deadline; otherwise the 10–86400 second range applies",
+    "expected_duration": (
+        "expectedSeconds is a positive expected duration, defaults to 1800 seconds and never stops execution; timeoutSeconds has been renamed",
     ),
 }
 

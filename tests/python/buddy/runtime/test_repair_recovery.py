@@ -100,7 +100,7 @@ class RecoveryBase(BoardTestCase):
             cwd=str(self.workdir()),
             adapter="command",
             argv=list(argv),
-            timeoutSeconds=120,
+            expectedSeconds=120,
         )["task"]
         client.register_worker(worker_id, adapter="command", capabilities=["command"])
         nonce = "n" * 32
@@ -113,7 +113,7 @@ class RecoveryBase(BoardTestCase):
         worker_id: str = "w-live",
         lease_seconds: int = 15,
         argv=("/bin/sleep", "60"),
-        timeout_seconds: int = 120,
+        expected_seconds: int = 120,
         request_id: str = "live-1",
     ) -> _LiveAttempt:
         """Claim an attempt and start the real command child exactly like the Worker does."""
@@ -127,7 +127,7 @@ class RecoveryBase(BoardTestCase):
             cwd=str(self.workdir()),
             adapter="command",
             argv=list(argv),
-            timeoutSeconds=timeout_seconds,
+            expectedSeconds=expected_seconds,
         )["task"]
         nonce = "l" * 32
         claim = client.claim(worker_id, f"claim-{request_id}", nonce, worker_instance=worker.instance_id)["claim"]
@@ -329,7 +329,7 @@ class CompletionDuringOutage(RecoveryBase):
             cwd=str(cwd),
             adapter="command",
             argv=["/bin/sh", "-c", f"echo run >> {log}"],
-            timeoutSeconds=60,
+            expectedSeconds=60,
         )["task"]
         worker = Worker("w-outage", self.directory, client=client, retry_seconds=2, log=silent)
         worker.register()
@@ -354,13 +354,13 @@ class CompletionDuringOutage(RecoveryBase):
 
 
 class TerminationTruth(RecoveryBase):
-    def test_explicit_zero_deadline_runs_to_completion_and_can_still_be_cancelled(self):
+    def test_expected_duration_does_not_stop_command_and_cancel_still_works(self):
         board = self.board(lease_seconds=15)
         client = board.client()
         finished = client.submit(
-            requestId="unlimited-complete", task="finish after a short delay", cwd=str(self.workdir()),
-            adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(.6)"],
-            timeoutSeconds=0,
+            requestId="unlimited-complete", task="finish after the estimate", cwd=str(self.workdir()),
+            adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(1.4)"],
+            expectedSeconds=1,
         )["task"]
         worker = Worker("w-unlimited", self.directory, client=client, lease_seconds=15, log=silent)
         worker.register()
@@ -368,11 +368,11 @@ class TerminationTruth(RecoveryBase):
         result = client.result(runId=finished["runId"])
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_COMPLETED)
-        self.assertEqual(client.get(runId=finished["runId"])["timeoutSeconds"], 0)
+        self.assertEqual(client.get(runId=finished["runId"])["expectedSeconds"], 1)
 
         pending = client.submit(
             requestId="unlimited-cancel", task="keep running until Host cancellation", cwd=str(self.workdir("cancel")),
-            adapter="command", argv=["/bin/sh", "-c", "sleep 60"], timeoutSeconds=0,
+            adapter="command", argv=["/bin/sh", "-c", "sleep 60"], expectedSeconds=1,
         )["task"]
         outcome: dict = {}
         thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="unlimited-run")
@@ -380,7 +380,7 @@ class TerminationTruth(RecoveryBase):
         self.assertTrue(wait_for(lambda: client.get(runId=pending["runId"])["status"] == "running", 20))
         client.cancel(runId=pending["runId"], reason="operator request")
         thread.join(timeout=40)
-        self.assertFalse(thread.is_alive(), "an unlimited execution must remain cancellable")
+        self.assertFalse(thread.is_alive(), "an ordinary execution must remain cancellable")
         cancelled = client.result(runId=pending["runId"])
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertEqual(cancelled["resultMeta"]["terminationReason"], TERMINATION_USER_CANCEL)
@@ -409,7 +409,7 @@ class TerminationTruth(RecoveryBase):
             cwd=str(self.workdir()),
             adapter="command",
             argv=["/bin/sh", "-c", "sleep 60"],
-            timeoutSeconds=120,
+            expectedSeconds=120,
         )["task"]
         worker = Worker("w-cancel", self.directory, client=client, lease_seconds=15, log=silent)
         worker.register()
@@ -424,36 +424,6 @@ class TerminationTruth(RecoveryBase):
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_USER_CANCEL)
 
-    def test_an_execution_deadline_is_recorded_as_deadline(self):
-        board = self.board(lease_seconds=15)
-        client = board.client()
-        task = client.submit(
-            requestId="deadline-1",
-            task="run past the deadline",
-            cwd=str(self.workdir()),
-            adapter="command",
-            argv=["/bin/sh", "-c", "sleep 60"],
-            timeoutSeconds=10,
-        )["task"]
-        worker = Worker("w-deadline", self.directory, client=client, lease_seconds=15, log=silent)
-        worker.register()
-        outcome: dict = {}
-        started_at = time.monotonic()
-
-        def run():
-            outcome.update(result=worker.run_once())
-
-        thread = threading.Thread(target=run, name="run-once")
-        thread.start()
-        self.assertTrue(wait_for(lambda: client.get(runId=task["runId"])["status"] == "running", 20))
-        thread.join(timeout=45)
-        self.assertFalse(thread.is_alive(), "the worker's own deadline stops the owned process group")
-        self.assertLess(time.monotonic() - started_at, 25, "the deadline was enforced, not extended")
-        result = client.result(runId=task["runId"])
-        # The task is cancelled because the owned group was stopped, but the reason
-        # names the deadline rather than pretending the user cancelled it.
-        self.assertEqual(result["status"], "cancelled")
-        self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_DEADLINE)
 
 
 class RealDaemonRestart(RecoveryBase):
@@ -505,7 +475,7 @@ class RealDaemonRestart(RecoveryBase):
                             "cwd": str(self.workdir()),
                             "adapter": "command",
                             "argv": ["/bin/sh", "-c", f"echo start >> {starts}; sleep 20"],
-                            "timeoutSeconds": 120,
+                            "expectedSeconds": 120,
                             "requiredCapabilities": ["recover-live"],
                         }
                     ),

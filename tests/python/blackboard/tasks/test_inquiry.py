@@ -475,19 +475,18 @@ class TestInquiry(BoardTestCase):
         self.assertIn("agentStatus", result["live"]["unavailable"])
         self.assertEqual(result["limits"]["maxQuestionBytes"], 4000)
         self.assertEqual(result["limits"]["maxInquiriesPerRun"], 32)
-        self.assertEqual(result["deadline"]["estimated"], True)
-        self.assertEqual(result["deadline"]["exact"], False)
+        self.assertEqual(result["expectedSeconds"], 1800)
+        self.assertNotIn("deadline", result)
 
-    def test_explicit_unlimited_execution_never_reports_an_expired_deadline(self):
+    def test_command_expected_duration_is_visible_without_an_execution_deadline(self):
         board = self.board()
         task = board.client().submit(
-            requestId="unlimited-inquiry", task="a long task", cwd=str(self.workdir()),
-            adapter="command", argv=["/bin/true"], timeoutSeconds=0,
+            requestId="expected-inquiry", task="a long task", cwd=str(self.workdir()),
+            adapter="command", argv=["/bin/true"], expectedSeconds=7,
         )["task"]
         result = board.call("inquiry_observe", {"runId": task["runId"]})
-        self.assertEqual(result["deadline"], {
-            "available": False, "unlimited": True, "reason": "this execution has no deadline",
-        })
+        self.assertEqual(result["expectedSeconds"], 7)
+        self.assertNotIn("deadline", result)
 
     def test_worker_endpoint_loss_is_unavailable_not_shutdown(self):
         board = self.board()

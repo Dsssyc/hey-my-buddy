@@ -78,7 +78,8 @@ class ClaudeFixtureCase(unittest.TestCase):
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
+                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
@@ -328,8 +329,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), False,
                       "a quota frame that interrupts the acknowledgement wait is not an acknowledgement")
 
-    def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
-        context = self.context(timeout=0)
+    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+        context = self.context(timeout=None)
         handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)

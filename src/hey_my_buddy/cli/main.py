@@ -170,7 +170,7 @@ examples:
 
   Advanced execution records (command/external adapters and internal decision
   infrastructure only; the service refuses coding harnesses here):
-  hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"timeoutSeconds":1800}'
+  hey-my-buddy execution-submit '{"requestId":"probe-1","task":"...","cwd":"/abs/path","adapter":"command","argv":["/bin/echo","hi"],"expectedSeconds":1800}'
   hey-my-buddy execution-cancel '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-retry '{"runId":"<runId>","reason":"..."}'
   hey-my-buddy execution-acknowledge '{"runId":"<runId>","note":"...","verdict":"accepted"}'

@@ -224,7 +224,7 @@ class PartialLogOpenTests(unittest.TestCase):
         from hey_my_buddy.buddy.runtime import command
         context = base.ExecutionContext(task_id="private-task", attempt_id="private-attempt", generation=1,
                                         spec={"argv": [sys.executable, "-c", "pass"], "task": "fixture",
-                                              "cwd": str(self.root), "timeoutSeconds": 1},
+                                              "cwd": str(self.root), "expectedSeconds": 1},
                                         directory=self.root, runtime={}, environment=dict(os.environ))
         with partial_log_open_failure() as state, \
              mock.patch.object(command, "owned_popen", wraps=command.owned_popen) as spawn:
@@ -271,8 +271,7 @@ class LaunchControllerTests(unittest.TestCase):
 
         with mock.patch.object(controller, "open_logs", traced_open_logs), \
                 mock.patch.object(controller, "owned_popen", return_value=process) as spawn:
-            handle = launch_controller(prepare=prepare, log_paths=self.log_paths,
-                                       timeout_seconds=0, unbounded_deadline=math.inf)
+            handle = launch_controller(prepare=prepare, log_paths=self.log_paths)
         self.assertEqual(trace, ["logs", "prepare"])
         arguments, keyword = spawn.call_args
         self.assertEqual(arguments[0], ["fixture"])
@@ -287,15 +286,6 @@ class LaunchControllerTests(unittest.TestCase):
         self.assertIs(handle.process, process)
         self.assertTrue(handle.own_group)
         self.assertEqual(handle.log_paths, self.log_paths)
-
-    def test_zero_timeout_stamps_exactly_each_path_explicit_unbounded_deadline(self):
-        for unbounded, expected in ((math.inf, math.inf), (None, None)):
-            with self.subTest(unbounded=unbounded):
-                with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()):
-                    handle = launch_controller(prepare=lambda: (["fixture"], None, {}),
-                                               log_paths=self.log_paths,
-                                               timeout_seconds=0, unbounded_deadline=unbounded)
-                self.assertIs(handle.deadline, expected)
 
     def test_positive_timeout_stamps_now_plus_timeout_and_grace(self):
         with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()):
@@ -481,7 +471,7 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
         directory.mkdir(mode=0o700)
         paths = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
         context = SimpleNamespace(directory=directory, environment={}, log_paths=lambda: paths,
-                                  timeout_seconds=0)
+                                  timeout_seconds=None)
         trace = []
         opened = []
         original_open_logs = controller.open_logs
@@ -501,7 +491,7 @@ class CodexCallerLaunchOrderTests(unittest.TestCase):
                 return super().__getitem__(key)
 
         control = LaunchControl(privateRoot=str(directory / "private"), cwd=str(directory),
-                                operation="worker", harness="codex", timeoutSeconds=0)
+                                operation="worker", harness="codex", timeoutSeconds=None)
         identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
 
         def traced_env(*_args, **_kwargs):

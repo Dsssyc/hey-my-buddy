@@ -30,7 +30,6 @@ ROUTER_EVIDENCE_BYTES = 256 * 1024
 
 
 def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None = None,
-                      unbounded_deadline: float | None = None,
                       grace_seconds: float = 0) -> ProcessHandle:
     """Open logs, prepare and spawn one owned child, closing both log FDs.
 
@@ -41,8 +40,8 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
     transfers ownership to its handle before log descriptors are closed, so
     later failures terminate and observe that owned group. An ownership
     failure consumes owned_popen's receipt even when no handle was returned.
-    Positive budgets stamp a deadline plus the supplied grace; zero uses the
-    caller's unbounded deadline; discovery supplies None and waits itself.
+    Positive budgets stamp a deadline plus the supplied grace. An absent
+    budget leaves the controller unbounded; discovery enforces its own limit.
     """
     evidence = ProcessCreationEvidence(created=False, shutdown_confirmed=True, exit_code=None)
     handle = None
@@ -64,9 +63,7 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
                 os.close(stdout)
             finally:
                 os.close(stderr)
-        if timeout_seconds == 0:
-            handle.deadline = unbounded_deadline
-        elif timeout_seconds is not None:
+        if timeout_seconds is not None:
             handle.deadline = time.monotonic() + timeout_seconds + grace_seconds
         return handle
     except BaseException as error:

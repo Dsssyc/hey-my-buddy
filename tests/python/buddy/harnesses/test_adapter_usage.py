@@ -57,7 +57,7 @@ class CodexUsageContractTests(unittest.TestCase):
                       "turnId": f"turn-{index}", "resumeMode": "native-session" if previous else "initial",
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": 8,
+                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 8,
                                       "provider": "openai", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},

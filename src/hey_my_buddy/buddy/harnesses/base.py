@@ -1,8 +1,8 @@
 """Adapter contract: how one attempt becomes real external work.
 
 Adapters never receive database handles and never write authoritative state. They
-receive a bounded execution context, own the child process handle, enforce their own
-deadline, and return a structured result the worker submits through C-Two.
+receive an execution context, own the child process handle, enforce a hard
+deadline when one is supplied, and return a structured result the worker submits through C-Two.
 """
 from __future__ import annotations
 
@@ -53,8 +53,8 @@ class ExecutionContext:
         return self.spec["cwd"]
 
     @property
-    def timeout_seconds(self) -> int:
-        return int(self.spec["timeoutSeconds"])
+    def timeout_seconds(self) -> int | None:
+        return self.spec.get("routerBudgetSeconds")
 
     @property
     def turn_input(self) -> dict | None:

@@ -504,7 +504,7 @@ class RunnerReceiptTests(unittest.TestCase):
 
     def context(self, case):
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}", generation=1,
-                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "timeoutSeconds": 20,
+                                spec={"cwd": str(self.cwd), "task": "Review the frozen copy", "routerBudgetSeconds": 20,
                                       "provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "low"},
                                 directory=self.root / "attempt-1", runtime={},
                                 environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}, turn=None)

@@ -47,7 +47,7 @@ QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 #: Only the most recent terminal call identities per tool are kept (to reject an
 #: immediate duplicate terminal result); a verified receipt is handed to its
 #: callback instead of being retained. Pending scheduled calls are never evicted
-#: and no cumulative call count ever ends a long ``timeoutSeconds: 0`` turn.
+#: and no cumulative call count ever ends a long unbounded turn.
 MAX_RETAINED_INQUIRY_CALLS = 64
 
 

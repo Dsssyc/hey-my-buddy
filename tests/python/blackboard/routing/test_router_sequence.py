@@ -81,7 +81,7 @@ class RouterSequenceTestCase(BoardTestCase):
             for task_id in ("task-alpha", "task-bravo"):
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
-                    "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
+                    "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
                     " VALUES(?,?,'decision','{}','{}','digest',1,'decision','/work',60,'queued',1,?,?)",
                     (task_id, f"decision:{task_id}", T0, T0))
 

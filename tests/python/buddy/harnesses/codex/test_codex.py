@@ -55,7 +55,8 @@ class CodexAdapterTests(unittest.TestCase):
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
+                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_CODEX_FIXTURE_CASE": case},
@@ -378,8 +379,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "deadline")
         self.assertTrue(outcome.shutdown_confirmed)
 
-    def test_zero_timeout_executes_unlimited_without_an_immediate_deadline(self):
-        context = self.context("ok", timeout=0)
+    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+        context = self.context("ok", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)
@@ -389,13 +390,15 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
-    def test_zero_timeout_still_honors_explicit_user_cancellation(self):
-        context = self.context("hang", timeout=0)
+    def test_absent_budget_still_honors_explicit_user_cancellation(self):
+        context = self.context("hang", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertEqual(handle.deadline, math.inf)
         started = self.wait_native_turn_start()
         self.assertEqual(set(started), {"threadId", "turnId"})
+        time.sleep(1.2)
+        self.assertIsNone(handle.wait(0), "the micro task must outlive its one-second estimate")
         self.adapter.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(10))
         outcome = self.adapter.collect(handle, context)

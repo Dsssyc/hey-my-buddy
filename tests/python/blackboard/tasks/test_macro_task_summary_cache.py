@@ -423,7 +423,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?", ("  Fictional  corrected summary\nsecond line", root))
             self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
             self.assert_recomputed(counter, [group])
-            self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,state,outcome_json,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write','prepared',?, '2026-01-01','2026-01-01')", (root,json.dumps({"summary":"Fictional newest summary"})))
+            self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,expected_seconds,state,outcome_json,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write',1800,'prepared',?, '2026-01-01','2026-01-01')", (root,json.dumps({"summary":"Fictional newest summary"})))
             self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE workflow_turns SET state='returned' WHERE turn_id='fictional-turn-2'")

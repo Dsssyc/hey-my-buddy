@@ -80,31 +80,26 @@ class StorageSplitTests(NativeRunCase):
         self.assertEqual(result.usage.value["inputTokens"], 3150)
 
 
-class NoDeadlineSentinelTests(NativeRunCase):
-    """``timeoutSeconds=0`` is a real unbounded deadline on the registered run.
+class UnboundedWorkerTests(NativeRunCase):
+    """An ordinary Worker run has no hard budget but remains cancellable."""
 
-    The registered run proves the sentinel at its own deadline seam: the
-    normalized budget becomes an infinite deadline, a real delay survives it,
-    and the bounded waits inside the ACP connection never turn the infinite
-    budget into an expiry.
-    """
-
-    def test_the_normalized_zero_budget_is_an_infinite_deadline(self):
-        self.assertEqual(execution_deadline(0), math.inf)
+    def test_an_absent_budget_is_an_infinite_deadline(self):
+        self.assertEqual(execution_deadline(None), math.inf)
         self.assertGreater(execution_deadline(3), time.monotonic())
 
-    def test_a_zero_timeout_attempt_survives_a_real_delay_and_completes(self):
-        self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/prompt:2",
-                                 "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt", timeout=0),
-                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
+    def test_an_unbounded_worker_survives_a_real_delay_and_completes(self):
+        request, bound, mount = self.worker_request(timeout=None)
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args += ["--delay", "session/prompt:2"]
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE, services=bound.services,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assertEqual(result.value.raw, '{"choice":"a"}')
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_a_zero_timeout_attempt_stays_cancellable_through_its_owned_group(self):
-        self.extra_agent_args = ["--prompt-mode", "final", "--hang-prompt"]
+    def test_an_unbounded_worker_stays_cancellable_through_its_owned_group(self):
+        request, bound, mount = self.worker_request(timeout=None)
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args.append("--hang-prompt")
         flag = threading.Event()
         result_holder: list = []
 
@@ -116,9 +111,9 @@ class NoDeadlineSentinelTests(NativeRunCase):
         thread = threading.Thread(target=stop_soon)
         thread.start()
         try:
-            result_holder.append(run(self.fast_request("prompt", timeout=0, scope="write"),
+            result_holder.append(run(request,
                                      observer=lambda _f: FEEDBACK_CONTINUE,
-                                     services=None, cancelled=flag.is_set))
+                                     services=bound.services, cancelled=flag.is_set))
         finally:
             thread.join()
         result = result_holder[0]

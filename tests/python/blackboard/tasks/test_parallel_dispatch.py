@@ -203,7 +203,7 @@ class CapacityTestCase(BoardTestCase):
             cwd=str(workdir),
             adapter="command",
             argv=[sys.executable, "-c", script],
-            timeoutSeconds=300,
+            expectedSeconds=300,
         )["task"]
         setattr(self, f"_gate_{name}", gate)
         return task["runId"]
