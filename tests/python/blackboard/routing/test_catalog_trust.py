@@ -1,13 +1,14 @@
 """ADR-027 rule 2 at the routing boundary: a pending model stays a legal candidate."""
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.catalog import catalog
 
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 
 
 def reading(models=('alpha',)):
-    return {'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+    return catalog.canonical_payload({'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
             'providers': [{'harness': 'dsh', 'provider': 'fixture',
-                           'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
+                           'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]})
 
 
 class CatalogTrustRoutingTests(BoardTestCase):
@@ -22,7 +23,7 @@ class CatalogTrustRoutingTests(BoardTestCase):
 
     def candidates(self):
         with self.board.store.db.read() as db:
-            return [row["buddy_id"] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            return [row["buddy_id"] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
 
     def test_pending_model_stays_inside_the_routing_bounds(self):
         self.evaluation.record_catalog(reading(models=()))

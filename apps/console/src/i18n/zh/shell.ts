@@ -40,12 +40,15 @@ export default {
       "account-read": "账户读取"
     },
     "bound": {
-      "removed": "候选已移除",
       "disabled": "已停用",
       "unavailable": "不可用",
       "excluded": "已排除",
       "capability-missing": "缺少能力",
-      "constraints-or-quota": "约束或额度不符",
+      "identity-changed": "身份已变化",
+      "constraints": "约束不符",
+      "not-pinned": "未被固定选择",
+      "harness-unavailable": "Harness 不可用",
+      "quota-exhausted": "额度已耗尽",
       "not-a-candidate": "不在候选内"
     },
     "disposition": {

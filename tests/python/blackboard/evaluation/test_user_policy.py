@@ -41,6 +41,17 @@ class UserPolicyTests(BoardTestCase):
         self.assertTrue(self.user('user_policy_publish', payload)['published'])
         self.assert_denied('user_policy_publish', payload)
 
+    def test_buddy_settings_patch_accepts_more_than_200_distinct_buddies(self):
+        with self.board_.store.db.write() as db:
+            db.executemany(
+                "INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                [(f'bulk-{index}', f'bulk-{index}', 'dsh', 'fixture', f'model-{index}', 'max', 1, 1, '[]')
+                 for index in range(205)])
+        changes = [{'buddyId': f'bulk-{index}', 'enabled': False} for index in range(205)]
+        published = self.user('user_policy_publish', self.payload({}, 'bulk-disable', buddySettings=changes))
+        self.assertEqual(published['counts']['buddySettings'], 205)
+
     def test_retired_pin_and_selector_do_not_block_disable_or_other_edits(self):
         grant = self.publication_params()
         payload = self.payload(grant, buddySettings=[{'buddyId': 'retired', 'enabled': False}], modelServiceNoteChanges=[{**LIVE_MODEL_SERVICE, 'text': 'prefer local evidence'}])

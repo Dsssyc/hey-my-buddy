@@ -61,7 +61,7 @@ class RouterListConfigurationTests(BoardTestCase):
             "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
                                     "bytesRead": 524288},
         })
-        self.assertIsNone(snapshot["configurationError"])
+        self.assertNotIn("configurationError", snapshot)
         stored = self.stored()
         self.assertEqual(stored["settings"], ("fast", "standard", 600))
         self.assertEqual(stored["buddies"], [])
@@ -126,14 +126,6 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.assertRaises(BoardError) as caught:
             self.publish({"routerBuddyIds": [UNKNOWN]})
         self.assertEqual(caught.exception.code, "NOT_FOUND")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                       "available,enabled,capabilities_json)"
-                       " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?)",
-                       (canonical_json([]),))
-        with self.assertRaises(BoardError) as caught:
-            self.publish({"routerBuddyIds": ["incomplete"]})
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         # Disabled, catalog-unavailable and mode-ineligible buddies may all be saved;
         # the resolver explains them per item later.
         with self.board_.store.db.write() as db:

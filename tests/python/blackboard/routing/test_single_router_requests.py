@@ -172,16 +172,6 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertIsNone(view["routerProblem"])
         self.assertIsNone(view["runId"])
 
-    def test_buddy_problem_orders_identity_before_availability(self):
-        board = self.board()
-        self.seed(board)
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE buddies SET provider='',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
-            buddy, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
-        self.assertIsNone(buddy)
-        self.assertEqual(code, "router-incomplete")
-        self.assertEqual(facts, {})
-
     def test_buddy_problem_keeps_each_cached_unavailability_reason(self):
         board = self.board()
         self.seed(board)
@@ -215,8 +205,6 @@ class SingleRouterRequestTests(BoardTestCase):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-review-unsupported")
             self.assertEqual(facts, {})
-            _, code, _ = router.buddy_problem(connection, "unpublished", "review")
-            self.assertEqual(code, "router-not-published")
 
     def test_frozen_current_router_keeps_snapshot_after_settings_changes(self):
         board = self.board()

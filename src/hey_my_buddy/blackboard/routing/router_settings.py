@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
@@ -14,35 +13,13 @@ RETRY_INTERVAL_MIN_SECONDS = 1
 RETRY_INTERVAL_MAX_SECONDS = 2147483647
 
 
-@dataclass(frozen=True)
-class RouterSettings:
-    router_buddy_ids: tuple[str, ...] = ()
-    router_retry_interval_seconds: int = 600
-    default_routing_mode: str = "fast"
-    routing_budget: str = "standard"
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.router_buddy_ids, tuple):
-            raise BoardError("INVALID_ARGUMENT", "router_buddy_ids must be a tuple of buddyIds")
-        _buddy_entries(self.router_buddy_ids, "router_buddy_ids")
-        _retry_interval(self.router_retry_interval_seconds, "router_retry_interval_seconds")
-        _choice(self.default_routing_mode, MODES, "default_routing_mode")
-        _choice(self.routing_budget, PRESETS, "routing_budget")
-
-    def as_dict(self) -> dict:
-        return {"routerBuddyIds": list(self.router_buddy_ids),
-                "routerRetryIntervalSeconds": self.router_retry_interval_seconds,
-                "defaultRoutingMode": self.default_routing_mode,
-                "routingBudget": self.routing_budget}
-
-
+DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
+                           "defaultRoutingMode": "fast", "routingBudget": "standard"}
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
     if not isinstance(value, Mapping):
         raise BoardError("INVALID_ARGUMENT", f"{label} must be an object")
-    if any(not isinstance(key, str) for key in value):
-        raise BoardError("INVALID_ARGUMENT", f"{label} field names must be strings")
     unknown = set(value) - fields
     if unknown:
         raise BoardError("INVALID_ARGUMENT", f"Unknown {label} field: {sorted(unknown)[0]}")

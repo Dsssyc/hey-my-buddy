@@ -1010,14 +1010,14 @@ class CatalogAccountTests(unittest.TestCase):
 
 class DiscoveryTests(NativeRunCase):
     def test_non_first_party_handshake_can_be_selected_and_executed(self):
-        from hey_my_buddy.blackboard.catalog.catalog import CatalogView, _check_recorded
+        from hey_my_buddy.blackboard.catalog.catalog import CatalogView, _check_recorded, discovery_payload
 
         self.fixture_case("third-party")
         os.environ["ANTHROPIC_BASE_URL"] = "https://shell-only.example.invalid"
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "third-party-discovery",
                                 native_root=self.base / "third-party-native", timeout_seconds=25,
                                 cancelled=lambda: False)
-        view = CatalogView.from_payload(catalog)
+        view = CatalogView(discovery_payload(catalog))
         selected = {"harness": "claude", **BUDDY, "provider": "bedrock"}
         self.assertEqual(_check_recorded(selected, view, pending_efforts=None), selected)
         buddies = view.proposed_buddies()

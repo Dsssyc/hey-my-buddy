@@ -39,11 +39,10 @@ class ProviderCoolingTests(BoardTestCase):
             self.assertEqual(row, {"provider": "fixture", "consecutiveRejections": count,
                                    "coolingUntil": moment(seconds)})
 
-    def test_future_reset_caps_cooling_and_past_invalid_reset_is_ignored(self):
+    def test_future_reset_caps_cooling_and_past_reset_is_ignored(self):
         self.assertEqual(self.reject(reset=moment(60))["coolingUntil"], moment(60))
         self.assertEqual(self.reject(reset=moment(-1))["coolingUntil"], moment(3600))
-        self.assertEqual(self.reject(reset="not-a-timestamp")["coolingUntil"], moment(7200))
-        self.assertEqual(self.reject(reset=T0)["coolingUntil"], moment(14400))
+        self.assertEqual(self.reject(reset=T0)["coolingUntil"], moment(7200))
 
     def test_manual_clear_and_expiry_keep_counts_and_allow_repeated_reads(self):
         self.reject()
@@ -276,19 +275,18 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertEqual(after_input["resumeMode"], "reconstructed-new-session")
         self.finish_turn(self.board_, resumed)
 
-    def test_all_cooling_freezes_exclusions_and_earliest_time_before_truncation(self):
+    def test_all_cooling_freezes_every_exclusion_and_earliest_time(self):
         self.enable(1)
         self.enable(2)
         with self.board_.store.db.write() as db:
             for index, identity in enumerate(self.identities):
                 quota_routing.record_rejection(db, "dsh", identity["provider"], failure(reset=moment(300 - index * 60)), now=T0)
-        with patch("hey_my_buddy.blackboard.routing.decision.MAX_FROZEN_EXCLUSIONS", 1):
-            selected = self.board_.call("selection_request", {"requestId": "all-cooling", "task": "choose"})
+        selected = self.board_.call("selection_request", {"requestId": "all-cooling", "task": "choose"})
         view = self.board_.call("selection_get", {"decisionId": selected["decisionId"]})["decision"]
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["reason"], {"code": "all-candidates-cooling", "params": {"retryAt": moment(180)}})
         self.assertEqual(view["routingBasis"]["coolingCount"], 3)
-        self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 1)
+        self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 3)
         self.assertEqual(view["routingBasis"]["coolingBuddies"][0]["coolingUntil"], moment(300))
         self.assertNotIn("quotaRetryBuddyIds", view["routingBasis"])
 

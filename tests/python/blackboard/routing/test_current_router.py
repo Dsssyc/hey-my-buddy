@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.routing import router, router_history
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 
@@ -76,7 +76,7 @@ class CurrentRouterTestCase(BoardTestCase):
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce',?,'decision',?,?,?,?,?)", (attempt_id, task_id, state, canonical_json(receipt) if receipt is not None else None, 1 if state == 'finished' else 0, at, at, at))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,1,'nonce',?,'decision',?,?,?,?,?)", (attempt_id, task_id, state, canonical_json(receipt) if receipt is not None else None, 1 if state == 'finished' else 0, at, at, at))
 
     def add_routing_record(self, *, decision, request, kind, buddy_id=None, code=None, at=T0,
                            attempt_state=None, receipt=None, output=None, called=None, candidates=3):
@@ -101,6 +101,14 @@ class CurrentRouterTestCase(BoardTestCase):
                 " VALUES(?,?,'digest',?,?,?,?,?,?)",
                 (decision, request, task_id, attempt_id, 0,
                  canonical_json(requested), canonical_json(output or {}), at))
+            if attempt_id is not None and buddy_id is not None:
+                router_sequence.freeze_request(db, decision, snapshot=requested, now=at)
+                router_sequence.reserve_dispatch(
+                    db, decision_id=decision, task_id=task_id, router_index=0,
+                    buddy={"buddyId": buddy_id, "harness": "dsh", "provider": "fixture",
+                           "model": buddy_id, "effort": "max"}, document=requested, now=at)
+                router_sequence.record_claim(db, task_id=task_id, attempt_id=attempt_id,
+                                             generation=1, now=at)
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})
@@ -290,15 +298,11 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertIsNone(exhausted.buddy)
         self.assertEqual(exhausted.problem["code"], "router-list-exhausted")
         self.assertNotIn("reason", exhausted.problem)
-        with self.assertRaises(BoardError) as caught:
-            with self.board_.store.db.read() as db:
-                router.current_router(db, after_index=-2, now=T0)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_unfrozen_read_uses_current_settings_without_version_marker(self):
         self.add_buddy(A)
         before = self.board_.call("console_snapshot", {})
-        self.assertIsNone(before["configurationError"])
+        self.assertNotIn("configurationError", before)
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertEqual(resolution.problem["code"], "router-not-configured")
@@ -349,34 +353,6 @@ class FrozenContinuationTests(CurrentRouterTestCase):
         resolution.facts["budget"]["timeoutSeconds"] = 88
         self.assertEqual(facts["budget"]["timeoutSeconds"], 77)
 
-    def test_frozen_budget_cannot_change_fast_deadline_or_preset_tool_limits(self):
-        facts = self.prepare()
-        cases = [{**facts, "budget": {"timeoutSeconds": 77}},
-                 {**facts, "budget": None}]
-        self.set_settings(mode="review")
-        with self.board_.store.db.read() as db:
-            facts = router.current_router(db, now=T0).facts
-        for patch in ({"timeoutSeconds": True}, {"timeoutSeconds": 0}, {"toolCalls": 24.0},
-                      {"toolCalls": 25}, {"bytesRead": 0}, {"preset": "brief"}, {"extra": True}):
-            cases.append({**facts, "budget": {**facts["budget"], **patch}})
-        for frozen in cases:
-            with self.subTest(frozen=frozen), self.assertRaises(BoardError):
-                with self.board_.store.db.read() as db:
-                    router.current_router(db, frozen=frozen, now=T0)
-
-    def test_frozen_snapshot_shape_is_validated(self):
-        facts = self.prepare()
-        for broken in (42, {}, {**facts, "routerBuddyIds": "solo"},
-                       {**facts, "routerIdentities": []},
-                       {key: value for key, value in facts.items() if key != "routerRetryIntervalSeconds"},
-                       {**facts, "routingMode": "auto"}, {**facts, "routerRetryIntervalSeconds": 0},
-                       {**facts, "routerIdentities": [42, facts["routerIdentities"][1]]}):
-            with self.subTest(broken=broken):
-                with self.assertRaises(BoardError) as caught:
-                    with self.board_.store.db.read() as db:
-                        router.current_router(db, frozen=broken, now=T0)
-                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-
 
 class OutcomeFactTests(CurrentRouterTestCase):
     def setUp(self):
@@ -411,16 +387,6 @@ class OutcomeFactTests(CurrentRouterTestCase):
         # After the rollback the same outcome records cleanly.
         self.record(A, request="route-1", now=T0)
         self.assertEqual(self.event_count(), 1)
-
-    def test_only_real_outcomes_are_recordable(self):
-        for kwargs in ({"outcome": "cancelled"}, {"outcome": "changed"}, {"plane": "execution"},
-                       {"phase": ""}, {"code": "x" * 200}):
-            with self.subTest(kwargs=kwargs), self.assertRaises(BoardError) as caught:
-                self.record(A, request="route-x", **kwargs)
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        with self.assertRaises(BoardError):
-            self.record(A, request="route-x", facts={})
-        self.assertEqual(self.event_count(), 0)
 
     def test_task_and_attempt_bind_onto_the_event(self):
         self.add_task("task-1", state="queued")
@@ -486,19 +452,6 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         # After a valid answered the same active execution is capacity, not a retry.
         self.record(A, outcome="answered", request="route-recorded-2", phase="runtime", code=None, now=T0)
         self.assertFalse(self.state(A)["retryInProgress"])
-
-    def test_claimed_events_bind_active_executions(self):
-        self.add_buddy(A, model="alpha")
-        self.add_task("task-claim", state="queued")
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,created_at,updated_at) VALUES('att-claim','task-claim',0,'nonce','executing','decision',?,?)", (T0, T0))
-            self.board_.store._append_event(db, "router.claimed", task_id="task-claim", attempt_id="att-claim",
-                                            payload={"buddyId": A, "routerIndex": 0})
-        self.record(A, request="route-recorded", phase="preflight", now=T0)
-        state = self.state(A)
-        self.assertTrue(state["retryInProgress"])
-        self.assertEqual(state["activeAttempts"][0]["source"], "claimed")
-
 
 if __name__ == "__main__":
     unittest.main()

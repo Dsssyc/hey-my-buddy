@@ -50,7 +50,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                 schemas.normalize_workflow_submit({**self.submit_params(root),
                     "spec": {"task": "nested task", "cwd": root, "timeoutSeconds": 600}})
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertIn("flat", raised.exception.message)
+            self.assertEqual(raised.exception.details["field"], "spec")
             with self.assertRaises(BoardError) as raised:
                 schemas.normalize_helpers({"helpers": [{
                     "requestId": "helper", "task": "Check a dependency", "cwd": root,
@@ -94,7 +94,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             }]}, integrator={"role": "host", "id": "actual-host"})[0]
             self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "actual-host"})
 
-    def test_retired_routing_inputs_are_rejected_with_the_three_expressions(self):
+    def test_unknown_routing_inputs_are_rejected(self):
         retired = {
             "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "prefer this route"}],
             "routingMode": "fast",
@@ -106,11 +106,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as raised:
                         schemas.normalize_workflow_submit({**self.submit_params(root), key: value})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("retired Host routing input", raised.exception.message)
-                    # The message names the three expressions that remain.
-                    self.assertIn("quadruple", raised.exception.message)
-                    self.assertIn("Router", raised.exception.message)
-                    self.assertIn("task description", raised.exception.message)
+                    self.assertIn("Unknown", raised.exception.message)
 
     def test_helper_inheritance_flag_is_rejected_because_nothing_is_inherited(self):
         with tempfile.TemporaryDirectory() as root:
@@ -157,13 +153,13 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as raised:
                         schemas.normalize_workflow_submit({**self.submit_params(root), **fields})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("Micro tasks do not accept", raised.exception.message)
+                    self.assertIn("Unknown", raised.exception.message)
                     self.assertEqual(raised.exception.details["field"], field)
                     with self.assertRaises(BoardError) as raised:
                         schemas.normalize_helpers({"helpers": [{**helper, **fields}]},
                                                   integrator={"role": "host", "id": "fixture-host"})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn("Micro tasks do not accept", raised.exception.message)
+                    self.assertIn("Unknown", raised.exception.message)
                     self.assertEqual(raised.exception.details["field"], field)
 
 
@@ -270,7 +266,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
                 with self.assertRaises(BoardError) as raised:
                     self.routed(board, request_id=f"rejected-{key}", **{key: value})
                 self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("retired Host routing input", raised.exception.message)
+                self.assertIn("Unknown", raised.exception.message)
 
     def test_submit_rejects_the_nested_spec_and_duplicate_workspace_spellings(self):
         board = self.board()
@@ -279,7 +275,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
             self.routed(board, request_id="rejected-spec",
                         spec={"task": "nested", "cwd": str(self.workdir("nested"))})
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("flat", raised.exception.message)
+        self.assertEqual(raised.exception.details["field"], "spec")
         for duplicate, field in (("cwd", str(self.workdir("dup"))), ("integrator", "host-1")):
             with self.subTest(duplicate=duplicate):
                 with self.assertRaises(BoardError):

@@ -46,7 +46,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         response = self.claim_route(board, request)
         self.assertIsNone(response['claim'])
         view = self.decision(board, request['decisionId'])
-        unavailable = code in ('router-not-published', 'router-incomplete', 'router-no-tool-unsupported',
+        unavailable = code in ('router-no-tool-unsupported',
                                'router-review-unsupported', 'router-quota-exhausted', 'router-disabled',
                                'router-catalog-unavailable', 'router-harness-unavailable')
         expected_code = 'router-list-exhausted'
@@ -92,10 +92,8 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertIsNotNone(claimed)
         self.assertEqual(claimed['decisionInput'], frozen['input'])
 
-    def test_buddy_removal_incomplete_disabled_and_unavailable_are_specific_boundaries(self):
-        for sql, code in (("DELETE FROM buddies WHERE buddy_id=?", 'router-not-published'),
-                          ("UPDATE buddies SET effort='' WHERE buddy_id=?", 'router-incomplete'),
-                          ("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
+    def test_disabled_and_unavailable_buddies_are_specific_boundaries(self):
+        for sql, code in (("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
                           ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-catalog-unavailable')):
             with self.subTest(code=code, sql=sql):
                 board = self.case_board()
@@ -331,6 +329,20 @@ class SingleRouterClaimTests(DecisionTestCase):
                              ('fixture-failure', 'fail after choice and event publication'))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.completed'").fetchone()[0], 0)
             self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
+
+    def test_programming_error_in_publication_propagates_and_rolls_back_receipt(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        with patch.object(board.store.decisions, '_publish_select', side_effect=RuntimeError('publication bug')):
+            with self.assertRaises(BoardError) as caught:
+                self.report(board, claim, stopped_answer(claim))
+        self.assertEqual(caught.exception.code, 'INTERNAL_ERROR')
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'running')
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
 
     def test_cached_qualification_loss_does_not_invalidate_an_effectively_valid_answer(self):
         board = self.board()

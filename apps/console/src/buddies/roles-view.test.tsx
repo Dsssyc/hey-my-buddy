@@ -1,13 +1,9 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { App } from "../App";
-import { makeDraft } from "../draft";
 import { formatShortDateTime } from "../i18n/format";
 import type { Snapshot } from "../types";
-import type { Editor } from "../use-editor";
-import { RolesView } from "./RolesView";
 import { levelPreference, modelButton, selectModel } from "./page.testing";
 import {
   FLASH, FLASH_ID, GLM, GLM_ID, HIGH, HIGH_ID, MEDIUM, MEDIUM_ID, PENDING, PENDING_ID, SOL, SOL_ID,
@@ -18,8 +14,8 @@ import {
 /**
  * The roles view as a user meets it: the Router list with its standing, its
  * add dialog and its three changes, the settings of the role, the records of
- * routing, and what a session that cannot write, a save in flight or settings
- * that need an upgrade leave usable. Every change goes into the draft and is
+ * routing, and what a session that cannot write or a save in flight leaves
+ * usable. Every change goes into the draft and is
  * published by the save bar as a patch of the changed settings only.
  */
 
@@ -464,53 +460,8 @@ describe("moving and removing", () => {
 });
 
 describe("what leaves the roles view out of use", () => {
-  it("leaves every control of the section out of use when the settings need an upgrade, says so, and changes nothing", async () => {
-    const f = fixture(snapshot({ configuration: null, routingHealth: health() }));
-    const user = userEvent.setup();
-    await openRoles(f);
-    const alert = within(rolesRegion()).getByRole("alert");
-    expect(alert.textContent).toBe("Router 设置需要升级：请先升级设置");
-    // No list and no empty state: nothing is known of the list.
-    expect(queryRouterList()).toBeNull();
-    expect(screen.queryByText("还没有 Router")).toBeNull();
-    const reason = "Router 设置需要升级后才能修改";
-    expect(addButton().getAttribute("aria-disabled")).toBe("true");
-    expect(addButton().getAttribute("aria-description")).toBe(reason);
-    for (const option of [modeOption("快速"), modeOption("审阅"), budgetOption("简要"), budgetOption("标准"), budgetOption("深入")]) {
-      expect(option.getAttribute("aria-disabled")).toBe("true");
-      expect(option.getAttribute("aria-checked")).toBe("false");
-    }
-    expect(modeOption("快速").getAttribute("aria-description")).toContain(reason);
-    expect(intervalInput().getAttribute("aria-disabled")).toBe("true");
-    expect(intervalInput().getAttribute("aria-description")).toBe(reason);
-    expect(intervalInput().getAttribute("aria-invalid")).toBeNull();
-    expect(within(section("重试间隔")).queryByText(/需要 1–2147483647/)).toBeNull();
-    await user.click(addButton());
-    await user.click(modeOption("快速"));
-    await user.click(budgetOption("深入"));
-    await user.type(intervalInput(), "5");
-    expect(queryAddDialog()).toBeNull();
-    expect(queryDraftBar()).toBeNull();
-    // The records are read apart from the settings and stay.
-    expect(within(section("记录")).getByText("失败")).toBeTruthy();
-  });
-
-  it("does not show a retained draft of the list as usable once the settings need an upgrade", () => {
-    const state = snapshot({ routers: [MEDIUM_ID], configuration: null, routingHealth: health() });
-    const retained = makeDraft(snapshot({ routers: [MEDIUM_ID], routingHealth: health({ currentRouterBuddyId: MEDIUM_ID }) }));
-    const update = vi.fn();
-    const editor = { view: { ...state, ...retained }, draft: retained, editing: true, sessionWritable: true, update } as unknown as Editor;
-    render(<TooltipProvider><RolesView snapshot={state} editor={editor} active location={{ view: "roles" }} onNavigate={vi.fn()} hidden={false} /></TooltipProvider>);
-    expect(within(rolesRegion()).getByRole("alert").textContent).toContain("请先升级设置");
-    expect(queryRouterList()).toBeNull();
-    expect(screen.queryByText("当前")).toBeNull();
-    expect(unsavedIn("列表")).toHaveLength(0);
-    expect(budgetOption("标准").getAttribute("aria-disabled")).toBe("true");
-    expect(update).not.toHaveBeenCalled();
-  });
-
-  it("keeps the preferences of the catalogue editable and publishes them without the Router settings", async () => {
-    const f = fixture(snapshot({ configuration: null }));
+  it("publishes a catalogue preference without changing Router settings", async () => {
+    const f = fixture(snapshot());
     const user = userEvent.setup();
     window.location.hash = "#buddies/catalog";
     render(<App suppliedApi={f.api} />);

@@ -394,7 +394,7 @@ class SelectionRequestTests(DecisionTestCase):
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
         self.assertNotIn("maintenance", capabilities)
-        self.assertFalse(capabilities["decisionAdapter"])
+        self.assertFalse(capabilities["selection"])
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
@@ -414,7 +414,7 @@ class SelectionRequestTests(DecisionTestCase):
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertTrue(capabilities["selection"])
         self.assertNotIn("maintenance", capabilities)
-        self.assertTrue(capabilities["decisionAdapter"])
+        self.assertTrue(capabilities["selection"])
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
         self.assertIn("decision", report["localCapabilities"])
@@ -531,8 +531,6 @@ class DecisionFailureTests(DecisionTestCase):
                 "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "Use the installed DSH harness"}],
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("complete harness/provider/model/effort quadruple", raised.exception.message)
-        self.assertIn("leave the choice to the Router", raised.exception.message)
 
     def test_policy_facts_carry_no_task_preference_slot(self):
         board = self.board()

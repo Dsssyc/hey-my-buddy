@@ -21,7 +21,7 @@ class CatalogObservationTests(BoardTestCase):
         self.e = self.b.evaluation
 
     def record(self, payload, observation=None):
-        return self.e.record_catalog(payload, observation)
+        return self.e.record_catalog(catalog_rules.canonical_payload(payload), observation)
 
     def test_automatic_refresh_records_the_health_fallback_then_its_current_copy(self):
         self.b.service.automatic_discovery = True

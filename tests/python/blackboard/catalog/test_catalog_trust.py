@@ -16,9 +16,9 @@ from hey_my_buddy.blackboard.catalog import catalog, catalog_store
 
 def reading(harness='dsh', models=('alpha',), status='complete', account_status=None, efforts=('max',)):
     trusted = account_status if account_status is not None else ('unknown' if status == 'unknown' else 'confirmed')
-    return {'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted}],
+    return catalog.canonical_payload({'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted}],
             'providers': [{'harness': harness, 'provider': 'fixture',
-                           'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]}
+                           'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]})
 
 
 class CatalogTrustTests(BoardTestCase):
@@ -29,7 +29,13 @@ class CatalogTrustTests(BoardTestCase):
         self.evaluation = self.board.evaluation
 
     def record(self, payload, observation=None):
-        return self.evaluation.record_catalog(payload, observation)
+        return self.evaluation.record_catalog(catalog.canonical_payload(payload), observation)
+
+    def test_large_catalog_publishes_and_console_lists_every_buddy(self):
+        models = tuple(f'alpha-{index}' for index in range(205))
+        published = self.record(reading(models=models))
+        self.assertEqual(len(published['buddies']), 205)
+        self.assertEqual(len(self.evaluation.console_core()['buddies']), 205)
 
     def events(self, kind_prefix='catalog.model_'):
         with self.board.store.db.read() as db:

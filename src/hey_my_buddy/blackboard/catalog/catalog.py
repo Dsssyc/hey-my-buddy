@@ -19,8 +19,6 @@ from typing import Any, Callable
 from ...errors import BoardError
 from ...protocol.reasons import REGISTERED_REASON_PARAMETERS, reason
 
-MAX_MODELS = 200
-MAX_PROVIDERS = 32
 MAX_TEXT = 2000
 MAX_CATALOG_BYTES = 2 * 1024 * 1024
 CATALOG_FILE_ENV = "HMB_MODEL_CATALOG_FILE"
@@ -186,12 +184,9 @@ def identities_from_payload(payload_json: Any, harness: str) -> set[tuple[str, s
     (ADR-027 rule 1).
     """
     identities: set[tuple[str, str, str]] = set()
-    if not isinstance(payload_json, str) or not payload_json:
+    if payload_json is None:
         return identities
-    try:
-        view = CatalogView.from_payload(json.loads(payload_json))
-    except (ValueError, BoardError):
-        return identities
+    view = CatalogView(json.loads(payload_json))
     for entry in view.payload["providers"]:
         if entry["harness"] != harness:
             continue
@@ -266,10 +261,10 @@ def _identity(value: Any, field: str, limit: int = 200) -> str:
     return value.strip()
 
 
-def _strings(value: Any, *, limit: int = 32) -> list[str]:
+def _strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    return list(dict.fromkeys(item.strip()[:128] for item in value if isinstance(item, str) and item.strip()))[:limit]
+    return list(dict.fromkeys(item.strip() for item in value if isinstance(item, str) and item.strip()))
 
 
 def _receipt_reason(value: Any, *, allowed: frozenset[str], field: str,
@@ -328,10 +323,9 @@ def canonical_payload(value: dict) -> dict:
     """Normalize checked native metadata and internally assembled catalog facts."""
     source = _identity(value.get("source"), "source", 1024)
     raw_providers = value.get("providers")
-    if not isinstance(raw_providers, list) or len(raw_providers) > MAX_PROVIDERS:
-        raise BoardError("CATALOG_INVALID", f"A catalog may contain at most {MAX_PROVIDERS} providers")
+    if not isinstance(raw_providers, list):
+        raise BoardError("CATALOG_INVALID", "providers must be a list")
     providers, seen_providers = [], set()
-    model_count = 0
     for entry in raw_providers:
         if not isinstance(entry, dict):
             raise BoardError("CATALOG_INVALID", "Each provider must be an object")
@@ -344,9 +338,6 @@ def canonical_payload(value: dict) -> dict:
         raw_models = entry.get("models")
         if not isinstance(raw_models, list):
             raise BoardError("CATALOG_INVALID", f"{harness}/{provider} models must be a list")
-        model_count += len(raw_models)
-        if model_count > MAX_MODELS:
-            raise BoardError("CATALOG_INVALID", f"A catalog may contain at most {MAX_MODELS} models")
         models, seen_models = [], set()
         for model in raw_models:
             if not isinstance(model, dict):
@@ -388,8 +379,8 @@ def canonical_payload(value: dict) -> dict:
             "models": models,
         })
     raw_discoveries = value.get("discoveries", [{"harness": name, "status": "complete"} for name in sorted({p["harness"] for p in providers})])
-    if not isinstance(raw_discoveries, list) or len(raw_discoveries) > MAX_PROVIDERS:
-        raise BoardError("CATALOG_INVALID", "discoveries must be bounded per-harness observations")
+    if not isinstance(raw_discoveries, list):
+        raise BoardError("CATALOG_INVALID", "discoveries must be a list")
     discoveries, seen = [], set()
     for result in raw_discoveries:
         if not isinstance(result, dict) or result.get("status") not in ("complete", "unknown"):
@@ -410,7 +401,7 @@ def canonical_payload(value: dict) -> dict:
     if any(p["harness"] not in seen for p in providers):
         raise BoardError("CATALOG_INVALID", "Every provider must have a harness observation")
     warnings = [{key: item[key] for key in ("reason", "harness", "content", "diagnostic") if key in item}
-                for item in value.get("warnings", [])[:16]]
+                for item in value.get("warnings", [])]
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
@@ -533,7 +524,7 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
         raise BoardError("UNSUPPORTED_HARNESS", "This harness does not declare a model execution catalog")
     payload = _override()
     if payload is not None:
-        return _check_recorded(selected, CatalogView.from_payload(payload), pending_efforts=None)
+        return _check_recorded(selected, CatalogView(payload), pending_efforts=None)
     from ..store.db import Database
     from ..service.harness_health import read_health
     from . import catalog_store
@@ -552,7 +543,7 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
             raise BoardError("CATALOG_UNAVAILABLE", "No native model catalog is recorded",
                              reason=reason("catalog-unavailable"))
         try:
-            return _check_recorded(selected, CatalogView.from_payload(recorded.payload),
+            return _check_recorded(selected, recorded,
                                    pending_efforts=pending_efforts)
         except BoardError as error:
             if error.code != "BUDDY_UNAVAILABLE":
@@ -569,11 +560,15 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
     if hook is None:
         raise first
 
+    reread_issue = None
+
     def run_reread() -> None:
+        nonlocal reread_issue
         try:
             hook(selected['harness'])
-        except (BoardError, OSError, ValueError, sqlite3.Error):
-            pass  # A failed bounded re-read leaves the rejection to speak for itself.
+        except (BoardError, OSError, ValueError, sqlite3.Error) as error:
+            reread_issue = {"code": error.code if isinstance(error, BoardError) else type(error).__name__,
+                            "message": str(error)}
 
     coordinate_catalog_reread(directory, selected["harness"], reader=run_reread, wait=True)
     # Every outcome re-judges on the facts as they are now recorded. The open
@@ -585,13 +580,16 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
         return judge()
     except BoardError as error:
         if error.code in ("CATALOG_UNAVAILABLE", "BUDDY_UNAVAILABLE", "INVALID_ARGUMENT"):
+            if reread_issue is not None:
+                raise BoardError(error.code, error.message, **{**error.details, "rereadIssue": reread_issue}) from error
             raise
         # The re-read itself broke the harness (for example the native refresh
         # invalidated health). The fresh error and its diagnostics lead, while
         # rule 3's rejection context — catalog read time and refresh method —
         # still rides along instead of being lost at this boundary.
         raise BoardError(error.code, error.message,
-                         **{**first.details, **error.details}) from error
+                         **{**first.details, **error.details,
+                            **({"rereadIssue": reread_issue} if reread_issue is not None else {})}) from error
 
 
 def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: list[str] | None) -> dict:
@@ -616,11 +614,6 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
 class CatalogView:
     def __init__(self, payload: dict, *, discovery_id: str | None = None):
         self.payload, self.discovery_id = payload, discovery_id
-
-    @classmethod
-    def from_payload(cls, payload: Any) -> "CatalogView":
-        canonical = canonical_payload(payload)
-        return cls(canonical)
 
     @property
     def source(self) -> str:
@@ -659,7 +652,7 @@ class CatalogView:
                     safe_identity = re.sub(r"[^A-Za-z0-9._:-]", "-", identity)
                     buddy_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
                     capabilities = ([f"execution:{entry['harness']}", f"effort:{effort}"]
-                                    + [f"input:{item}" for item in model["inputModalities"]][:30])
+                                    + [f"input:{item}" for item in model["inputModalities"]])
                     proposals.append({
                         "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
                         "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,
