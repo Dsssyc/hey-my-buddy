@@ -46,8 +46,13 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                 self.assertEqual(facts["runtimeEntries"], [])
                 self.assertEqual(facts["workflowStates"].get("accepted"), 1)
                 self.assertIn("workflow.request_approved", facts["eventKinds"])
-                self.assertIn("workflow.turn_concluded", facts["eventKinds"])
+                self.assertIn("workflow.turn_returned", facts["eventKinds"])
                 with fixture.board.store.db.read() as connection:
+                    returned_states = connection.execute(
+                        "SELECT t.state FROM events e LEFT JOIN workflow_turns t"
+                        " ON t.turn_id=json_extract(e.payload_json,'$.turnId')"
+                        " WHERE e.kind='workflow.turn_returned'").fetchall()
+                    self.assertEqual({row[0] for row in returned_states}, {"returned"})
                     # Not just counts: selected receipt, turn and task are bound.
                     bound = connection.execute(
                         "SELECT COUNT(*) FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"

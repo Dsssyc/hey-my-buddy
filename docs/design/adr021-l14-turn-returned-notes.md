@@ -18,7 +18,7 @@
 
 ## 保留的 concluded
 
-计数按 `src/hey_my_buddy/` 中 Python 源码内不区分大小写的字面出现次数计算，包含标识符、注释和字符串；不计测试、文档与生成资产。保留 63 处，其中 58 处属于微任务、任务或 Host 结论，另 5 处属于回合方法与事件名称；没有归属存疑项。
+计数按 `src/hey_my_buddy/` 中 Python 源码内不区分大小写的字面出现次数计算，包含标识符、注释和字符串；不计测试、文档与生成资产。保留 58 处，全部属于微任务、任务或 Host 结论；Python 源码没有其他含义的剩余项，没有归属存疑项。
 
 | 文件 | 微任务相关出现次数 | 行号与对象 |
 | --- | ---: | --- |
@@ -36,11 +36,17 @@
 | `src/hey_my_buddy/install/upgrade.py` | 3 | 323, 357, 372；归档基点微任务的 Host 结论判断与升级空闲条件 |
 | `src/hey_my_buddy/protocol/schemas.py` | 1 | 98；任务终态 |
 
-`src/hey_my_buddy/blackboard/store/store.py` 的 `:2531` 保留既有的 `turn_concluded` 方法调用、定义或 `workflow.turn_concluded` 事件名；它们不是回合状态取值，按“不改别的名字”的范围保留。
+续接回合按 Host 补充的范围，将 `src/hey_my_buddy/blackboard/tasks/workflow.py:6395` 的方法改为 `settle_turn`；这个名字涵盖有效交回、执行失败、拒收、取消后的迟到结果与未启动释放等结束情形，不把全部结束情形称作 returned。调用点 `src/hey_my_buddy/blackboard/store/store.py:2531` 与 `src/hey_my_buddy/blackboard/tasks/workflow.py:3575` 同步修改，未保留旧名或别名。
 
-`src/hey_my_buddy/blackboard/tasks/workflow.py` 的 `:3575`、`:6395`、`:6520`、`:6531` 保留既有的 `turn_concluded` 方法调用、定义或 `workflow.turn_concluded` 事件名；它们不是回合状态取值，按“不改别的名字”的范围保留。
+续接回合将 `src/hey_my_buddy/blackboard/tasks/workflow.py:6520` 与 `:6531` 的事件改为 `workflow.turn_returned`。先核对控制流：两处都在同一事务中 `:6487` 将回合写为 `returned` 之后发生，分别对应 completed 与 assistance/attention；失败、拒收与迟到结果分支在此前返回，不写该事件。本次只改事件名字，不增加新事件、不改变触发条件，不转换旧看板事件。`tests/python/blackboard/tasks/test_console_macro_task_fixture.py:49` 同步事件名，`:51` 至 `:55` 扩展现有样例测试，逐条关联事件与回合，验证该事件对应的回合均为 `returned`。样例由真实写入路径生成，没有另一个写死旧名的当前样例数据需要修改；升级基点 SQL 中两条旧事件保留原样。
 
-控制台没有读取回合 `state` 的逻辑：`apps/console/src/workflow-types.ts:48` 的 `TurnRouting` 不包含状态，`WorkflowPanel.tsx` 使用回合配置、摘要、会话和用量；`ui.tsx:204` 与 `macro-task-display.ts:201` 的 `concluded` 标签读取微任务状态，`macro-task-stop-reply.ts` 与 `macro-task-types.ts` 的 `concludedRunIds` 表示保留 Host 结论的根微任务，因此均不改。前端原有结果摘要的历史文字（`types.ts:224`、`desktop-console.test.tsx:327`、`:346`）不读取回合状态，按“前端没有这样的地方就不动前端”的限定保留。本次没有修改前端或重建资产，也没有执行前端全量或浏览器检查。
+控制台没有读取回合 `state` 的逻辑：`apps/console/src/workflow-types.ts:48` 的 `TurnRouting` 不包含状态，`WorkflowPanel.tsx` 使用回合配置、摘要、会话和用量；`ui.tsx:204` 与 `macro-task-display.ts:201` 的 `concluded` 标签读取微任务状态，`macro-task-stop-reply.ts` 与 `macro-task-types.ts` 的 `concludedRunIds` 表示保留 Host 结论的根微任务，因此均不改。本次没有修改前端或重建资产，也没有执行前端全量或浏览器检查。
+
+除上述 Python 清点外，仍有 3 处前端文字使用 concluded 描述旧回合结果摘要，逐条列出如下；它们不读取回合状态，按“前端没有这样的地方就不动前端”的限定保留，归属明确，不属于存疑项。
+
+- `apps/console/src/types.ts:224`：`workflow.resultSummary` 的注释把最新回合结果称为 concluded。
+- `apps/console/src/desktop-console.test.tsx:327`：已有测试名中的 newest concluded result。
+- `apps/console/src/desktop-console.test.tsx:346`：关于 0.16 T1 摘要刷新的历史注释。
 
 ## 顺带修改的帮助文字
 
@@ -108,8 +114,27 @@
 
 唯一失败为 `cli.test_host_preview.PreviewFixtureTest.test_frontend_parsers_consume_the_emitted_fixtures`：检出中缺少 `apps/console/node_modules/vitest/vitest.mjs`，在调用前端解析器之前的依赖断言失败；`test_preview_self_check_passes` 与 `test_preview_tree_is_deterministic` 均通过。这是缺失测试依赖，不是观察到回合状态错误。
 
-按 Host 要求单独重跑 `tests/python/cli/test_host_preview.py` 一次，仍为 3 项中 2 项通过、同一个缺依赖断言失败，退出 1，私有根已删除；原始输出保存在忽略的 `tmp/turn-returned-preview-retry.log`。没有重跑已通过的测试。
+按 Host 要求单独重跑 `tests/python/cli/test_host_preview.py` 一次，仍为 3 项中 2 项通过、同一个缺依赖断言失败，退出 1，私有根已删除；原始输出保存在忽略的 `tmp/turn-returned-preview-retry.log`。首回合没有重跑已通过的测试。
 
-本次未改前端，而 Host 将 `npm --prefix apps/console ci` 限定在前端变更时执行，因此未擅自安装依赖。需要 Host 在此检出中提供控制台开发依赖，或扩展本次授权以允许用检出内 npm 缓存安装依赖，然后重跑上述 Python 预览回归；前端解析器实际消费这批合成预览的验证尚未完成。
+首回合未改前端，因此没有安装前端依赖。Host 在续接指令中报告，已在合并后的树上运行 `tests/python/cli/test_host_preview.py` 且通过，并明确本回合不用再跑或安装前端依赖；这是 Host 提供的合并后验证结果，本 Worker 未在当前检出复跑。原有两次依赖缺失的记录保留，不再把它列为待办。
+
+## 续接回合的验证
+
+续接回合先按与首回合相同的指定命令检查 50 个受影响测试文件（首回合参数去掉 `tests/python/cli/test_host_preview.py`）。测试启动后复核差异发现，一处方法调用被事件名的字符串替换误改成 `self.workflow.turn_returned`，已立即修正为 `self.workflow.settle_turn`；更正前载入源码的测试进程仍持有错误调用，因此以下首次失败属于本次修改错误，不能归为时序问题。
+
+主批次中 46 个文件通过，3 个文件返回失败，剩余的 `tests/python/blackboard/tasks/test_parallel_dispatch.py` 未完成：该文件退休回执场景直接同步调用 `worker.run()`，更正前载入的错误调用导致回执无法提交，持续重试。确认仅剩该测试子进程后，对所属私有检查运行器发送 SIGINT，运行器按自身中断流程停止它的测试子进程并执行清理；本批次退出 130，随后只读核对确认其私有根已删除，没有操作日常服务或 Worker。原始输出保存在忽略的 `tmp/turn-returned-event-checks.log`。
+
+除下面列出的 4 个文件外，本回合 46 个通过文件的范围为首回合表去掉 `test_host_preview.py` 后的其余文件；没有重新运行已通过文件。以下各次单文件重跑均使用最终源码、原指定检查命令与默认并发设置，未修改版本、schema 或升级基点。
+
+| 测试文件 | 首次结果 | 最终源码的单文件重跑 |
+| --- | --- | --- |
+| `tests/python/blackboard/tasks/test_workflow_preparation.py` | 31 项，29 个错误，文件失败 | 31 项全部通过，退出 0，私有根删除 |
+| `tests/python/blackboard/tasks/test_workspace_lifecycle.py` | 53 项，54 个错误（含清理错误），文件失败 | 53 项全部通过，退出 0，私有根删除 |
+| `tests/python/blackboard/store/test_blackboard.py` | 58 项，1 个失败与 10 个错误，文件失败 | 58 项全部通过，退出 0，私有根删除 |
+| `tests/python/blackboard/tasks/test_parallel_dispatch.py` | 未完成，随上述私有检查运行器中断 | 27 项全部通过，退出 0，私有根删除 |
+
+单文件重跑日志分别保存在忽略的 `tmp/turn-returned-event-retry-test_workflow_preparation.log`、`tmp/turn-returned-event-retry-test_workspace_lifecycle.log`、`tmp/turn-returned-event-retry-test_blackboard.log` 与 `tmp/turn-returned-event-retry-test_parallel_dispatch.log`。
+
+本回合选择的 50 个受影响文件最终全部有通过结果：46 个文件在更正后启动的主批次中通过，另外 4 个文件单独重跑各一次全部通过，4 次单文件检查均退出 0、无跳过且私有根均已删除。该结论不把中断的主批次描述为整批退出 0，也不把首回合的验证代替本回合验证；预览回归仅引用前述 Host 的合并后树验证，本 Worker 没有复跑。
 
 `git diff --check` 通过。以上为 Worker 的修改与检查记录，最终验收由 Host 负责。
