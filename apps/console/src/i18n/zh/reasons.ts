@@ -1,5 +1,7 @@
 export default {
   "checkout.live-processes": "活进程正在以此检出为工作目录：{{processes}}。",
+  "checkout.unreadable-processes": "以下进程在此检出首次执行后启动，工作目录读不到：{{processes}}。进程结束或观察恢复后可重试删除。",
+  "checkout.process-blockers": "活进程正在使用此检出：{{processes}}。另有首次执行后启动的进程，工作目录读不到：{{unreadableProcesses}}。",
   "checkout.process-scan-failed": "未能完整检查进程的工作目录；观察恢复后可重试删除。",
   "ANCESTOR_TERMINAL": "上级微任务已结束。",
   "CONFLICT": "当前状态与本次操作冲突。",

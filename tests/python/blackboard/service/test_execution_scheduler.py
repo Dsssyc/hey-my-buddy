@@ -192,7 +192,7 @@ class ExecutionObservationTests(unittest.TestCase):
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint") as read, \
                     patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="unknown"), \
                     patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="unknown"), \
-                    patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_group") as send:
+                    patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_process") as send:
                 self.monitor(scheduler, claim, location, {"pid": 1})
             read.assert_not_called()
             send.assert_not_called()
@@ -243,12 +243,12 @@ class ExecutionObservationTests(unittest.TestCase):
         store.release_execution.assert_not_called()
         handle.terminate.assert_not_called()
 
-    def test_missing_identity_uses_reaped_creator_and_empty_group(self):
+    def test_missing_identity_uses_confirmed_creator_stop(self):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock()
-        handle.process.poll.return_value = 1
-        handle.group_alive.return_value = False
+        handle.poll.return_value = 1
+        handle.shutdown_confirmed.return_value = True
         scheduler._handles["attempt-1"] = (handle, None)
         store.task_get.return_value = {"task": {"selectedAttempt": {
             "attemptId": "attempt-1", "executionState": "finished"}}}
@@ -268,7 +268,7 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             scheduler.TICK_SECONDS = 0
             handle = Mock()
-            handle.process.poll.return_value = 1
+            handle.poll.return_value = 1
             handle.execution_directory = Path(root)
             handle.budget_path = Path(root) / "execution-budget.json"
             claim = {"attempt": {"attemptId": "attempt-1"}, "task": {"taskId": "task-1"}}
@@ -294,7 +294,7 @@ class ExecutionObservationTests(unittest.TestCase):
             client = self.client()
             client.connection_observation.close()
             handle = Mock()
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             handle.execution_directory = Path(root)
             handle.role_run_identity = Mock()
             handle.budget_path = Path(root) / "execution-budget.json"
@@ -459,7 +459,7 @@ class ExecutionObservationTests(unittest.TestCase):
             service = Mock(store=store)
             scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             handle = Mock()
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             handle.execution_directory = Path(root)
             handle.budget_path = Path(root) / "budget.json"
             clients = [self.client(), self.client()]
@@ -710,7 +710,7 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, _location = self.recovered(root)
             handle = Mock(budget_path=Path(root) / "budget.json")
-            handle.process.poll.return_value = None
+            handle.poll.return_value = None
             scheduler._handles["attempt"] = (handle, None)
             scheduler._start_observer(claim, handle, None)
             try:
@@ -846,9 +846,10 @@ class ExecutionObservationTests(unittest.TestCase):
                 job.active.return_value = 0
                 source.started_at.return_value = None
                 source.open_job.side_effect = lambda _name: contextlib.nullcontext(job)
-                signal = job.terminate if windows else source.signal_group
+                members = Mock()
+                signal = job.terminate if windows else members.signal
                 signal.side_effect = [OSError("signal failed"), None] if first == "signal-error" else None
-                observation = "_inspect_job_identity" if windows else "inspect_process_identity"
+                observation = "_inspect_job_identity" if windows else "_inspect_posix"
                 waits = []
                 def advance(_predicate, timeout=None):
                     waits.append(timeout)
@@ -863,6 +864,7 @@ class ExecutionObservationTests(unittest.TestCase):
                      patch.object(scheduler._condition, "wait_for", side_effect=advance), \
                      patch.object(process_identity.signal, "SIGKILL", 9, create=True), \
                      patch("hey_my_buddy.protocol.process_identity._SystemSource", return_value=source), \
+                     patch("hey_my_buddy.protocol.process_identity._posix_members", return_value=members), \
                      patch("hey_my_buddy.protocol.process_identity." + observation,
                            side_effect=["unknown", "alive"] if first == "unknown" else ["alive", "alive"]):
                     self.monitor(scheduler, claim, location, identity)
@@ -871,8 +873,6 @@ class ExecutionObservationTests(unittest.TestCase):
                 self.assertEqual(signal.call_count, 1 if first == "unknown" else 2)
                 store.recover_executions.assert_not_called()
                 store.release_execution.assert_not_called()
-                if first == "signal-error" and not windows:
-                    self.assertEqual(store.record_execution_issue.call_args.args[1], "force-stop")
 
     def test_budget_is_read_on_attachment_and_drives_force_without_a_notification(self):
         from hey_my_buddy.protocol.execution import fsync_json

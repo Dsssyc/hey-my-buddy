@@ -94,11 +94,17 @@ describe("macro task deletion boundary", () => {
       reason: { code: "checkout.live-processes", params: { processes: [process] } } };
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
     expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
+      reason: { code: "checkout.unreadable-processes", params: { processes: [process] } } }).state).toBe("deleting");
+    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
+      reason: { code: "checkout.process-blockers", params: { processes: [process], unreadableProcesses: [process] } } }).state).toBe("deleting");
+    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
       reason: { code: "checkout.process-scan-failed", params: {} } }).state).toBe("deleting");
     for (const identity of [{ ...process, pid: 0 }, { ...process, startedAt: -1 },
       { ...process, executable: "" }, { ...process, commandLine: "private" }, { ...process, environment: {} }]) {
       expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial,
         reason: { code: "checkout.live-processes", params: { processes: [identity] } } })).toThrow();
+      expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial,
+        reason: { code: "checkout.process-blockers", params: { processes: [process], unreadableProcesses: [identity] } } })).toThrow();
     }
   });
 });

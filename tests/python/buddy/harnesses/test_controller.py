@@ -20,7 +20,7 @@ from hey_my_buddy.buddy.harnesses import base, controller
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.protocol import owned_process as windows_process
 from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence
-from hey_my_buddy.protocol import process_controller, process_handle
+from hey_my_buddy.protocol import process_controller, process_handle, process_members
 from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
     collect_controller,
@@ -88,7 +88,8 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
     original_open = process_controller.open_logs
     original_spawn = process_controller.owned_popen
     original_close = os.close
-    original_killpg = os.killpg if os.name != "nt" else None
+    original_snapshot = process_members.process_snapshot
+    original_initialize = ProcessHandle.__init__
     original_observe = ProcessHandle.shutdown_confirmed
 
     def open_logs(paths):
@@ -124,10 +125,12 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
             if log is not None and descriptor == state["descriptors"][0 if log == "stdout" else 1]:
                 raise state["error"]
 
-    def killpg(pgid, sig):
-        if state["process"] is not None and pgid == state["process"].pid and sig == 0:
-            raise PermissionError(errno.EPERM, "fixture group observation refused")
-        return original_killpg(pgid, sig)
+    def snapshot():
+        raise PermissionError(errno.EPERM, "fixture session observation refused")
+
+    def initialize(handle, *args, **kwargs):
+        state["handle"] = handle
+        original_initialize(handle, *args, **kwargs)
 
     def active(job):
         if state["process"] is not None and job is state["process"]._buddy_job:
@@ -140,21 +143,29 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
         with mock.patch.object(process_controller, "open_logs", open_logs), \
              mock.patch.object(process_controller, "owned_popen", spawn), \
              mock.patch.object(process_controller.os, "close", close), \
-             mock.patch.object(ProcessHandle, "shutdown_confirmed", observe):
+             mock.patch.object(ProcessHandle, "shutdown_confirmed", observe), \
+             mock.patch.object(ProcessHandle, "__init__", initialize):
             if observation_blocked:
                 if os.name == "nt":
                     with mock.patch.object(windows_process.OwnedJob, "active", active):
                         yield state
                 else:
-                    with mock.patch.object(process_controller.os, "killpg", killpg):
+                    with mock.patch.object(process_members, "process_snapshot", snapshot):
                         yield state
             else:
                 yield state
     finally:
         if state["process"] is not None:
-            handle = ProcessHandle(state["process"], own_group=True, log_paths=state["paths"], stop_channel="signal")
-            handle.terminate(grace_seconds=0.2)
-            handle.shutdown_confirmed()
+            handle = state["handle"]
+            if handle._members is not None:
+                handle._members.snapshot = original_snapshot
+                handle.terminate(grace_seconds=0.2)
+                handle.shutdown_confirmed()
+            else:
+                # No membership was admitted during the injected failure. The
+                # fixture owns a single child; a fresh handle reads its identity.
+                handle = ProcessHandle(state["process"], own_group=True, log_paths=state["paths"], stop_channel="signal")
+                handle.terminate(grace_seconds=0)
         for descriptor in state["descriptors"]:
             if descriptor not in state["closed"]:
                 original_close(descriptor)
@@ -453,7 +464,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             evidence = caught.exception.owned_popen_evidence
             self.assertTrue(evidence.created)
             self.assertIs(evidence.shutdown_confirmed, False)
-            self.assertIsNotNone(state["process"].poll())
+            self.assertIsNone(state["process"].returncode)
 
     def test_cleanup_observation_error_carries_created_unknown_receipt(self):
         with controller_log_close_failure(observation_raises=True) as state:
@@ -468,9 +479,16 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
         error = ValueError("fixture handle registration failed")
         from hey_my_buddy.protocol import process_identity
         with controller_log_close_failure(log=None) as state:
-            with mock.patch.object(process_identity, "_creation_time", side_effect=error):
-                with self.assertRaises(ValueError) as caught:
-                    self.launch()
+            with mock.patch.object(process_identity, "record_native_process_spawn", side_effect=error):
+                state["native_intent"] = "fixture"
+                original_spawn = process_controller.owned_popen
+                def journalled_spawn(*args, **kwargs):
+                    child = original_spawn(*args, **kwargs)
+                    child._buddy_native_intent = "fixture"
+                    return child
+                with mock.patch.object(process_controller, "owned_popen", side_effect=journalled_spawn):
+                    with self.assertRaises(ValueError) as caught:
+                        self.launch()
             self.assertIs(caught.exception, error)
             self.assertEqual(error.owned_popen_evidence,
                              ProcessCreationEvidence(True, True, state["process"].returncode))
@@ -610,35 +628,29 @@ class RealStopTests(unittest.TestCase):
 
 
 class ObservationErrorStopTests(unittest.TestCase):
-    """An unavailable POSIX group observation is not termination evidence.
+    """An unavailable session scan leaves even an exited root unconfirmed."""
 
-    The Windows Job branch of the same conservative rule is pinned by
-    ``buddy.runtime.test_windows_process``; this is the POSIX owned-group branch
-    at the shared face: a leader that already exited, whose group can no longer
-    be observed, keeps the attempt unconfirmed — unknown stays alive, so the
-    collection never reports a stop on the strength of a failed observation.
-    """
-
-    def test_an_observation_error_of_the_owned_group_keeps_the_attempt_unconfirmed(self):
-        if os.name == "nt":
-            self.skipTest("POSIX owned groups only")
+    @unittest.skipIf(os.name == "nt", "POSIX session observation")
+    def test_scan_error_before_reaping_keeps_the_attempt_unconfirmed(self):
         with TemporaryDirectory(prefix="controller-observe-") as name:
-            log_paths = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
-            handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"],
-                                                    name, dict(os.environ)),
-                                       log_paths=log_paths, stop_channel="stdin")
-            self.assertIsNotNone(handle.wait(5))
-            receipt = {"processState": {"shutdownConfirmed": True}}
-            self.assertIs(stop_confirmed(receipt, handle.shutdown_confirmed), True,
-                          "the group must be observed gone before the fault is injected")
-            for error in (PermissionError("the group belongs to another user"),
-                          OSError("the group cannot be observed")):
-                with self.subTest(error=type(error).__name__), \
-                        mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
-                    self.assertTrue(handle.group_alive())
-                    self.assertIs(handle.shutdown_confirmed(settle_seconds=0), False)
-                    collection = collect_controller(handle, read=lambda _path: None, stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
-                    self.assertIs(collection.stop_confirmed, False)
+            logs = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
+            handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"], name, dict(os.environ)),
+                                       log_paths=logs, stop_channel="stdin")
+            try:
+                receipt = {"processState": {"shutdownConfirmed": True}}
+                for error in (PermissionError("session denied"), OSError("scan unavailable")):
+                    with self.subTest(error=type(error).__name__), \
+                         mock.patch.object(handle._members, "snapshot", side_effect=error):
+                        self.assertIsNotNone(handle.wait(5))
+                        self.assertTrue(handle.group_alive())
+                        self.assertIsNone(handle.process.returncode)
+                        self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+                        collection = collect_controller(handle, read=lambda _path: None,
+                            stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
+                        self.assertFalse(collection.stop_confirmed)
+                self.assertTrue(stop_confirmed(receipt, handle.shutdown_confirmed))
+            finally:
+                handle.terminate(grace_seconds=0)
 
 
 class CollectControllerTests(unittest.TestCase):

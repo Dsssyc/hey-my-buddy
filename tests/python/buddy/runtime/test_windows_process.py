@@ -138,7 +138,7 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertIs(caught.exception.execution_handle.process, process)
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
-    def test_handle_construction_failure_stops_spawned_group(self):
+    def test_missing_posix_identity_keeps_spawned_session_unconfirmed(self):
         children = []
         original = process_controller.owned_popen
 
@@ -153,14 +153,18 @@ class WindowsProcessTests(unittest.TestCase):
             with mock.patch.object(process_controller, "owned_popen", side_effect=spawn), \
                  mock.patch("hey_my_buddy.protocol.process_identity._creation_time",
                             side_effect=OSError("identity unavailable")):
-                with self.assertRaises(OSError) as caught:
+                with self.assertRaises(RuntimeError) as caught:
                     process_controller.launch_controller(
                         prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
                                          directory, dict(os.environ)), log_paths=logs, stop_channel="stdin")
         self.assertEqual(len(children), 1)
         self.assertTrue(caught.exception.owned_popen_evidence.created)
-        self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
-        self.assertIsNotNone(children[0].poll())
+        self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
+        self.assertIsNone(children[0].poll())
+        # The test still owns this unreaped child; restore real observation for
+        # its cleanup after removing the injected creation-read failure.
+        handle = ProcessHandle(children[0], own_group=True, log_paths={}, stop_channel="signal")
+        self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def launch(self, api, process):
         with mock.patch("hey_my_buddy.protocol.owned_process.subprocess.Popen", return_value=process) as popen:

@@ -38,6 +38,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     SessionService,
 )
 from hey_my_buddy.buddy.harnesses.zcode import native_run
+from hey_my_buddy.protocol import process_members
 from hey_my_buddy.buddy.harnesses.zcode.native_run import (
     SessionServices,
     prepare_session_service,
@@ -1668,21 +1669,27 @@ class DiscoveryStopTests(NativeRunCase):
                 raise OSError("fixture process creation refused")
             return process
 
+        handle_type = native_run.ProcessHandle
+
         def owned_popen(*args, **kwargs):
             child = windows_process.owned_popen(*args, windows_api=windows_api, **kwargs)
             self.fd_close_child = child
+            return child
+
+        def capture(*args, **kwargs):
             creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
                              if windows_api is not None else nullcontext())
             with creation_time:
-                owner = native_run.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
-
+                owner = handle_type(*args, **kwargs)
             def reap():
                 try:
+                    if owner._members is not None:
+                        owner._members.snapshot = process_members.process_snapshot
                     native_run.halt_owned_group(owner, time.monotonic() + 5)
                 finally:
-                    child.stdout.close()
+                    owner.process.stdout.close()
             self.addCleanup(reap)
-            return child
+            return owner
 
         def close(fd):
             nonlocal close_failed
@@ -1692,6 +1699,7 @@ class DiscoveryStopTests(NativeRunCase):
                 raise error
 
         with mock.patch.object(native_run, "owned_popen", owned_popen), \
+             mock.patch.object(native_run, "ProcessHandle", side_effect=capture), \
              mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(native_run.os, "close", side_effect=close), \
              mock.patch.object(native_run, "NativeConnection") as connection:
@@ -1792,20 +1800,14 @@ class DiscoveryStopTests(NativeRunCase):
     @unittest.skipIf(os.name == "nt", "POSIX group observation; Windows Job uncertainty is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
         error = OSError("fixture stderr close failed")
-        real_killpg = os.killpg
-
-        def killpg(pgid, sig):
-            if self.fd_close_child is not None and pgid == self.fd_close_child.pid and sig == 0:
-                raise PermissionError("fixture group observation refused")
-            return real_killpg(pgid, sig)
-
-        with mock.patch.object(os, "killpg", side_effect=killpg):
+        with mock.patch.object(process_members, "process_snapshot",
+                               side_effect=PermissionError("fixture session scan refused")):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(error)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
         self.assertIs(caught.exception, error)
         self.assertIsNotNone(self.fd_close_child)
-        self.assertIsNotNone(self.fd_close_child.poll())
+        self.assertIsNone(self.fd_close_child.returncode)
         self.assertTrue(self.fd_close_child.stdout.closed)
 
     def test_original_non_native_read_error_keeps_confirmed_stop(self):

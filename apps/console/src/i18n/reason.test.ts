@@ -13,6 +13,7 @@ const samples: Record<string, unknown> = {
   errorCode: "SAMPLE", errors: ["summary-citation-outside-batch"], harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
   missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
   processes: [{ pid: 321, startedAt: 456, executable: "python" }],
+  unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
   requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768,
 };

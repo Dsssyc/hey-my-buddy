@@ -257,6 +257,15 @@ class StopStateTest(AcpTestCase):
         """
 
         class UnstoppableHandle:
+            def poll(self):
+                return None
+
+            def group_observation(self):
+                return "alive"
+
+            def shutdown_confirmed(self, settle_seconds=0):
+                return False
+
             process = type("FakeProcess", (), {"poll": lambda self: None})()
             job = type("ActiveJob", (), {"active": lambda self: 1})()
 

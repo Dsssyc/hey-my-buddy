@@ -43,6 +43,7 @@ class ProcessHandle:
         self.role_run_active_identity = None
         self.job = vars(process).get("_buddy_job")
         self._members = None
+        self.process_started_at = None
         self._exit_code = None
         self._confirmed = False
         # start_new_session makes the owned child's PID its process-group ID.
@@ -118,7 +119,7 @@ class ProcessHandle:
             return self._exit_code
 
     def _signal_group(self, sig: int) -> None:
-        if self.process.pid is None:
+        if self.process.pid is None or self._members is None:
             return
         try:
             self._members.signal(sig)
@@ -143,6 +144,8 @@ class ProcessHandle:
             return "unknown"  # A root PID without a held Job cannot prove tree shutdown.
         if self.process.pid is None:
             return "gone"
+        if self._members is None:
+            return "unknown"  # Failed identity capture cannot admit a POSIX member.
         try:
             observation = self._members.observe()
             return "gone" if observation == "identity-absent" else observation

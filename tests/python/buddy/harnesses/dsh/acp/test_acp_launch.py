@@ -39,7 +39,9 @@ class LaunchTest(AcpTestCase):
         process, handle = launch(argv, private_root=self.root,
                                  extra_env={"DSH_PERMISSION_MODE": "read-only"})
         try:
-            out, _ = process.communicate(timeout=30)
+            process.stdin.close()
+            out = process.stdout.read()
+            handle.wait(30)
             self.assertEqual(0, process.returncode)
         finally:
             handle.wait(5)
@@ -51,7 +53,7 @@ class LaunchTest(AcpTestCase):
         self.assertEqual("read-only", child["DSH_PERMISSION_MODE"])
         self.assertTrue(stop_evidence(handle)["shutdownConfirmed"])
 
-    def test_handle_construction_failure_stops_child_and_retains_evidence(self):
+    def test_handle_identity_failure_retains_honest_stop_evidence(self):
         from hey_my_buddy.protocol import process_identity
         original_terminate = ProcessHandle.terminate
         with mock.patch.object(ProcessHandle, "terminate", autospec=True,
@@ -62,8 +64,14 @@ class LaunchTest(AcpTestCase):
                            private_root=self.root)
         self.assertEqual(stop.call_count, 1)
         error = caught.exception
-        self.assertTrue(error.evidence["shutdownConfirmed"], error.evidence)
-        self.assertEqual("gone", error.evidence["groupObserved"])
+        if os.name == "nt":
+            self.assertTrue(error.evidence["shutdownConfirmed"], error.evidence)
+        else:
+            self.assertFalse(error.evidence["shutdownConfirmed"], error.evidence)
+            self.assertEqual("unknown", error.evidence["groupObserved"])
+            # Re-observe only the test-owned unreaped child with the real reader.
+            handle = ProcessHandle(error.process, own_group=True, log_paths={}, stop_channel="signal")
+            self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_connection_construction_failure_stops_child_and_retains_evidence(self):
         with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.AcpConnection",

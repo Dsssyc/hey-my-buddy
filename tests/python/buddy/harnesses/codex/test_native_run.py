@@ -12,6 +12,7 @@ Worker and review carriers, ``no_tool_codex.py`` the fast no-tool carrier.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -1818,21 +1819,26 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             return run_discovery(cwd=str(self.base), invocation_root=self.base / 'invocation',
                                  native_root=self.base / 'native', timeout_seconds=2, cancelled=lambda: False)
 
+    @contextmanager
     def keep_child_for_teardown(self, before=None):
         create = native_run.owned_popen
 
         def owned(*args, **kwargs):
             if before is not None:
                 before(kwargs)
-            child = create(*args, **kwargs)
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            return create(*args, **kwargs)
 
+        def capture(*args, **kwargs):
+            handle = ProcessHandle(*args, **kwargs)
             def reap():
                 native_run._halt_owned_group(handle, time.monotonic() + 5)
-                child.stdout.close()
+                handle.process.stdout.close()
             self.addCleanup(reap)
-            return child
-        return mock.patch.object(native_run, 'owned_popen', side_effect=owned)
+            return handle
+
+        with mock.patch.object(native_run, 'owned_popen', side_effect=owned), \
+             mock.patch.object(native_run, 'ProcessHandle', side_effect=capture):
+            yield
 
     def test_missing_command_proves_no_native_child(self):
         self.record.update(status='unavailable', command=[],
