@@ -217,6 +217,7 @@ class RunRequest(InternalModel):
     buddy: RunBuddy
     cwd: AbsolutePath
     private_state: PrivateStatePaths
+    session_record_path: AbsolutePath
     input_text: NonEmptyInputText
     tool_scope: ToolScope
     #: None for runs without a micro task Worker permission choice.
@@ -590,6 +591,14 @@ class NativeEvidence(InternalModel):
                            max_items=MAX_UNCONFIRMED_ITEMS) = ()
 
 
+class SessionRecordFailure(InternalModel):
+    """The first failed session write; it does not change execution facts."""
+
+    code: Literal["session-record-write-failed"]
+    message: RawText(8192)
+    cause: Text(128)
+
+
 class RunResult(InternalModel):
     """One native run's facts; ``ok`` means the native interaction completed.
 
@@ -626,6 +635,7 @@ class RunResult(InternalModel):
     native_failure: NativeFailurePackage = None
     native_error: NativeErrorRecord = None
     last_assistant_message: LastAssistantMessagePackage = None
+    session_record_failure: Optional[SessionRecordFailure] = None
     continuation: Optional[ContinuationFacts] = None
     stop_evidence: StopEvidence = Field(default_factory=StopEvidence)
     evidence_refs: JsonTuple(EvidenceRef, max_items=MAX_EVIDENCE_REFS) = ()

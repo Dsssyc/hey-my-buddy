@@ -447,7 +447,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
     native_owners = {}
-    private_task_ids = {}
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
@@ -458,7 +457,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             for micro_task_id in micro_task_ids:
                 digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
                 native_owners[digest] = (run['run_id'], reasons)
-                private_task_ids[digest] = micro_task_id
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
@@ -491,26 +489,24 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    records = []
-                    attempts = path / 'attempts'
-                    if private_dirs.linked_component(attempts) is None and attempts.is_dir():
-                        for attempt in sorted(attempts.iterdir()):
-                            record = attempt / 'session.jsonl'
-                            if private_dirs.linked_component(record) is None and record.is_file():
-                                records.append((attempt.name, record))
-                    if records:
-                        reasons = [*reasons, 'session-records-retained']
-                    parent = add('harnesses', path, reasons, excluded=frozenset(record for _, record in records),
-                                 runId=run_id, adapter=adapter)
-                    if parent is None:
-                        continue
-                    for attempt_id, record in records:
-                        add('session-records', record, ['macro-task-deletion'], runId=run_id,
-                            taskId=private_task_ids.get(path.name), attemptId=attempt_id, adapter=adapter)
+                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
                     if path.name != 'micro-tasks':
                         add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
+    sessions = state / 'sessions'
+    if private_dirs.linked_component(sessions) is not None:
+        add('session-records', sessions, ['macro-task-deletion'])
+    elif sessions.exists():
+        for category in ('macro-tasks', 'micro-tasks'):
+            groups = sessions / category
+            if private_dirs.linked_component(groups) is not None:
+                add('session-records', groups, ['macro-task-deletion'])
+                continue
+            if groups.exists():
+                for group in sorted(groups.iterdir()):
+                    add('session-records', group, ['macro-task-deletion'], groupId=(
+                        group.name if category == 'macro-tasks' else 'run:' + group.name))
     seen = set()
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
@@ -647,7 +643,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
-        if path.name in {'workspaces','harnesses','backups','archives'} or path == runtime_root:
+        if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtime_root:
             continue
         add('durable', path, ['durable-record'])
     if harnesses.exists() and not private_dirs.linked(harnesses):

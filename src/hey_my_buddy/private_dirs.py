@@ -120,6 +120,22 @@ def attempt_root(state: Path, adapter: str, task_id: str, attempt_id: str) -> Pa
     return micro_task_root(state, adapter, task_id) / 'attempts' / attempt_id
 
 
+def session_group_root(state: Path, group_id: str) -> Path:
+    """The session directory of the console's authoritative task group."""
+    independent = group_id.startswith('run:')
+    identity = group_id[4:] if independent else group_id
+    if _ATTEMPT_ID.fullmatch(identity) is None or identity in ('.', '..'):
+        raise BoardError('INVALID_ARGUMENT', 'Session records require a safe group identity')
+    return _absolute(state) / 'sessions' / ('micro-tasks' if independent else 'macro-tasks') / identity
+
+
+def session_record_path(state: Path, group_id: str, attempt_id: str) -> Path:
+    """One execution's display record, shared by the service and its reader."""
+    if not isinstance(attempt_id, str) or _ATTEMPT_ID.fullmatch(attempt_id) is None or attempt_id in ('.', '..'):
+        raise BoardError('INVALID_ARGUMENT', 'Session records require a safe attempt identity')
+    return session_group_root(state, group_id) / (attempt_id + '.sqlite3')
+
+
 def context_root(context, adapter: str | None = None) -> Path:
     """Resolve an execution's private root from its explicit service state root."""
     state = context.environment['HMB_STATE_DIR']

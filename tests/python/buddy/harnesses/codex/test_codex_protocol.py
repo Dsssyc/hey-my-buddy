@@ -77,6 +77,7 @@ class NativeCheckpointTests(unittest.TestCase):
                                  invocation_id="invocation", turn_id="turn",
                                  input_sha256=input_hash(self.document)),
             harness="codex", buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
+            session_record_path="/fixture/session.sqlite3",
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/invocation",
                                                             native_root="/fixture/native"),
             input_text="prompt", tool_scope="write", output_schema={},

@@ -7,7 +7,8 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.session_content import ZcodeSessionProjector
-from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from buddy.harnesses.session_record_support import notifications, updates
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from buddy.harnesses.zcode.test_native_run import NativeRunCase, MockNativeCase
 
@@ -147,25 +148,24 @@ class ProjectorTests(unittest.TestCase):
 
 class RouterSessionTests(NativeRunCase):
     def record(self, request):
-        return SessionRecord(Path(os.environ['HMB_STATE_DIR']), 'zcode', request.identity.task_id, request.identity.attempt_id)
+        return SessionRecord(request.session_record_path, request.identity.attempt_id)
 
     def events(self, request):
-        return [json.loads(line)['update'] for line in self.record(request).path.read_text().splitlines()[1:]]
+        return updates(self.record(request).path)
 
     def test_router_runs_append_to_one_attempt_with_one_header(self):
         request = self.fast_request('Return only one JSON value matching this schema: {}')
         first = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(first.end.status, 'ok', first.end.message)
         path = self.record(request).path
-        before = path.read_bytes()
+        before = notifications(path)
         second = request.model_copy(update={
             'identity': request.identity.model_copy(update={'invocation_id': 'second-invocation'}),
             'private_state': request.private_state.model_copy(update={'invocation_root': str(self.base / 'second')})})
         result = native_run.run(second, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok', result.end.message)
-        after = path.read_bytes()
-        self.assertTrue(after.startswith(before))
-        self.assertEqual(after.count(b'"projectionVersion"'), 1)
+        after = notifications(path)
+        self.assertEqual(after[:len(before)], before)
         events = self.events(request)
         self.assertEqual([e['sessionUpdate'] for e in events], ['user_message_chunk', 'agent_message_chunk'] * 2)
         self.assertNotEqual(events[1]['_meta']['contentSegment'], events[3]['_meta']['contentSegment'])
@@ -181,9 +181,10 @@ class RouterSessionTests(NativeRunCase):
 
     def test_write_failure_preserves_native_identity_stop_and_result(self):
         request = self.fast_request('Return only one JSON value matching this schema: {}')
-        with mock.patch.object(SessionRecord, 'append', side_effect=SessionRecordWriteError()):
+        with mock.patch.object(SessionRecord, '_open', side_effect=OSError('controlled write failure')):
             result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
-        self.assertEqual((result.end.status, result.end.reason_code), ('error', 'session-record-write-failed'))
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertTrue(result.model_started)
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
@@ -194,10 +195,11 @@ class RouterSessionTests(NativeRunCase):
         close = SessionRecord.close
         def failed_close(record):
             close(record)
-            raise SessionRecordWriteError()
+            record._failed(OSError('controlled close failure'))
         with mock.patch.object(SessionRecord, 'close', failed_close):
             result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.value)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
@@ -208,20 +210,20 @@ class RouterSessionTests(NativeRunCase):
         append = SessionRecord.append
         def failed_late(record, update):
             if getattr(update, 'tool_call_id', None) == 'c-late':
-                raise SessionRecordWriteError()
+                record._failed(OSError('late record write failed'))
+                return
             return append(record, update)
         with mock.patch.object(SessionRecord, 'append', failed_late):
             result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.value)
 
 
 class WorkerSessionTests(MockNativeCase):
     def events(self, request):
-        path = SessionRecord(Path(self.environment['HMB_STATE_DIR']), 'zcode',
-                             request.identity.task_id, request.identity.attempt_id).path
-        return [json.loads(line)['update'] for line in path.read_text().splitlines()[1:]]
+        return updates(Path(request.session_record_path))
 
     def test_worker_records_native_finish_tool_result(self):
         from hey_my_buddy.buddy.roles.run_observers import worker_observer
@@ -267,6 +269,7 @@ class WorkerSessionTests(MockNativeCase):
         second_input = {**first_input, 'turnId': 'next-turn', 'previousSessionId': session, 'resumeMode': 'native-session'}
         second, services = self.worker_request(second_input,
             continuation=RunContinuation(mode='native-session', previous_session_id=session))
+        second = second.model_copy(update={'session_record_path': request.session_record_path})
         with mock.patch.dict(os.environ, {**self.environment, 'HMB_ZCODE_TEST_CASE': 'session-content-resume'}, clear=True):
             result = native_run.run(second, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok', result.end.message)
@@ -282,12 +285,14 @@ class WorkerSessionTests(MockNativeCase):
         append = SessionRecord.append
         def failed_terminal(record, update):
             if getattr(update, 'status', None) == 'completed':
-                raise SessionRecordWriteError()
+                record._failed(OSError('terminal record write failed'))
+                return
             return append(record, update)
         with mock.patch.dict(os.environ, self.environment, clear=True), \
              mock.patch.object(SessionRecord, 'append', failed_terminal):
             result = native_run.run(request, observer=worker_observer, services=services, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertTrue(result.evidence_refs)
         self.assertIsNotNone(result.native_identity.session_id)

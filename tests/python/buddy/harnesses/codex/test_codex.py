@@ -17,6 +17,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from buddy.harnesses.session_record_support import notifications
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
@@ -56,7 +57,7 @@ class CodexAdapterTests(unittest.TestCase):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
-        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
+        return ExecutionContext(session_record_path=str(self.root / f"session-{index}.sqlite3"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
@@ -459,20 +460,17 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
     def test_host_wrap_up_resumes_same_native_session_for_structured_summary(self):
-        from hey_my_buddy.private_dirs import attempt_root
-        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+        from hey_my_buddy.protocol.session_content import SessionNotification
 
         context = self.context("wrap-up", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         started = self.wait_native_turn_start()
-        session_path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                                    context.task_id, context.attempt_id) / 'session.jsonl'
+        session_path = Path(context.session_record_path)
         record_deadline = time.monotonic() + 5
         while not session_path.exists() and time.monotonic() < record_deadline:
             time.sleep(0.01)
-        first_record = session_path.read_bytes()
-        self.assertTrue(first_record.endswith(b'\n'))
+        first_record = notifications(session_path)
         controller.worker_stop(self.adapter, handle, stop_initiator="host",
                                grace_deadline=time.monotonic() + 10)
         self.assertIsNotNone(handle.wait(15), "Codex fixture summary controller did not exit")
@@ -495,15 +493,12 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual([(item["id"], item["status"]) for item in native_turns],
                          [(started["turnId"], "interrupted"), ("native-turn-2", "completed")])
         self.assertEqual(len(state["threads"][started["threadId"]]["resumeRequests"]), 1)
-        final_record = session_path.read_bytes()
-        self.assertTrue(final_record.startswith(first_record), 'the original turn must stay intact')
-        lines = [json.loads(line) for line in final_record.splitlines()]
-        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
-        SessionFormat.from_payload(lines[0])
-        for line in lines[1:]:
+        lines = notifications(session_path)
+        self.assertEqual(lines[:len(first_record)], first_record, 'the original turn must stay intact')
+        for line in lines:
             SessionNotification.from_payload(line)
             self.assertEqual(line['sessionId'], context.attempt_id)
-        inputs = [line['update']['content']['text'] for line in lines[1:]
+        inputs = [line['update']['content']['text'] for line in lines
                   if line['update']['sessionUpdate'] == 'user_message_chunk']
         self.assertEqual(len(inputs), 2, 'the original and wrap-up runs share one attempt record')
         self.assertNotEqual(inputs[0], inputs[1])

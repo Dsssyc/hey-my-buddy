@@ -89,6 +89,7 @@ from ..run_contract import (
     RunIdentity,
     RunRequest,
     RunResult,
+    SessionRecordFailure,
     RunValue,
     StopEvidence,
     StopLayer,
@@ -123,7 +124,7 @@ from .tool_evidence import (
     CodexToolEventProjector,
 )
 from .session_content import CodexSessionProjector
-from ..session_record import SESSION_RECORD_WRITE_FAILED, SessionRecord, SessionRecordWriteError
+from ..session_record import SessionRecord
 from ..runtime_selection import environment_for
 
 _NATIVE_STDERR_FILE = "native.stderr.log"
@@ -882,7 +883,6 @@ class _EventChain:
         self.pending: list[dict] = []
         self.truncated = False
         self.session = session
-        self.session_error: SessionRecordWriteError | None = None
 
     def observe_facts(self, message: dict) -> None:
         """Project and classify one frame without the carrier stage."""
@@ -893,12 +893,7 @@ class _EventChain:
 
     def observe(self, message: dict) -> None:
         self.observe_facts(message)
-        try:
-            self.session.observe_notification(message)
-        except SessionRecordWriteError as error:
-            # Preserve this frame's native facts and carrier observation before
-            # the pump reports the record failure to the run boundary.
-            self.session_error = error
+        self.session.observe_notification(message)
         if self.carrier is None:
             if len(self.pending) >= _BOUND_NOTIFICATIONS:
                 self.truncated = True
@@ -1163,10 +1158,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
-    session = CodexSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "codex",
-                                                request.identity.task_id, request.identity.attempt_id))
+    session = CodexSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
     chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
-    record_error: SessionRecordWriteError | None = None
     inquiry_bridge: InquiryBridge | None = None
     inquiry_poller: list[_NativeInquiry] = []
     try:
@@ -1201,9 +1194,6 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                 thread_id = _configure_review(connection, request, state)
             _structured_rounds(connection, chain, request, state, thread_id,
                                mode, observer, activity)
-    except SessionRecordWriteError as error:
-        record_error = error
-        state.status = "error"
     except ObserverInterrupt:
         state.status, state.reason = "cancelled", "observer-interrupt"
         state.error_text = "the role observer stopped the run"
@@ -1228,17 +1218,11 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
         _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
-    # Display teardown belongs to normal run settlement, after stop evidence
-    # has been collected. No display exception may bypass the result builder.
-    try:
-        session.close(flush=record_error is None)
-    except SessionRecordWriteError as error:
-        record_error = error
-    if record_error is not None:
-        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
-        state.error_text = str(record_error)
+    session.close()
     _collect_quota_failure(state, stream_truncated=chain.truncated)
-    return _build_result(request, prep, state, mode, projector, facts, activity)
+    return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
+        update={"session_record_failure": SessionRecordFailure(**session.record.failure)
+                if session.record.failure is not None else None})
 
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
@@ -1276,8 +1260,6 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
     def dispatch_feedback() -> None:
         # Runs after every pump step, the waits inside ``call`` included: the
         # refusal answer is already on the wire when the role's stop lands.
-        if chain.session_error is not None:
-            raise chain.session_error
         if connection.messages.empty():
             chain.session.flush()
         if facts.dirty:

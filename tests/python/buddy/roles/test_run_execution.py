@@ -255,6 +255,18 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.assertNotIn("selectedModelListed", payload)
         self.assertNotIn("selectedModel", payload)
 
+    def test_session_write_failure_is_reported_without_changing_run_status(self):
+        request = self._request("none")
+        result = self._result(request, with_ref=False, status="ok").model_copy(update={
+            "session_record_failure": rc.SessionRecordFailure(
+                code="session-record-write-failed", message="storage unavailable", cause="OperationalError")})
+        payload = run_execution._fast_result(result, request,
+                                             {"stopReason": None, "elapsedMs": 1})
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["sessionRecordFailure"], {
+            "code": "session-record-write-failed", "message": "storage unavailable",
+            "cause": "OperationalError"})
+
     def test_a_changed_evidence_reference_is_refused(self):
         request = self._request("none")
         result = self._result(request, with_ref=True)

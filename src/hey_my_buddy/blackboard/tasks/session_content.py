@@ -9,7 +9,8 @@ from .macro_tasks import MEMBERS_SQL
 def identity(store, task_id: str, attempt_id: str) -> dict:
     with store.db.read() as connection:
         row = connection.execute(f'''
-            SELECT a.execution_state, COALESCE(a.model_harness, a.adapter) AS harness,
+            SELECT a.execution_state, a.result_json,
+                   COALESCE(a.model_harness, a.adapter) AS harness,
                    member.group_id
               FROM attempts a JOIN tasks t ON t.task_id=a.task_id
               JOIN ({MEMBERS_SQL}) member ON member.task_id=t.task_id

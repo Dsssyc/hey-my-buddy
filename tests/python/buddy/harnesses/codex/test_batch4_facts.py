@@ -28,6 +28,7 @@ class NativeFactsTests(unittest.TestCase):
             identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                  invocation_id="invocation"),
             harness="codex", buddy=RunBuddy(provider="openai", model="model", effort="low"),
+            session_record_path=str(self.root / "session.sqlite3"),
             cwd=str(self.root), private_state=PrivateStatePaths(invocation_root=str(self.root),
                                                               native_root=str(self.root / "native")),
             input_text="Read the input", output_schema={"type": "object"}, tool_scope="none",

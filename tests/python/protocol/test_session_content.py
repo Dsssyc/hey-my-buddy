@@ -3,22 +3,10 @@ import unittest
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import decode_strict_json
-from hey_my_buddy.protocol.session_content import SESSION_FORMAT, SessionFormat, SessionNotification
+from hey_my_buddy.protocol.session_content import SessionNotification
 
 
 class SessionContentTests(unittest.TestCase):
-    def test_format_is_exact_and_versions_are_strict(self):
-        self.assertEqual(SESSION_FORMAT.to_payload(), {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1})
-        for field, value in (("protocol", "other"), ("protocolVersion", 2),
-                             ("protocolVersion", True), ("projectionVersion", 1.0)):
-            with self.subTest(field=field, value=value), self.assertRaises(BoardError):
-                SessionFormat.from_payload({**SESSION_FORMAT.to_payload(), field: value})
-        for field in SESSION_FORMAT.to_payload():
-            payload = SESSION_FORMAT.to_payload()
-            del payload[field]
-            with self.subTest(missing=field), self.assertRaises(BoardError):
-                SessionFormat.from_payload(payload)
-
     def test_six_updates_round_trip(self):
         updates = [
             *({"sessionUpdate": kind, "content": {"type": "text", "text": "正文𝄞"},

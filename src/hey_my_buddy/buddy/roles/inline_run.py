@@ -173,7 +173,10 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
                 control, request, result, module, state_dir, deadline, handle)
             handle.role_run_active_control = active_control
             if result.identity != first.identity:
-                result = result.model_copy(update={"usage": _wrap_up_usage(first, result)})
+                result = result.model_copy(update={
+                    "usage": _wrap_up_usage(first, result),
+                    "session_record_failure": first.session_record_failure or result.session_record_failure,
+                })
     if control["operation"] == "worker" and request.worker_permission is not None:
         path = Path(request.private_state.invocation_root) / "worker-permission.json"
         declaration = {"source": "harness-permission-declaration",

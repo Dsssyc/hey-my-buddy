@@ -101,6 +101,7 @@ def start(harness, context, request, fixture, options):
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
     control = {
         "operation": "review", "harness": harness, "privateRoot": str(private),
+        "sessionRecordPath": context.session_record_path,
         "directory": str(context.directory), "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],

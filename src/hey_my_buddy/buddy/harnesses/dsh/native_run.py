@@ -67,6 +67,7 @@ from ..run_contract import (
     RunFeedback,
     RunRequest,
     RunResult,
+    SessionRecordFailure,
     SessionService,
     RunValue,
     StopEvidence,
@@ -78,7 +79,7 @@ from ..run_contract import (
     unknown_event_name,
 )
 from ..runtime_selection import command_for, environment_for
-from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from ..session_record import SessionRecord
 from .session_content import DshSessionProjector
 from .acp import AcpClient
 from .acp.client import PermissionPolicy
@@ -973,9 +974,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
-    session = DshSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "dsh",
-                                               request.identity.task_id, request.identity.attempt_id))
-    record_error: SessionRecordWriteError | None = None
+    session = DshSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
     # The cooperative inquiry bridge lives in this process because only it holds
     # the native connection; it queues questions for the root's own checkpoint
     # tool and journals delivered/answered state after the verified receipt.
@@ -1016,21 +1015,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         return feedback
 
     def fold(message: object) -> bool:
-        nonlocal record_error
         state.event_count += 1
-        write_failed = False
-        if record_error is None:
-            try:
-                session.observe_notification(message)
-            except SessionRecordWriteError as error:
-                record_error = error
-                write_failed = True
-        # Keep the native facts and role observation even when this frame could
-        # not be recorded; the record failure is settled after stop collection.
+        session.observe_notification(message)
         changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
                                evidence=evidence, inquiry_bridge=inquiry_bridge)
-        if write_failed:
-            raise record_error
         if pump is not None and pump.overflow:
             raise NativeError("invalid-protocol", "the native update queue overflowed; frames were dropped")
         return changed
@@ -1105,10 +1093,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel, session=session)
             if state.status != "unknown":
                 state.status = "ok"
-    except SessionRecordWriteError as error:
-        record_error = error
-        state.status = "error"
-        send_cancel(sessions[-1] if sessions else None)
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1134,13 +1118,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             inquiry_bridge.close()
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
-    try:
-        session.close()
-    except SessionRecordWriteError as error:
-        record_error = error
-    if record_error is not None:
-        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
-        state.error_text = str(record_error)
+    session.close()
     if sessions:
         if state.record_baseline is not None:
             record = resumed_session_record_facts(sessions_root, state.record_baseline)
@@ -1175,7 +1153,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                          correction_count=correction_count, drained=drained,
                          invocation_root=invocation_root, record=record,
                          stderr_mirror=services.native_stderr if micro_task else None,
-                         continuation=continuation)
+                         continuation=continuation).model_copy(
+                             update={"session_record_failure": SessionRecordFailure(**session.record.failure)
+                                     if session.record.failure is not None else None})
 
 
 # -- the session/prompt stages shared by both carriers -------------------------------
@@ -1557,7 +1537,7 @@ def _drain_late(pump: _Pump | None, state: _RunState, fold, notify) -> bool:
     for message in pump.drain():
         try:
             changed = fold(message)
-        except (NativeError, SessionRecordWriteError):
+        except NativeError:
             complete = False
             continue
         except BoardError:

@@ -87,6 +87,7 @@ def _request(harness):
         tool_scope="read",
         output_schema={"type": "object"},
         budget=RunBudget(timeout_seconds=60),
+        session_record_path=str(ROOT / "session.sqlite3"),
     )
 
 

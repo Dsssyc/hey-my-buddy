@@ -142,7 +142,6 @@ export default {
   "session.codex-internal-reasoning-omitted": "Codex internal reasoning (only native reasoning summaries are provided).",
   "macro-task-deletion": "Deleted with its macro task.",
   "session-record-write-failed": "The session record could not be written.",
-  "session-records-retained": "Session records are retained with their macro task.",
   "session.deleted": "The session was deleted.",
   "session.invalid-record": "The session record is damaged.",
   "session.not-integrated": "Session view is not implemented for this harness.",

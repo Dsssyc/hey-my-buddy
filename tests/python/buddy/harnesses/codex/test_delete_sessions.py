@@ -44,7 +44,7 @@ class DeleteSessionTests(unittest.TestCase):
         return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
     def test_adapter_uses_controller_and_deletes_each_exact_identity_once(self):
-        record = private_dirs.attempt_root(self.root / 'state', 'codex', 'owned-task', 'owned-attempt') / 'session.jsonl'
+        record = private_dirs.session_record_path(self.root / 'state', 'run:owned-task', 'owned-attempt')
         private_dirs.ensure_private_dir(record.parent)
         record.write_bytes(b'private display record\n')
         self.assertEqual(CodexAdapter().delete_sessions(["owned", "gone", "owned", "gone"]),

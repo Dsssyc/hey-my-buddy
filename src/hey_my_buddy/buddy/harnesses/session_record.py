@@ -1,52 +1,77 @@
-"""Execution-side append-only display record; the protocol side owns its model."""
+"""Execution-side append-only SQLite display record."""
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 from ...errors import BoardError
 from ...json_codec import canonical_json
-from ...private_dirs import attempt_root, ensure_private_dir, open_regular_fd
-from ...protocol.session_content import SESSION_FORMAT, SessionNotification, SessionUpdate
+from ...private_dirs import ensure_private_dir, open_regular_fd
+from ...protocol.session_content import SessionNotification, SessionUpdate
 
 
 SESSION_RECORD_WRITE_FAILED = "session-record-write-failed"
-
-
-class SessionRecordWriteError(Exception):
-    """A private record open, append, flush or close failed, with no source path."""
-
-    def __init__(self):
-        super().__init__("Could not write the attempt session record")
+# A summary run can reopen this path in the same execution process. Its first
+# write failure remains authoritative for the attempt and disables that writer.
+_FAILED_PATHS: dict[Path, dict] = {}
 
 
 class SessionRecord:
-    def __init__(self, state: Path, harness: str, task_id: str, attempt_id: str):
-        root = attempt_root(state, harness, task_id, attempt_id)
-        self.session_id = attempt_id
-        self.path = root / "session.jsonl"
-        self._stream = None
+    """One attempt's lazy writer; a failed write disables only this display record."""
 
-    def _write(self, value) -> None:
-        self._stream.write(canonical_json(value.model_dump(mode="json", by_alias=True, exclude_none=True)) + "\n")
-        self._stream.flush()
+    def __init__(self, path: Path, attempt_id: str):
+        self.path = Path(path).absolute()
+        self.session_id = attempt_id
+        self._connection: sqlite3.Connection | None = None
+        self.failure: dict | None = _FAILED_PATHS.get(self.path)
+
+    def _open(self) -> sqlite3.Connection:
+        ensure_private_dir(self.path.parent)
+        fd = open_regular_fd(self.path, os.O_RDWR | os.O_CREAT)
+        os.close(fd)
+        connection = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+        self._connection = connection
+        connection.execute("PRAGMA busy_timeout=60000")
+        mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if mode != "wal":
+            raise sqlite3.DatabaseError(f"Session record journal mode is {mode}, expected wal")
+        connection.execute("PRAGMA synchronous=NORMAL")
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == 0:
+            connection.execute("CREATE TABLE events (seq INTEGER PRIMARY KEY, notification TEXT NOT NULL)")
+            connection.execute("PRAGMA user_version=1")
+        elif version != 1:
+            raise sqlite3.DatabaseError(f"Unsupported session record version: {version}")
+        return connection
+
+    def _failed(self, error: Exception, *, closing: sqlite3.Connection | None = None) -> None:
+        if self.failure is None:
+            self.failure = {"code": SESSION_RECORD_WRITE_FAILED,
+                            "message": str(error), "cause": type(error).__name__}
+            _FAILED_PATHS[self.path] = self.failure
+        connection, self._connection = closing or self._connection, None
+        if connection is not None:
+            try:
+                connection.close()
+            except sqlite3.Error as close_error:
+                self.failure["message"] += f"; connection close failed: {close_error}"
 
     def append(self, update: SessionUpdate) -> None:
+        if self.failure is not None:
+            return
         notification = SessionNotification(session_id=self.session_id, update=update)
         try:
-            if self._stream is None:
-                ensure_private_dir(self.path.parent)
-                fd = open_regular_fd(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-                self._stream = os.fdopen(fd, "a", encoding="utf-8", newline="\n")
-                if os.fstat(fd).st_size == 0:
-                    self._write(SESSION_FORMAT)
-            self._write(notification)
-        except (OSError, BoardError) as error:
-            raise SessionRecordWriteError() from error
+            connection = self._connection or self._open()
+            connection.execute("INSERT INTO events (notification) VALUES (?)", (
+                canonical_json(notification.model_dump(mode="json", by_alias=True, exclude_none=True)),))
+        except (OSError, BoardError, sqlite3.Error) as error:
+            self._failed(error)
 
     def close(self) -> None:
-        if self._stream is not None:
+        connection, self._connection = self._connection, None
+        if connection is not None:
             try:
-                self._stream.close()
-            except OSError as error:
-                raise SessionRecordWriteError() from error
+                connection.close()
+            except sqlite3.Error as error:
+                self._failed(error, closing=connection)

@@ -324,6 +324,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         request = RunRequest(
             identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
             harness="codex", buddy=RunBuddy(provider="openai", model="m", effort="low"),
+            session_record_path="/fixture/session.sqlite3",
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
             input_text="prompt", tool_scope="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
@@ -402,6 +403,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                            HMB_DEV_SOURCE="1", HMB_CODEX_FIXTURE_CASE=case,
                            PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
+                                  session_record_path=str(self.root / f"session-{attempt}.sqlite3"),
                                   spec={"cwd": str(self.cwd), "task": "Select", "routerBudgetSeconds": 8,
                                         "provider": "openai", "model": "fixture-model", "effort": "low"},
                                   directory=self.root / f"attempt-{index}", runtime={}, environment=environment,

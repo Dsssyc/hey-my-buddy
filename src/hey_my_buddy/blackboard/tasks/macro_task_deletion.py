@@ -356,10 +356,10 @@ def _delete_workspaces(store, scope):
     return delete_workspaces(store, scope.manifests, scope.artifacts)
 
 
-def _remove_owned_tree(path):
+def _remove_owned_tree(path, *, object_kind='private-root'):
     if (private_dirs.linked_component(path) is not None
             or path.exists() and not path.is_dir()):
-        return [{'objectKind':'private-root', 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
+        return [{'objectKind':object_kind, 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
     private_dirs.remove_tree(path)
     return []
 
@@ -394,6 +394,10 @@ def _delete_private_roots(store, scope):
             skipped.extend(_remove_owned_tree(store.directory / 'harnesses' / harness / hashlib.sha256(task_id.encode()).hexdigest()))
         skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
     return skipped
+
+
+def _delete_session_group(store, target):
+    return _remove_owned_tree(private_dirs.session_group_root(store.directory, target), object_kind='session-records')
 
 
 def _delete_cli_files(store, scope):
@@ -578,7 +582,9 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
-                                ('private-root',_delete_private_roots),('cli-file',_delete_cli_files)):
+                                ('private-root',_delete_private_roots),
+                                ('session-records',lambda store, scope: _delete_session_group(store, target)),
+                                ('cli-file',_delete_cli_files)):
             try:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:

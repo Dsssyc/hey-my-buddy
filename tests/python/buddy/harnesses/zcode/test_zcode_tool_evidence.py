@@ -535,7 +535,8 @@ class FakeAppServerTests(unittest.TestCase):
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
              "routerBudgetSeconds": timeout}, self.root / "attempt", {},
-            {**self.environment, "HMB_ZCODE_TEST_CASE": case})
+            {**self.environment, "HMB_ZCODE_TEST_CASE": case},
+            session_record_path=str(self.root / "session-attempt.sqlite3"))
         request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
@@ -654,6 +655,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
             identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                  invocation_id="timeout-after-prompt"),
             harness="zcode", buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
+            session_record_path=str(self.root / "session.sqlite3"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(self.root / "invocation"),
                                             native_root=str(self.root / "native")),

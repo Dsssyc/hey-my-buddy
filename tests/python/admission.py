@@ -19,13 +19,18 @@ def admit_board(board, params):
 
 def run_next(client, nonce='test-execution-nonce-000000000000'):
     from hey_my_buddy.buddy.runtime.execution import Execution
+    from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
     from hey_my_buddy.protocol import process_identity
     from unittest.mock import patch
     claim = admit_execution(client, nonce)['claim']
     if claim is None:
         return 'idle'
+    service = client._call.__self__.service
+    scheduler = ExecutionScheduler(service, live_registry=service.live_registry)
+    record_path = scheduler._session_record_path(claim)
     # Production has one journal per execution process. This in-process fixture
     # gives each simulated process that same isolated module lifetime.
     with patch.object(process_identity, '_active_native_journal', None):
-        Execution(claim, client.state_dir, nonce, client=client).run()
+        Execution(claim, client.state_dir, nonce, client=client,
+                  session_record_path=str(record_path) if record_path is not None else None).run()
     return 'ran'

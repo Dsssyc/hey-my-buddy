@@ -80,6 +80,7 @@ from ..run_contract import (
     RunFeedback,
     RunRequest,
     RunResult,
+    SessionRecordFailure,
     SessionService,
     RunValue,
     StopEvidence,
@@ -103,7 +104,7 @@ from .protocol import (
 )
 from .tool_evidence import ZcodeToolFacts
 from .session_content import ZcodeSessionProjector
-from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from ..session_record import SessionRecord
 from ..runtime_selection import environment_for
 
 _END_FACTS_FILE = "run-end-facts.json"
@@ -690,7 +691,6 @@ class _RunState:
     runtime_preferences: dict | None = None
     last_assistant_message: dict | None = None
     drain_error: tuple[str, str] | None = None
-    session_error: SessionRecordWriteError | None = None
 
     def note_drain_error(self, error: NativeError) -> None:
         if self.drain_error is None:
@@ -786,12 +786,7 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
 
 
 def _project_session(session: ZcodeSessionProjector, state: _RunState, message: dict) -> None:
-    if state.session_error is not None:
-        return
-    try:
-        session.observe_notification(message)
-    except SessionRecordWriteError as error:
-        state.session_error = error
+    session.observe_notification(message)
 
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
@@ -822,7 +817,7 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
             failed(NativeError("invalid-protocol", "the native stream ended without EOF"))
             return False
         if message is None:
-            return complete and state.session_error is None
+            return complete
         if isinstance(message, NativeError):
             failed(message)
             continue
@@ -1121,8 +1116,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
-    session = ZcodeSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "zcode",
-                                                request.identity.task_id, request.identity.attempt_id))
+    session = ZcodeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
     outcome = _CarrierOutcome()
     spawn: _Spawn | None = None
     owned_spawn: list = []
@@ -1160,8 +1154,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         if feedback_due[0]:
             feedback_due[0] = False
             notify()
-        if state.session_error is not None:
-            raise state.session_error
 
     def unknown_sink(label: str) -> None:
         facts.note_unknown(label)
@@ -1188,8 +1180,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                            workspace=workspace, invocation_root=invocation_root, native_root=native_root,
                            facts=facts, classifier=classifier, state=state, tools=tools,
                            notify=notify, outcome=outcome, session=session)
-    except SessionRecordWriteError:
-        state.status = "error"
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1226,13 +1216,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
                                    completion_carrier=completion_carrier, outcome=outcome, session=session)
-    try:
-        session.close()
-    except SessionRecordWriteError as error:
-        state.session_error = error
-    if state.session_error is not None:
-        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
-        state.error_text = str(state.session_error)
+    session.close()
     if state.quota_failure is not None:
         usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
         has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
@@ -1274,7 +1258,9 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                    state=state, facts=facts, record=outcome.record)
     return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
                           outcome=outcome, completion_carrier=completion_carrier, drained=drained,
-                          evidence_refs=evidence_refs, tool_package=tool_package, facts=facts)
+                          evidence_refs=evidence_refs, tool_package=tool_package, facts=facts).model_copy(
+                              update={"session_record_failure": SessionRecordFailure(**session.record.failure)
+                                      if session.record.failure is not None else None})
 
 
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,

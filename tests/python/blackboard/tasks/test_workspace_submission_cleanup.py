@@ -49,7 +49,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             self.assertIsNone(connection.execute('SELECT task_id FROM tasks WHERE request_id=?', (request,)).fetchone())
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations WHERE path=?', (str(self.allocation(request) / 'checkout'),)).fetchone()[0], 0)
 
-    def test_reclaim_keeps_each_session_and_failure_evidence_without_successful_private_state(self):
+    def test_reclaim_keeps_group_sessions_and_failure_evidence_without_successful_private_state(self):
         from hey_my_buddy import private_dirs
         from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
         from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
@@ -73,13 +73,16 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 'processState': {'shutdownConfirmed': True}, 'workspaceSeal': seal}})
         delivered = board.call('workflow_get', {'runId': run_id})
         records = {}
+        group_id = 'run:' + run_id
+        for attempt_id in (failed_id, success_id):
+            path = private_dirs.session_record_path(board.directory, group_id, attempt_id)
+            record = SessionRecord(path, attempt_id)
+            record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text=attempt_id)))
+            record.close()
+            records[attempt_id] = path.read_bytes()
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
-                record = SessionRecord(board.directory, adapter, run_id, attempt_id)
-                record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text=attempt_id)))
-                record.close()
-                records[(adapter, attempt_id)] = record.path.read_bytes()
-                root = record.path.parent
+                root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
                 (root / 'agent-credential.json').write_text('credential fixture')
                 (root / 'unknown-events.json').write_text('failure evidence fixture')
                 if attempt_id == success_id:
@@ -87,23 +90,25 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, adapter, run_id))
             (native / 'session.json').write_text('native binding fixture')
             unknown = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown'))
-            (unknown / 'session.jsonl').write_text('not a known attempt')
+            (unknown / 'unknown-record').write_text('not a known attempt')
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)
-                self.assertEqual((root / 'session.jsonl').read_bytes(), records[(adapter, attempt_id)])
                 self.assertFalse((root / 'agent-credential.json').exists())
                 if attempt_id == success_id:
-                    self.assertEqual(sorted(path.name for path in root.iterdir()), ['session.jsonl'])
+                    self.assertFalse(root.exists())
                 else:
                     self.assertEqual((root / 'unknown-events.json').read_text(), 'failure evidence fixture')
             self.assertFalse(private_dirs.native_root(board.directory, adapter, run_id).exists())
             self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown').exists())
+        for attempt_id in (failed_id, success_id):
+            self.assertEqual(private_dirs.session_record_path(board.directory, group_id, attempt_id).read_bytes(),
+                             records[attempt_id])
 
-    def test_reclaim_keeps_only_an_existing_regular_session_file(self):
+    def test_reclaim_does_not_follow_an_unrelated_link_and_group_session_survives(self):
         from hey_my_buddy import private_dirs
         from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
         from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
@@ -121,24 +126,25 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             'exitCode': 0, 'result': {'status': 'ok', 'turn': self.turn_record(claimed),
                 'processState': {'shutdownConfirmed': True}, 'workspaceSeal': seal}})
         delivered = board.call('workflow_get', {'runId': run_id})
-        record = SessionRecord(board.directory, 'codex', run_id, attempt_id)
+        path = private_dirs.session_record_path(board.directory, 'run:' + run_id, attempt_id)
+        record = SessionRecord(path, attempt_id)
         record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text='retained')))
         record.close()
-        expected = record.path.read_bytes()
+        expected = path.read_bytes()
         outside = self.directory / 'retained-outside-private-root.txt'
         outside.write_text('untouched target')
         for adapter in ('dsh', 'zcode', 'claude'):
             root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
             if adapter == 'dsh':
-                (root / 'session.jsonl').symlink_to(outside)
+                (root / 'unrelated-link').symlink_to(outside)
             elif adapter == 'zcode':
-                (root / 'session.jsonl').mkdir()
-                (root / 'session.jsonl/unrelated.txt').write_text('not a record')
+                (root / 'unrelated-directory').mkdir()
+                (root / 'unrelated-directory/unrelated.txt').write_text('not a record')
             (root / 'settings.json').write_text('configuration fixture')
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
-        self.assertEqual(record.path.read_bytes(), expected)
+        self.assertEqual(path.read_bytes(), expected)
         self.assertEqual(outside.read_text(), 'untouched target')
         for adapter in ('dsh', 'zcode', 'claude'):
             self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id).exists())

@@ -30,8 +30,7 @@ Safety boundary:
   Reads use one fixed page with a synthetic event head and
   ``nextCursor`` is always null. Reads stay identical until a synthetic deletion,
   which advances that instance's cursor and removes the target from later reads.
-* Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic
-  session.jsonl; reads never open a session file or inspect a harness home.
+* Session content is an in-memory ACP-shaped fixture. Its position cursors count events; reads never open a session file or inspect a harness home.
 
 Usage::
 
@@ -228,7 +227,6 @@ STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND":
                   "SESSION_NOT_INTEGRATED": 501, "SESSION_NOT_RECORDED": 404,
                   "SESSION_DELETED": 410, "SESSION_INVALID_RECORD": 422, "SESSION_UNREADABLE": 500}
 
-SESSION_HEADER = {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1}
 SESSION_LONG = ("preview-run-a1", "att-a1-2")
 SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
 SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
@@ -1310,10 +1308,6 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
     return []
 
 
-def session_line(value: dict) -> bytes:
-    return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-
-
 def session_query(query: str) -> dict[str, int]:
     values = urllib.parse.parse_qs(query, keep_blank_values=True)
     if any(key not in ("before", "after", "limit") or len(items) != 1 for key, items in values.items()):
@@ -1323,6 +1317,8 @@ def session_query(query: str) -> dict[str, int]:
         if re.fullmatch(r"[0-9]+", items[0]) is None:
             raise PreviewError("INVALID_ARGUMENT", "Session parameters must be decimal integers")
         params[key] = int(items[0])
+        if params[key] > 2**63 - 1:
+            raise PreviewError("INVALID_ARGUMENT", "Session parameter is too large")
     if "before" in params and "after" in params:
         raise PreviewError("INVALID_ARGUMENT", "before and after are mutually exclusive")
     if not 1 <= params.get("limit", 100) <= 256:
@@ -1331,15 +1327,9 @@ def session_query(query: str) -> dict[str, int]:
 
 
 def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewState) -> dict:
-    """Page by JSONL byte boundaries, with bounded future appends for the running fixture."""
+    """Page by event position, with bounded future appends for the running fixture."""
     events = session_events(pair) + (state.session_appends if pair == SESSION_RUNNING else [])
-    start = len(session_line(SESSION_HEADER))
-    boundaries = [start]
-    for event in events:
-        boundaries.append(boundaries[-1] + len(session_line(event)))
     cursor = params.get("before", params.get("after"))
-    if cursor is not None and cursor not in boundaries:
-        raise PreviewError("INVALID_ARGUMENT", "Session offset is outside the event area or not a line boundary")
     if pair == SESSION_RUNNING and "after" in params:
         state.session_after_polls += 1
         if state.session_after_polls % 2 == 0:
@@ -1349,19 +1339,19 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
                                   _meta={"nativeItemId": "running-message", "contentSegment": "main"})
             state.session_appends.append(added)
             events.append(added)
-            boundaries.append(boundaries[-1] + len(session_line(added)))
     limit = params.get("limit", 100)
     if "after" in params:
-        first = boundaries.index(cursor)
+        first = min(cursor, len(events))
         last = min(len(events), first + limit)
     else:
-        last = boundaries.index(cursor) if cursor is not None else len(events)
+        last = min(cursor, len(events)) if cursor is not None else len(events)
         first = max(0, last - limit)
     omitted = ([reason("session.codex-internal-reasoning-omitted")]
                if pair in (SESSION_LONG, SESSION_ROUTER) else [])
     return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
-            "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
-            "hasEarlier": first > 0}
+            "events": events[first:last], "before": first if first < last else (cursor if cursor is not None else len(events)),
+            "after": last if first < last else (cursor if cursor is not None else len(events)),
+            "hasEarlier": first > 0, "stopped": None}
 
 
 def session_read(task_id: str, attempt_id: str, params: dict[str, int], state: PreviewState) -> dict:

@@ -687,7 +687,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks/${encodeURIComponent(runId)}`, signal);
       return verifiedRead(data, verifiedAtMs);
     },
-    /** Session bodies are never cached; their byte cursors belong to one attempt. */
+    /** Session bodies are never cached; their position cursors belong to one attempt. */
     async session(taskId: string, attemptId: string, params: { before?: number; after?: number; limit?: number }, signal: AbortSignal): Promise<unknown> {
       const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
       return request(`/tasks/${encodeURIComponent(taskId)}/attempts/${encodeURIComponent(attemptId)}/session?${query}`, { signal });

@@ -92,6 +92,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
+                                session_record_path=str(self.root / f"session-attempt-{index}.sqlite3"),
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},

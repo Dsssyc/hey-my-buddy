@@ -7,11 +7,9 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.codex.session_content import CodexSessionProjector
-from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
-from hey_my_buddy.errors import BoardError
-from hey_my_buddy.json_codec import decode_strict_json
-from hey_my_buddy.private_dirs import attempt_root
-from hey_my_buddy.protocol.session_content import MessageChunk, SessionFormat, SessionNotification, TextContent
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from hey_my_buddy.protocol.session_content import MessageChunk, SessionNotification, TextContent
+from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.codex.fixtures.protocol_items import item_frames
 
 
@@ -20,7 +18,7 @@ class SessionProjectionTests(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.state = Path(temp.name)
-        self.record = SessionRecord(self.state, "codex", "task", "attempt")
+        self.record = SessionRecord(self.state / "attempt.sqlite3", "attempt")
         self.projector = CodexSessionProjector(self.record)
         self.addCleanup(self.projector.close)
         self.projector.record_input("sent input")
@@ -34,14 +32,11 @@ class SessionProjectionTests(unittest.TestCase):
         self.frame(method, item={"type": kind, "id": item_id, **fields})
 
     def updates(self):
-        raw = self.record.path.read_bytes()
-        self.assertTrue(raw.endswith(b"\n"))
-        lines = [decode_strict_json(line) for line in raw.splitlines()]
-        SessionFormat.from_payload(lines[0])
-        for line in lines[1:]:
+        lines = notifications(self.record.path)
+        for line in lines:
             SessionNotification.from_payload(line)
             self.assertEqual(line["sessionId"], "attempt")
-        return [line["update"] for line in lines[1:]]
+        return [line["update"] for line in lines]
 
     @staticmethod
     def displayed_blocks(updates):
@@ -58,7 +53,7 @@ class SessionProjectionTests(unittest.TestCase):
         return blocks
 
     def test_record_is_not_opened_until_the_first_write(self):
-        record = SessionRecord(self.state, 'codex', 'other-task', 'unstarted')
+        record = SessionRecord(self.state / 'other' / 'unstarted.sqlite3', 'unstarted')
         record.close()
         self.assertFalse(record.path.parent.exists())
 
@@ -82,10 +77,12 @@ class SessionProjectionTests(unittest.TestCase):
             {'id': '', 'type': 'commandExecution', 'command': 'must not normalize'}]})
         self.assertEqual(len(self.updates()), 1)
 
-    def test_fixed_attempt_path_header_private_permissions_and_no_fsync(self):
-        self.assertEqual(self.record.path, attempt_root(self.state, "codex", "task", "attempt") / "session.jsonl")
+    def test_attempt_path_private_permissions_and_wal_settings(self):
+        self.assertEqual(self.record.path, self.state / "attempt.sqlite3")
         if os.name != "nt":
             self.assertEqual(self.record.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.record._connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+        self.assertEqual(self.record._connection.execute("PRAGMA synchronous").fetchone()[0], 1)
         with patch("os.fsync", side_effect=AssertionError("display writes never fsync")):
             self.item("item/completed", text="visible now")
             self.projector.flush()
@@ -305,51 +302,50 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertNotIn('rawInput', row)
         self.assertEqual(row['rawOutput'], {'durationMs': 17})
 
-    def test_long_line_multibyte_flush_close_and_partial_tail(self):
+    def test_long_multibyte_content_survives_close(self):
         text = "中文𝄞\n" * 100000
         self.frame("item/agentMessage/delta", itemId="long", delta=text)
         self.projector.close()
         rows = self.updates()
         self.assertEqual(rows[-1]["content"]["text"], text)
-        self.assertEqual(len(self.record.path.read_bytes().splitlines()), 3)
-        complete = self.record.path.read_bytes()
-        with self.record.path.open("ab") as stream:
-            stream.write(b'{"sessionId":')  # abrupt termination during a later write
-        self.assertEqual(self.record.path.read_bytes()[:len(complete)], complete)
-        self.assertFalse(self.record.path.read_bytes().endswith(b"\n"))
+        self.assertEqual(len(notifications(self.record.path)), 2)
 
     def test_new_attempt_on_same_native_thread_has_a_separate_record(self):
-        second = SessionRecord(self.state, "codex", "task", "next-attempt")
+        second = SessionRecord(self.state / "next-attempt.sqlite3", "next-attempt")
         projector = CodexSessionProjector(second)
         projector.record_input("new input")
         projector.observe_root("thread", "next-turn", "new input", [])
         projector.close()
-        lines = [json.loads(line) for line in second.path.read_text().splitlines()]
-        self.assertEqual(lines[1]["sessionId"], "next-attempt")
+        lines = notifications(second.path)
+        self.assertEqual(lines[0]["sessionId"], "next-attempt")
         self.assertNotEqual(second.path, self.record.path)
         self.assertEqual(len(self.updates()), 1)
 
-    def test_reopened_record_appends_without_another_header_and_refuses_links(self):
-        original = self.record.path.read_bytes()
-        reopened = SessionRecord(self.state, "codex", "task", "attempt")
+    def test_reopened_record_appends_and_refuses_links(self):
+        original = notifications(self.record.path)
+        reopened = SessionRecord(self.record.path, "attempt")
         try:
             reopened.append(MessageChunk(session_update="user_message_chunk", content=TextContent(text="next run")))
         finally:
             reopened.close()
-        self.assertTrue(self.record.path.read_bytes().startswith(original))
-        self.assertEqual(sum('"protocol":"acp"' in line for line in self.record.path.read_text().splitlines()), 1)
+        self.assertEqual(notifications(self.record.path)[:len(original)], original)
         self.assertEqual(self.updates()[-1]["content"]["text"], "next run")
-        root = attempt_root(self.state, "codex", "task", "linked")
-        root.mkdir()
-        (root / "session.jsonl").symlink_to(self.record.path)
-        linked = SessionRecord(self.state, "codex", "task", "linked")
-        with self.assertRaises(SessionRecordWriteError) as caught:
-            linked.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='input')))
-        self.assertIsInstance(caught.exception.__cause__, BoardError)
+        linked_path = self.state / "linked.sqlite3"
+        linked_path.symlink_to(self.record.path)
+        linked = SessionRecord(linked_path, "linked")
+        linked.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='input')))
+        self.assertEqual(linked.failure['code'], 'session-record-write-failed')
+        self.assertEqual(notifications(self.record.path)[-1]['sessionId'], 'attempt')
 
-    def test_io_failure_propagates(self):
+    def test_io_failure_disables_future_writes_and_same_path_writer(self):
         self.frame("item/agentMessage/delta", itemId="message", delta="pending")
-        with patch.object(self.record._stream, "flush", side_effect=OSError("controlled write failure")):
-            with self.assertRaises(SessionRecordWriteError) as caught:
-                self.projector.flush()
-        self.assertIsInstance(caught.exception.__cause__, OSError)
+        with patch.object(self.record, '_open', side_effect=OSError('controlled write failure')):
+            self.record.close()
+            self.projector.flush()
+        self.assertEqual(self.record.failure['message'], 'controlled write failure')
+        count = len(notifications(self.record.path))
+        self.record.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='ignored')))
+        self.assertEqual(len(notifications(self.record.path)), count)
+        reopened = SessionRecord(self.record.path, 'attempt')
+        self.assertEqual(reopened.failure, self.record.failure)
+        self.assertIsNone(reopened._connection)
