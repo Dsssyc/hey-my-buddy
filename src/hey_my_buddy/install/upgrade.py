@@ -20,6 +20,7 @@ from .launcher import write_active_runtime
 from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_24_to_25
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -57,13 +58,14 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False,
+                  upgrade_to_current: bool = False) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or int(schema[0]) != SCHEMA_VERSION:
+        if schema is None or int(schema[0]) not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -82,8 +84,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
-                    'schema': int(schema[0])}
+        snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact,
+                                               upgrade_to_current=upgrade_to_current),
+                    'schema': SCHEMA_VERSION if upgrade_to_current else int(schema[0])}
         return snapshot
 
 
@@ -507,7 +510,11 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         journal['before'] = before
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
-                    expected = idle_snapshot(state, event_head=before['eventHead'])
+                    if before['schema'] == UPGRADE_BASE_SCHEMA:
+                        expected = idle_snapshot(state, event_head=before['eventHead'], upgrade_to_current=True)
+                        upgrade_schema_24_to_25(state)
+                    else:
+                        expected = idle_snapshot(state, event_head=before['eventHead'])
                 else:
                     expected = before
                 expected['runtimeSettings'] = runtime_settings

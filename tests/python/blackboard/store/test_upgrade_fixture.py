@@ -15,7 +15,8 @@ from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
-from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_schema_24_to_25
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -83,6 +84,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -110,10 +112,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         self.assertEqual(fixture['sourceCommit'], '90bd0148230fe1b030cc65e325026dea0cdfb8b9')
         self.assertEqual(fixture['sourceVersion'], '0.42.0')
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(UPGRADE_BASE_SCHEMA))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'created_at', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -185,7 +187,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_contract_cutover_preserves_stock_and_matches_fresh_structure(self):
         fixture, old = self.restored()
         state = fixture['state']
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
         before = upgrade.idle_snapshot(state, exact=True)
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
@@ -195,6 +197,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         retained_meta = dict(old.execute("SELECT key,value FROM meta WHERE key!='schema_version'"))
         stock = {row[0]: [dict(item) for item in old.execute(f'SELECT * FROM {row[0]} ORDER BY rowid')]
                  for row in old.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        for row in stock['commands']:
+            row['deletion_id'] = None
+        for row in stock['meta']:
+            if row['key'] == 'schema_version':
+                row['value'] = str(SCHEMA_VERSION)
+        stock['macro_task_deletions'] = []
         old.close()
         history = {path.relative_to(state): path.read_bytes()
                    for path in (state / 'workspaces').rglob('*') if path.is_file()}
@@ -238,8 +246,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         fresh.initialize()
         with sqlite3.connect(state / 'board.sqlite3') as upgraded, fresh.read() as baseline:
             upgraded.row_factory = sqlite3.Row
-            # The installed base already has the current schema; every stored
-            # row must survive the contract cutover without conversion.
+            # Only the schema marker, NULL command links and empty deletion
+            # table differ from the installed base's stored form.
             for table, rows in stock.items():
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
@@ -249,7 +257,16 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
-            self.assertEqual(source_schema, fresh_schema)
+            # SQLite ADD COLUMN retains the old whitespace around the final
+            # comma; compare the command DDL without that formatting difference.
+            def structure(rows):
+                return [(kind, name, table, ''.join(sql.split()) if name == 'commands' else sql)
+                        for kind, name, table, sql in rows]
+            self.assertEqual(structure(source_schema), structure(fresh_schema))
+            self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA table_info(commands)')],
+                             [tuple(row) for row in baseline.execute('PRAGMA table_info(commands)')])
+            self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA foreign_key_list(commands)')],
+                             [tuple(row) for row in baseline.execute('PRAGMA foreign_key_list(commands)')])
             self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
                              str(SCHEMA_VERSION))
             self.assertEqual(dict(upgraded.execute("SELECT key,value FROM meta WHERE key!='schema_version'")),
@@ -303,10 +320,101 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.commit()
         return response
 
+    def test_failed_schema_write_rolls_back_ddl_and_all_stock(self):
+        fixture, connection = self.restored('failed-upgrade')
+        connection.execute("CREATE TRIGGER reject_upgrade BEFORE UPDATE OF value ON meta "
+                           "WHEN NEW.key='schema_version' BEGIN SELECT RAISE(ABORT,'injected upgrade failure'); END")
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        schema = list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name'))
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'injected upgrade failure'):
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name')), schema)
+
+    def test_foreign_key_failure_rolls_back_schema_and_stock(self):
+        fixture, connection = self.restored('invalid-foreign-key')
+        connection.execute('INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)',
+                           (fixture['stableIds']['accepted'], 'missing-run', '2026-01-01T00:00:00Z'))
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        schema = list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name'))
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name')), schema)
+
+    def test_pending_upgrade_rejects_every_other_schema_without_writes(self):
+        fixture, connection = self.restored('unsupported-upgrade')
+        for version in ('23', '25', '26', '999', 'unknown', None):
+            with self.subTest(schema=version):
+                connection.execute("DELETE FROM meta WHERE key='schema_version'")
+                if version is not None:
+                    connection.execute("INSERT INTO meta VALUES('schema_version',?)", (version,))
+                connection.commit()
+                before = (fixture['state'] / 'board.sqlite3').read_bytes()
+                with self.assertRaises(BoardError) as caught:
+                    upgrade_schema_24_to_25(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+                self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
+
+    def test_current_startup_refuses_the_unmodified_upgrade_base(self):
+        fixture, connection = self.restored('startup-base')
+        connection.close()
+        state = fixture['state']
+        state.chmod(0o750)
+        before = {path.relative_to(state): path.read_bytes() for path in state.rglob('*') if path.is_file()}
+        database = Database(state)
+        self.addCleanup(database.close)
+        with self.assertRaisesRegex(Corruption, 'only schema 25'):
+            database.initialize()
+        self.assertEqual({path.relative_to(state): path.read_bytes() for path in state.rglob('*') if path.is_file()}, before)
+        self.assertEqual(state.stat().st_mode & 0o777, 0o750)
+
+    def test_new_and_upgraded_deletion_tables_enforce_the_same_constraints(self):
+        fixture, upgraded = self.restored('deletion-constraints')
+        upgrade_schema_24_to_25(fixture['state'])
+        fresh = Database(self.root / 'fresh-constraints')
+        fresh.initialize()
+        self.addCleanup(fresh.close)
+        with fresh.connect() as baseline:
+            for label, connection in (('upgraded', upgraded), ('fresh', baseline)):
+                with self.subTest(schema=label):
+                    connection.execute('PRAGMA foreign_keys=ON')
+                    self.assertEqual([row['name'] for row in connection.execute('PRAGMA table_info(macro_task_deletions)')],
+                                     ['deletion_id', 'target_kind', 'target_id', 'state', 'started_at', 'deleted_at', 'micro_task_count'])
+                    insert = ('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,state,started_at,deleted_at,micro_task_count)'
+                              ' VALUES(?,?,?,?,?,?,?)')
+                    for kind in ('macro-task', 'micro-task-tree'):
+                        for state in ('deleting', 'deleted'):
+                            identity = kind + '-' + state
+                            connection.execute(insert, (identity, kind, identity, state, 'started',
+                                                        'finished' if state == 'deleted' else None, 2))
+                    for kind, state, deleted_at, count in (
+                        ('other', 'deleting', None, 0), ('macro-task', 'other', None, 0),
+                        ('macro-task', 'deleted', None, 0), ('macro-task', 'deleting', 'finished', 0),
+                        ('macro-task', 'deleting', None, None),
+                    ):
+                        with self.subTest(kind=kind, state=state, deletedAt=deleted_at, count=count), self.assertRaises(sqlite3.IntegrityError):
+                            connection.execute(insert, ('invalid', kind, 'invalid', state, 'started', deleted_at, count))
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute(insert, ('duplicate-target', 'macro-task', 'macro-task-deleting', 'deleting', 'started', None, 2))
+                    connection.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)"
+                                       " VALUES('deletion-command','fixture','hash','{}','started')")
+                    self.assertIsNone(connection.execute("SELECT deletion_id FROM commands WHERE command_id='deletion-command'").fetchone()[0])
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("UPDATE commands SET deletion_id='missing' WHERE command_id='deletion-command'")
+                    connection.execute("UPDATE commands SET deletion_id='macro-task-deleted' WHERE command_id='deletion-command'")
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("DELETE FROM macro_task_deletions WHERE deletion_id='macro-task-deleted'")
+                    self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
     def test_started_verification_preserves_command_fingerprints_and_rejects_tampering(self):
         fixture, connection = self.restored('started-stop')
         self.insert_stop_receipt(fixture, connection)
-        before = upgrade.idle_snapshot(fixture['state'], exact=True)
+        before = upgrade.idle_snapshot(fixture['state'], upgrade_to_current=True)
+        upgrade_schema_24_to_25(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
@@ -331,6 +439,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE workflow_runs SET request_fingerprint=NULL')
         connection.commit()
         connection.close()
+        upgrade_schema_24_to_25(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)

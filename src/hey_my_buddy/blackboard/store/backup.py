@@ -17,6 +17,7 @@ import tempfile
 import time
 
 from .db import SCHEMA_VERSION, Database, utc_now
+from .upgrade import UPGRADE_BASE_SCHEMA
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
@@ -157,15 +158,22 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False) -> dict:
+def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False,
+                      upgrade_to_current: bool = False) -> dict:
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
     Python retains one row at a time. ``exact`` adds the lifecycle rows normally
-    exempted by backup without changing ordinary backup metadata.
+    exempted by backup without changing ordinary backup metadata. For the pending
+    schema-24 upgrade, ``upgrade_to_current`` hashes its explicit converted form
+    before any migration writes: NULL command links, an empty deletion table and
+    the schema marker. Ordinary backup fingerprints always describe actual rows.
     """
     tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     counts = {name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0]
               for name in tables}
+    if upgrade_to_current:
+        tables.append('macro_task_deletions')
+        counts['macro_task_deletions'] = 0
     if event_head is None:
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
 
@@ -178,9 +186,15 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
 
         quoted = '"' + name.replace('"','""') + '"'
         columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
-        arguments = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
+        quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
+        if upgrade_to_current and name == 'commands':
+            quoted_columns.append('NULL')
+        elif upgrade_to_current and name == 'meta':
+            quoted_columns[columns.index('value')] = (
+                f"CASE WHEN key='schema_version' THEN '{SCHEMA_VERSION}' ELSE value END")
+        arguments = ','.join(quoted_columns)
         limit = connection.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)
-        wide = len(columns) > limit
+        wide = len(quoted_columns) > limit
         if wide:
             # SELECT * also supports generated columns and tables wider than a
             # SQLite function call. Join bounded chunks in the same JSON format.
@@ -188,9 +202,8 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
                 return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
 
             connection.create_function('hey_my_buddy_snapshot_part', -1, encode_part)
-            quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
             parts = ['hey_my_buddy_snapshot_part(' + ','.join(quoted_columns[offset:offset + limit]) + ')'
-                     for offset in range(0, len(columns), limit)]
+                     for offset in range(0, len(quoted_columns), limit)]
             arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
         else:
             arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'
@@ -235,7 +248,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -266,7 +279,8 @@ def _verify(directory: Path) -> dict:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != manifest['schema']:
                 raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        Database(trial).initialize()
+        if manifest['schema'] == SCHEMA_VERSION:
+            Database(trial).initialize()
     return manifest
 
 
