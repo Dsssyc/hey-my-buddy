@@ -59,6 +59,7 @@ from ..native_support import (
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
+    MAX_UNKNOWN_EVENT_TYPES,
     CheckedConfiguration,
     CheckedValue,
     CompletionEvidence,
@@ -66,7 +67,9 @@ from ..run_contract import (
     EffectivePolicy,
     EvidenceRef,
     InterruptEvidence,
+    NativeEvidence,
     NativeFailurePackage,
+    UnknownEvents,
     UsagePackage,
     ToolEvidencePackage,
     NativeErrorRecord,
@@ -125,8 +128,8 @@ def selected(snapshot: dict) -> dict:
 def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
                       note_unknown: Callable[[str], None] = lambda _label: None) -> dict:
     session_id = snapshot["session"]["sessionId"]
-    if any(not isinstance(spec.get(k), str) or not spec[k].strip() for k in ("provider", "model", "effort")):
-        raise NativeError("invalid-configuration", "ZCode coding requires a complete provider, model and effort after routing")
+    # spec is the frozen request's own selection: blank or non-string values
+    # were refused when the RunRequest was built, so nothing is re-checked here.
     provider, model, effort = spec["provider"], spec["model"], spec["effort"]
     choices = _model_settings(snapshot).get("available")
     catalog_known = isinstance(choices, list) and all(
@@ -832,9 +835,8 @@ def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
     continuation = request.continuation
     if continuation is None:
         return "initial", None
-    previous = continuation.previous_session_id
-    if previous is not None and (not isinstance(previous, str) or not previous.strip()):
-        raise NativeError("invalid-resume-mode", "the previous native session identity must be null or a nonblank string")
+    # previous_session_id is null or a nonblank string by the RunContinuation
+    # boundary; a native-session resume further required it at construction.
     return continuation.mode, continuation.previous_session_id
 
 
@@ -1146,7 +1148,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                    state=state, facts=facts, record=outcome.record)
     return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
                           outcome=outcome, completion_carrier=completion_carrier, drained=drained,
-                          evidence_refs=evidence_refs, tool_package=tool_package)
+                          evidence_refs=evidence_refs, tool_package=tool_package, facts=facts)
 
 
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,
@@ -1484,10 +1486,30 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
     return refs
 
 
+def _shared_unknown_events(facts: _RunFacts) -> NativeEvidence | None:
+    """The run's unknown-event counts as the shared result's bounded summary.
+
+    The private ``native-run-facts`` evidence file keeps every kind; beyond
+    the shared contract's type cap the remaining kinds count under the
+    established unretained-name bucket, and the total stays exact.
+    """
+    counts = facts.unknown_counts
+    if not counts:
+        return None
+    if len(counts) <= MAX_UNKNOWN_EVENT_TYPES:
+        return NativeEvidence(unknown_events=UnknownEvents(
+            counts_by_type=dict(counts), total=sum(counts.values())))
+    kept = dict(list(counts.items())[:MAX_UNKNOWN_EVENT_TYPES - 1])
+    kept["unknown"] = kept.get("unknown", 0) + sum(
+        count for _, count in list(counts.items())[MAX_UNKNOWN_EVENT_TYPES - 1:])
+    return NativeEvidence(unknown_events=UnknownEvents(
+        counts_by_type=kept, total=sum(counts.values())))
+
+
 def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunState,
                    owned_spawn: list, outcome: _CarrierOutcome, completion_carrier: bool,
                    drained: bool | None, evidence_refs: list[EvidenceRef],
-                   tool_package) -> RunResult:
+                   tool_package, facts: _RunFacts) -> RunResult:
     """Compose the common result; an unrepresentable package fails the run alone."""
     try:
         return _build_result(request, spawn=spawn, state=state, owned_spawn=owned_spawn,
@@ -1501,7 +1523,7 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              correction_count=outcome.correction_count, event_count=outcome.event_count,
                              record=outcome.record, projection=outcome.projection,
                              binding_path=outcome.binding_path, drained=drained,
-                             evidence_refs=evidence_refs, tool_package=tool_package)
+                             evidence_refs=evidence_refs, tool_package=tool_package, facts=facts)
     except BoardError:
         # A fact that cannot be represented in the common result is the run's
         # own failure, never an unhandled escape. The fallback keeps every
@@ -1520,7 +1542,7 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
                              raw_answer=outcome.raw_answer,
                              correction_count=outcome.correction_count, event_count=outcome.event_count,
                              record=None, projection=None, binding_path=outcome.binding_path, drained=drained,
-                             evidence_refs=evidence_refs, tool_package=None)
+                             evidence_refs=evidence_refs, tool_package=None, facts=facts)
 
 
 _tool_package = shape_guard(ToolEvidencePackage)
@@ -1540,7 +1562,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
                   turn_id, raw_answer, correction_count, event_count, record,
                   projection, binding_path, drained, evidence_refs, tool_package,
                   completion_carrier, verified_outcome, verified_completion,
-                  final_message_completed) -> RunResult:
+                  final_message_completed, facts: _RunFacts) -> RunResult:
     native_identity = None
     if session_id is not None:
         fields = {"session_id": session_id}
@@ -1610,6 +1632,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         harness_version=spawn.version if spawn is not None else None,
         model_started=True if state.model_started else None,
         native_event_count=event_count if event_count else None,
+        native_evidence=_shared_unknown_events(facts),
         configuration=ResultConfiguration(
             requested=RunConfiguration(provider=request.configuration.provider,
                                        model=request.configuration.model,
