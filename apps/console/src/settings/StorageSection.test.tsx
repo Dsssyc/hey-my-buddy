@@ -90,7 +90,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(f.calls[0]).toEqual({ operation: "storage_plan", params: {} });
   });
 
-  it("renders the fixed-order category table with formatted bytes and exact tooltips", async () => {
+  it("renders compact category sizes and hints only for protected data", async () => {
     const f = fixture({ planValue: plan({ categories: [...plan().categories].reverse() }) });
     const user = userEvent.setup();
     render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
@@ -102,9 +102,9 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
     expect(within(rows[0]!).getByText("0 B")).toBeTruthy();
-    expect(rows[0]!.querySelector('[aria-description="3,500,000,000 字节"]')).toBeTruthy();
+    expect(rows[0]!.querySelector("[aria-description]")).toBeNull();
     expect(within(rows[0]!).getByText("71")).toBeTruthy();
-    // Structurally protected categories show — with their own tooltip.
+    // Protected data retains the reason it cannot be reclaimed.
     expect(within(rows[3]!).getByText("0 B")).toBeTruthy();
     expect(within(rows[4]!).getByText("0 B")).toBeTruthy();
     expect(rows[4]!.querySelector('[aria-description="黑板、记录及上次升级之前的黑板受保护"]')).toBeTruthy();
@@ -146,7 +146,8 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const orphans = screen.getByRole("heading", { name: /游离进程（2）/ }).closest<HTMLElement>('[data-slot="storage-orphans"]')!;
-    expect(within(orphans).getByRole("heading").getAttribute("aria-description")).toBe("清理不会停止这些进程。");
+    expect(within(orphans).getByRole("heading").getAttribute("aria-description")).toBeNull();
+    expect(within(orphans).getByText("清理不会停止这些进程。").tagName).toBe("P");
     expect(orphans.textContent).toContain("服务");
     expect(orphans.textContent).toContain("执行进程");
     expect(orphans.textContent).toContain("pid 4321");
@@ -159,7 +160,8 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const view = render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const clean = screen.getByRole("button", { name: "回收…" }) as HTMLButtonElement;
-    expect(clean.getAttribute("aria-description")).toContain("3.1 GB");
+    expect(clean.getAttribute("aria-description")).toBeNull();
+    expect(screen.getByText(/^检查于/).tagName).toBe("P");
     await user.click(clean);
     const dialog = screen.getByRole("dialog", { name: "清理可回收数据" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
@@ -301,7 +303,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     // the durable receipt replays regardless of plan expiry.
     const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
     expect(retry.getAttribute("aria-disabled")).toBe("false");
-    expect(retry.getAttribute("aria-description")).toContain("重试同一请求可继续或核对清理");
+    expect(retry.getAttribute("aria-description")).toBeNull();
     const recheck = screen.getByRole("button", { name: "检查占用" }) as HTMLButtonElement;
     expect(recheck.getAttribute("aria-disabled")).toBe("true");
     f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());

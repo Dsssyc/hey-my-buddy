@@ -37,7 +37,7 @@ export function MomentRange({ start, end, itemKey, label = "" }: { start: number
 export function PaneTitle({ title, state, tone = "past", warnings = [], note, children }: {
   title: string; state?: string; tone?: "past" | "live" | "hand" | "fail"; warnings?: string[]; note?: ReactNode; children?: ReactNode;
 }) {
-  return <div data-slot="pane-title" className="flex shrink-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-4 pb-2">
+  return <div data-slot="pane-title" className="flex shrink-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-5 pb-2.5">
     <h3 className="text-base font-semibold">{title}</h3>
     {state && <span className={cn("text-xs", tone === "past" ? "text-ink2" : tone === "live" ? "text-ink state-breathe" : tone === "hand" ? "text-hand" : "text-fail")}>{state}</span>}
     {warnings.map(word => <span key={word} className="text-xs text-hand">{word}</span>)}
@@ -50,11 +50,12 @@ export function PaneTitle({ title, state, tone = "past", warnings = [], note, ch
 export type ContentTabs = (content: ReactNode) => ReactNode;
 export function Pane({ title, children, footer, tabs }: { title: ReactNode; children: ReactNode; footer?: ReactNode; tabs?: ContentTabs }) {
   const links = useContext(DetailLinks);
-  const content = <ScrollArea className="min-h-0 flex-1"><div className="w-0 min-w-full py-3">{children}</div></ScrollArea>;
+  const content = <ScrollArea className="min-h-0 flex-1"><div data-slot="pane-content" className="w-0 min-w-full pt-4 pb-3">{children}</div></ScrollArea>;
   return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
     <DetailItem itemKey={links?.stepKey || undefined} className="flex min-h-0 min-w-0 flex-1 flex-col">
       {title}
       {links?.waits}
+      {!tabs && <div data-slot="pane-divider" className="shrink-0 border-b border-line2" />}
       {tabs ? tabs(content) : content}
     </DetailItem>
     {footer}

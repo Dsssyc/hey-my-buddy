@@ -208,9 +208,6 @@ export type Activity = {
   toolName: string | null;
   modelTurns: number | null;
   toolCalls: number | null;
-  lastToolAt: string | null;
-  lastNativeAt: string | null;
-  eventSeq: number | null;
   /** What backs the report: a tool, native activity, or the phase alone (which says nothing of progress). */
   basis: "tool" | "native" | "phase" | "unknown";
 };
@@ -223,17 +220,6 @@ export type Ending = {
   actor: Actor | null;
   note: string | null;
   rejectionCode: "quota-exceeded" | "rate-limited" | "overloaded" | null;
-};
-
-/** Where an execution's native session lives, in the receipt's own words. */
-export type Session = {
-  id: string | null;
-  scope: string | null;
-  owner: string | null;
-  visibility: string | null;
-  resumable: boolean | null;
-  binding: boolean | null;
-  note: string | null;
 };
 
 /** The execution the task view's per-attempt facts are about: the one running, else the last one chosen. */
@@ -249,7 +235,6 @@ export type Attempt = {
   activity: Activity | null;
   /** Null when it ended as it should. */
   ending: Ending | null;
-  session: Session | null;
   tokenUsage: TokenUsage | null;
   shutdownConfirmed: boolean;
 };

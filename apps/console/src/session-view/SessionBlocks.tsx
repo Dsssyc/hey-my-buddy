@@ -5,7 +5,6 @@ import { Marker, MarkerContent } from "../components/ui/marker";
 import { MessageScrollerItem } from "../components/ui/message-scroller";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceLine, TraceIcon } from "../components/ui/trace";
 import { CodeBlockCopyButton } from "../components/ui/code-block";
-import { Hint } from "../components/hint";
 import { MessageResponse } from "./Markdown";
 import { ToolRow, Output, kindIcon, CallStatus } from "./ToolRow";
 import { Answer } from "./Answer";
@@ -63,7 +62,7 @@ export function SessionBlocks({ rows, expansion, taskText, checkoutRoot, routing
         </TraceCollapsible></Trace>;
         else body = <div className="group/message relative max-w-[700px] min-w-0">
           <Message><MessageContent className="text-[14.5px] leading-[1.72]"><div className="pr-7"><MessageResponse>{text}</MessageResponse></div></MessageContent></Message>
-          <div className={`absolute right-0 top-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100`}><Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={text}/></Hint></div>
+          <div className={`absolute right-0 top-0 opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100`}><CodeBlockCopyButton value={text}/></div>
         </div>;
       }
       return <MessageScrollerItem key={key} messageId={key} data-session-block={key} data-session-row={row.type} className="[content-visibility:visible]">{body}</MessageScrollerItem>;

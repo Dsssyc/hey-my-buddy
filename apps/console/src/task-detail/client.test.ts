@@ -10,15 +10,14 @@ const reply = (entries: string[], nextCursor: number | null, audit = true) => ({
 
 function api(pages: unknown[]) {
   const command = vi.fn(async () => pages.shift());
-  return { client: createTaskDetailClient({ command, readVerifiedAt: () => 7 } as unknown as ConsoleApi, "csrf"), command };
+  return { client: createTaskDetailClient({ command } as unknown as ConsoleApi, "csrf"), command };
 }
 
 describe("the routing decisions of a micro task", () => {
   it("are read page after page until every one the timeline names is found", async () => {
     const { client, command } = api([reply(["d3", "d2"], 20), reply(["d1"], 10, false), reply(["d0"], null, false)]);
-    const { value, verifiedAtMs } = await client.audit("m1", ["d2", "d1"]);
+    const { value } = await client.audit("m1", ["d2", "d1"]);
     expect(value.routing.map(item => item.decisionId)).toEqual(["d3", "d2", "d1"]);
-    expect(verifiedAtMs).toBe(7);
     expect(command.mock.calls).toEqual([
       ["workflow_get", { runId: "m1", includeAudit: true, routingHistory: { limit: 100 } }, "csrf"],
       ["workflow_get", { runId: "m1", routingHistory: { limit: 100, before: 20 } }, "csrf"],
@@ -40,7 +39,7 @@ describe("the routing decisions of a micro task", () => {
 
   it("read the bounds of a decision with its audit, and no more", async () => {
     const command = vi.fn(async () => ({ decision: { decisionId: "d1", constraints: { harness: "dsh" } } }));
-    const client = createTaskDetailClient({ command, readVerifiedAt: () => null } as unknown as ConsoleApi, "csrf");
+    const client = createTaskDetailClient({ command } as unknown as ConsoleApi, "csrf");
     expect((await client.basis("d1")).value.constraints).toEqual({ harness: "dsh" });
     expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "d1", includeAudit: true }, "csrf");
   });
@@ -49,7 +48,7 @@ describe("the routing decisions of a micro task", () => {
 describe("the inquiries of a micro task", () => {
   it("are asked for as many as the console may, and read through the one operation that lists them", async () => {
     const command = vi.fn(async () => ({ messages: [] }));
-    const client = createTaskDetailClient({ command, readVerifiedAt: () => null } as unknown as ConsoleApi, "csrf");
+    const client = createTaskDetailClient({ command } as unknown as ConsoleApi, "csrf");
     expect((await client.inquiries("m1")).value).toEqual({ items: [], more: false });
     expect(command).toHaveBeenCalledExactlyOnceWith("message_list", { runId: "m1", limit: 200 }, "csrf");
   });

@@ -4,7 +4,6 @@ import { Check, X, File, Search, Terminal, Pencil, Globe, Wrench, LoaderCircle }
 import type { LucideIcon } from "lucide-react";
 import { TraceCollapsible, TraceCollapsibleTrigger, TraceCollapsibleContent, TraceLine, TraceIcon, TraceTitle } from "../components/ui/trace";
 import { CodeBlockActions, CodeBlockCopyButton } from "../components/ui/code-block";
-import { Hint } from "../components/hint";
 import { HighlightedCode } from "./MarkdownCode";
 import { displayPath, toolInput, toolObject, unwrappedCommand, markerName } from "./rows";
 import type { ToolBlock, ToolKind } from "./rows";
@@ -16,9 +15,9 @@ const jsonText = (value: unknown): string => typeof value === "string" ? value :
 
 export function CallStatus({ status }: { status: ToolUpdate["status"] }) {
   const { t } = useTranslation("taskDetail");
-  return <Hint text={t(`sessionView.toolStatus.${status ?? "unrecorded"}`)}><span data-slot="session-call-status" data-status={status ?? "unrecorded"} className={status === "failed" ? "shrink-0 text-fail" : "shrink-0 text-ink3"} aria-label={t(`sessionView.toolStatus.${status ?? "unrecorded"}`)}>
+  return <span data-slot="session-call-status" data-status={status ?? "unrecorded"} className={status === "failed" ? "shrink-0 text-fail" : "shrink-0 text-ink3"} aria-label={t(`sessionView.toolStatus.${status ?? "unrecorded"}`)}>
     {status === "failed" ? <X size={13} aria-hidden/> : status === "completed" ? <Check size={13} aria-hidden/> : status === "in_progress" ? <LoaderCircle size={13} aria-hidden className="motion-safe:animate-spin"/> : <span className="inline-block size-1 rounded-full bg-current" aria-hidden/>}
-  </span></Hint>;
+  </span>;
 }
 
 function ToolFields({ fields, checkoutRoot, result = false }: { fields: [string, unknown][]; checkoutRoot: string; result?: boolean }) {
@@ -33,7 +32,7 @@ export function Output({ text, id, expansion, language = "text", preview = true 
   return <div className="group/output relative min-w-0" data-slot="session-output">
     <HighlightedCode code={!preview || open ? text : lines.slice(0, 14).join("\n")} language={language}/>
     <CodeBlockActions className="absolute top-1 right-1 opacity-0 group-hover/output:opacity-100 group-focus-within/output:opacity-100">
-      <Hint text={t("sessionView.copy")}><CodeBlockCopyButton value={text}/></Hint>
+      <CodeBlockCopyButton value={text}/>
     </CodeBlockActions>
     {preview && remaining > 0 && <button type="button" className="disclosure-trigger py-1 text-xs text-ink2" aria-expanded={open} onClick={() => expansion.toggle(id, !open)}>{t(open ? "sessionView.collapseOutput" : "sessionView.moreLines", { count: remaining })}</button>}
   </div>;
@@ -61,7 +60,7 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
   return <TraceCollapsible open={open} onOpenChange={value => expansion.toggle(key, value)} data-session-tool={key}>
     <TraceCollapsibleTrigger className="h-[30px] w-full rounded-none">
       <TraceLine className="w-full gap-2 text-[13px]">
-        <TraceIcon><Hint text={t(`sessionView.kind.${tool.kind ?? "other"}`)}><Icon size={13}/></Hint></TraceIcon>
+        <TraceIcon><Icon size={13}/></TraceIcon>
         <TraceTitle ref={titleRef} className="flex-1 text-left font-mono text-ink">{title}</TraceTitle>
         <CallStatus status={tool.status}/>
       </TraceLine>

@@ -15,12 +15,12 @@ export function ExecutionTabs({ routingMode, taskText, checkoutRoot, children, c
 }) {
   const { t } = useTranslation("taskDetail");
   return <Tabs data-slot="detail-tabs" value={tab} onValueChange={value => onTab(value as DetailTab)} className="min-h-0 min-w-0 flex-1 gap-0">
-    <TabsList variant="line" aria-label={t("tabs.label")} className="h-8 w-full shrink-0 justify-start gap-6 border-0 px-6">
+    <TabsList variant="line" aria-label={t("tabs.label")} className="h-8 w-full shrink-0 justify-start gap-6 border-0 border-b border-line2 px-6">
       <TabsTrigger value="overview" className="flex-none text-xs text-ink">{t("tabs.overview")}</TabsTrigger>
       <TabsTrigger value="session" className="flex-none text-xs text-ink">{t("sessionView.title")}</TabsTrigger>
     </TabsList>
     <TabsPrimitive.Content value="overview" forceMount className="flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
-    <TabsPrimitive.Content value="session" className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+    <TabsPrimitive.Content value="session" className="flex min-h-0 min-w-0 flex-1 flex-col pt-4 outline-none">
       <Suspense fallback={<p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>}><SessionPanel
         routingMode={routingMode} taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active}/></Suspense>
     </TabsPrimitive.Content>

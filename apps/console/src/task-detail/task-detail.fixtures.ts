@@ -135,14 +135,13 @@ export type Replies = { task?: Task; workflow?: Workflow; audit?: Audit; routing
 /** A client that answers from what a test holds and records what it was asked. */
 export function client(replies: Replies = {}): TaskDetailClient & { held: Required<Replies> } {
   const held = { task: task(), workflow: workflow(), audit: audit(), routing: [routing()], inquiries: { items: [], more: false } as Inquiries, bases: {} as Record<string, Basis>, ...replies };
-  const verifiedAtMs = Date.UTC(2026, 8, 26, 11, 30, 5);
   return {
     held,
-    task: vi.fn(async () => ({ value: parseTask(structuredClone(held.task), held.task.runId), verifiedAtMs })),
-    workflow: vi.fn(async () => ({ value: structuredClone(held.workflow), verifiedAtMs })),
-    audit: vi.fn(async (_runId: string, _decisionIds: string[]) => ({ value: { audit: structuredClone(held.audit), routing: structuredClone(held.routing) }, verifiedAtMs })),
-    inquiries: vi.fn(async () => ({ value: structuredClone(held.inquiries), verifiedAtMs })),
-    basis: vi.fn(async (decisionId: string) => ({ value: structuredClone(held.bases[decisionId]!), verifiedAtMs })),
+    task: vi.fn(async () => ({ value: parseTask(structuredClone(held.task), held.task.runId) })),
+    workflow: vi.fn(async () => ({ value: structuredClone(held.workflow) })),
+    audit: vi.fn(async (_runId: string, _decisionIds: string[]) => ({ value: { audit: structuredClone(held.audit), routing: structuredClone(held.routing) } })),
+    inquiries: vi.fn(async () => ({ value: structuredClone(held.inquiries) })),
+    basis: vi.fn(async (decisionId: string) => ({ value: structuredClone(held.bases[decisionId]!) })),
   };
 }
 

@@ -5,10 +5,47 @@ import { contrastOf, expectNoSidewaysScroll, open, settle, test } from "./previe
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const run = "preview-run-a1";
-const shots = fileURLToPath(new URL("../../../tmp/console-steps", import.meta.url));
+const shots = fileURLToPath(new URL("../../../tmp/console-hints/steps", import.meta.url));
 const pane = (page: Page) => page.locator('[data-slot=detail-pane]');
 const markdown = "# 任务书的 Markdown\n\n先核对 `layout.tsx`，再检查 **布局**。\n\n## 验证清单\n\n" +
   Array.from({ length: 18 }, (_, index) => `- 第 ${index + 1} 项：读取完整的 Markdown 内容，验证任务书保持列表结构。`).join("\n");
+
+async function expectHeaderRule(page: Page) {
+  const result = await pane(page).evaluate(node => {
+    const title = node.querySelector('[data-slot="pane-title"]')!;
+    const tabs = node.querySelector('[role="tablist"]');
+    const rule = tabs ?? node.querySelector('[data-slot="pane-divider"]')!;
+    const content = node.querySelector('[data-slot="pane-content"]')!;
+    const line = rule.getBoundingClientRect();
+    const frame = node.getBoundingClientRect();
+    const style = getComputedStyle(rule);
+    const color = document.createElement("span");
+    color.style.color = "var(--line2)"; node.append(color);
+    const expectedColor = getComputedStyle(color).color; color.remove();
+    const active = tabs?.querySelector('[data-state="active"]');
+    const underline = active ? getComputedStyle(active, "::after") : null;
+    const underlineBottom = active ? active.getBoundingClientRect().bottom - parseFloat(underline!.bottom) : null;
+    const waits = [...node.querySelectorAll('[data-item-key^="span:queue:"], [data-item-key^="span:host:"], [data-item-key^="settle:"]')];
+    return {
+      width: line.width, paneWidth: frame.width, left: line.left, paneLeft: frame.left,
+      thickness: style.borderBottomWidth, color: style.borderBottomColor, expectedColor,
+      titleAbove: title.getBoundingClientRect().bottom <= line.bottom - 1,
+      waitsAbove: waits.every(wait => wait.getBoundingClientRect().bottom <= line.bottom - 1),
+      contentBelow: content.getBoundingClientRect().top >= line.bottom - 0.5,
+      titleTop: getComputedStyle(title).paddingTop, titleBottom: getComputedStyle(title).paddingBottom,
+      contentTop: getComputedStyle(content).paddingTop,
+      underlineOverlaps: underlineBottom === null || underlineBottom >= line.bottom - 1 && underlineBottom - parseFloat(underline!.height) <= line.bottom,
+      underlineVisible: underline === null || underline.opacity === "1",
+    };
+  });
+  expect(result.thickness).toBe("1px");
+  expect(result.color).toBe(result.expectedColor);
+  expect(result.width).toBeCloseTo(result.paneWidth, 1);
+  expect(result.left).toBeCloseTo(result.paneLeft, 1);
+  expect(result.titleAbove && result.waitsAbove && result.contentBelow, JSON.stringify(result)).toBe(true);
+  expect([result.titleTop, result.titleBottom, result.contentTop]).toEqual(["20px", "10px", "16px"]);
+  expect(result.underlineOverlaps && result.underlineVisible, JSON.stringify(result)).toBe(true);
+}
 
 async function fixture(page: Page) {
   await page.route(`**/api/tasks/${run}`, async route => {
@@ -83,6 +120,7 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
         return before(title, tabs ?? viewport) && waits.every(wait => before(title, wait) && before(wait, tabs ?? viewport));
       });
       expect(ordered, steps[index]).toBe(true);
+      await expectHeaderRule(page);
       await expectNoSidewaysScroll(page);
       if (index === 0) {
         await expect(pane(page)).not.toContainText("微任务 ID");
@@ -130,7 +168,10 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
     await tabs.getByRole("tab", { name: "会话", exact: true }).click();
     await expect(title).toBeVisible();
     await expect(wait).toBeVisible();
+    await expect(tabs).toHaveCSS("border-bottom-width", "1px");
+    await expect(pane(page).getByRole("tabpanel")).toHaveCSS("padding-top", "16px");
     await tabs.getByRole("tab", { name: "概述", exact: true }).click();
+    await expectHeaderRule(page);
     if (width === 1280) await page.screenshot({ path: `${shots}/turn-wait-zh-dark-1280.png` });
   });
 

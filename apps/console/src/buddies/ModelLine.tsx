@@ -5,7 +5,6 @@ import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { UnsavedMark } from "@/components/ui/state-mark";
 import { concurrencyEntryFor, MODEL_SERVICE_CONCURRENCY_DEFAULT } from "../console-data";
 import { modelServiceNoteText } from "../draft";
-import { formatDateTime } from "../i18n/format";
 import type { ConsoleView, Snapshot } from "../types";
 import { CoolingStatus } from "./cooling";
 import { modelIdentity, reasonTexts } from "./models";
@@ -28,16 +27,14 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
       <button type="button" aria-label={modelIdentity(row.modelService)} aria-description={enabled.length > 0 ? t("models.enabled") : undefined} onClick={onSelect}
         className="disclosure-trigger grid min-h-10 w-full grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left motion-reduce:transition-none sm:grid-cols-[16px_20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
         <Disclosure open={expanded} />
-        {enabled.length > 0 ? <Hint text={t("models.enabled")}><span className="mx-auto size-2 rounded-full bg-foreground" aria-hidden="true" /></Hint> : <span className="mx-auto size-2" aria-hidden="true" />}
+        {enabled.length > 0 ? <span className="mx-auto size-2 rounded-full bg-foreground" aria-hidden="true" /> : <span className="mx-auto size-2" aria-hidden="true" />}
         <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", !enabled.length && "text-ink3")}>
           <span className="wrap-anywhere font-medium">{member.model}</span>
           {!row.available && !harnessState && <Hint text={reasonTexts(row.reasons, t).join(" · ") || undefined}>
             <span className="text-xs text-ink3">{t("models.unavailable")}</span>
           </Hint>}
           <CoolingStatus providers={member.providerCooling ? [member.providerCooling] : []} />
-          {row.pending && <Hint text={row.pendingSince ? t("models.pendingSince", { time: formatDateTime(Date.parse(row.pendingSince)) }) : undefined}>
-            <span className="text-xs text-ink3">{t("models.pending")}</span>
-          </Hint>}
+          {row.pending && <span className="text-xs text-ink3">{t("models.pending")}</span>}
           {row.fresh && <span className="border border-line2 px-1 text-xs text-ink2">{t("models.fresh")}</span>}
           {changed && !expanded && <UnsavedMark label={t("unsaved")} />}
         </span>

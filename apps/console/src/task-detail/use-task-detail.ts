@@ -14,15 +14,12 @@ type Data = {
   routing: RoutingEntry[];
   bases: Record<string, Basis>;
   inquiries: Inquiries | null;
-  /** When the server checked the reply each part comes from; null when the reply says nothing of it. */
-  verified: Record<Kind, number | null>;
   errors: Record<Kind, (() => string) | null>;
 };
 
 const KINDS: Kind[] = ["task", "workflow", "audit", "inquiries", "basis"];
 const empty: Data = {
   view: null, workflow: null, audit: null, routing: [], bases: {}, inquiries: null,
-  verified: Object.fromEntries(KINDS.map(kind => [kind, null])) as Record<Kind, number | null>,
   errors: Object.fromEntries(KINDS.map(kind => [kind, null])) as Record<Kind, (() => string) | null>,
 };
 
@@ -39,8 +36,6 @@ export type DetailRead = {
   routing: RoutingEntry[];
   bases: Record<string, Basis>;
   inquiries: Inquiries | null;
-  /** When the server checked the reply the head of the detail rests on. */
-  verifiedAtMs: number | null;
   /** The first read that failed and has not succeeded since; what was read before stays. */
   error: string;
   /** A read the reader asked for is on its way. */
@@ -76,11 +71,11 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     const signal = lifetime.current!.signal;
     const mine = ++sequence.current[kind];
     try {
-      const { value, verifiedAtMs } = await work(signal);
+      const { value } = await work(signal);
       if (signal.aborted || mine !== sequence.current[kind]) return;
       setData(previous => {
         const next = apply(previous, value);
-        return { ...next, verified: { ...next.verified, [kind]: verifiedAtMs }, errors: { ...next.errors, [kind]: null } };
+        return { ...next, errors: { ...next.errors, [kind]: null } };
       });
     } catch (failure) {
       if (signal.aborted || mine !== sequence.current[kind] || isAbortError(failure)) return;
@@ -98,7 +93,7 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
   const loadInquiries = useCallback(() => load("inquiries", () => client.inquiries(runId), (previous, inquiries) => ({ ...previous, inquiries })), [client, runId, load]);
   const loadBases = useCallback((ids: string[]) => load("basis", async () => {
     const reads = await Promise.all(ids.map(async id => [id, await client.basis(id)] as const));
-    return { value: Object.fromEntries(reads.map(([id, read]) => [id, read.value])), verifiedAtMs: null };
+    return { value: Object.fromEntries(reads.map(([id, read]) => [id, read.value])) };
   }, (previous, bases: Record<string, Basis>) => ({ ...previous, bases: { ...previous.bases, ...bases } })), [client, load]);
 
   const live = data.view !== null && LIVE_STATUSES.includes(data.view.task.state);
@@ -156,10 +151,9 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
     void Promise.all(reads).finally(() => { busyRef.current = false; setBusy(false); });
   }, [loadTask, loadWorkflow, loadAudit, loadInquiries]);
 
-  const { errors, verified, ...read } = data;
+  const { errors, ...read } = data;
   return {
     ...read, busy, refresh,
-    verifiedAtMs: verified.workflow,
     error: Object.values(errors).find(Boolean)?.() ?? "",
   };
 }

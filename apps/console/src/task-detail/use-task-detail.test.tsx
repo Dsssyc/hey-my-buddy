@@ -32,7 +32,6 @@ describe("what the detail of a micro task reads", () => {
     expect(latest.audit?.turns).toHaveLength(2);
     expect(latest.routing).toHaveLength(1);
     expect(latest.inquiries).toEqual({ items: [], more: false });
-    expect(latest.verifiedAtMs).not.toBeNull();
     expect(latest.error).toBe("");
     expect([calls(reads.task), calls(reads.audit), calls(reads.inquiries)]).toEqual([1, 1, 1]);
     expect(Object.keys(reads).filter(key => key !== "held").sort()).toEqual(["audit", "basis", "inquiries", "task", "workflow"]);
@@ -126,7 +125,7 @@ describe("what the detail of a micro task reads", () => {
   it("lets an older reply that arrives late replace nothing the newer one wrote", async () => {
     const reads = client();
     let release!: () => void;
-    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: workflow({ revision: 3 }), verifiedAtMs: 1 }); }));
+    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: workflow({ revision: 3 }) }); }));
     render(<Probe reads={reads} />);
     await settle();
     await act(async () => { latest.refresh(); });
@@ -149,21 +148,6 @@ describe("when the detail is left", () => {
     view.unmount();
     expect(signal.aborted).toBe(true);
   });
-});
-
-describe("what the head rests on", () => {
-  it("says when the server checked the read the head rests on, per read: a read that carries no time carries none", async () => {
-    const reads = client();
-    render(<Probe reads={reads} />);
-    await settle();
-    expect(latest.verifiedAtMs).not.toBeNull();
-    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
-    await settle(3000);
-    expect(latest.verifiedAtMs).toBeNull();
-    // The time of another read is not lent to it.
-    expect(calls(reads.task)).toBeGreaterThan(0);
-  });
-
 });
 
 describe("what moves the reads", () => {
@@ -194,7 +178,7 @@ describe("what moves the reads", () => {
     await settle();
     expect(latest.busy).toBe(false);
     let release!: () => void;
-    (reads.task as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: parseTask(task(), "m1"), verifiedAtMs: 1 }); }));
+    (reads.task as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: parseTask(task(), "m1") }); }));
     const before = calls(reads.workflow);
     await act(async () => { latest.refresh(); });
     expect(latest.busy).toBe(true);

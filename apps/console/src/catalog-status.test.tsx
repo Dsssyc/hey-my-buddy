@@ -146,17 +146,17 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     expect(within(nameCell("retired-model")).queryByText("待确认")).toBeNull();
   });
 
-  it("explains the one mark of a model with the earliest recorded first-absence time", async () => {
+  it("leaves the pending model mark without a repeated timestamp hint", async () => {
     const f = fixture();
     const user = userEvent.setup();
     window.location.hash = "#buddies";
     render(<App suppliedApi={f.api} />);
     await listed(2, 4);
-    // Both levels are pending with different times; the model says it once, with the earliest.
+    // The compact row names the state; the drawer still carries its recorded time.
     const mark = within(nameCell("deepseek-flash")).getByText("待确认");
-    expect(mark.getAttribute("aria-description")).toBe(`待确认，自 ${early}`);
+    expect(mark.getAttribute("aria-description")).toBeNull();
     await user.hover(mark);
-    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toBe(`待确认，自 ${early}`);
+    expect(screen.queryByRole("tooltip")).toBeNull();
     expect(document.body.textContent).not.toContain(late);
   });
 

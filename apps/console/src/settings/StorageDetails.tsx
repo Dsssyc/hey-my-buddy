@@ -5,10 +5,10 @@ import { Hint } from "../components/hint";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "../components/ui/collapsible";
 import { StateMark } from "../components/ui/state-mark";
 import { formatList, formatNumber } from "../i18n/format";
-import { ALWAYS_PROTECTED, byteHint, byteText, categoryText, reasonText } from "./storage-display";
+import { ALWAYS_PROTECTED, byteText, categoryText, reasonText } from "./storage-display";
 
 function Bytes({ value, hint }: { value: number; hint?: string }) {
-  return <Hint text={hint ?? byteHint(value)}><span tabIndex={0} className="whitespace-nowrap tabular-nums">{byteText(value)}</span></Hint>;
+  return <Hint text={hint}><span tabIndex={hint ? 0 : undefined} className="whitespace-nowrap tabular-nums">{byteText(value)}</span></Hint>;
 }
 
 export function StorageTable({ categories }: { categories: StorageCategory[] }) {
@@ -30,7 +30,7 @@ export function StorageTable({ categories }: { categories: StorageCategory[] }) 
         </th>
         <td className="pl-3 text-right tabular-nums text-ink2">{formatNumber(category.count)}</td>
         <td className="pl-3 text-right"><Bytes value={category.bytes} /></td>
-        <td className={`pl-3 text-right ${category.reclaimableBytes > 0 ? "text-hand" : "text-ink3"}`}><Bytes value={category.reclaimableBytes} hint={ALWAYS_PROTECTED.has(category.id) ? t("protected") : category.reclaimableBytes ? undefined : t("none")} /></td>
+        <td className={`pl-3 text-right ${category.reclaimableBytes > 0 ? "text-hand" : "text-ink3"}`}><Bytes value={category.reclaimableBytes} hint={ALWAYS_PROTECTED.has(category.id) ? t("protected") : undefined} /></td>
       </tr>
       {category.reasons.length > 0 && <tr><td colSpan={4}><CollapsibleContent>
         <ul className="flex list-none flex-wrap gap-x-5 gap-y-2 bg-muted px-5 py-3 text-xs text-ink2">{category.reasons.map(code => <li key={code}>{reasonText(code)}</li>)}</ul>
@@ -42,7 +42,8 @@ export function StorageTable({ categories }: { categories: StorageCategory[] }) 
 export function StorageOrphans({ processes }: { processes: StorageOrphanProcess[] }) {
   const { t } = useTranslation("settingsStorage");
   return <div data-slot="storage-orphans" className="space-y-2 text-xs">
-    <Hint text={t("orphansHint")}><h3 tabIndex={0} className="flex w-fit items-center gap-2 font-normal text-ink2"><StateMark kind="hand" />{t("orphans", { n: formatNumber(processes.length) })}</h3></Hint>
+    <h3 className="flex w-fit items-center gap-2 font-normal text-ink2"><StateMark kind="hand" />{t("orphans", { n: formatNumber(processes.length) })}</h3>
+    <p data-slot="orphans-consequence" className="text-ink3">{t("orphansConsequence")}</p>
     <ul className="space-y-2">{processes.map(process => <li key={process.pid} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <span>{process.kind === "daemon" ? t("daemon") : process.kind === "execution" ? t("execution") : process.kind || t("unknownKind")}</span>
       <code className="tabular-nums">{t("process", { pid: process.pid })}</code>
@@ -58,7 +59,7 @@ export function StorageOutcome({ result }: { result: StorageApplyResult }) {
   return <div role="status" className="space-y-2 text-xs">
     <p className="flex items-center gap-2"><StateMark kind="done" />{t("removed", { bytes: byteText(result.removedBytes), n: formatNumber(result.removed.length) })}</p>
     {result.removed.length > 0 && <Collapsible open={removed} onOpenChange={setRemoved}><CollapsibleTrigger className="inline-flex h-7 items-center gap-2 px-0 text-xs"><Disclosure open={removed} />{t(removed ? "hideRemoved" : "showRemoved")}</CollapsibleTrigger>
-      <CollapsibleContent><ul className="space-y-2 py-2 font-mono text-ink2">{result.removed.map(item => <li key={item.id} className="break-all"><Hint text={byteHint(item.bytes)}><span tabIndex={0}>{t("item", { path: item.path, detail: byteText(item.bytes) })}</span></Hint></li>)}</ul></CollapsibleContent>
+      <CollapsibleContent><ul className="space-y-2 py-2 font-mono text-ink2">{result.removed.map(item => <li key={item.id} className="break-all">{t("item", { path: item.path, detail: byteText(item.bytes) })}</li>)}</ul></CollapsibleContent>
     </Collapsible>}
     {result.skipped.length > 0 && <Collapsible open={skipped} onOpenChange={setSkipped}>
       <p className="flex items-center gap-2"><StateMark kind="hand" />{t("skipped", { n: formatNumber(result.skipped.length) })}</p>

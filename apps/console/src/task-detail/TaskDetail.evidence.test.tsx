@@ -339,7 +339,7 @@ describe("the head", () => {
     await ready();
     const button = screen.getByRole("button", { name: "重新读取" });
     const before = slow.mock.calls.length;
-    slow.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: undefined, verifiedAtMs: null }); }));
+    slow.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ value: undefined }); }));
     await f.user.click(button);
     await waitFor(() => expect(button.getAttribute("aria-busy")).toBe("true"));
     await f.user.click(button);
@@ -347,20 +347,13 @@ describe("the head", () => {
     release();
   });
 
-  it("keeps refresh free of a checking-time tooltip whether or not the read has a checking time", async () => {
+  it("keeps refresh free of a checking-time tooltip", async () => {
     const reads = client();
     const f = open({ client: reads });
     await ready();
     await f.user.hover(screen.getByRole("button", { name: "重新读取" }));
     expect(screen.queryByRole("tooltip")).toBeNull();
     expect(screen.getByRole("button", { name: "重新读取" }).hasAttribute("aria-description")).toBe(false);
-    cleanup();
-    const bare = client();
-    (bare.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
-    const g = open({ client: bare });
-    await ready();
-    await g.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("writes a relative time with a space between the number and the unit", async () => {

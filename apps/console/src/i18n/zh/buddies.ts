@@ -24,11 +24,6 @@ export default {
     pin: "固定",
     exclude: "排除",
   },
-  preferenceHint: {
-    prefer: "路由时先考虑",
-    pin: "路由时只在固定的 buddy 里选",
-    exclude: "不参与路由",
-  },
   unsaved: "未保存",
   loginExpired: "浏览器授权已失效，操作未提交；请重新授权。",
   models: {
@@ -55,7 +50,6 @@ export default {
     },
     unavailable: "不可用",
     pending: "待确认",
-    pendingSince: "待确认，自 {{time}}",
     fresh: "新",
     occupancyUnknown: "占用未知",
     occupancy: "占用 {{active}}，上限 {{limit}}",

@@ -1,4 +1,3 @@
-import { Hint } from "../components/hint";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { clockTime } from "../macro-task-display";
@@ -38,14 +37,14 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
     onOpen(runId, markerKey(marker));
   };
   return <Popover open={open} onOpenChange={setOpen}>
-    <Hint text={label}><PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={itemLinks || tabKey === key ? 0 : -1} data-linked-item={itemLinks ? [...new Set(markers.map(marker => itemLinks.get(markerKey(marker))))].join(" ") : undefined} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
+    <PopoverTrigger asChild><g ref={trigger} role="button" tabIndex={itemLinks || tabKey === key ? 0 : -1} data-linked-item={itemLinks ? [...new Set(markers.map(marker => itemLinks.get(markerKey(marker))))].join(" ") : undefined} data-slot="event-cluster" data-at={Date.parse(markerAt(first))} data-key={key} aria-pressed={selected}
       aria-label={`${label} · ${taskTitle}`} onPointerEnter={() => onFocusMarker(first, "hover")} onPointerLeave={() => onFocusMarker(null, "hover")} onFocus={() => onFocusMarker(first, "focus")} onBlur={() => onFocusMarker(null, "focus")}
       onClick={() => onSelect(runId, markerKey(first))}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelect(runId, markerKey(first)); setOpen(true); } }}
       className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath} fill="transparent"/>
       <ClusterMark count={markers.length} x={x} y={y} selected={selected || markers.some(marker => markerHasKey(marker, highlightedKey))} focusFrame/>
-    </g></PopoverTrigger></Hint>
+    </g></PopoverTrigger>
     <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto p-1"
       onOpenAutoFocus={event => { event.preventDefault(); items.current[0]?.focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }}>

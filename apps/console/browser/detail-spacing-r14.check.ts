@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/readability-r16", import.meta.url));
+const captures = fileURLToPath(new URL("../../../tmp/console-hints/detail-groups", import.meta.url));
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`detail groups ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
   test("groups the strip into a paper band and keeps identity and tabbed content on the card", async ({ page }) => {
@@ -21,7 +21,8 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
     expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
     expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
-    for (const group of [header, strip, tabs]) await expect(group).toHaveCSS("border-bottom-width", "0px");
+    for (const group of [header, strip]) await expect(group).toHaveCSS("border-bottom-width", "0px");
+    await expect(tabs).toHaveCSS("border-bottom-width", "1px");
     await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     const paper = await page.evaluate(() => {
       const probe = document.createElement("span"); probe.style.backgroundColor = "var(--paper)"; document.body.append(probe);

@@ -156,8 +156,8 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
     </div></>);
   }
   return bare(<>
-    <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
-      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
+    <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)}
+      error={read.error} busy={read.busy} onRefresh={read.refresh} onBack={onBack} />
     {steps && !steps.complete && <p className="border-b bg-card px-4 py-2 text-xs text-ink3 sm:px-6">{t("strip.truncated")}</p>}
     {steps && current && ctx && row && <div ref={stripRef} data-slot="detail-step-band" className="shrink-0 border-y border-line bg-background py-3">
       <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>

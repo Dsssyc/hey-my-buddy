@@ -257,7 +257,7 @@ describe("the task view", () => {
     const view = parseTask(task(), "m1");
     expect(view.task.task).toContain("实现微任务详情");
     expect(view).toMatchObject({ updatedAt: "2026-09-26T11:00:00Z", lead: false });
-    expect(view.attempt).toMatchObject({ attemptId: "att-2", active: false, overdue: false, possiblyStuck: false, activity: null, ending: null, session: null });
+    expect(view.attempt).toMatchObject({ attemptId: "att-2", active: false, overdue: false, possiblyStuck: false, activity: null, ending: null });
     expect(() => parseTask(task({ runId: "other" }), "m1")).toThrow(ApiError);
     for (const key of ["task", "state", "cwd", "createdAt", "updatedAt", "lineage"]) {
       expect(() => parseTask({ ...task(), [key]: undefined }, "m1"), key).toThrow(ApiError);
@@ -285,7 +285,7 @@ describe("the task view", () => {
     const activity = { phase: "tool-running", observedAt: "t", toolName: "bash", counts: { modelTurns: 4, toolCalls: 9 }, lastToolActivityAt: "t", lastNativeActivityAt: "t", eventSeq: 7 };
     const running = parseTask(task({ state: "running", activeAttemptId: "att-2", activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
     expect(running).toMatchObject({ active: true, overdue: true, possiblyStuck: true });
-    expect(running.activity).toMatchObject({ phase: "tool-running", toolName: "bash", modelTurns: 4, toolCalls: 9, eventSeq: 7, basis: "tool" });
+    expect(running.activity).toEqual({ phase: "tool-running", observedAt: "t", toolName: "bash", modelTurns: 4, toolCalls: 9, basis: "tool" });
     const idle = parseTask(task({ state: "completed", activeAttemptId: null, activity, selectedAttempt: attempt({ reminders }) }), "m1").attempt!;
     expect(idle).toMatchObject({ active: false, overdue: false, possiblyStuck: false, activity: null });
   });
@@ -304,7 +304,9 @@ describe("the task view", () => {
     const basis = (activity: Record<string, unknown>) => parseTask(task({ state: "running", activeAttemptId: "att-2", activity }), "m1").attempt!.activity!.basis;
     expect(basis({ phase: "waiting-model", lastToolActivityAt: "t" })).toBe("tool");
     expect(basis({ phase: "waiting-model", nativeSessionId: "s" })).toBe("native");
+    expect(basis({ phase: "waiting-model", lastNativeActivityAt: "t" })).toBe("native");
     expect(basis({ phase: "starting", observedAt: "t", eventSeq: 1 })).toBe("phase");
+    expect(basis({ phase: "starting", eventSeq: 1 })).toBe("phase");
     expect(basis({ phase: "nonsense" })).toBe("unknown");
   });
 
@@ -321,14 +323,6 @@ describe("the task view", () => {
     // A stop with no recorded initiator is unknown, never a person.
     expect(parseTask(task({ state: "cancelled", selectedAttempt: attempt({ result: { terminationReason: "unknown-stop" } }) }), "m1").attempt!.ending).toMatchObject({ stoppedBy: "unknown" });
     expect(() => parseTask(task({ state: "failed", providerRejection: { code: "blocked" } }), "m1")).toThrow(ApiError);
-  });
-
-  it("reads where the native session is kept and whether it can be resumed", () => {
-    const view = parseTask(task({ selectedAttempt: attempt({ result: { terminationReason: "completed", error: null, result: { stdout: "做完了", nativeSession: {
-      sessionId: "s-1", storageScope: "task-private", storageOwner: "hey-my-buddy-attempt", nativeAppVisibility: "not-listed-in-native-app", resumable: true, bindingPresent: false, note: "  私有  " } } } }) }), "m1");
-    expect(view.attempt!.session).toEqual({ id: "s-1", scope: "task-private", owner: "hey-my-buddy-attempt", visibility: "not-listed-in-native-app", resumable: true, binding: false, note: "私有" });
-    const nativeOnly = parseTask(task({ selectedAttempt: attempt({ result: { terminationReason: "completed", result: { nativeIdentity: { sessionId: "s-2" } } } }) }), "m1").attempt!.session;
-    expect(nativeOnly).toMatchObject({ id: "s-2", scope: null, resumable: null });
   });
 
   it("keeps the basis a usage states", () => {
