@@ -46,7 +46,7 @@ def write_runtime_hint(skill: Path, target: Path) -> None:
     """Bootstrap with a stable interpreter; active-runtime remains authority."""
     from .runtime import runtime_python
     from ..private_files import publish_bytes
-    publish_bytes(skill / '.runtime-python', (str(runtime_python(target)) + '\n').encode("utf-8"))
+    publish_bytes(skill / '.runtime-python', (str(runtime_python(target)) + '\n').encode("utf-8"), private=False)
 
 
 def _is_product_skill(path: Path) -> bool:
@@ -292,8 +292,9 @@ def paths(params: dict) -> dict:
     state = get_state_dir()
     pointer = None
     try:
-        pointer = json.loads((state / "active-runtime.json").read_text(encoding="utf-8")).get("runtimeDir")
-    except (OSError, ValueError, AttributeError):
+        from ..private_files import read_text
+        pointer = json.loads(read_text(state / "active-runtime.json")).get("runtimeDir")
+    except (OSError, ValueError, AttributeError, BoardError):
         pass
     return {
         "skill": {"dir": str(target), "installed": marker is not None,

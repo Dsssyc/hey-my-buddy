@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
+from ...private_files import read_bytes
 from ...protocol.capabilities import PERMISSION_LEVELS
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
@@ -197,7 +198,7 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
         wrap_up_run = result.identity != original_identity
         if code == 0 and (not wrap_up_run or wrap_up_candidate):
             try:
-                turn_input = decode_strict_json(guard_private_path(Path(control["inputFile"])).read_bytes())
+                turn_input = decode_strict_json(read_bytes(guard_private_path(Path(control["inputFile"]))))
                 facts = {"sessionId": result.native_identity.session_id if result.native_identity else None}
                 run_execution._worker_result(result, control, turn_input, request.input_text, facts)
                 delivered = wrap_up_candidate

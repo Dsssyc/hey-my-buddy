@@ -215,9 +215,8 @@ def _runtime_ready(target: Path) -> bool:
     if runtime is not None:
         return runtime.is_ready(target)
     try:
-        from hey_my_buddy.private_dirs import open_regular_fd
-        with os.fdopen(open_regular_fd(target / 'READY.json', os.O_RDONLY), 'rb') as stream:
-            marker = json.load(stream)
+        from hey_my_buddy.private_files import read_bytes
+        marker = json.loads(read_bytes(target / 'READY.json', private=False))
     except (OSError, ValueError):
         return False
     return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()

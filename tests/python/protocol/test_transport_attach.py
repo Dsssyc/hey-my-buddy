@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy import private_dirs
 from hey_my_buddy.protocol import transport
 
 from hey_my_buddy.protocol.transport import (
@@ -218,14 +219,19 @@ class TrustBoundaryTests(AttachFixture):
             return child
 
         with MutationRecorder() as recorder:
-            recorder.chmod.side_effect = lambda directory, mode: os.chmod(directory, mode)
+            if os.name != "nt":
+                recorder.chmod.side_effect = lambda directory, mode: os.chmod(directory, mode)
             recorder.popen.side_effect = spawn
             with patch("hey_my_buddy.protocol.transport._read_endpoint", side_effect=endpoint_read):
                 self.assertEqual(ensure_service(self.directory), ENDPOINT)
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
-        self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
-        recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
+        if os.name == "nt":
+            private_dirs.validate_private_dir(self.directory)
+            recorder.chmod.assert_not_called()
+        else:
+            self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
+            recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 

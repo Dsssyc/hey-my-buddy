@@ -51,6 +51,11 @@ class _Disposition(ctypes.Structure):
     _fields_ = [("DeleteFile", ctypes.c_ubyte)]
 
 
+class _RenameInfo(ctypes.Structure):
+    _fields_ = [("Flags", ctypes.c_uint32), ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", ctypes.c_uint32), ("FileName", ctypes.c_wchar * 1)]
+
+
 class WindowsFileAPI:
     def __init__(self):
         import msvcrt
@@ -149,6 +154,21 @@ class WindowsFileAPI:
         disposition = _Disposition(1)
         if not self.kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition),
                                                       ctypes.sizeof(disposition)):
+            self._error()
+
+    def rename(self, descriptor, target):
+        """Replace a name using the still-open, synchronized writer handle."""
+        name = str(Path(target).absolute()).encode('utf-16-le')
+        # The Win32 entry point consumes a terminated WCHAR path while forming
+        # the native rename request. FileNameLength excludes that terminator.
+        size = _RenameInfo.FileName.offset + len(name) + 2
+        buffer = ctypes.create_string_buffer(max(size, ctypes.sizeof(_RenameInfo)))
+        info = _RenameInfo.from_buffer(buffer)
+        info.Flags = 0x00000001 | 0x00000002  # REPLACE_IF_EXISTS | POSIX_SEMANTICS
+        info.FileNameLength = len(name)
+        ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.FileName.offset, name, len(name))
+        handle = self.msvcrt.get_osfhandle(descriptor)
+        if not self.kernel.SetFileInformationByHandle(handle, 22, buffer, size):  # FileRenameInfoEx
             self._error()
 
     def close(self, handle):
@@ -250,25 +270,18 @@ def initialize_process_owner():
     _owner_initialized = True
 
 
-def _path_key(value):
-    # GetFinalPathNameByHandleW uses the extended DOS/UNC namespace; callers may
-    # spell the same path without that prefix. Keep every path component.
-    if value[:8].upper() == '\\\\?\\UNC\\':
-        value = '\\\\' + value[8:]
-    elif value.startswith('\\\\?\\'):
-        value = value[4:]
-    return ntpath.normcase(ntpath.normpath(value))
-
-
 def _check(api, handle, path, *, directory, private=False):
     attributes, _ = api.info(handle)
     if (attributes & FILE_ATTRIBUTE_REPARSE_POINT
             or bool(attributes & FILE_ATTRIBUTE_DIRECTORY) != directory
             or api.file_type(handle) != FILE_TYPE_DISK):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path has a reparse point or invalid type', path=str(path))
-    expected = api.long_path(path)
-    if _path_key(api.final_path(handle)) != _path_key(expected):
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private handle does not name the requested path', path=str(path))
+    # Volume/share roots have no level name. A subst root's final handle path
+    # can name a directory on another drive; the pinned root is the boundary.
+    if ntpath.basename(str(path).rstrip('\\')):
+        expected = ntpath.basename(api.long_path(path).rstrip('\\'))
+        if api.name(handle).casefold() != expected.casefold():
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Private handle does not name the requested path', path=str(path))
     if private:
         validate_private_handle(handle)
 
@@ -320,11 +333,11 @@ def open_regular_fd(path, flags, mode=0o600):
         return open_held_regular_fd(api, path, flags)
 
 
-def open_held_regular_fd(api, path, flags):
+def open_held_regular_fd(api, path, flags, *, private=True, delete=False):
     """Open one leaf while the caller retains its checked parent handles."""
     if flags & os.O_TRUNC and not flags & os.O_EXCL:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
-    access = READ_CONTROL
+    access = READ_CONTROL | (DELETE if delete else 0)
     if flags & os.O_RDWR:
         access |= GENERIC_READ | GENERIC_WRITE
     elif flags & os.O_WRONLY:
@@ -334,11 +347,16 @@ def open_held_regular_fd(api, path, flags):
     disposition = CREATE_NEW if flags & os.O_EXCL else OPEN_ALWAYS if flags & os.O_CREAT else OPEN_EXISTING
     handle = api._open(path, access, disposition, share_delete=True)
     try:
-        _check(api, handle, path, directory=False, private=True)
+        _check(api, handle, path, directory=False, private=private)
         return api.fd(handle, flags)
     except BaseException:
         api.close(handle)
         raise
+
+
+def open_public_regular_fd(path, flags):
+    """Installation files allow linked ancestors and have no private ACL policy."""
+    return open_held_regular_fd(WindowsFileAPI(), Path(path), flags, private=False)
 
 
 def validate_directory(path):

@@ -166,8 +166,7 @@ def ensure_private_dir(path: Path) -> Path:
     _guard_parents(path)
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
-    if os.name != 'nt':
-        path.chmod(0o700)
+    path.chmod(0o700)
     return path
 
 

@@ -22,7 +22,7 @@ from ..tasks import scheduling
 from ...console.server import Console
 from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..store.db import SCHEMA_VERSION, utc_now
-from ...private_files import publish_bytes
+from ...private_files import publish_bytes, read_text
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
@@ -270,10 +270,10 @@ class Daemon:
             self.console.close()
         self.store.db.close()
         try:
-            value = json.loads(self.endpoint_path.read_text(encoding="utf-8"))
+            value = json.loads(read_text(self.endpoint_path))
             if hmac.compare_digest(value.get("serviceId", ""), self.service_id):
                 self.endpoint_path.unlink()
-        except (OSError, ValueError):
+        except (OSError, ValueError, BoardError):
             pass
         for fd in self.lock_fds:
             try:

@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -302,10 +303,19 @@ def is_ready(directory: Path) -> bool:
 
 
 @contextmanager
-def installation_lock(path: Path, *, blocking: bool = True, create: bool = True):
+def installation_lock(path: Path, *, blocking: bool = True, create: bool = True, private: bool = False):
     """Hold a stable lock file until the descriptor closes; never unlink it."""
-    fd = private_dirs.open_regular_fd(path, os.O_RDWR | (os.O_CREAT if create else 0))
+    flags = os.O_RDWR | (os.O_CREAT if create else 0)
+    if private:
+        fd = private_dirs.open_regular_fd(path, flags)
+    elif os.name == 'nt':
+        from ..windows_files import open_public_regular_fd
+        fd = open_public_regular_fd(path, flags)
+    else:
+        fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
     try:
+        if not private and os.name != 'nt' and not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise BoardError('RUNTIME_INSTALL_LOCK_INVALID', 'Runtime installation lock is not a regular file', path=str(path))
         locking.lock(fd, blocking=blocking)
         yield fd
     finally:
@@ -333,10 +343,7 @@ def materialize(
     target = runtime_dir(root, destination)
     if is_ready(target):
         return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
-    if os.name == 'nt':
-        private_dirs.ensure_private_dir(target.parent)
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     # Install into a temporary sibling first only because the final name must be a
     # complete directory atomically; every path recorded inside is rewritten to the
     # final location before installation starts.
@@ -362,7 +369,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
             )
         record = manifest(root)
         from ..private_files import publish_bytes
-        publish_bytes(working / "manifest.json", (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True)
+        publish_bytes(working / "manifest.json", (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True, private=False)
         # Publish the complete source tree under the FINAL content-addressed name
         # before any environment is created inside it.
         if target.exists():
@@ -426,7 +433,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
         }
         _rewrite_environment_paths(environment, target)
-        publish_bytes(target / READY_FILE, (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True)
+        publish_bytes(target / READY_FILE, (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True, private=False)
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
         return result
     finally:
@@ -457,10 +464,8 @@ def _copy_assets(root: Path, destination: Path) -> None:
 
 
 def _read_ready_file(directory: Path) -> dict:
-    if os.name == 'nt':
-        with os.fdopen(private_dirs.open_regular_fd(directory / READY_FILE, os.O_RDONLY), 'rb') as stream:
-            return json.load(stream)
-    return json.loads((directory / READY_FILE).read_text(encoding='utf-8'))
+    from ..private_files import read_bytes
+    return json.loads(read_bytes(directory / READY_FILE, private=False))
 
 
 def read_ready(directory: Path) -> dict:

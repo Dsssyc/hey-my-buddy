@@ -1,5 +1,6 @@
 """The Windows private boundary's policy is portable; native checks are explicit."""
 from contextlib import contextmanager
+import ctypes
 import os
 from pathlib import Path, PureWindowsPath
 import subprocess
@@ -83,6 +84,39 @@ class ACLPolicyTests(unittest.TestCase):
 
 
 class HandleBoundaryTests(unittest.TestCase):
+    def test_rename_uses_writer_handle_and_posix_replace_flags_once(self):
+        api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
+        api.kernel, api.msvcrt = mock.Mock(), mock.Mock()
+        api.msvcrt.get_osfhandle.return_value = 321
+        target = Path('published-中文.json').absolute()
+
+        def rename(handle, kind, buffer, size):
+            info = files._RenameInfo.from_buffer(buffer)
+            self.assertEqual((handle, kind, info.Flags, info.RootDirectory), (321, 22, 3, None))
+            name = ctypes.string_at(ctypes.addressof(buffer) + files._RenameInfo.FileName.offset,
+                                    info.FileNameLength).decode('utf-16-le')
+            self.assertEqual(name, str(target))
+            self.assertEqual(size, files._RenameInfo.FileName.offset + len(str(target).encode('utf-16-le')) + 2)
+            self.assertEqual(buffer.raw[size - 2:size], b'\0\0')
+            return True
+
+        api.kernel.SetFileInformationByHandle.side_effect = rename
+        api.rename(123, target)
+        api.msvcrt.get_osfhandle.assert_called_once_with(123)
+        api.kernel.SetFileInformationByHandle.assert_called_once()
+        api.kernel.CloseHandle.assert_not_called()
+
+    def test_publication_writer_requests_delete_access_and_all_sharing(self):
+        api = mock.Mock()
+        api._open.return_value = 123
+        api.fd.return_value = 456
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        with mock.patch.object(files, '_check'):
+            self.assertEqual(files.open_held_regular_fd(api, Path('new.tmp'), flags, delete=True), 456)
+        api._open.assert_called_once_with(Path('new.tmp'),
+            files.READ_CONTROL | files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
+        api.close.assert_not_called()
+
     def test_directory_open_pins_against_rename(self):
         api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
         api.kernel = mock.Mock()
@@ -94,16 +128,20 @@ class HandleBoundaryTests(unittest.TestCase):
         self.assertEqual(args[5] & (files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS),
                          files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS)
 
-    def test_private_handle_compares_the_full_long_path_without_case_sensitivity(self):
+    def test_private_handle_compares_only_this_levels_long_name_without_case_sensitivity(self):
         api = mock.Mock()
         api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
         api.file_type.return_value = files.FILE_TYPE_DISK
         api.long_path.return_value = r'C:\Users\Runner Long Name\AppData'
-        api.final_path.return_value = r'\\?\c:\users\RUNNER LONG NAME\appdata'
+        api.name.return_value = 'appdata'
         requested = PureWindowsPath(r'C:\Users\RUNNER~1\AppData')
         files._check(api, 123, requested, directory=True)
         api.long_path.assert_called_once_with(requested)
+        # The same level can be reached through a subst drive or mapped share;
+        # ancestors have already been pinned and checked independently.
         api.final_path.return_value = r'\\?\C:\Other\Runner Long Name\AppData'
+        files._check(api, 123, requested, directory=True)
+        api.name.return_value = 'another-name'
         with self.assertRaises(BoardError):
             files._check(api, 123, requested, directory=True)
 
@@ -113,6 +151,15 @@ class HandleBoundaryTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             files._check(api, 123, PureWindowsPath(r'C:\private\junction'), directory=True)
         api.long_path.assert_not_called()
+
+    def test_subst_drive_root_is_a_pinned_boundary_without_a_level_name(self):
+        api = mock.Mock()
+        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
+        api.file_type.return_value = files.FILE_TYPE_DISK
+        api.name.return_value = 'directory-behind-subst'
+        files._check(api, 123, PureWindowsPath('S:/'), directory=True)
+        api.long_path.assert_not_called()
+        api.name.assert_not_called()
 
     def test_new_directories_are_created_one_level_at_a_time_with_0700(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -204,7 +251,7 @@ class NativePrivateFilesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = private_dirs.ensure_private_dir(Path(temporary) / 'Long Private Directory For Short Name')
             short = win32api.GetShortPathName(str(root))
-            if files._path_key(short) == files._path_key(str(root)):
+            if short.casefold() == str(root).casefold():
                 self.skipTest('GetShortPathNameW returned the long spelling; this volume supplies no 8.3 alias for the fixture')
             path = root / 'Payload.json'
             publish_bytes(path, b'short-name-content')

@@ -91,10 +91,10 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
         # Daemon argv can omit its state root. Control identity provides one exact
         # positive match, but no missing PID is interpreted as stopped.
         try:
-            current = json.loads((state / 'control.json').read_text(encoding="utf-8"))
+            current = json.loads(private_files.read_text(state / 'control.json'))
             if int(pid) == current.get('pid'):
                 observed_state = str(state)
-        except (OSError, ValueError):
+        except (OSError, ValueError, BoardError):
             pass
         if observed_state is None:
             try:
@@ -558,9 +558,9 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
                             and state != default_state_dir().resolve())
     try:
-        keep = json.loads((state / 'runtime-retention.json').read_text(encoding="utf-8"))
+        keep = json.loads(private_files.read_text(state / 'runtime-retention.json'))
         retained_ids = {keep['current'], keep['previous']}
-    except (OSError, KeyError, ValueError):
+    except (OSError, KeyError, ValueError, BoardError):
         retained_ids = None
     if private_dirs.linked_component(runtime_root) is not None:
         add('runtimes', runtime_root, ['linked-path'])

@@ -35,6 +35,7 @@ from ....errors import BoardError
 from ....protocol.reasons import reason as make_reason
 from ....protocol.owned_process import WindowsCommandLineTooLong
 from ....private_dirs import ensure_private_dir, open_regular_fd
+from ....private_files import read_text
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
 from ..base import BoundSessionServices
@@ -854,7 +855,7 @@ class _AttentionPolicy:
         try:
             path = Path(self._bridge["attentionPath"])
             if path.is_file():
-                value = json.loads(path.read_text(encoding="utf-8")).get("requests")
+                value = json.loads(read_text(path)).get("requests")
                 requests = [item for item in value if isinstance(item, dict)][:7] + requests \
                     if isinstance(value, list) else requests
             private_json(path, {"version": 1, "requests": requests})

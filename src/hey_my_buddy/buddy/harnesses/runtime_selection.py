@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from ...errors import BoardError
+from ...private_files import read_text
 
 _records = ContextVar('harness_records', default=None)
 _environment = ContextVar('harness_environment', default=None)
@@ -32,8 +33,8 @@ def selected(harness, environment=None):
     records = _records.get()
     if records is None and env.get(RECORD_FILE):
         try:
-            records = json.loads(Path(env[RECORD_FILE]).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            records = json.loads(read_text(Path(env[RECORD_FILE])))
+        except (OSError, ValueError, BoardError):
             raise BoardError('HARNESS_RECORD_INVALID', 'The attempt has no readable selected harness record') from None
     return records.get(harness) if records is not None else None
 

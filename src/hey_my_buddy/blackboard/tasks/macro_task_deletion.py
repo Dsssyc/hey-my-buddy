@@ -12,7 +12,7 @@ import json
 import re
 import uuid
 
-from ... import private_dirs
+from ... import private_dirs, private_files
 from ...errors import BoardError
 from ...home import control_file_path, submission_file_path
 from ...protocol import schemas
@@ -401,8 +401,8 @@ def _delete_cli_files(store, scope):
         if not safe_file(path):
             return False
         try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError,UnicodeError):
+            document = json.loads(private_files.read_text(path))
+        except (ValueError, BoardError):
             return False
         return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
 

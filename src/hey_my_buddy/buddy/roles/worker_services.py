@@ -35,6 +35,8 @@ import secrets
 from copy import deepcopy
 from pathlib import Path
 
+from ...private_files import read_text
+from ...errors import BoardError
 from ...protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records
 from .turn_io import canonical_json, validate_outcome
 from .prompts import worker_prompt
@@ -160,8 +162,8 @@ def attention_requests(configuration: dict) -> int:
         path = Path(path_value)
         if path.stat().st_size > MAX_ATTENTION_BYTES:
             return 1  # an oversized record still means an unresolved request
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        value = json.loads(read_text(path))
+    except (OSError, ValueError, BoardError):
         return 0
     requests = value.get("requests") if isinstance(value, dict) else None
     return len(requests) if isinstance(requests, list) else 0

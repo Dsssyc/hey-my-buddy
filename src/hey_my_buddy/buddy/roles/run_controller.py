@@ -23,6 +23,7 @@ if __name__ == "__main__":
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
+from ...private_files import read_bytes
 from ...protocol import schemas
 from ..harnesses.registry import run_seam
 from .turn_io import guard_private_path
@@ -82,7 +83,7 @@ def main() -> int:
                 *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, _interrupt)
     try:
-        control = decode_strict_json(guard_private_path(Path(args.control)).read_bytes())
+        control = decode_strict_json(read_bytes(guard_private_path(Path(args.control))))
         frame, code = execute(control, _cancelled, Path(selected))
     except BoardError as error:
         frame, code = canonical_json({"status": "error", "modelStarted": False, **error.payload(),

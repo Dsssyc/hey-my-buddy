@@ -462,7 +462,7 @@ def _prepare_runtime(state: Path, *, skill_source: Path | None):
     """
     storage = state / 'storage'
     private_dirs.ensure_private_dir(storage)
-    with runtime.installation_lock(storage / '.lock'):
+    with runtime.installation_lock(storage / '.lock', private=True):
         installed = (runtime.materialize(root=skill_source / 'package')
                      if skill_source is not None else runtime.materialize())
         root = Path(installed['runtimeDir']).parent
