@@ -676,19 +676,29 @@ def _worktree_record(root, target):
     return None
 
 
-def _materialize(root, entries):
+def _windows_links(root, entries):
+    names = [path for path, (mode, _oid) in entries.items() if mode == "120000"]
+    targets = dict(zip(names, map(os.fsdecode, _batch_objects(root, [entries[path][1] for path in names]))))
+    types = windows_paths.symlink_types(root, entries, targets)
+    return {path: (target, types[path]) for path, target in targets.items()}
+
+
+def _materialize(root, entries, *, tree=None):
     if _WINDOWS:
         windows_paths.validate_unique(entries)
-    contents = iter(_batch_objects(root, [oid for _mode, oid in entries.values()]))
-    if _WINDOWS:
-        for (path, (mode, _oid)), data in zip(entries.items(), contents):
+        links = _windows_links(root, entries if tree is None else tree)
+        files = [path for path, (mode, _oid) in entries.items() if mode != "120000"]
+        contents = iter(_batch_objects(root, [entries[path][1] for path in files]))
+        for path, (mode, _oid) in entries.items():
             _relative(path)
             target = Path(root) / path
             if mode == "120000":
-                windows_paths.symlink(target, os.fsdecode(data), repository=root)
+                text, directory = links[path]
+                windows_paths.symlink(target, text, directory=directory, repository=root)
             else:
-                windows_paths.write_new(target, data, create_parents=True, repository=root)
+                windows_paths.write_new(target, next(contents), create_parents=True, repository=root)
         return
+    contents = iter(_batch_objects(root, [oid for _mode, oid in entries.values()]))
     for (path, (mode, _oid)), data in zip(entries.items(), contents):
         with _parent(root, path, create=True) as (parent, name):
             if mode == "120000":
@@ -1590,14 +1600,14 @@ def _site_conflicts(root, recorded, selected, index):
                                                                       recorded[path].get("authorizedIndex"))]
 
 
-def _write_path(root, path, entry, data=None):
+def _write_path(root, path, entry, data=None, *, links=None):
     if _WINDOWS:
         _relative(path)
         target = Path(root) / path
-        if data is None and entry is not None:
+        if data is None and entry is not None and entry["mode"] != "120000":
             data = _git(root, "cat-file", "blob", entry["oid"])
         windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
-                              symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None,
+                              link=links[path] if entry is not None and entry["mode"] == "120000" else None,
                               repository=root)
         return
     with _parent(root, path, create=True) as (parent, name):
@@ -1656,8 +1666,9 @@ def _reset_site(root, manifest, observation):
     needed = [path for path in ordered if states[path] is not None]
     contents = iter(_batch_objects(root, [states[path]["oid"] for path in needed]))
     payloads = dict(zip(needed, contents))
+    links = _windows_links(root, initial) if _WINDOWS else None
     for path in ordered:
-        _write_path(root, path, states[path], data=payloads.get(path))
+        _write_path(root, path, states[path], data=payloads.get(path), links=links)
     _restore_index(root, {path: _entry_state(initial_index, path) for path in sorted(selected)
                           if _entry_state(current_index, path) != _entry_state(initial_index, path)})
     # An excluded cache was never captured by content, so a modified one cannot be
@@ -1905,8 +1916,9 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             needed = [path for path in selected if authorized[path] is not None]
             contents = iter(_batch_objects(root, [authorized[path]["oid"] for path in needed]))
             payloads = dict(zip(needed, contents))
+            links = _windows_links(root, _entries(root, manifest["inputCommit"])) if _WINDOWS else None
             for path in selected:
-                _write_path(root, path, authorized[path], data=payloads.get(path))
+                _write_path(root, path, authorized[path], data=payloads.get(path), links=links)
             _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
                                   if _entry_state(index, path) != entries[path].get("authorizedIndex")})
             after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True, state_dir=state_dir)
@@ -2312,8 +2324,9 @@ def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed):
     if not _path_present(checkout_root / ".git"):
         _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"), repository=checkout_root)
     tree = sealed["tree"] if sealed is not None else manifest["inputTree"]
+    entries = _entries(repository, tree)
     missing = {}
-    for path, entry in _entries(repository, tree).items():
+    for path, entry in entries.items():
         try:
             with _parent(checkout_root, path) as (parent, name):
                 if _WINDOWS:
@@ -2325,7 +2338,7 @@ def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed):
             missing[path] = entry
     # _materialize pins parents without following links and creates each leaf
     # exclusively. A file that appears meanwhile is preserved and stops recovery.
-    _materialize(checkout_root, missing)
+    _materialize(checkout_root, missing, tree=entries)
 
 
 def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,

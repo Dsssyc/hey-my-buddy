@@ -33,6 +33,41 @@ class RuntimeInterpreterTests(unittest.TestCase):
             with self.subTest(platform=platform), patch.object(runtime, 'os', SimpleNamespace(name=platform)):
                 self.assertEqual(runtime.runtime_python(directory), directory / 'venv' / suffix)
 
+    def test_leak_scan_uses_both_paths_reported_by_the_target_interpreter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            purelib, platlib = root / 'venv/Lib/site-packages', root / 'native-packages'
+            for site in (purelib, platlib):
+                site.mkdir(parents=True)
+                (site / 'source.pth').write_text(str(root.parent / 'disposable-source'), encoding='utf-8')
+            record = {'state': 'READY', 'runtimeDir': str(root), 'environment': str(root / 'venv'),
+                      'python': str(root / 'venv/Scripts/python.exe')}
+            response = subprocess.CompletedProcess([], 0, json.dumps([str(purelib), str(platlib)]), '')
+            with patch.object(runtime.subprocess, 'run', return_value=response) as probe:
+                leaks = runtime.source_leaks(record)
+            self.assertEqual({leak.split(': ', 1)[0] for leak in leaks},
+                             {str(purelib / 'source.pth'), str(platlib / 'source.pth')})
+            self.assertEqual(probe.call_args.args[0][0], record['python'])
+            self.assertIn('sysconfig.get_path', probe.call_args.args[0][-1])
+
+    def test_an_unavailable_library_directory_does_not_prove_a_runtime_is_clean(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / 'missing-site-packages'
+            response = subprocess.CompletedProcess([], 0, json.dumps([str(missing)] * 2), '')
+            record = {'state': 'READY', 'runtimeDir': temporary, 'environment': temporary, 'python': 'target-python'}
+            with patch.object(runtime.subprocess, 'run', return_value=response), self.assertRaises(FileNotFoundError):
+                runtime.source_leaks(record)
+
+    def test_a_failed_or_invalid_sysconfig_probe_is_not_an_empty_scan(self):
+        with patch.object(runtime.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, ['python'])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                runtime._runtime_site_packages('target-python')
+        for paths in ([], [None, None], ['relative', 'relative']):
+            with self.subTest(paths=paths), patch.object(runtime.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], 0, json.dumps(paths), '')):
+                with self.assertRaises(BoardError):
+                    runtime._runtime_site_packages('target-python')
+
 
 class LexicalWindowsPath(PureWindowsPath):
     def resolve(self):
@@ -117,20 +152,19 @@ def write_manifest(
 
 
 def fake_uv(directory: Path) -> Path:
-    """A stand-in uv that publishes an interpreter without any dependency install."""
+    """A stand-in uv that creates a real, empty venv without installing dependencies."""
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "uv.py"
     script.write_text(
         "import os\n"
+        "import venv\n"
         "from pathlib import Path\n"
         "base = Path(__file__).parent\n"
         "with (base / 'invocations').open('a', encoding='utf-8', newline='\\n') as stream:\n"
         "    stream.write('sync\\n')\n"
         "if (base / 'fail').exists():\n"
         "    raise SystemExit(7)\n"
-        "interpreter = Path(os.environ['UV_PROJECT_ENVIRONMENT']) / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')\n"
-        "interpreter.parent.mkdir(parents=True, exist_ok=True)\n"
-        "interpreter.write_bytes(b'synthetic interpreter marker')\n", encoding="utf-8", newline="\n"
+        "venv.EnvBuilder(symlinks=os.name != 'nt').create(os.environ['UV_PROJECT_ENVIRONMENT'])\n", encoding="utf-8", newline="\n"
     )
     return script
 
@@ -356,7 +390,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
 
         def run_fake_uv(command, **options):
             if command[0] == str(self.uv):
-                command = [sys.executable, *command]
+                command = [sys._base_executable, *command]
             return run(command, **options)
 
         self.enterContext(patch.object(runtime.subprocess, "run", side_effect=run_fake_uv))
@@ -751,8 +785,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
     def test_source_leaks_find_an_editable_path_back_into_the_checkout(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        site = Path(record["environment"]) / "lib" / "python3.12" / "site-packages"
-        site.mkdir(parents=True)
+        site = runtime._runtime_site_packages(record['python'])[0]
         (site / "buddy.pth").write_text(str(REAL_ROOT / "src") + "\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("buddy.pth" in leak for leak in leaks), leaks)
@@ -764,11 +797,19 @@ class RuntimeMaterializationTests(unittest.TestCase):
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("fixture.runner" in leak for leak in leaks), leaks)
 
+    def test_relative_pth_paths_resolve_from_the_library_directory(self):
+        target = self.materialize()
+        record = runtime.read_ready(target)
+        site = runtime._runtime_site_packages(record['python'])[0]
+        (site / 'relative.pth').write_text('# comment\n.\n../inside\nimport\tignored\n', encoding='utf-8')
+        self.assertEqual(runtime.source_leaks(record), [])
+        (site / 'relative.pth').write_text(os.path.relpath(self.root, site), encoding='utf-8')
+        self.assertTrue(any('relative.pth' in leak for leak in runtime.source_leaks(record)))
+
     def test_source_leaks_does_not_hide_an_unreadable_pth_file(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        site = Path(record['environment']) / 'lib/python3.12/site-packages'
-        site.mkdir(parents=True)
+        site = runtime._runtime_site_packages(record['python'])[0]
         pth = site / 'runtime.pth'
         pth.write_bytes(b'fixture')
         read = Path.read_text
@@ -784,7 +825,8 @@ class RuntimeMaterializationTests(unittest.TestCase):
     def test_source_leaks_find_a_pyvenv_that_references_the_project(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        (Path(record["environment"]) / "pyvenv.cfg").write_text(f"home = /usr/bin\nproject = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
+        pyvenv = Path(record["environment"]) / "pyvenv.cfg"
+        pyvenv.write_text(pyvenv.read_text(encoding='utf-8') + f"project = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
 

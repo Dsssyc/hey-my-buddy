@@ -52,14 +52,16 @@ class SkillInstallTests(unittest.TestCase):
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertTrue(os.access(skill / "scripts/hey-my-buddy", os.X_OK))
         self.assertEqual(result["claude"]["status"], "linked")
-        self.assertTrue((self.claude / "hey-my-buddy").is_symlink())
+        link = self.claude / "hey-my-buddy"
+        self.assertTrue(link.is_junction() if os.name == 'nt' else link.is_symlink())
         self.assertEqual(os.path.realpath(self.claude / "hey-my-buddy"), os.path.realpath(skill))
         self.assertEqual(result["service"]["action"], "none")
 
     def test_a_second_host_with_the_same_version_only_repairs_the_link(self):
         self.install()
         before = (self.agents / "hey-my-buddy/skill.json").stat().st_mtime_ns
-        (self.claude / "hey-my-buddy").unlink()
+        link = self.claude / "hey-my-buddy"
+        link.rmdir() if os.name == 'nt' else link.unlink()
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "already-current")
         self.assertEqual((self.agents / "hey-my-buddy/skill.json").stat().st_mtime_ns, before)
@@ -93,7 +95,8 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(result['service']['action'], 'none')
         self.assertIn('old skill cleanup denied', result['skillCleanupError'])
         self.assertTrue((self.base / 'state/active-runtime.json').is_file())
-        self.assertTrue((self.claude / 'hey-my-buddy').is_symlink())
+        link = self.claude / 'hey-my-buddy'
+        self.assertTrue(link.is_junction() if os.name == 'nt' else link.is_symlink())
         self.assertEqual(len(list(self.agents.glob('.hey-my-buddy-install-previous-*'))), 1)
 
     def test_foreign_directories_are_never_replaced(self):
@@ -131,7 +134,7 @@ class SkillInstallTests(unittest.TestCase):
 
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
         from hey_my_buddy.errors import BoardError
-        with patch("pathlib.Path.symlink_to", side_effect=OSError(1, "Operation not permitted")), \
+        with patch("hey_my_buddy.install.skill_install._create_claude_link", side_effect=OSError(1, "Operation not permitted")), \
                 patch("hey_my_buddy.install.upgrade.upgrade") as service:
             with self.assertRaises(BoardError) as caught:
                 self.install()
@@ -142,6 +145,18 @@ class SkillInstallTests(unittest.TestCase):
         result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(result["claude"]["status"], "linked")
+
+    def test_failed_publication_removes_only_the_new_claude_link_and_restores_the_skill(self):
+        from hey_my_buddy.install import skill_install
+        skill = self.agents / skill_install.SKILL
+        skill.mkdir(parents=True)
+        (skill / 'SKILL.md').write_text('---\nname: hey-my-buddy\n---\nold skill', encoding='utf-8')
+        with patch.object(skill_install, 'write_runtime_hint', side_effect=OSError('publication denied')):
+            with self.assertRaisesRegex(OSError, 'publication denied'):
+                self.install()
+        link = self.claude / skill_install.SKILL
+        self.assertFalse(link.exists() or link.is_symlink() or link.is_junction())
+        self.assertTrue((skill / 'SKILL.md').read_text(encoding='utf-8').endswith('old skill'))
 
     def test_windows_data_root_is_local_app_data(self):
         from pathlib import PurePosixPath

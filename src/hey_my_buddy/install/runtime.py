@@ -621,6 +621,20 @@ def runtime_identity() -> str:
     return resolve_runtime()["identity"]
 
 
+def _runtime_site_packages(python: str) -> list[Path]:
+    """Ask the target interpreter, whose installation scheme owns these paths."""
+    result = subprocess.run(
+        [python, "-I", "-c", "import json, sysconfig; print(json.dumps([sysconfig.get_path(key) "
+         "for key in ('purelib', 'platlib')]))"],
+        capture_output=True, text=True, encoding="utf-8", check=True, timeout=30,
+    )
+    paths = json.loads(result.stdout)
+    if (not isinstance(paths, list) or len(paths) != 2
+            or any(not isinstance(path, str) or not Path(path).is_absolute() for path in paths)):
+        raise BoardError("RUNTIME_INVALID", f"{python} did not report absolute purelib and platlib paths; rebuild the runtime")
+    return sorted({Path(path) for path in paths})
+
+
 def source_leaks(runtime: dict | None = None) -> list[str]:
     """Paths inside a runtime that still depend on the source tree.
 
@@ -633,13 +647,20 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
     if runtime.get("state") == "SOURCE":
         return leaks
     root = Path(runtime.get("runtimeDir") or runtime.get("source") or "").resolve()
-    for pth in sorted(environment.glob("lib/python*/site-packages/*.pth")):
+    pyvenv = environment / "pyvenv.cfg"
+    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(encoding="utf-8"):
+        leaks.append(f"{pyvenv}: references the project source tree")
+    # iterdir raises for an absent/unreadable library directory. A glob over a
+    # guessed layout could silently return no files and hide an editable install.
+    pth_files = {path for site in _runtime_site_packages(runtime["python"])
+                 for path in site.iterdir() if path.suffix == ".pth"}
+    for pth in sorted(pth_files):
         text = pth.read_text(encoding="utf-8")
         for line in text.splitlines():
             candidate = line.strip()
-            if not candidate or candidate.startswith("import "):
+            if not candidate or candidate.startswith(("#", "import ", "import\t")):
                 continue
-            resolved = Path(candidate).resolve()
+            resolved = (pth.parent / candidate).resolve()
             # An editable/relative reference is fine only when it stays inside this
             # runtime; anything pointing back into a checkout is a real dependency
             # on the disposable source tree.
@@ -650,9 +671,6 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
             continue
         if root and not _inside(root, value):
             leaks.append(f"{name} resolves outside the runtime: {value}")
-    pyvenv = environment / "pyvenv.cfg"
-    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(encoding="utf-8"):
-        leaks.append(f"{pyvenv}: references the project source tree")
     return leaks
 
 

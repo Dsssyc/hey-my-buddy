@@ -1,7 +1,7 @@
 """``hey-my-buddy install``: place the shared skill once and bring the service to it (ADR-015).
 
 The canonical copy lives in ``~/.agents/skills/hey-my-buddy`` (read by Codex); Claude Code
-reaches it through ``~/.claude/skills/hey-my-buddy``, a symbolic link to that directory. A
+reaches it through ``~/.claude/skills/hey-my-buddy``, a directory link to that directory. A
 second Host running the same version finds the marker and only repairs the link.
 The new package coordinates the skill swap and service cutover under one
 upgrade journal; the old installed launcher never chooses the candidate code.
@@ -33,6 +33,28 @@ def claude_skills_home() -> Path:
     return Path(os.environ.get("HMB_CLAUDE_SKILLS_DIR") or Path.home() / ".claude/skills").expanduser().absolute()
 
 
+def _is_link(path: Path) -> bool:
+    return path.is_symlink() or path.is_junction()
+
+
+def _create_claude_link(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        from _winapi import CreateJunction
+        CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def _remove_claude_link(link: Path) -> None:
+    """Remove only the link, including a junction whose target is missing."""
+    if link.is_junction():
+        link.rmdir()
+    elif link.is_symlink():
+        link.unlink()
+    elif link.exists():
+        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is no longer a link; move it away before retrying")
+
+
 def _marker(skill: Path) -> dict | None:
     try:
         value = json.loads((skill / "skill.json").read_text(encoding="utf-8"))
@@ -58,7 +80,7 @@ def _is_product_skill(path: Path) -> bool:
 
 def _matches(source: Path, target: Path, marker: dict) -> bool:
     """A version marker alone cannot prove that an installed skill is intact."""
-    current = _marker(target) if target.is_dir() and not target.is_symlink() else None
+    current = _marker(target) if target.is_dir() and not _is_link(target) else None
     if not current or any(current.get(key) != marker.get(key) for key in ('version', 'contract', 'sourceCommit')):
         return False
     from .runtime import iter_assets
@@ -66,7 +88,7 @@ def _matches(source: Path, target: Path, marker: dict) -> bool:
     names.extend(str(path.relative_to(source)) for path in (source / 'references').glob('*.md'))
     names.extend('package/' + relative for relative, _ in iter_assets(source / 'package'))
     try:
-        return all(not (target / name).is_symlink() and (target / name).read_bytes() == (source / name).read_bytes() for name in names)
+        return all(not _is_link(target / name) and (target / name).read_bytes() == (source / name).read_bytes() for name in names)
     except OSError:
         return False
 
@@ -81,10 +103,10 @@ def packaged_skill() -> Path | None:
 
 
 def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
-    current = _marker(target) if target.is_dir() and not target.is_symlink() else None
+    current = _marker(target) if target.is_dir() and not _is_link(target) else None
     if _matches(source, target, marker):
         return "already-current", None
-    if target.is_symlink() or (target.exists() and not current and not _is_product_skill(target)):
+    if _is_link(target) or (target.exists() and not current and not _is_product_skill(target)):
         raise BoardError("SKILL_TARGET_CONFLICT", f"{target} exists and is not a hey-my-buddy skill; move it away first")
     staged = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-install-", directory=target.parent)
     previous = target.with_name(f".hey-my-buddy-install-previous-{uuid.uuid4().hex}") if target.exists() else None
@@ -104,7 +126,7 @@ def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
 
 
 def _link_claude(target: Path) -> dict:
-    """Point ~/.claude/skills/hey-my-buddy at the canonical skill with a symbolic link.
+    """Use an NTFS junction on Windows and a symbolic link on POSIX.
 
     There is no copy fallback: a second copy could silently drift from the canonical
     skill. Anything that prevents the link fails the install before the service is
@@ -112,30 +134,32 @@ def _link_claude(target: Path) -> dict:
     """
     home = claude_skills_home()
     link = home / SKILL
-    if link.is_symlink():
-        resolved = Path(os.path.realpath(link))
-        if resolved == Path(os.path.realpath(target)):
-            return {"path": str(link), "status": "already-linked"}
-        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
-    elif link.exists():
-        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away and rerun install")
-    home.mkdir(parents=True, exist_ok=True)
+    if _check_claude_link(target):
+        return {"path": str(link), "status": "already-linked"}
     try:
-        link.symlink_to(target, target_is_directory=True)
+        home.mkdir(parents=True, exist_ok=True)
+        _create_claude_link(link, target)
+        if _claude_status(target) != "linked":
+            _remove_claude_link(link)
+            raise OSError("the created directory link does not resolve to the canonical skill")
     except OSError as error:
         raise BoardError("CLAUDE_LINK_FAILED",
-                         f"Could not link {link} to {target} ({error.strerror or error}). On Windows, enable Developer "
-                         "Mode or run with permission to create symbolic links, then rerun the fixed-version package install command.") from None
+                         f"Could not link {link} to {target} ({error.strerror or error}). "
+                         + ("Use writable directories on a local NTFS volume and check the target; " if os.name == "nt" else
+                            "Check the target and permissions on the link directory; ")
+                         + "then rerun the fixed-version package install command.") from None
     return {"path": str(link), "status": "linked"}
 
 
-def _check_claude_link(target: Path) -> None:
+def _check_claude_link(target: Path) -> bool:
     link = claude_skills_home() / SKILL
-    if link.is_symlink():
+    if _is_link(link):
         if Path(os.path.realpath(link)) != Path(os.path.realpath(target)):
             raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
+        return True
     elif link.exists():
         raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away before installing")
+    return False
 
 
 def install(params: dict) -> dict:
@@ -195,7 +219,7 @@ def install(params: dict) -> dict:
                     os.environ["HMB_DEV_SOURCE"] = old_dev
         if (state / "control.json").exists():
             from .upgrade import upgrade
-            current = _marker(target) if target.is_dir() and not target.is_symlink() else None
+            current = _marker(target) if target.is_dir() and not _is_link(target) else None
             # Placement follows the actual content comparison above, not a marker
             # match: a same-version rebuild with changed files is an update.
             placement = "already-current" if intact else ("updated" if current else "installed")
@@ -227,7 +251,7 @@ def install(params: dict) -> dict:
             except Exception:
                 pointer.unlink(missing_ok=True)
                 if created_link:
-                    (claude_skills_home() / SKILL).unlink(missing_ok=True)
+                    _remove_claude_link(claude_skills_home() / SKILL)
                 if previous_skill is not None:
                     shutil.rmtree(target)
                     previous_skill.rename(target)
@@ -262,7 +286,7 @@ def install(params: dict) -> dict:
 
 def _claude_status(target: Path) -> str:
     link = claude_skills_home() / SKILL
-    if link.is_symlink():
+    if _is_link(link):
         return "linked" if Path(os.path.realpath(link)) == Path(os.path.realpath(target)) else "conflict"
     return "conflict" if link.exists() else "missing"
 

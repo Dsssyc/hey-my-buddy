@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import windows_paths, workspace
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.windows_files import WindowsFileAPI, _link_print_name
+from hey_my_buddy.windows_files import WindowsFileAPI, _link_print_name, _link_with_print_name
 from hey_my_buddy import private_dirs
 from hey_my_buddy.paths import native_path
 
@@ -120,7 +120,11 @@ class FakeWindowsAPI:
                 os.readlink(handle.path))
 
     def symlink(self, target, path, *, directory=False):
-        os.symlink(target, path, target_is_directory=directory)
+        self.events.append(("symlink", str(path), target, directory))
+        if self.native is not None:
+            self.native.symlink(target, path, directory=directory)
+        else:
+            os.symlink(target, path, target_is_directory=directory)
 
 
 class WindowsWorkspaceTests(unittest.TestCase):
@@ -147,18 +151,21 @@ class WindowsWorkspaceTests(unittest.TestCase):
         while len(str(deep)) < 310:
             deep /= 'directory-' + 'a' * 35
         private_dirs.ensure_private_dir(deep / 'links')
-        private_dirs.ensure_private_dir(deep / 'target')
         for operation in ('restore', 'symlink'):
             with self.subTest(operation=operation):
                 path = deep / 'links' / operation
                 target = '../target'
+                types = windows_paths.symlink_types(
+                    deep,
+                    {f'links/{operation}': ['120000', 'link'], 'target/file': ['100644', 'file']},
+                    {f'links/{operation}': target})
                 try:
                     if operation == 'restore':
-                        windows_paths.restore(path, None, symlink_target=target)
+                        windows_paths.restore(path, None, link=(target, types[f'links/{operation}']))
                     else:
-                        windows_paths.symlink(path, target)
-                except OSError as error:
-                    if error.winerror == 1314:
+                        windows_paths.symlink(path, target, directory=types[f'links/{operation}'])
+                except BoardError as error:
+                    if getattr(error.__cause__, 'winerror', None) == 1314:
                         self.skipTest('symbolic-link privilege is unavailable')
                     raise
                 metadata = native_path(path).lstat()
@@ -254,9 +261,85 @@ class WindowsWorkspaceTests(unittest.TestCase):
         with mock.patch.object(workspace, "_WINDOWS", True), \
              mock.patch.object(windows_paths, "WindowsFileAPI", return_value=self.api), \
              mock.patch.object(workspace, "_git", return_value=b"target"):
-            workspace._write_path(self.root, "nested/link", {"mode": "120000", "oid": "def"})
+            workspace._write_path(self.root, "nested/link", {"mode": "120000", "oid": "def"},
+                                  links={'nested/link': ('target', False)})
             self.assertEqual(workspace._file(self.root, "nested/link"), ("120000", b"target"))
         self.assertEqual(self.api.open, [])
+
+    def test_materialize_proves_file_and_directory_links_before_their_targets_exist(self):
+        entries = {'a-directory': ['120000', 'dir-link'], 'b-file': ['120000', 'file-link'],
+                   'z/file': ['100644', 'file']}
+        blobs = {'dir-link': b'z', 'file-link': b'z/file', 'file': b'content'}
+        with mock.patch.object(workspace, '_WINDOWS', True), \
+             mock.patch.object(windows_paths, 'WindowsFileAPI', return_value=self.api), \
+             mock.patch.object(workspace, '_batch_objects', side_effect=lambda _root, oids: [blobs[oid] for oid in oids]):
+            workspace._materialize(self.root, entries)
+        self.assertIn(('symlink', str(self.root / 'a-directory'), 'z', True), self.api.events)
+        self.assertIn(('symlink', str(self.root / 'b-file'), 'z/file', False), self.api.events)
+        self.assertEqual((self.root / 'a-directory/file').read_bytes(), b'content')
+        self.assertEqual((self.root / 'b-file').read_bytes(), b'content')
+
+    def test_restore_and_partial_materialize_use_the_complete_tree(self):
+        entries = {'a-directory': ['120000', 'dir-link'], 'z/file': ['100644', 'file']}
+        blobs = {'dir-link': b'z', 'file': b'content'}
+        with mock.patch.object(workspace, '_WINDOWS', True), \
+             mock.patch.object(windows_paths, 'WindowsFileAPI', return_value=self.api), \
+             mock.patch.object(workspace, '_batch_objects', side_effect=lambda _root, oids: [blobs[oid] for oid in oids]):
+            workspace._materialize(self.root, {'a-directory': entries['a-directory']}, tree=entries)
+            workspace._write_path(self.root, 'a-directory', {'mode': '120000', 'oid': 'dir-link'},
+                                  links=workspace._windows_links(self.root, entries))
+        self.assertEqual([event[3] for event in self.api.events if event[0] == 'symlink'], [True, True])
+
+    def test_unprovable_link_is_rejected_before_materializing_any_files(self):
+        entries = {'first': ['100644', 'file'], 'dangling': ['120000', 'link']}
+        with mock.patch.object(workspace, '_WINDOWS', True), \
+             mock.patch.object(workspace, '_batch_objects', return_value=[b'missing']), \
+             mock.patch.object(windows_paths, 'WindowsFileAPI', return_value=self.api):
+            with self.assertRaises(BoardError) as failure:
+                workspace._materialize(self.root, entries)
+        self.assertEqual(failure.exception.details['path'], 'dangling')
+        self.assertIn('absent from the Git tree', failure.exception.message)
+        self.assertIn('retry workspace preparation', failure.exception.message)
+        self.assertFalse((self.root / 'first').exists())
+        self.assertEqual(self.api.events, [])
+
+    def test_link_types_follow_git_symlinks_including_directory_components(self):
+        targets = {'alias': 'directory', 'chain': 'alias', 'file-link': 'alias/file',
+                   'parent-link': 'alias/../directory', 'directory/up': '..'}
+        entries = {path: ['120000', path] for path in targets}
+        entries['directory/file'] = ['100644', 'file']
+        self.assertEqual(windows_paths.symlink_types(self.root, entries, targets),
+                         {'alias': True, 'chain': True, 'file-link': False,
+                          'parent-link': True, 'directory/up': True})
+
+    def test_dangling_outside_cyclic_and_file_component_targets_are_rejected(self):
+        for target in ('missing', '../outside', '/outside', 'C:/outside', 'C:outside',
+                       '\\\\server\\share\\outside', 'link', 'file/child', 'file/../directory'):
+            with self.subTest(target=target), self.assertRaises(BoardError) as failure:
+                windows_paths.symlink_types(self.root, {'link': ['120000', 'link'], 'file': ['100644', 'file'],
+                                             'directory/file': ['100644', 'other']}, {'link': target})
+            self.assertEqual(failure.exception.code, 'WORKSPACE_UNSUPPORTED')
+            self.assertEqual(failure.exception.details['path'], 'link')
+            self.assertEqual(failure.exception.details['target'], target)
+        with self.assertRaisesRegex(BoardError, 'outside the repository'):
+            windows_paths.symlink_types(self.root, {'link': ['120000', 'a'], 'alias': ['120000', 'b']},
+                                       {'link': 'alias/child', 'alias': '../outside'})
+
+    def test_absolute_internal_targets_and_unique_case_aliases_are_provable(self):
+        root = r'C:\checkout'
+        entries = {'directory/File': ['100644', 'file'], 'link': ['120000', 'link']}
+        for target, directory in ((r'C:\checkout\directory', True),
+                                  (r'c:\CHECKOUT\DIRECTORY\file', False), ('DIRECTORY/File', False)):
+            with self.subTest(target=target):
+                self.assertEqual(windows_paths.symlink_types(root, entries, {'link': target}), {'link': directory})
+
+    def test_native_link_creation_failure_names_the_path_and_next_step(self):
+        with mock.patch.object(self.api, 'symlink', side_effect=OSError('creation denied')):
+            with self.assertRaises(BoardError) as failure:
+                windows_paths.symlink(self.root / 'link', 'target', directory=True, api=self.api)
+        self.assertEqual(failure.exception.details['path'], str(self.root / 'link'))
+        self.assertIn('creation denied', failure.exception.message)
+        self.assertIn('retry workspace preparation', failure.exception.message)
 
     def test_immutable_record_rejects_symlink_and_keeps_first_contents(self):
         record = self.root / "record.json"
@@ -329,6 +412,39 @@ class WindowsWorkspaceTests(unittest.TestCase):
         self.assertEqual(_link_print_name(raw), "../target")
         with self.assertRaises(OSError):
             _link_print_name(raw[:12])
+
+    def test_git_print_name_keeps_the_native_substitute_and_relative_flag(self):
+        substitute = 'directory\\file'.encode('utf-16-le')
+        raw = (struct.pack('<IHHHHHHI', windows_paths.IO_REPARSE_TAG_SYMLINK,
+                           12 + len(substitute) * 2, 0, 0, len(substitute),
+                           len(substitute), len(substitute), 1) + substitute * 2)
+        updated = _link_with_print_name(raw, 'directory/file')
+        self.assertEqual(_link_print_name(updated), 'directory/file')
+        _tag, _length, _reserved, offset, size, _po, _pl, flags = struct.unpack_from('<IHHHHHHI', updated)
+        self.assertEqual(updated[20 + offset:20 + offset + size], substitute)
+        self.assertEqual(flags, 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows symlink target spelling')
+    def test_native_symlinks_follow_native_paths_and_keep_the_original_git_text(self):
+        directory = self.root / 'directory'
+        directory.mkdir()
+        (directory / 'file').write_bytes(b'content')
+        api = WindowsFileAPI()
+        for name, target, is_directory in (('file-link', 'directory/file', False),
+                                           ('directory-link', './directory', True)):
+            link = self.root / name
+            try:
+                api.symlink(target, link, directory=is_directory)
+            except OSError as error:
+                if error.winerror == 1314:
+                    self.skipTest('symbolic-link privilege is unavailable')
+                raise
+            self.assertEqual((link / 'file' if is_directory else link).read_bytes(), b'content')
+            handle = api.open_leaf(link)
+            try:
+                self.assertEqual(api.readlink(handle), target)
+            finally:
+                api.close(handle)
 
 
 if __name__ == "__main__":

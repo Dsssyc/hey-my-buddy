@@ -366,10 +366,10 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.git("worktree", "unlock", str(checkout))
         materialize = workspace._materialize
 
-        def competing_write(root, entries):
+        def competing_write(root, entries, **kwargs):
             self.assertEqual(set(entries), {"src/file.txt"})
             (checkout / "src/file.txt").write_bytes(b"new unsealed bytes\x00\xff")
-            materialize(root, entries)
+            materialize(root, entries, **kwargs)
 
         with patch.object(workspace, "_materialize", side_effect=competing_write):
             self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_inspect,
