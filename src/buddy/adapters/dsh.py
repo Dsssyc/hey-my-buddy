@@ -44,12 +44,36 @@ class DshAdapter(Adapter):
     capabilities = ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline")
     model_discovery = True
     no_tool_structured = True
-    # The native DSH permission policy does not confine reads or networking.
-    # Do not advertise a read-only structured Router capability.
+    # The review entry restricts the native Agent tool surface to read, glob and
+    # grep through the private headless profile and its bridge. DSH has no
+    # native system sandbox, so nothing here claims OS-level isolation.
+    read_only_structured = True
+    read_only_structured_resume = True
+    read_only_tool_categories = ("read", "search")
 
     def start_no_tool_structured(self, context, request):
         from .read_only import start_no_tool
         return start_no_tool(self.name, context, request)
+
+    def start_read_only_structured(self, context, request):
+        from .read_only import start
+        return start(self.name, context, request)
+
+    def local_read_only_check(self) -> dict:
+        """The free check also confirms the packaged Node bridge is present."""
+        result = super().local_read_only_check()
+        if not result["eligible"]:
+            return result
+        from .dsh_read_only import bridge_plugin
+        try:
+            plugin = bridge_plugin()
+        except BoardError as error:
+            return {**result, "eligible": False, "reasonCode": "readonly-resource-missing",
+                    "reason": error.message}
+        if not plugin.is_file():
+            return {**result, "eligible": False, "reasonCode": "readonly-resource-missing",
+                    "reason": "The packaged DSH read-only Node bridge is missing"}
+        return result
 
     def discover_models(self) -> dict:
         from .dsh_catalog import discover_models
