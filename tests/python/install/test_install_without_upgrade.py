@@ -20,6 +20,7 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.tasks.storage import prune_old_runtimes
 from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.install import launcher, runtime, upgrade
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
@@ -380,6 +381,6 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 recovery_fixture.PrivateExecutionRecoveryTests.resume_execution(self, identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
-            for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
+            for journal in native_path(self.directory).glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)

@@ -10,6 +10,7 @@ from support import BoardTestCase, wait_for
 from blackboard.service import test_execution_recovery as recovery_fixture
 from install import test_install_without_upgrade as install_fixture
 from hey_my_buddy.install import runtime, upgrade
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.process_identity import inspect_process_identity
 from hey_my_buddy.private_dirs import attempt_root
 
@@ -69,8 +70,8 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     self.assertTrue(wait_for(lambda: log.exists() and
                         "result delivery pending: UPGRADE_IN_PROGRESS" in log.read_text(encoding="utf-8"), timeout=20),
                         "the real execution did not attempt result delivery through the fence")
-                    self.assertTrue((directory / "result-receipt.json").exists())
-                    self.assertFalse((directory / "result-delivery.json").exists())
+                    self.assertTrue(native_path(directory / "result-receipt.json").exists())
+                    self.assertFalse(native_path(directory / "result-delivery.json").exists())
                     self.assertEqual(inspect_process_identity(attempt["processIdentity"]), "alive")
                     observed.touch()
 
@@ -83,8 +84,8 @@ class ExecutionInstallFenceTests(BoardTestCase):
             finished = wait_for(lambda: self.finished(run_id), timeout=35)
             self.assertIsNotNone(finished, client.get(runId=run_id))
             self.assertEqual(finished["selectedAttempt"]["result"]["status"], "ok")
-            self.assertFalse((directory / "result-delivery.json").exists())
-            self.assertTrue((directory / "result-receipt.json").exists())
+            self.assertFalse(native_path(directory / "result-delivery.json").exists())
+            self.assertTrue(native_path(directory / "result-receipt.json").exists())
 
     def gated_runtime(self, *, activity_refusal: bool = False) -> Path:
         """Pause this private runtime after identity acknowledgement, before preflight."""

@@ -97,9 +97,14 @@ class RuntimeVersionTests(unittest.TestCase):
             body = "time.sleep(60)"
         else:
             body = "print(" + repr(text or "") + ")"
-        script.write_text("import os, sys, time\nif '--version' in sys.argv:\n    " + body +
-                          "\n    sys.exit(0)\nos.execv(sys.executable, [sys.executable, " +
-                          repr(str(fixture)) + ", *sys.argv[1:]])\n", encoding="utf-8", newline="\n")
+        # Run the fixture in this process. On Windows, execv starts a replacement
+        # process and can lose the native protocol's inherited stdio pipe pair.
+        # run_path sets argv[0] for the fixture; its sibling imports need its
+        # directory on sys.path just as they have when launched directly.
+        script.write_text("import runpy, sys, time\nif '--version' in sys.argv:\n    " + body +
+                          "\n    sys.exit(0)\nsys.path.insert(0, " + repr(str(fixture.parent)) +
+                          ")\nrunpy.run_path(" + repr(str(fixture)) +
+                          ", run_name='__main__')\n", encoding="utf-8", newline="\n")
         selected_launch = module.launch
         with mock.patch.object(module, "launch", side_effect=lambda environment=None: (
                 [sys.executable, str(script)], selected_launch(environment)[1])):

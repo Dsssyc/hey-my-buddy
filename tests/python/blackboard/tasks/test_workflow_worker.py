@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 
 from support import BoardTestCase, enable_fixture_buddy, wait_for
@@ -291,7 +292,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.protocol import capabilities as execution_capabilities
         board = self.board()
         enable_fixture_buddy(board.store, BUDDY)
-        with self.daemon(env=self.env()):
+        with self.daemon(env=self.env()), ExitStack() as cleanup:
             # The extra capability leaves this test's Lead turn queued for the
             # in-process admission while the daemon serves its CLI calls.
             code, submitted = self.cli("submit", json.dumps({
@@ -305,6 +306,10 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                                  dsh=(*execution_capabilities.ADAPTER_CAPABILITIES["dsh"], "launcher-private")):
                 response = admit_board(board, {'runId': submitted['runId'], 'nonce': 'n' * 16})
             self.assertIsNotNone(response["claim"], response)
+            # This fixture admits the Lead itself and never creates its
+            # execution process. Return that proof before the daemon drains.
+            cleanup.callback(board.store.release_execution, response["claim"]["attempt"]["attemptId"],
+                             reason="execution-process-not-created")
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"],
                                               "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
