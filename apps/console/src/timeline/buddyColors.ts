@@ -1,48 +1,76 @@
 import type { LABColor } from "iwanthue";
-import { labToRgb, labToRgbHex, validateRgb } from "iwanthue/helpers";
+import { labToRgb, labToRgbHex, rgbHexToLab, validateRgb } from "iwanthue/helpers";
+import tokens from "../tokens.css?raw";
 import { buddyColorKey } from "../macro-task-display";
 import type { TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant } from "./instant";
 
-export const BUDDY_EXCLUDED_HUE_RANGES = [[320, 80], [100, 200]] as const;
+/** Curated sRGB colours; the order spreads every prefix, especially the first six. */
+export const BUDDY_CORE_COLORS = [
+  { hex: "#146eb4", name: "Blue" }, // 蓝色 / Blue
+  { hex: "#f5dd8a", name: "Butter yellow" }, // 奶油黄 / Butter yellow
+  { hex: "#8e215a", name: "Deep rose" }, // 深玫红 / Deep rose
+  { hex: "#fec0dc", name: "Light pink" }, // 浅粉 / Light pink
+  { hex: "#4fdaf8", name: "Light cyan" }, // 浅青蓝 / Light cyan
+  { hex: "#d094f0", name: "Lilac" }, // 浅紫 / Lilac
+  { hex: "#afb6e9", name: "Periwinkle" }, // 长春花蓝 / Periwinkle
+  { hex: "#8c5b97", name: "Plum" }, // 梅紫 / Plum
+  { hex: "#3e4199", name: "Indigo" }, // 靛蓝 / Indigo
+  { hex: "#02b3fc", name: "Sky blue" }, // 天蓝 / Sky blue
+  { hex: "#0c6681", name: "Deep cyan" }, // 深青蓝 / Deep cyan
+  { hex: "#da69ac", name: "Orchid pink" }, // 兰花粉 / Orchid pink
+] as const;
 
+export const BUDDY_STATUS_DISTANCE = 25;
+export const BUDDY_EXTENSION_CORE_DISTANCE = 12;
+
+// Both themes come from the same tokens that the console renders. No semantic
+// hue bands: distance leaves room for individual colours near reserved hues.
+const statusLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|brand-mark|past): (#[0-9a-f]{6});/g)]
+  .map(match => rgbHexToLab(match[1]!));
+const coreLabs = BUDDY_CORE_COLORS.map(color => rgbHexToLab(color.hex));
 type Candidate = { lab: LABColor; hex: string };
-
-// A fixed D65 Lab grid makes the palette reproducible. Hue intervals occupied
-// by failure, human handoff, the live ruler and the brand mark are excluded.
-// The order also breaks equal-distance ties deterministically.
 const candidates: Candidate[] = [];
 const nearestDistanceSquared: number[] = [];
-const colors: string[] = [];
-
-const seed: LABColor = [60, 33 * Math.cos(250 * Math.PI / 180), 33 * Math.sin(250 * Math.PI / 180)];
+const colors: string[] = BUDDY_CORE_COLORS.map(color => color.hex);
 
 function squaredDistance(left: LABColor, right: LABColor): number {
   return (left[0] - right[0]) ** 2 + (left[1] - right[1]) ** 2 + (left[2] - right[2]) ** 2;
 }
 
+/** One lightness rule for text and monochrome harness marks, in both themes. */
+export function buddyUsesLightInk(color: string): boolean {
+  return rgbHexToLab(color)[0] < 52;
+}
+
 function prepareCandidates(): void {
-  if (colors.length) return;
-  const usedHex = new Set([labToRgbHex(seed)]);
-  for (let lightness = 54; lightness <= 66; lightness++) {
-    for (let chroma = 24; chroma <= 48; chroma += 2) {
+  const usedHex = new Set(colors);
+  // The extension keeps the existing deterministic farthest-point Lab grid.
+  // Measure the rounded sRGB output, which is what the user actually sees.
+  for (let lightness = 54; lightness <= 86; lightness += 2) {
+    for (let chroma = 26; chroma <= 54; chroma += 2) {
       for (let hue = 0; hue < 360; hue += 2) {
-        if (BUDDY_EXCLUDED_HUE_RANGES.some(([start, end]) => start <= end ? hue >= start && hue <= end : hue >= start || hue <= end)) continue;
         const radians = hue * Math.PI / 180;
-        const lab: LABColor = [lightness, chroma * Math.cos(radians), chroma * Math.sin(radians)];
-        if (!validateRgb(labToRgb(lab))) continue;
-        const hex = labToRgbHex(lab);
+        const point: LABColor = [lightness, chroma * Math.cos(radians), chroma * Math.sin(radians)];
+        if (!validateRgb(labToRgb(point))) continue;
+        const hex = labToRgbHex(point);
         if (usedHex.has(hex)) continue;
+        const lab = rgbHexToLab(hex);
+        const angle = (Math.atan2(lab[2], lab[1]) * 180 / Math.PI + 360) % 360;
+        if (angle >= 115 && angle <= 220 || angle >= 30 && angle <= 115 && lab[0] < 76) continue;
+        if (statusLabs.some(status => squaredDistance(lab, status) < BUDDY_STATUS_DISTANCE ** 2)) continue;
+        const distance = Math.min(...coreLabs.map(core => squaredDistance(lab, core)));
+        if (distance < BUDDY_EXTENSION_CORE_DISTANCE ** 2) continue;
         usedHex.add(hex);
         candidates.push({ lab, hex });
-        nearestDistanceSquared.push(squaredDistance(lab, seed));
+        nearestDistanceSquared.push(distance);
       }
     }
   }
-  colors.push(labToRgbHex(seed));
 }
 
 function extendPalette(): void {
+  if (!candidates.length) prepareCandidates();
   let winner = -1;
   let largestDistance = -1;
   for (let index = 0; index < candidates.length; index++) {
@@ -64,7 +92,6 @@ function extendPalette(): void {
 
 /** The shared sequence, also used by the execution legend's colour sample. */
 export function buddyColorPrefix(count: number): readonly string[] {
-  if (count > 0) prepareCandidates();
   while (colors.length < count) extendPalette();
   return colors.slice(0, count);
 }
@@ -78,12 +105,13 @@ export function buddyColorsFor(spans: readonly TimelineSpan[]): ReadonlyMap<stri
   return new Map(keys.map((key, index) => [key, palette[index]!]));
 }
 
-/** CIE Lab lightness changes; chromatic coordinates stay fixed for a running execution. */
+/** Keep text contrast and reserve headroom for pale colours' moving edge. */
 export function runningBuddyColor(color: string): string {
-  return `lab(from ${color} calc(l + 9) a b)`;
+  const lightness = buddyUsesLightInk(color) ? "calc(l - 4)" : "min(85, calc(l + 9))";
+  return `lab(from ${color} ${lightness} a b)`;
 }
 
-/** The luminous leading edge keeps the same chromatic coordinates. */
+/** The moving leading edge stays on the same side of the ink threshold. */
 export function leadingBuddyColor(color: string): string {
-  return `lab(from ${color} calc(l + 27) a b)`;
+  return `lab(from ${color} calc(l + ${buddyUsesLightInk(color) ? -12 : 27}) a b)`;
 }

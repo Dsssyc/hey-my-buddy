@@ -56,7 +56,7 @@ async function barLabels(page: Page) {
     let count = 0;
     for (const track of tracks) {
       const bars = [...track.querySelectorAll('[data-slot=execution-bar]')].map(bar => bar.getBoundingClientRect());
-      for (const label of track.querySelectorAll('[data-slot=track-label].fill-execution-ink')) {
+      for (const label of track.querySelectorAll('[data-slot=track-label].fill-execution-ink, [data-slot=track-label].fill-execution-ink-light')) {
         const text = label.getBoundingClientRect();
         count++;
         const bar = bars.find(bar => text.left >= bar.left - 0.75 && text.left < bar.right && text.top < bar.bottom && text.bottom > bar.top);

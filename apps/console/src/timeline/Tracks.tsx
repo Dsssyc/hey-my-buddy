@@ -1,4 +1,4 @@
-import { leadingBuddyColor, runningBuddyColor } from "./buddyColors";
+import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddyColors";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { Hint } from "../components/hint";
 import { useId, useLayoutEffect, useRef, useState } from "react";
@@ -226,6 +226,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     ...markerGroups.filter(group => group.length > 1).map(group => String(group.length)),
     ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
+  const lightInk = (span: TimelineSpan) => buddyUsesLightInk(buddyColors.get(buddyColorKey(span.buddy))!);
   const labels: Label[] = [];
   const occupied: Record<number, Occupancy[]> = { [topTextY]: [], [barTextY]: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? clusterHalfWidth(group.length, measure(String(group.length))) + 3 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ kind: "obstacle" as const, left: mark.x - mark.radius, right: mark.x + mark.radius })) };
   const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Occupancy[] = []) => {
@@ -256,7 +257,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   for (const item of positioned) {
     if (item.execution) {
       const tail = tails.find(entry => entry.item === item);
-      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 23 : 6), (tail?.x ?? item.end) - 6, barTextY, item.span.kind === "execution" ? "fill-execution-ink" : "fill-ink");
+      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 23 : 6), (tail?.x ?? item.end) - 6, barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink");
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, topTextY, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
   return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
@@ -276,7 +277,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
         strokeWidth={span.kind === "execution" && outcome === "failed" ? 2.5 : undefined}
         className={span.kind === "routing" ? cn("fill-card", outcome === "failed" ? "stroke-fail" : outcome === "running" ? "stroke-ink" : "stroke-ink3") : cn("stroke-line2", outcome === "failed" && "stroke-fail", outcome === "unknown" && "stroke-hand-mark")}/>
         : <line data-slot={`${span.kind}-wait`} x1={start} x2={end} y1={middle} y2={middle} strokeWidth={outcome === "open" && span.kind === "host" ? 2 : 1.5} strokeDasharray={outcome === "open" && span.kind === "host" ? "5 4" : undefined} className={outcome === "open" && span.kind === "host" ? "stroke-hand-mark" : "stroke-ink3"}/>}
-      {span.kind === "execution" && <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 3} y={middle - 7} width={14} height={14} className="overflow-visible text-execution-ink"><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>}
+      {span.kind === "execution" && <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 3} y={middle - 7} width={14} height={14} className={cn("overflow-visible", lightInk(span) ? "text-execution-ink-light" : "text-execution-ink")}><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>}
 
       {span.kind === "execution" && outcome === "failed" && <path data-slot="execution-failed" pointerEvents="none" d={`M${end - 8} ${middle - 3}l6 6m0-6l-6 6`} className="stroke-fail" strokeWidth={1.8}/>}
       {outcome === "unknown" && <path data-slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} className="fill-none stroke-hand-mark" strokeWidth={2}/>}

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { labToHcl, labToRgbHex, rgbHexToLab } from "iwanthue/helpers";
+import { labToHcl, rgbHexToLab } from "iwanthue/helpers";
 import { buddyColorKey } from "../macro-task-display";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 
@@ -10,14 +10,13 @@ const spans = Array.from({ length: 40 }, (_, index) => ({
   startAt: new Date(Date.UTC(2026, 0, 1, index)).toISOString(),
   buddy: { ...source.buddy!, model: `model-${index}` },
 }));
-const tokens = [...readFileSync("src/tokens.css", "utf8")
-  .matchAll(/--(?:fail|hand|hand-mark|live|brand-mark): (#[0-9a-f]{6});/g)].map(match => match[1]!);
-const executionInks = [...readFileSync("src/tokens.css", "utf8")
-  .matchAll(/--execution-ink: (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const css = readFileSync("src/tokens.css", "utf8");
+const tokens = [...css.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|brand-mark|past): (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const executionInks = [...css.matchAll(/--execution-ink: (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const lightInks = [...css.matchAll(/--execution-ink-light: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const labDistance = (left: readonly number[], right: readonly number[]) =>
   Math.hypot(left[0]! - right[0]!, left[1]! - right[1]!, left[2]! - right[2]!);
 const hue = (lab: [number, number, number]) => labToHcl(lab)[0];
-const hueDistance = (left: number, right: number) => Math.min(Math.abs(left - right), 360 - Math.abs(left - right));
 const luminance = (color: string) => {
   const components = color.match(/[a-f0-9]{2}/gi)!.map(component => {
     const value = parseInt(component, 16) / 255;
@@ -35,7 +34,7 @@ const leastPairDistance = (labs: readonly (readonly number[])[], count: number) 
   return least;
 };
 
-describe("derived buddy palette", () => {
+describe("curated buddy palette", () => {
   it("extends one deterministic shared prefix across views and polls", async () => {
     vi.resetModules();
     const { buddyColorsFor, buddyColorPrefix } = await import("./buddyColors");
@@ -58,37 +57,45 @@ describe("derived buddy palette", () => {
     }
     expect(previous).toEqual([...full.values()]);
     expect(fresh.buddyColorsFor([...spans].reverse())).toEqual(full);
-    const seed: [number, number, number] = [60, 33 * Math.cos(250 * Math.PI / 180), 33 * Math.sin(250 * Math.PI / 180)];
-    expect(fresh.buddyColorPrefix(1)).toEqual([labToRgbHex(seed)]);
+    expect(fresh.buddyColorPrefix(12)).toEqual(fresh.BUDDY_CORE_COLORS.map(color => color.hex));
   });
 
-  it("keeps forty colours distinct, legible and clear of semantic hue ranges", async () => {
-    vi.resetModules();
-    const { buddyColorPrefix, runningBuddyColor, BUDDY_EXCLUDED_HUE_RANGES } = await import("./buddyColors");
-    const excluded = (angle: number) => BUDDY_EXCLUDED_HUE_RANGES.some(([start, end]) => start <= end ? angle >= start && angle <= end : angle >= start || angle <= end);
+  it("keeps all twelve core colours apart and measures every ordered prefix", async () => {
+    const { BUDDY_CORE_COLORS, buddyColorPrefix } = await import("./buddyColors");
+    expect(BUDDY_CORE_COLORS).toHaveLength(12);
+    for (const key of ["hex", "name"] as const) expect(new Set(BUDDY_CORE_COLORS.map(color => color[key])).size).toBe(12);
+    const labs = buddyColorPrefix(12).map(rgbHexToLab);
+    // Bounds are measured on the displayed 8-bit values, for every prefix 2–12.
+    expect(leastPairDistance(labs, 1)).toBe(Infinity);
+    const prefixBounds = [97.8, 61.9, 55.9, 49.9, 37.2, 28.9, 28.3, 28.0, 27.6, 27.4, 27.2];
+    for (const [index, threshold] of prefixBounds.entries()) {
+      expect(leastPairDistance(labs, index + 2), `prefix ${index + 2}`).toBeGreaterThanOrEqual(threshold);
+    }
+    expect(leastPairDistance(labs, 12)).toBeGreaterThanOrEqual(25);
+  });
+
+  it("extends beyond twelve while respecting semantic colours, core distances and both themes' inks", async () => {
+    const { buddyColorPrefix, buddyUsesLightInk, BUDDY_STATUS_DISTANCE, BUDDY_EXTENSION_CORE_DISTANCE } = await import("./buddyColors");
+    expect(BUDDY_STATUS_DISTANCE).toBe(25);
+    expect(BUDDY_EXTENSION_CORE_DISTANCE).toBe(12);
+    expect(tokens).toHaveLength(16);
+    expect(executionInks).toHaveLength(2);
+    expect(lightInks).toHaveLength(2);
     const palette = buddyColorPrefix(40);
     expect(new Set(palette).size).toBe(40);
     const labs = palette.map(rgbHexToLab);
-    for (const [count, threshold] of [[4, 28.5], [6, 28], [8, 18.5], [12, 16], [20, 13], [40, 9]]) {
-      expect(leastPairDistance(labs, count)).toBeGreaterThanOrEqual(threshold!);
-    }
-    expect(tokens).toHaveLength(10);
-    expect(executionInks).toHaveLength(2);
-    for (const token of tokens) {
-      const angle = hue(rgbHexToLab(token));
-      expect(excluded(angle)).toBe(true);
-      expect(Math.min(...BUDDY_EXCLUDED_HUE_RANGES.flatMap(range => [...range]).map(boundary => hueDistance(angle, boundary)))).toBeGreaterThanOrEqual(30);
-    }
-    for (const color of palette) {
-      const lab = rgbHexToLab(color);
-      const [lightness, a, b] = lab;
+    for (const [index, color] of palette.entries()) {
+      const lab = labs[index]!;
       const angle = hue(lab);
-      // The library emits 8-bit sRGB; tolerate its rounding at gamut edges.
-      expect(lightness).toBeGreaterThan(53); expect(lightness).toBeLessThan(67);
-      expect(Math.hypot(a, b)).toBeGreaterThan(23); expect(Math.hypot(a, b)).toBeLessThan(49);
-      expect(excluded(angle)).toBe(false);
-      for (const ink of executionInks) expect((luminance(color) + 0.05) / (luminance(ink) + 0.05)).toBeGreaterThanOrEqual(4.5);
-      expect(runningBuddyColor(color)).toBe(`lab(from ${color} calc(l + 9) a b)`);
+      expect(angle >= 115 && angle <= 220, `${color} belongs to green`).toBe(false);
+      expect(angle >= 30 && angle <= 115 && lab[0] < 76, `${color} is dark yellow/orange/brown`).toBe(false);
+      for (const token of tokens) expect(labDistance(lab, rgbHexToLab(token)), `${color} / ${token}`).toBeGreaterThanOrEqual(BUDDY_STATUS_DISTANCE);
+      if (index >= 12) for (const core of labs.slice(0, 12)) expect(labDistance(lab, core)).toBeGreaterThanOrEqual(BUDDY_EXTENSION_CORE_DISTANCE);
+      const inks = buddyUsesLightInk(color) ? lightInks : executionInks;
+      for (const ink of inks) expect((Math.max(luminance(color), luminance(ink)) + 0.05) / (Math.min(luminance(color), luminance(ink)) + 0.05), `${color} / ${ink}`).toBeGreaterThanOrEqual(4.5);
     }
+    // Both ink branches must be exercised by the core set.
+    expect(palette.slice(0, 12).some(buddyUsesLightInk)).toBe(true);
+    expect(palette.slice(0, 12).some(color => !buddyUsesLightInk(color))).toBe(true);
   });
 });

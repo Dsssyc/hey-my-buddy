@@ -35,6 +35,7 @@ Safety boundary:
 Usage::
 
     python tests/probes/macro_task_console_preview.py --assets ABS_PATH
+    python tests/probes/macro_task_console_preview.py --assets ABS_PATH --palette
     python tests/probes/macro_task_console_preview.py --assets ABS_PATH --scenario truncated
     python tests/probes/macro_task_console_preview.py --assets ABS_PATH --smoke
     python tests/probes/macro_task_console_preview.py --check
@@ -134,6 +135,7 @@ CONSOLE_ID = re.compile(r"^[0-9a-f]{24}$")
 MACRO_A = "macro-11111111-1111-4111-8111-111111111111"
 MACRO_B = "macro-22222222-2222-4222-8222-222222222222"
 MACRO_C = "macro-33333333-3333-4333-8333-333333333333"
+MACRO_PALETTE = "macro-44444444-4444-4444-8444-444444444444"
 STANDALONE = "preview-run-c1"
 STANDALONE_GROUP = f"run:{STANDALONE}"
 
@@ -1174,6 +1176,24 @@ def build_runs() -> dict[str, dict]:
                     attempts=[attempt("att-command-c1", 1, "finished", True,
                                       instant(-20, 10, 5), instant(-20, 10, 8), None,
                                       result="synthetic preview command")]))
+    # Opt-in colour review: twelve distinct synthetic buddies in one macro task.
+    # Keep the normal parser/browser fixtures unchanged.
+    if "--palette" in sys.argv:
+        for index in range(12):
+            buddy = {**CONFIGS[index % len(CONFIGS)], "model": f"palette-buddy-{index + 1:02}"}
+            identifier = f"palette-{index + 1:02}"
+            start, end = instant(8, index), instant(9, 20 + index)
+            runs.append(run(identifier, project="alpha", group=MACRO_PALETTE,
+                            title=f"配色核对 {index + 1:02} · Buddy colour review", title_source="title",
+                            task_text="Synthetic timeline colour review.", created=start, updated=end,
+                            state="accepted", status="completed", category="ended", buddy=buddy,
+                            accepted=end, result=True,
+                            spans=[span(f"execution:{identifier}", "execution", start, end, "finished",
+                                        attempt_id=f"att-{identifier}", buddy=buddy, confirmed=True,
+                                        generation=1, disposition="completed", turn_index=1)],
+                            attempts=[attempt(f"att-{identifier}", 1, "finished", True, start, end,
+                                              buddy, result="Synthetic colour review.")],
+                            markers=[marker(start, "dispatch", actor=host_actor(HOST_A))]))
     by_id = {entry["runId"]: entry for entry in runs}
     for entry in runs:
         root = entry["runId"]
@@ -1243,6 +1263,11 @@ MACRO_TASKS = {
             "host": HOST_A, "createdAt": instant(1, 0)},
 }
 
+
+if "--palette" in sys.argv:
+    MACRO_TASKS[MACRO_PALETTE] = {"title": "12 个 buddy 的时间轴配色 · Timeline palette",
+                                "description": "Synthetic colour review", "project": "alpha",
+                                "host": HOST_A, "createdAt": instant(8, 0)}
 
 FIXTURES = build_runs()
 
@@ -1600,10 +1625,10 @@ def deletion_scope(group: str) -> dict:
     return {
         "artifacts": {"count": len({item["artifactId"] for entry in entries for item in artifact_views(entry)}),
                       "bytes": 16384 if group == MACRO_C else None},
-        "sessions": {"count": {MACRO_A: 7, MACRO_B: 9, MACRO_C: 1, STANDALONE_GROUP: 2}[group],
+        "sessions": {"count": {MACRO_A: 7, MACRO_B: 9, MACRO_C: 1, STANDALONE_GROUP: 2, MACRO_PALETTE: 0}[group],
                      "bytes": None},
         "checkouts": len(entries),
-        "gitRefs": {MACRO_A: 15, MACRO_B: 27, MACRO_C: 0, STANDALONE_GROUP: 6}[group],
+        "gitRefs": {MACRO_A: 15, MACRO_B: 27, MACRO_C: 0, STANDALONE_GROUP: 6, MACRO_PALETTE: 0}[group],
     }
 
 
@@ -3740,6 +3765,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assets", help="absolute path of the built console assets directory")
     parser.add_argument("--scenario", choices=SCENARIOS, default="normal")
     parser.add_argument("--port", type=int, default=0, help="0 binds an ephemeral loopback port (default)")
+    parser.add_argument("--palette", action="store_true", help="add a macro task with twelve synthetic buddies for colour review")
     parser.add_argument("--verbose", action="store_true", help="enable access logging (off by default)")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="run the fixture self-checks and exit")

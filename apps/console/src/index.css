@@ -33,6 +33,7 @@
   --color-selection: var(--selection);
   --color-selection-hover: var(--selection-hover);
   --color-execution-ink: var(--execution-ink);
+  --color-execution-ink-light: var(--execution-ink-light);
 
   --color-overlay: var(--overlay);
   --color-sunk: var(--sunk);
