@@ -338,8 +338,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         decision = self.client().call("selection_get", {"decisionId": decision_id})["decision"]
         return decision if decision["status"] == "completed" else None
 
-    @mock.patch.object(upgrade, "retire_workers", side_effect=AssertionError("retired workers"))
-    def test_frozen_execution_stays_unknown_until_identity_based_cancel(self, _retire):
+    def test_frozen_execution_stays_unknown_until_identity_based_cancel(self):
         if not hasattr(signal, "SIGSTOP") or not hasattr(os, "killpg"):
             self.skipTest("frozen execution requires POSIX signals")
         first = self.private_runtime("frozen-one", 1)

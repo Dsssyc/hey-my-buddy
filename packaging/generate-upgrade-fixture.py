@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Generate schema-22 upgrade stock using the frozen installed base source.
+"""Generate schema-23 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
-named service operations run in process; only native discovery is synthetic.
-All work directories are retained. The export includes fixed Git objects,
-workspace sidecars and the hash preimages needed for private path binding.
-Tests restore that text stock; they never execute this generator.
+named service operations run in process; only native discovery and execution
+receipts are synthetic. All work directories are retained. The export includes
+fixed Git objects, workspace sidecars and the hash preimages needed for private
+path binding. Tests restore that text stock; they never execute this generator.
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "b9632dd9421b02fab170752175edabf683a8aeb1"
-BASE_VERSION = "0.39.0"
-BASE_SCHEMA = 22
+BASE = "9baa0524a884fb335f64446a7bad8f27522082b8"
+BASE_VERSION = "0.40.0"
+BASE_SCHEMA = 23
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -184,6 +184,18 @@ def populate(args):
             label = "publish-" + str(len(operations))
             return call("user_policy_publish", {"commandId": label, **changes}, human=True)
 
+        def admit(nonce, task_id):
+            response = service.admit_execution(nonce, task_id=task_id)
+            assert response.get("claim") is not None, response
+            operations.append({"operation": "service.admit_execution", "params": {"nonce": nonce, "taskId": task_id},
+                               "response": {"reason": response.get("reason")}})
+            return response["claim"]
+
+        def report(claim, nonce, *, status, result):
+            return call("execution_result", {"attemptId": claim["attempt"]["attemptId"],
+                "generation": claim["attempt"]["generation"], "nonce": nonce, "status": status,
+                "shutdownConfirmed": True, "exitCode": 0 if status == "ok" else 1, "result": result})
+
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
         publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in PROFILES])
@@ -195,7 +207,7 @@ def populate(args):
                                         "defaultRoutingMode": "review", "routingBudget": "deep"},
                 modelServiceNoteChanges=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha",
                                           "text": "升级夹具的模型备注；应保留。"}])
-        call("worker_register", {"workerId": "fixture-worker", "capabilities": ["codex"]})
+        nonce = "fixture-nonce-00000000000000000000"
         for label in ("delivered", "accepted", "failed", "cancelled"):
             submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
                 "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
@@ -208,14 +220,12 @@ def populate(args):
             if label == "cancelled":
                 call("workflow_cancel", {"runId": run_id, "commandId": "cancel-fixture", "reason": "fixture only", **control})
                 continue
-            claim = call("worker_claim", {"workerId": "fixture-worker", "claimRequestId": "claim-" + label,
-                                          "nonce": "fixture-nonce-00000000000000000000", "runId": run_id})["claim"]
+            claim = admit(nonce, run_id)
             attempt, turn = claim["attempt"], claim["turn"]
             if label == "failed":
-                call("worker_result", {"workerId": "fixture-worker", "attemptId": attempt["attemptId"],
-                    "generation": attempt["generation"], "nonce": "fixture-nonce-00000000000000000000",
-                    "status": "failed", "shutdownConfirmed": True, "exitCode": 1,
-                    "result": {"status": "error", "code": "fixture-failed", "stopEvidence": {"shutdownConfirmed": True}}})
+                report(claim, nonce, status="failed", result={"status": "error", "code": "fixture-failed",
+                                                              "modelStarted": False,
+                                                              "stopEvidence": {"shutdownConfirmed": True}})
                 view = call("workflow_get", {"runId": run_id})
                 assert view["state"] == "failed", view
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded failed work", **control})
@@ -232,11 +242,8 @@ def populate(args):
                                      "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True,
                                      "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
                                      "finalItemId": "fixture-item", "eventSeq": 2}}
-            call("worker_result", {"workerId": "fixture-worker", "attemptId": attempt["attemptId"],
-                "generation": attempt["generation"], "nonce": "fixture-nonce-00000000000000000000", "status": "ok",
-                "shutdownConfirmed": True, "exitCode": 0,
-                "result": {"status": "ok", "turn": record, "workspaceSeal": sealed,
-                           "processState": {"shutdownConfirmed": True}, "fixture": True}})
+            report(claim, nonce, status="ok", result={"status": "ok", "turn": record, "workspaceSeal": sealed,
+                                                      "processState": {"shutdownConfirmed": True}, "fixture": True})
             view = call("workflow_get", {"runId": run_id})
             assert view["state"] == "delivered", view
             if label == "accepted":
@@ -245,18 +252,14 @@ def populate(args):
                     "keepCheckout": True, **control})
             elif label == "delivered":
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
-        # Freeze a real Router claim via base operations, then cancel it with
-        # explicit synthetic result/stop input; no harness process is spawned.
-        call("worker_register", {"workerId": "fixture-router", "adapter": "decision", "capabilities": ["decision"]})
+        # Freeze a real Router claim via base operations, then fail it with an
+        # explicit synthetic result; no harness process is spawned.
+        router_nonce = "fixture-router-nonce-000000000000"
         requested = call("selection_request", {"requestId": "fixture-routing", "task": "fixture routing choice"})
         while requested.get("runId"):
-            claim = call("worker_claim", {"workerId": "fixture-router", "claimRequestId": "claim-route-" + requested["runId"],
-                "nonce": "fixture-router-nonce-000000000000", "taskId": requested["runId"]}).get("claim")
-            assert claim is not None, requested
-            call("worker_result", {"workerId": "fixture-router", "attemptId": claim["attempt"]["attemptId"],
-                "generation": claim["attempt"]["generation"], "nonce": "fixture-router-nonce-000000000000",
-                "status": "failed", "shutdownConfirmed": True, "exitCode": 0,
-                "result": {"status": "error", "code": "fixture-no-answer", "stopEvidence": {"shutdownConfirmed": True}}})
+            claim = admit(router_nonce, requested["runId"])
+            report(claim, router_nonce, status="failed", result={"status": "error", "code": "fixture-no-answer",
+                                                                 "modelStarted": False})
             requested = call("selection_get", {"decisionId": requested["decisionId"]})["decision"]
             if requested["status"] != "queued":
                 break
@@ -312,7 +315,7 @@ def populate(args):
             "stableIds": ids,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService named operations in process; synthetic native discovery and worker result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
+            "boundary": "Base BoardService named operations in process; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),

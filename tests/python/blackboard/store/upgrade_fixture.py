@@ -1,4 +1,4 @@
-"""Restore the fixed schema-22 stock; private binding precedes upgrade.
+"""Restore the fixed schema-23 stock; private binding precedes any cutover.
 
 No old-source imports, generator, daemon, account or model is used here. The
 returned board is the preservation baseline, including its rebound base-format
@@ -38,7 +38,7 @@ def load_fixture(state: Path) -> dict:
     ``state`` and ``fixtureRoot`` are Paths; ``operations`` is the rebound old
     operation log; ``bindings`` maps template-era identities/digests to restored
     ones. Other keys are the fixed metadata (including stableIds/sourceCommit).
-    Schema remains 22. Take the upgrade baseline only after this returns.
+    Schema remains 23. Take the preservation baseline only after this returns.
     """
     metadata = json.loads((FIXTURE / "metadata.json").read_text())
     stock = {}

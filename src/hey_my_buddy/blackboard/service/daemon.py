@@ -109,17 +109,6 @@ class Daemon:
                 # Guard refusals preserve the workspace and its durable plan.
                 pass
 
-    def _cleanup_legacy_workers(self) -> None:
-        if (self.directory / "upgrade.json").exists():
-            return
-        from ...install.upgrade import retry_legacy_worker_cleanup
-        failure = retry_legacy_worker_cleanup(self.directory)
-        if failure is not None:
-            self.store.record_service_issue("legacy-worker-cleanup",
-                BoardError("LEGACY_WORKER_CLEANUP_FAILED", failure))
-        else:
-            self.store.clear_service_issue("legacy-worker-cleanup")
-
     def service(self) -> BoardService:
         return BoardService(
             self.store, token=self.token, control=self.control,
@@ -138,7 +127,6 @@ class Daemon:
         self.acquire_exclusive()
         try:
             self.store.initialize()
-            self._cleanup_legacy_workers()
             service = self.service()
             self.harnesses = service.harnesses
             self.scheduler = ExecutionScheduler(service)
@@ -175,7 +163,6 @@ class Daemon:
         next_recovery = time.monotonic() + 15
         while not self.stopping.wait(2):
             self._cleanup_accepted_workspaces()
-            self._cleanup_legacy_workers()
             if time.monotonic() >= next_recovery:
                 try:
                     self.store.recover_executions()

@@ -1,6 +1,6 @@
 """Contract-aware runtime cutover, with offline backup only for upgrades."""
 from __future__ import annotations
-from contextlib import ExitStack, contextmanager, closing
+from contextlib import contextmanager, closing
 from .. import locking
 import gzip
 import json
@@ -55,15 +55,13 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False,
-                  schema_version: int | None = None) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        supported = (schema_version,) if schema_version is not None else (22, SCHEMA_VERSION)
-        if schema is None or int(schema[0]) not in supported:
+        if schema is None or int(schema[0]) != SCHEMA_VERSION:
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {supported} only')
+                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -170,22 +168,6 @@ def probe(state: Path, target: Path) -> dict | None:
     return None
 
 
-def retire_workers(state: Path, *, timeout: float = 35) -> None:
-    # This is the one-time 0.39.0/schema-22 retirement protocol. The new runtime
-    # contains no Worker module, so the old request filename lives here.
-    if (state / 'workers').is_symlink():
-        raise BoardError('UPGRADE_UNSAFE', 'Worker root cannot be linked')
-    locks = sorted((state / 'workers').glob('*/supervisor.lock'))
-    for lock in locks:
-        if lock.parent.is_symlink() or lock.is_symlink():
-            raise BoardError('UPGRADE_UNSAFE', 'Worker identity is linked')
-        write_journal(lock.parent / 'retire.request', {'requestedAt': utc_now(), 'reason': 'idle upgrade'})
-    deadline = time.monotonic() + timeout
-    with ExitStack() as stack:
-        for lock in locks:
-            stack.enter_context(file_lock(lock, timeout=max(0, deadline - time.monotonic())))
-
-
 def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
     try:
         command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated installation'})
@@ -201,41 +183,6 @@ def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
         # detached. The caller then restores that runtime without touching work.
         if contract_changed:
             idle_snapshot(state)
-            retire_workers(state)
-
-
-def remove_legacy_worker_state(state: Path) -> None:
-    """Remove retired 0.39.0 Worker state after the upgrade can no longer roll back."""
-    workers = state / 'workers'
-    if workers.is_symlink():
-        raise BoardError('UPGRADE_UNSAFE', 'Worker root cannot be linked')
-    if workers.exists():
-        shutil.rmtree(workers)
-    (state / 'worker-pool.json').unlink(missing_ok=True)
-    backup.sync_dir(state)
-
-
-def retry_legacy_worker_cleanup(state: Path) -> str | None:
-    """Retry post-verification cleanup without keeping the upgrade entry fence."""
-    record = state / 'upgrade-last.json'
-    try:
-        if not record.exists():
-            return None
-        with file_lock(state / 'legacy-worker-cleanup.lock'):
-            journal = schemas.decode_request(record.read_text(), 'verified upgrade record')
-            if journal.get('phase') != 'verified' or journal.get('legacyWorkerCleanup') is not True:
-                return None
-            verification = journal.get('verification')
-            if not isinstance(verification, dict) or verification.get('schemaVersion') != SCHEMA_VERSION:
-                return None
-            remove_legacy_worker_state(state)
-            journal['legacyWorkerCleanup'] = False
-            write_journal(record, journal)
-    except (BoardError, OSError, ValueError) as error:
-        return (f'Retired Worker state cleanup failed: {error}. '
-                'Fix access to workers/ and worker-pool.json in the state directory; '
-                'service startup and installation retry this cleanup.')
-    return None
 
 
 def start(state: Path, target: Path) -> dict:
@@ -499,14 +446,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     contract_changed = contract_version != CONTRACT_VERSION
     before = preflight(state, contract_changed=contract_changed)
     before['runtimeSettings'] = runtime_settings
-    legacy_cleanup_error = retry_legacy_worker_cleanup(state)
     # Dependency installation cannot disturb the old daemon; materialize before
     # taking the short ownership fence and preserve both generations on failure.
     materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
     target = Path(materialized['runtimeDir'])
     if previous == target and skill_source is None:
-        return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name,
-                **({'legacyCleanupError': legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
+        return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}
     marker = state / 'upgrade.json'
     with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
         if marker.exists():
@@ -567,10 +512,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         journal['before'] = before
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
-                    if before['schema'] == 22:
-                        from ..blackboard.store.upgrade import upgrade_database
-                        upgrade_database(state)
-                    expected = idle_snapshot(state, event_head=before['eventHead'], schema_version=SCHEMA_VERSION)
+                    expected = idle_snapshot(state, event_head=before['eventHead'])
                 else:
                     expected = before
                 expected['runtimeSettings'] = runtime_settings
@@ -585,11 +527,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             _publish_skill(journal)
             write_journal(marker, journal)
             write_active_runtime(state, target, preserved)
-            journal.update(phase='verified', verification=evidence, legacyWorkerCleanup=contract_changed)
+            journal.update(phase='verified', verification=evidence)
             write_journal(marker, journal)
             write_journal(state / 'upgrade-last.json', journal)
             _finish_skill(journal)
-            legacy_cleanup_error = retry_legacy_worker_cleanup(state)
             journal_error = None
             try:
                 clear_journal(marker)
@@ -598,8 +539,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
             pruning = retain_runtimes(state, target, previous)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning,
-                    **({'journalError':journal_error} if journal_error is not None else {}),
-                    **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
+                    **({'journalError':journal_error} if journal_error is not None else {})}
         except Exception as failure:
             reason = _failure_reason(failure)
             try:
@@ -660,10 +600,9 @@ def recover(state: Path, root: Path) -> dict:
                                   contract_changed=contract_changed)
         _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
-        journal.update(verification=evidence, legacyWorkerCleanup=contract_changed and evidence['schemaVersion'] == SCHEMA_VERSION)
+        journal.update(verification=evidence)
         write_journal(state / 'upgrade-last.json', journal)
         _finish_skill(journal)
-        legacy_cleanup_error = retry_legacy_worker_cleanup(state)
         journal_error = None
         try:
             clear_journal(marker)
@@ -672,8 +611,7 @@ def recover(state: Path, root: Path) -> dict:
         pruning = retain_runtimes(state, target, previous)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
-                **({'journalError':journal_error} if journal_error is not None else {}),
-                **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
+                **({'journalError':journal_error} if journal_error is not None else {})}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
@@ -701,14 +639,13 @@ def recover(state: Path, root: Path) -> dict:
     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
         if contract_changed:
-            retire_workers(state)
             saved = journal.get('backup')
             if saved is not None:
                 current = state / 'backups/current'
                 if Path(saved['path']) != current:
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
                 restore(state, current)
-            before = idle_snapshot(state, schema_version=journal['before']['schema'])
+            before = idle_snapshot(state)
         else:
             before = journal['before']
     health = start(state, previous)
