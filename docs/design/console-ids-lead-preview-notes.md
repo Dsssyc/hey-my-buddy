@@ -81,3 +81,11 @@ Lead 对 C 先运行 `npm --prefix apps/console run typecheck`，退出码 0，�
 额外以 ignored `tmp/copy-browser.config.mts` 与 `tmp/copy-browser.check.ts` 在真实 Chromium 中复核原生剪贴板：中英文、1440 与 390 宽度，宏任务标题、微任务检查器、详情的按钮都复制完整标识，悬停可读完整值，独立微任务在宏任务标题处复制 `run:preview-run-c1`；宏任务头部与检查器控件无重叠、页面无横向溢出，详情仍显示委派它的 Lead。8 个场景最终全部通过；首次脚本在 390 宽度仍选择隐藏的桌面 `.tl-label` 而有两项超时（6 项通过），改为窄屏实际使用的 `.tl-entry` 后只重跑这两项，2 项通过、退出码 0，属于临时检查脚本的入口错误，没有修改产品源码。原始结果分别在 `tmp/copy-browser.log` 与 `tmp/copy-browser-narrow.log`。
 
 最终交回：四项改动、夹具返修与重建资源都在本 Lead 检出；前端全量 1,119 项、浏览器全量 106 项、指定 Python 3 项通过，另有原生复制与窄屏 8 场景通过。名下共 3 项，A 为 Codex CLI `gpt-6.1-sol / high`（返修 0）、B 为 Codex CLI `gpt-6.1-sol / max`（返修 1）、C 为 DSH CLI `deepseek-flash / max`（返修 0），均经默认路由、固定产物审查与实际提交验收，已回收子检出。本次 Lead 的凭据、正常交付叫醒、失败叫醒、恢复、范围修订、累计产物整合和三次验收可用；最不顺的是 B 首回合约 39 分钟后失败，以及 Lead 验收前未先做 typecheck、误以为晚发现问题需要 Host 另批返修路径造成的额外回合，证据和纠正均已记录。
+
+## Host 再审返修（第七回合）
+
+Host 已核对第 1、3、4 项、整合与先前记录的全量检查，但复现第 2 项遗漏：工作流的命令执行 buddy 是 `{"adapter":"command"}`，`WorkflowPanel` 的记录细节仅以 `value.buddy` 是否非空决定显示，因此仍会写出 `undefined · undefined / undefined｜buddy 来源未记录`。此前 A 只处理执行列表与详情头部，Lead 的回归夹具没有经 WorkflowPanel 覆盖这个真实形态，先前“四项完成”的判断被 Host 纠正。Host 另指出标识 span 的原生 `title` 与 Tooltip 叠出两个提示。
+
+新增顺序微任务 D，以交回时封存的完整整合提交 `1adae637` 为基点，集中修改 `apps/console/src/console-data.ts` 中“这次执行有没有模型 buddy”的共享规则，让执行列表、详情头部、记录细节共同使用，补 WorkflowPanel 实际渲染命令记录细节的回归；同时删除 `CopyableIdentifier` 标识 span 的原生 `title` 并更新相应行为断言。写入范围限制为上述数据工具、三个消费组件、复制组件及其相关现有测试，不动 Python、浏览器测试、文档或打包资源；文件间无并行写入。D 只跑 typecheck 和明确列出的相关组件 / 数据工具测试，Lead 验收前先重跑 typecheck 与相关测试，整合后再跑前端全量、浏览器全量并重建打包资源。
+
+D 用第七回合执行凭据 `submit --params-file tmp/command-record-repair-submit.json` 提交，退出码 0，runId 为 `8b26486c-f55e-40b7-979b-44f57a80d720`，回执为 `executing` / `queued`、`awaiting-model-selection`，未指定 buddy；提示带完整环境规矩、三句交付和验收前 typecheck 要求。D 返修 0 次，等待交回；前三项验收状态保持。
