@@ -60,6 +60,16 @@ Router 输入删除卡片、评价证据和它们的引用集合，只保留任�
 
 `tests/probes/objective_console_preview.py` 删除 `evaluation_history`、`evaluation_write_begin`、`evaluation_write_renew`、`evaluation_write_abort` 的允许入口及维护历史回复；删除快照的 `gate`、`cards`、`evidence`、`pendingEvidence`、`sampleCounts` 和维护能力，删除模型分页的卡片/样本、决策的维护发布字段、`SAMPLE_COUNTS` 与 `sample_counts()`。保留设置版本、用户策略、路由健康统计、微任务结果与原生执行证据；决策的现存引用仍用 `evidence`。`tests/probes/router_fast.py` 同步删除准备包的空 `cards` 字段，没有执行真实 Router 调用。真实前端解析器的预览检查现在也核对快照不再携带旧字段；`App.test.tsx` 与 `desktop-console.test.tsx` 删除混合用例中的旧卡片/观察字段断言，保留设置和草稿行为。
 
+## Host 第三回合打回：Claude 额度测试与全 tests 扫描
+
+Host 在整合后的完整检查中发现 `buddy/harnesses/claude/test_claude_worker.py` 的额度失败测试仍调用已删除的 `EvaluationStore._sample_basis`。该文件不在前两回合的五个测试目录内。本回合把 `test_quota_failure_is_persisted_as_harness_error_without_a_capability_sample` 改名为 `test_quota_failure_is_persisted_as_harness_error_without_retry`，只删除末尾构造评价存储与样本归属的断言；保留额度拒绝记为 `harness-error`、错误码 `quota-rejected`、结果没有 `turn` / `workspaceSeal`、没有封存、只执行一个回合而不自动重试，以及 `quotaFailure` 的字段断言。
+
+从 `e9c1988f` 到当前源码的差异提取 90 个已删除的方法/函数名，包含下划线开头的内部方法；对整个 `tests/` 同时搜索这些名字、已删除常量、8 张表、保留表中的 10 处删除列及对应的传输字段，再用 Python AST 核对代码中的属性调用和名字加载。除本次已移除的 `_sample_basis` 使用处，未发现其他仍调用旧评价实现的代码，没有恢复样本或维护操作的替身。
+
+保留的命中有明确边界：`tests/fixtures/upgrade-base/board.sql` 与 `operations.json` 是禁止改动的升级基点；CLI / console 测试中的旧操作名用于确认入口已消失或返回 `METHOD_NOT_FOUND`；Router 答案的 `evidenceIds` / `card` 用于确认旧输入被拒绝，快照与有界输入中的旧字段断言用于确认不会再返回它们；`CONFIGURATION_FIELDS`、`_catalog`、`_checkpoint`、`_publish`、`prepare`、`history` 解析到现存协议、harness 或其他测试助手；`tests/probes/console_layout_check.mjs` 的 `cards` 变量表示设置页面容器。Router 自用的 `evaluation_readers` 继续留给下一微任务，没有把这些现存行为当作旧维护实现删除。
+
+本回合按任务指定解释器和私有检查器运行 `tests/python/buddy` 整个目录，清除原有运行时与凭据环境：82 个文件、1,608 项测试通过，0 跳过，退出 0，私有测试根已删除。说明完成后，`cli/test_repository_hygiene.py` 的 5 项也通过、退出 0，私有根已删除，`git diff --check` 通过。没有重复运行前端或重建资产，因为只改动该 Python 测试及本说明；前两回合的前端与资产证据仍以各自当时的源码为边界。Host 指出的范围外参考文档链接由 Host 处理，本回合没有修改。
+
 ## 留给下一个微任务的版本闸门
 
 `blackboard/store/db.py` 的 `evaluation_state.table_revision`、`configuration_revision` 和仍现存的旧名字不变，`migrations.py` 带走两种版本及所有既定设置的行为不变。`evaluation_revisions`、profile 的 created/updated revision、偏好/备注的更新版本继续存在。
@@ -72,7 +82,7 @@ Router 输入删除卡片、评价证据和它们的引用集合，只保留任�
 
 ## 验证和边界
 
-最终在本次源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，并使用支持的 Node 24.21.0 供跨组件检查调用。146 个文件、2,253 项测试通过，0 跳过，最终退出 0，私有测试根已删除。没有运行完整 Python 检查，没有安装、日常看板或真实 harness / 付费模型调用。
+第二续做回合在当时源码上运行指定的五个 Python 目录：`tests/python/blackboard`、`tests/python/buddy/roles`、`tests/python/console`、`tests/python/cli`、`tests/python/protocol`。检查器使用任务指定解释器及 `PYTHONPATH=src`，清除继承的 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`、`BUDDY_RUNTIME`、`BUDDY_RUNTIME_IDENTITY`、`BUDDY_WORKER_STATE`、`BUDDY_WORKER_ID`、`BUDDY_AGENT_CREDENTIAL`、`BUDDY_AGENT_CREDENTIAL_FILE`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，并使用支持的 Node 24.21.0 供跨组件检查调用。146 个文件、2,253 项测试通过，0 跳过，最终退出 0，私有测试根已删除。没有运行完整 Python 检查，没有安装、日常看板或真实 harness / 付费模型调用。
 
 第一续做回合的五目录检查曾退出 1：138 个文件通过，8 个文件失败。目录回滚测试引用了基点里已删除的 `blackboard.store.test_migrations.rows`，已改为比较私有数据库全部当前表的行，保留整个目录发布事务回滚的断言，单独重跑 16 项通过；其余 7 个文件由上节缺失助手造成，现已在最终五目录检查中全部通过。第二续做回合还分别聚焦检查了 `test_workspace_lifecycle.py`（49 项）、`test_workflow_preparation.py`（30 项）和 `cli/test_host_preview.py`（3 项），均退出 0、私有根已删除。第一续做回合的后端两文件聚焦检查另有 52 项通过。
 
@@ -92,4 +102,4 @@ Host 另需同步的范围外现行文档：`README.md` 与 `README.zh-CN.md` �
 
 同一代理最初未设置浏览器下载目录，Chromium 下载向默认的 `~/Library/Caches/ms-playwright` 缓存写入，在约 50% 时中断；没有检查或删除该外部缓存。随后改用检出内 `apps/console/node_modules/.cache/ms-playwright` 安装并运行浏览器回归。这两项偏差不计为源码验证的通过证据；前端与 Python 的最终结果以规定命令的最后一次输出为准。
 
-第一续做回合前端代理的 npm 命令未覆盖 npm 缓存，沿用本机配置，未核实其确切目录；没有检查或删除外部 npm 缓存。主代理随后的一次额外前端测试使用了默认 Node 25.8.1，虽也通过 1,098 项，但不作为支持版本的最终证据；最后已在 Node 24.21.0 上重跑全部前端测试并重建资产，两者退出 0，且为这两次命令显式设置检出内 `apps/console/node_modules/.cache/npm` 缓存。两个续做回合没有使用 uv，也没有向指定解释器环境安装包。
+第一续做回合前端代理的 npm 命令未覆盖 npm 缓存，沿用本机配置，未核实其确切目录；没有检查或删除外部 npm 缓存。主代理随后的一次额外前端测试使用了默认 Node 25.8.1，虽也通过 1,098 项，但不作为支持版本的最终证据；最后已在 Node 24.21.0 上重跑全部前端测试并重建资产，两者退出 0，且为这两次命令显式设置检出内 `apps/console/node_modules/.cache/npm` 缓存。三个续做回合没有使用 uv，也没有向指定解释器环境安装包。
