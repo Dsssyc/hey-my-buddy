@@ -8,16 +8,14 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from c_two._native import CoreError
-from c_two.error import ContractMismatch
+from c_two.error import ContractMismatch, CoreError
 
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import transport
 
 
 def core_failure(kind: str | None) -> CoreError:
-    failure = CoreError('native connection failed')
-    failure.category = 'transport'
+    failure = CoreError('transport', 'native connection failed')
     failure.transport_kind = 'ipc'
     failure.io_kind = kind
     failure.raw_os_error = errno.EACCES if kind == 'permission_denied' else errno.ENOENT

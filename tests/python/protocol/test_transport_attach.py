@@ -575,11 +575,10 @@ class ColdStartTests(unittest.TestCase):
 
     def test_native_startup_timeout_reaches_the_launcher_through_the_daemon_record(self):
         import io
-        from c_two._native import CoreError
+        from c_two.error import CoreError
         from hey_my_buddy.blackboard.service import daemon
 
-        error = CoreError("fixture native lifecycle failure")
-        error.category = "lifecycle"
+        error = CoreError("lifecycle", "fixture native lifecycle failure")
         error.lifecycle_kind = "startup_timeout"
         child = self.spawn.return_value
         child.pid = os.getpid()
@@ -602,14 +601,13 @@ class ColdStartTests(unittest.TestCase):
     def test_native_bind_failure_reaches_cold_start_with_its_structured_cause(self):
         import errno
         import io
-        from c_two._native import CoreError
+        from c_two.error import CoreError
         from hey_my_buddy.blackboard.service import daemon
 
         for kind, raw_error, code in (("permission_denied", errno.EACCES, "LAUNCH_ACCESS_DENIED"),
-                                      ("addr_in_use", errno.EADDRINUSE, "C_TWO_TRANSPORT")):
+                                      ("address_in_use", errno.EADDRINUSE, "C_TWO_TRANSPORT")):
             with self.subTest(kind=kind):
-                error = CoreError("fixture native endpoint bind failure")
-                error.category = "transport"
+                error = CoreError("transport", "fixture native endpoint bind failure")
                 error.transport_kind = "ipc"
                 error.io_kind = kind
                 error.raw_os_error = raw_error
@@ -797,7 +795,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.8.1")
+        self.assertEqual(cc.__version__, "0.8.2")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}

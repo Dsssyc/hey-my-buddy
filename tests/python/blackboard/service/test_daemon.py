@@ -6,7 +6,7 @@ import io
 import json
 from unittest.mock import Mock, patch
 
-from c_two._native import CoreError
+from c_two.error import CoreError
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.service.daemon import Daemon, _env_int, main
@@ -146,8 +146,7 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertIn("INVALID_ARGUMENT", stderr.getvalue())
 
     def test_native_startup_timeout_uses_the_existing_startup_error_record(self):
-        error = CoreError("fixture lifecycle failure without timeout wording")
-        error.category = "lifecycle"
+        error = CoreError("lifecycle", "fixture lifecycle failure without timeout wording")
         error.lifecycle_kind = "startup_timeout"
         with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
              patch.object(Daemon, "run", side_effect=error), \
@@ -177,8 +176,7 @@ class DaemonAdmissionTests(BoardTestCase):
     def test_other_native_errors_are_reraised_even_with_timeout_wording(self):
         for category, kind in (("lifecycle", "shutdown_timeout"), ("transport", "startup_timeout"), (None, None)):
             with self.subTest(category=category, kind=kind):
-                error = CoreError("server did not become ready within 5.000s")
-                error.category = category
+                error = CoreError(category, "server did not become ready within 5.000s")
                 error.lifecycle_kind = kind
                 with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
                      patch.object(Daemon, "run", side_effect=error), \

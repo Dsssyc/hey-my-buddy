@@ -11,10 +11,12 @@ import secrets
 import threading
 import time
 
+import c_two as cc
+
 from ...errors import BoardError
 from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
-from ...protocol.execution import (BUDGET, execution_directory, execution_live_error,
+from ...protocol.execution import (BUDGET, execution_directory,
                                   launch_execution, read_execution_endpoint, read_execution_receipt)
 from ...protocol.process_identity import inspect_process_identity, boot_id, kill_verified_process_group
 from ...protocol.run_identity import RunIdentity
@@ -36,6 +38,7 @@ class _RecoveredExecution:
 
 @dataclass
 class _ConnectionWatch:
+    observation: cc.ConnectionObservation
     error: Exception | None = None
 
 
@@ -66,10 +69,19 @@ class ExecutionScheduler:
         self._observed: dict[str, _ExecutionObservation] = {}
         self._handles: dict[str, tuple[object, dict | None]] = {}
         self._threads: set[threading.Thread] = set()
+        self._connection_events: cc.ConnectionEvents | None = None
+        self._connection_thread = threading.Thread(
+            target=self._consume_connection_events, name="execution-connections", daemon=True)
         self._thread = threading.Thread(target=self._run, name="execution-scheduler", daemon=True)
 
     def start(self) -> None:
-        self._thread.start()
+        self._connection_events = cc.connection_events()
+        try:
+            self._connection_thread.start()
+            self._thread.start()
+        except BaseException:
+            self.stop()
+            raise
 
     def wake(self, task_ids: frozenset[str] | None = None) -> None:
         self._wake.set()
@@ -87,8 +99,13 @@ class ExecutionScheduler:
                 observer.condition.notify()
 
     def stop(self) -> None:
-        self._stopping.set()
+        with self._condition:
+            self._stopping.set()
+            if self._connection_events is not None:
+                self._connection_events.close()
         self.wake()
+        if self._connection_thread.is_alive():
+            self._connection_thread.join()
         if self._thread.is_alive():
             self._thread.join()
         with self._lock:
@@ -320,30 +337,49 @@ class ExecutionScheduler:
                 raise
         return client
 
-    def _watch_connection(self, observation) -> _ConnectionWatch:
-        # Logical reconnects can share one physical stream. Its one waiter
-        # remains useful until the physical connection actually terminates.
+    def _watch_connection(self, observation, observer: _ExecutionObservation) -> _ConnectionWatch:
+        # Logical reconnects can share one physical stream until it closes.
         key = observation.connection_id
         with self._condition:
             watch = self._connections.get(key)
             if watch is None:
-                watch = _ConnectionWatch()
-                threading.Thread(target=self._connection_closed, args=(key, observation, watch),
-                                 name=f"execution-connection-{key}", daemon=True).start()
+                watch = _ConnectionWatch(observation)
                 self._connections[key] = watch
+                observer.watch = watch
+                closed = observation.snapshot()
+                if closed is not None:
+                    self._connection_closed(key, closed)
+            else:
+                observer.watch = watch
             return watch
 
-    def _connection_closed(self, key, observation, watch: _ConnectionWatch) -> None:
-        try:
-            closed = observation.wait_closed(timeout=None)
-            error = BoardError("LIVE_UNAVAILABLE", "The execution physical connection closed",
-                               connectionId=closed.connection_id, reason=closed.reason,
-                               io_operation=closed.operation, raw_os_error=closed.os_error)
-        except Exception as failure:
-            error = execution_live_error(failure)
+    def _consume_connection_events(self) -> None:
+        while True:
+            try:
+                event = self._connection_events.recv()
+            except StopIteration:
+                return
+            except cc.ConnectionEventsLagged:
+                with self._condition:
+                    if self._stopping.is_set():
+                        return
+                    self._connection_events = cc.connection_events()
+                    for key, watch in tuple(self._connections.items()):
+                        closed = watch.observation.snapshot()
+                        if closed is not None:
+                            self._connection_closed(key, closed)
+                continue
+            if event.side == "client" and event.kind == "closed":
+                self._connection_closed(event.connection_id, event.value)
+
+    def _connection_closed(self, key: int, closed: cc.ConnectionClosed) -> None:
         with self._condition:
-            watch.error = error
-            del self._connections[key]
+            watch = self._connections.pop(key, None)
+            if watch is None:
+                return
+            watch.error = BoardError("LIVE_UNAVAILABLE", "The execution physical connection closed",
+                                     connectionId=closed.connection_id, reason=closed.reason,
+                                     io_operation=closed.operation, raw_os_error=closed.os_error)
             for observer in self._observed.values():
                 if observer.watch is watch:
                     observer.revision += 1
@@ -395,8 +431,7 @@ class ExecutionScheduler:
                                 self._unknown(attempt_id, error)
                             if client is not None:
                                 self.live_registry.bind(attempt_id, client)
-                                with self._condition:
-                                    observer.watch = self._watch_connection(client.connection_observation)
+                                self._watch_connection(client.connection_observation, observer)
                                 stop_sent = None  # Re-send durable intent on every new channel.
                                 delay, retry_at = 0.1, None
                                 self.store.execution_connection(attempt_id, connected=True)

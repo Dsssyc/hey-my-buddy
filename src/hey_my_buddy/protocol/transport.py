@@ -21,8 +21,7 @@ import uuid
 from typing import Any
 
 import c_two as cc
-from c_two._native import CoreError
-from c_two.error import CCError
+from c_two.error import CCError, CoreError
 
 from . import rpc_config
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
@@ -104,7 +103,7 @@ class ServiceError(BoardError):
     """A board failure raised on the client side of the boundary."""
 
 
-def _local_rpc_error(error: CoreError | CCError) -> ServiceError:
+def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     """Keep C-Two's local I/O cause visible at the Host boundary."""
     details = dict(getattr(error, 'details', None) or {})
     details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
@@ -165,7 +164,7 @@ def _invoke(service, endpoint: dict, operation: str, params: dict) -> dict:
     try:
         raw = getattr(service, operation)(request)
     except (CoreError, CCError) as exc:
-        raise _local_rpc_error(exc) from exc
+        raise local_rpc_error(exc) from exc
     if not isinstance(raw, str) or len(raw.encode()) > MAX_MESSAGE_BYTES:
         raise ServiceError("INVALID_RESPONSE", "Invalid or oversized service response")
     try:
@@ -192,7 +191,7 @@ def _connection(endpoint: dict, resource: str, directory: Path):
         try:
             service = stack.enter_context(cc.connect(contract, name=name, address=endpoint["address"]))
         except (CoreError, CCError) as exc:
-            raise _local_rpc_error(exc) from exc
+            raise local_rpc_error(exc) from exc
         yield service
 
 
