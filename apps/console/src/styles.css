@@ -49,6 +49,7 @@ input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: va
 .backup-attention ul { margin: 6px 0; padding-left: 18px; overflow-wrap: anywhere; }
 .attention-banner { background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
 .unavailable-mark { color: var(--warning); font-size: 10px; font-weight: 600; }
+.pending-mark { color: var(--warning); font-size: 10px; font-weight: 600; }
 .variant-switch .effort-choice.unavailable { border-style: dashed; color: var(--muted); }
 .assessment-readonly { display: block; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .annotation-readonly { display: block; }
@@ -834,6 +835,7 @@ button.tl-label.markers-toggle:hover { color: var(--accent); }
 .family-row-marks { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .router-mark { display: inline-flex; padding: 0 5px; border: 1px solid var(--accent); border-radius: 3px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
 .family-new-mark { padding: 0 4px; border-radius: 3px; background: var(--accent-wash); color: var(--accent); font-size: 10px; font-weight: 600; }
+.family-pending-mark { display: inline-flex; padding: 0 4px; border-radius: 3px; background: var(--warning-wash); color: var(--warning); font-size: 10px; font-weight: 600; white-space: nowrap; }
 
 /* The family detail: a label column and a value column. */
 .family-header h2 { font-size: 17px; }

@@ -20,7 +20,7 @@ import type {
   Snapshot,
 } from "./types";
 import { Badge, Help, formatDate } from "./ui";
-import { effortText, profileTitle } from "./profile-display";
+import { catalogPending, effortText, pendingMark, profileTitle } from "./profile-display";
 import {
   MODEL_CONCURRENCY_DEFAULT,
   MODEL_CONCURRENCY_MAX,
@@ -28,6 +28,7 @@ import {
   cardOriginText,
   concurrencyEntryFor,
   familyKey,
+  familyPending,
   recordedSampleCount,
 } from "./console-data";
 import type { ModelFamilyGroup } from "./console-data";
@@ -81,6 +82,9 @@ function EffortTag({
   const effort = effortText(profile.effort) || profile.effort || "默认";
   const menuId = `effort-menu-${profile.profileId}`;
   const pending = recordedEnabled !== undefined && recordedEnabled !== profile.enabled;
+  // The board's model-level pending state (ADR-027 §6): shown as a mark, never
+  // mistaken for unavailability — the effort stays usable and routable.
+  const catalogPendingMark = catalogPending(profile) ? pendingMark(profile) : "";
   const canToggle = editor.editing && (profile.available || profile.enabled);
   const switchTitle = !editor.sessionWritable ? "登录已失效；重新登录后可修改"
     : !editor.editing ? "保存进行中或结果未确认，暂不能修改"
@@ -117,9 +121,10 @@ function EffortTag({
     {effective && <span className="pref-icon" aria-hidden="true">{PREFERENCE_ICON[effective.mode]}</span>}
     {isRouter && <span className="router-mark">Router</span>}
     {!profile.available && <span className="unavailable-mark">不可用</span>}
+    {catalogPendingMark && <span className="pending-mark">{catalogPendingMark}</span>}
     {pending && <span className="unsaved-dot" title="启用状态未保存" aria-hidden="true">•</span>}
     <span className="sr-only">{[profile.enabled ? "已启用" : "未启用", preferenceText,
-      profile.available ? "" : "目录不可用", pending ? "未保存" : ""].filter(Boolean).join("，")}</span>
+      profile.available ? "" : "目录不可用", catalogPendingMark, pending ? "未保存" : ""].filter(Boolean).join("，")}</span>
     <button ref={menuButton} type="button" className="tag-menu-button" aria-label={`${effort} 档位菜单`}
       aria-haspopup="dialog" {...popoverButtonProps(menuId, menuOpen)} onClick={() => setMenuOpen(value => !value)}>▾</button>
     {menuOpen && <Popover id={menuId} anchor={menuButton.current} label={`${profileTitle(profile)} 档位设置`}
@@ -214,6 +219,9 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
   const efforts = family.profiles;
   const enabledCount = efforts.filter(p => p.enabled).length;
   const available = efforts.some(p => p.available);
+  // One aggregated pending fact per family with its first-absence time; the
+  // availability badge above keeps its own board-recorded meaning.
+  const pendingState = familyPending(efforts);
   const configuration = recorded.configuration === null ? null : data.configuration;
   const routerId = configuration?.routerProfileIds[0] ?? null;
   const currentRouterId = routerId;
@@ -272,6 +280,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
         <span className="chip-row">
           {isNew && <Badge tone="green">新</Badge>}
           <Badge tone={available ? "green" : "amber"}>{available ? "可用" : "不可用"}</Badge>
+          {pendingState.pending && <Badge tone="amber">{pendingMark({ pendingSince: pendingState.since })}</Badge>}
           <Badge tone={enabledCount ? "green" : "neutral"}>已启用 {enabledCount}/{efforts.length}</Badge>
         </span>
       </div>
@@ -351,6 +360,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
                     <dt>上下文</dt><dd>{profile.contextWindow ? profile.contextWindow.toLocaleString() + " tokens" : "未知"}</dd>
                     <dt>能力</dt><dd>{profile.capabilities.length ? profile.capabilities.map(capabilityLabel).join("、") : "未记录"}</dd>
                     <dt>目录来源</dt><dd>{profile.source || "未记录"}</dd>
+                    <dt>目录状态</dt><dd>{catalogPending(profile) ? pendingMark(profile) : profile.available ? "可用" : "不可用"}</dd>
                     <dt>可用性</dt><dd>{profile.unavailableReason || (profile.available ? "未验证" : "目录中不可用")}</dd></dl>
                 </div>
               </details>;

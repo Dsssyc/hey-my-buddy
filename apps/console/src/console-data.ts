@@ -1,7 +1,22 @@
 import type { Card, ModelFamily, Preference, Profile, Snapshot, Task } from "./types";
-import { effortText, profileName } from "./profile-display";
+import { catalogPending, effortText, profileName } from "./profile-display";
 
 export const familyKey = (p: ModelFamily) => JSON.stringify([p.adapter, p.provider, p.model]);
+
+/**
+ * The family's aggregated pending fact (ADR-027 §6): pending is a model-identity
+ * state, so its efforts share one mark. Pending when any effort is pending; the
+ * earliest recorded first-absence time rides along, and a pending fact without
+ * one stays pending with a null time rather than dropping the state.
+ */
+export function familyPending(profiles: Profile[]): { pending: boolean; since: string | null } {
+  const pendingProfiles = profiles.filter(catalogPending);
+  if (!pendingProfiles.length) return { pending: false, since: null };
+  const times = pendingProfiles.map(p => p.pendingSince)
+    .filter((t): t is string => typeof t === "string" && t !== "")
+    .sort();
+  return { pending: true, since: times.length ? times[0] : null };
+}
 /**
  * ADR-011 shared model concurrency: one user-owned concurrent-task limit per
  * exact adapter/provider/model family. All effort variants, routing decisions
