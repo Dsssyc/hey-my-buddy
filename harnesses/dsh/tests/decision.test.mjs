@@ -10,6 +10,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,8 +18,8 @@ import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS,
-  composePatch, isEntrypoint, parseArgs, resolveDshBin, validateRequest,
+  DEFAULT_TIMEOUT_SECONDS, MAX_DIAGNOSTIC_TEXT_BYTES, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS,
+  composePatch, isEntrypoint, normalizeDiagnostics, parseArgs, resolveDshBin, validateRequest,
 } from '../scripts/decision.mjs';
 import { derivePolicyFacts } from '../scripts/selection-policy.mjs';
 
@@ -57,7 +58,7 @@ let caseCounter = 0;
  * scenario: the adapter refuses to run against a harness home where the
  * profile would have to be created, and that refusal has its own test.
  */
-function scenario({ request, scenarioName = 'ok', answer, code, timeout, settingsFile, argv = [], dump, installProfile = true } = {}) {
+function scenario({ request, scenarioName = 'ok', answer, code, timeout, settingsFile, argv = [], dump, installProfile = true, diagnostics } = {}) {
   caseCounter += 1;
   const dir = join(root, `case-${String(caseCounter)}`);
   const bin = join(dir, 'bin');
@@ -90,6 +91,7 @@ function scenario({ request, scenarioName = 'ok', answer, code, timeout, setting
     ...(code === undefined ? {} : { MOCK_DECISION_CODE: code }),
     ...(dump === undefined ? {} : { MOCK_DECISION_DUMP: dump }),
     ...(settingsFile === undefined ? {} : { DSH_SETTINGS_FILE: settingsFile }),
+    ...(diagnostics === undefined ? {} : { MOCK_DECISION_DIAGNOSTICS: typeof diagnostics === 'string' ? diagnostics : JSON.stringify(diagnostics) }),
   });
   const args = ['--input-file', inputFile, '--output-file', outputFile, ...(timeout === undefined ? [] : ['--timeout', String(timeout)]), ...argv];
   return { dir, dshHome, bin, records, artifacts, dsh, inputFile, outputFile, env, args };
@@ -388,41 +390,52 @@ describe('bounded output validation', () => {
     assert.equal(readEnvelope(extra).code, 'child-protocol-error');
   });
 
-  test('a stated fallback while a legal preference match exists is refused', () => {
-    // The historical inversion: a positive rule matching p1 must be stated as
-    // matched, never as an avoid/fallback while the candidate is legal.
+  test('an echoed or invented model policyCheck is ignored and replaced by the computed one (R1)', () => {
     const request = defaultRequest({
       routingPreferences: [{ match: { provider: 'deepseek-official' }, reason: 'Prefer the installed provider' }],
     });
     request.policyFacts = derivePolicyFacts({
       profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {},
     });
-    const s = scenario({ request, answer: JSON.stringify({
+    // The real failure shape: the child copied taskPreference (including
+    // matchingProfileIds) and appended an outcome; the launcher recomputes.
+    const echoed = scenario({ request, answer: JSON.stringify({
       decision: {
-        profileId: 'p1', reason: 'avoiding the preference', evidenceIds: [],
-        policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'fallback' }, userPreference: 'none' },
+        profileId: 'p1', reason: 'echoing the supplied facts', evidenceIds: [],
+        policyCheck: {
+          hardConstraints: {},
+          taskPreference: { ruleIndex: 0, matchingProfileIds: ['p1'], outcome: 'fallback' },
+          userPreference: 'none',
+        },
         support: { cardProfileIds: [], annotationProfileIds: [] },
       },
     }) });
-    const result = runDecisionCli(s);
-    assert.equal(result.status, 1);
-    assert.equal(readEnvelope(s).code, 'policy-outcome-false');
-  });
+    const echoedResult = runDecisionCli(echoed);
+    assert.equal(echoedResult.status, 0, echoedResult.stderr);
+    const envelope = readEnvelope(echoed);
+    assert.deepEqual(Object.keys(envelope.decision), ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support']);
+    assert.deepEqual(
+      envelope.decision.policyCheck,
+      { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'matched' }, userPreference: 'none' },
+    );
+    assert.deepEqual(envelope.decision.support, { cardProfileIds: [], annotationProfileIds: [] });
 
-  test('an invented hard constraint is refused', () => {
-    const s = scenario({ answer: JSON.stringify({
+    // An invented hard constraint cannot change the adopted check either.
+    const invented = scenario({ answer: JSON.stringify({
       decision: {
         profileId: 'p1', reason: 'assuming a dsh constraint', evidenceIds: [],
         policyCheck: { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' },
         support: { cardProfileIds: [], annotationProfileIds: [] },
       },
     }) });
-    const result = runDecisionCli(s);
-    assert.equal(result.status, 1);
-    assert.equal(readEnvelope(s).code, 'policy-constraint-mismatch');
+    const inventedResult = runDecisionCli(invented);
+    assert.equal(inventedResult.status, 0, inventedResult.stderr);
+    assert.deepEqual(readEnvelope(invented).decision.policyCheck, {
+      hardConstraints: {}, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none',
+    });
   });
 
-  test('an unsupported alternative and unknown support references are refused', () => {
+  test('unknown support references are still refused', () => {
     const request = defaultRequest({
       routingPreferences: [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }],
       annotations: [{ profileId: 'p1', text: 'user annotation', revision: 1, updatedAt: '2026-09-25T00:00:00Z' }],
@@ -430,30 +443,15 @@ describe('bounded output validation', () => {
     request.policyFacts = derivePolicyFacts({
       profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {},
     });
-    // p1 is the matching candidate, so selecting it is 'matched'; selecting p3
-    // (disabled, hence not legal) is refused as a non-candidate before policy.
-    const stated = (profileId, outcome) => JSON.stringify({
-      decision: {
-        profileId, reason: 'deviating', evidenceIds: [],
-        policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome }, userPreference: 'none' },
-        support: { cardProfileIds: [], annotationProfileIds: [] },
-      },
-    });
-    // A supported alternative: selecting p1 with outcome alternative is false
-    // (p1 IS the match), so the false outcome is what gets refused here.
-    const falseOutcome = scenario({ request, answer: stated('p1', 'alternative') });
-    assert.equal(runDecisionCli(falseOutcome).status, 1);
-    assert.equal(readEnvelope(falseOutcome).code, 'policy-outcome-false');
-    // Unknown support references are refused even when the outcome is honest.
-    const unknownSupport = scenario({ request, answer: JSON.stringify({
+    const s = scenario({ request, answer: JSON.stringify({
       decision: {
         profileId: 'p1', reason: 'deviating with invented support', evidenceIds: [],
         policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'matched' }, userPreference: 'none' },
         support: { cardProfileIds: ['ghost'], annotationProfileIds: [] },
       },
     }) });
-    assert.equal(runDecisionCli(unknownSupport).status, 1);
-    assert.equal(readEnvelope(unknownSupport).code, 'policy-support-unknown');
+    assert.equal(runDecisionCli(s).status, 1);
+    assert.equal(readEnvelope(s).code, 'policy-support-unknown');
   });
 
   test('a request whose policy facts disagree with its table never reaches a child', () => {
@@ -480,6 +478,95 @@ describe('bounded output validation', () => {
     for (const [value, pattern] of cases) {
       assert.throws(() => validateRequest(value), pattern, JSON.stringify(value.policyFacts ?? value));
     }
+  });
+});
+
+describe('bounded visible-answer diagnostics (R3)', () => {
+  const sha256 = (text) => createHash('sha256').update(text, 'utf8').digest('hex');
+  const failure = (code, text) => ({
+    code,
+    answer: { text, sha256: sha256(text), bytes: Buffer.byteLength(text, 'utf8'), truncated: false, redacted: true },
+  });
+
+  test('the success envelope preserves and bounds the child diagnostics', () => {
+    const diagnostics = { calls: 2, failures: [failure('answer-not-json', '<unparsed-answer>')] };
+    const s = scenario({ diagnostics });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 0, result.stderr);
+    const envelope = readEnvelope(s);
+    assert.deepEqual(envelope.diagnostics, diagnostics);
+    assert.equal(Object.keys(envelope).at(-1), 'diagnostics', 'diagnostics stay top-level and last');
+    assert.deepEqual(Object.keys(envelope.decision), ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support']);
+    // The decision itself is still the program-computed five-field record.
+    assert.deepEqual(envelope.decision.policyCheck, { hardConstraints: {}, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' });
+  });
+
+  test('a malformed diagnostics record is dropped, never forwarded', () => {
+    const usable = failure('answer-shape', '{"profileId":"p1"}');
+    const cases = [
+      'invalid',
+      { calls: 1, failures: [], unexpected: true },
+      { calls: 9, failures: [] },
+      { calls: 1, failures: [usable], extraFailure: true },
+      { calls: 1, failures: [failure('answer-shape', 'x'.repeat(MAX_DIAGNOSTIC_TEXT_BYTES + 1))] },
+      { calls: 1, failures: [{ code: 'answer-shape', answer: { text: 'x', sha256: 'not-a-hash', bytes: 1, truncated: false, redacted: true } }] },
+      { calls: 1, failures: [{ code: 'answer-shape', answer: { text: 'x', sha256: sha256('x'), bytes: 1, truncated: false, redacted: false } }] },
+      { calls: 1, failures: [usable, usable] },
+      { calls: 1, failures: [{ code: '', answer: usable.answer }] },
+    ];
+    for (const diagnostics of cases) {
+      const s = scenario({ diagnostics });
+      const result = runDecisionCli(s);
+      assert.equal(result.status, 0, `${JSON.stringify(diagnostics)} => ${result.stderr}`);
+      const envelope = readEnvelope(s);
+      assert.equal('diagnostics' in envelope, false, `forwarded a malformed record: ${JSON.stringify(diagnostics)}`);
+      assert.equal(envelope.status, 'ok');
+    }
+  });
+
+  test('the failure envelope preserves the child error diagnostics', () => {
+    const diagnostics = { calls: 1, failures: [failure('answer-shape', '{"profileId":"p1","reason":1}')] };
+    const s = scenario({ scenarioName: 'error', code: 'answer-shape', diagnostics });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 1);
+    const envelope = readEnvelope(s);
+    assert.equal(envelope.status, 'error');
+    assert.equal(envelope.code, 'answer-shape');
+    assert.deepEqual(envelope.diagnostics, diagnostics);
+    assert.equal(Object.keys(envelope).at(-1), 'diagnostics');
+  });
+
+  test('a refused child answer still carries its diagnostics', () => {
+    const diagnostics = { calls: 1, failures: [failure('answer-evidence-not-supplied', '{"profileId":"p2"}')] };
+    const s = scenario({
+      answer: JSON.stringify({ decision: { profileId: 'p2', reason: 'not a candidate', evidenceIds: [] } }),
+      diagnostics,
+    });
+    const result = runDecisionCli(s);
+    assert.equal(result.status, 1);
+    const envelope = readEnvelope(s);
+    assert.equal(envelope.code, 'decision-not-candidate');
+    assert.deepEqual(envelope.diagnostics, diagnostics);
+    assert.equal(Object.keys(envelope).at(-1), 'diagnostics');
+  });
+
+  test('the launcher validator and the plugin emitter agree on the bounds', async () => {
+    const plugin = await import('../plugins/decision.mjs');
+    assert.equal(plugin.MAX_DIAGNOSTIC_TEXT_BYTES, MAX_DIAGNOSTIC_TEXT_BYTES);
+    assert.equal(plugin.MAX_DIAGNOSTIC_FAILURES, 2);
+    assert.equal(MAX_DIAGNOSTIC_TEXT_BYTES, 2_048);
+  });
+
+  test('normalizeDiagnostics accepts only the exact bounded shape', () => {
+    assert.equal(normalizeDiagnostics(undefined), undefined);
+    assert.equal(normalizeDiagnostics(null), undefined);
+    assert.equal(normalizeDiagnostics({ calls: 0, failures: [] }).calls, 0);
+    assert.equal(normalizeDiagnostics({ calls: 1, failures: [failure('answer-shape', 'x')] }).failures[0].answer.redacted, true);
+    assert.equal(normalizeDiagnostics({ calls: 1, failures: [], extra: 1 }), undefined);
+    assert.equal(normalizeDiagnostics({ calls: -1, failures: [] }), undefined);
+    assert.equal(normalizeDiagnostics({ calls: 1.5, failures: [] }), undefined);
+    assert.equal(normalizeDiagnostics({ calls: 1, failures: [{}] }), undefined);
+    assert.equal(normalizeDiagnostics({ calls: 1, failures: [{ code: 'x', answer: { ...failure('x', 't').answer, bytes: -1 } }] }), undefined);
   });
 });
 

@@ -9,25 +9,34 @@
  * rather than assumptions.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 
 import {
-  BOUNDS, MAX_ANSWER_BYTES, MAX_OUTPUT_TOKENS,
-  callDecisionModel, checkAgentRunnerDisabled, extractJsonValue, finishProblem,
-  legalCandidateIds,
+  BOUNDS, MAX_ANSWER_BYTES, MAX_DIAGNOSTIC_FAILURES, MAX_DIAGNOSTIC_TEXT_BYTES, MAX_OUTPUT_TOKENS,
+  RETRYABLE_ANSWER_CODES,
+  boundedAnswerDiagnostic, callDecisionModel, checkAgentRunnerDisabled, extractJsonValue, finishProblem,
+  isRetryableAnswerCode, legalCandidateIds,
   normalizeCandidates, normalizeEvidence, readRequest, resolveAnswer,
   validateSelectAnswer, waitForRoute, writeJsonFile,
 } from '../plugins/decision.mjs';
-import { MAX_PAYLOAD_BYTES, PROMPT_VERSION, buildPayload, instructionsFor, renderUserTurn } from '../scripts/decision-prompt.mjs';
 import {
-  POLICY_ALTERNATIVE_UNSUPPORTED, POLICY_CHECK_SHAPE, POLICY_CONSTRAINT_MISMATCH, POLICY_FACTS_MISMATCH,
-  POLICY_INDEX_MISMATCH, POLICY_OUTCOME_FALSE, POLICY_SUPPORT_UNKNOWN,
+  CORRECTION_NOTES, MAX_PAYLOAD_BYTES, PROMPT_VERSION, buildPayload, correctionMessage, instructionsFor, renderUserTurn,
+} from '../scripts/decision-prompt.mjs';
+import {
+  POLICY_ALTERNATIVE_UNSUPPORTED, POLICY_CHECK_SHAPE, POLICY_FACTS_MISMATCH,
+  POLICY_SUPPORT_UNKNOWN,
   derivePolicyFacts, expectedPolicyCheck, validateDecision,
 } from '../scripts/selection-policy.mjs';
 
 /** A fake `ctx.llm` recording every call it receives. */
-function fakeLlm({ chunks, prepareConfig, providers = [{ id: 'deepseek-official', name: 'DeepSeek' }], failPrepare } = {}) {
+function fakeLlm({ chunks, chunkSets, prepareConfig, providers = [{ id: 'deepseek-official', name: 'DeepSeek' }], failPrepare } = {}) {
   const calls = { prepare: [], stream: [], listed: 0 };
+  /** The chunks for one stream: a literal list, a per-call list, or a factory. */
+  const chunksFor = (index, options) => {
+    const set = chunkSets === undefined ? chunks : chunkSets[index];
+    return typeof set === 'function' ? set(options) : set;
+  };
   const llm = {
     listProviders() {
       calls.listed += 1;
@@ -42,15 +51,33 @@ function fakeLlm({ chunks, prepareConfig, providers = [{ id: 'deepseek-official'
       return {
         config: resolved,
         stream(options) {
+          const index = calls.stream.length;
           calls.stream.push({ options, hadSignal: options.signal !== undefined });
           return (async function* generate() {
-            for (const chunk of chunks ?? []) yield chunk;
+            const produced = chunksFor(index, options);
+            for await (const chunk of produced ?? []) yield chunk;
           })();
         },
       };
     },
   };
   return { llm, calls };
+}
+
+/** An async chunk source that yields nothing until its call is aborted. */
+function hangUntilAborted(options) {
+  return (async function* generate() {
+    await new Promise((resolve) => {
+      if (options.signal.aborted) resolve();
+      else options.signal.addEventListener('abort', resolve, { once: true });
+    });
+    yield { type: 'finish', reason: { kind: 'aborted' } };
+  })();
+}
+
+/** A chunk list carrying one visible answer and a clean finish. */
+function answerChunks(text) {
+  return [{ type: 'text-delta', index: 0, text }, { type: 'finish', reason: { kind: 'stop' } }];
 }
 
 /** The minimal normalized request the plugin works from. */
@@ -106,12 +133,17 @@ const TEXT_ANSWER = JSON.stringify(statedAnswer(pluginRequest(), 'p1', { evidenc
 
 describe('prompt assembly', () => {
   test('the instruction prefix is versioned, selection-only and request-free', () => {
-    assert.equal(PROMPT_VERSION, 7);
+    assert.equal(PROMPT_VERSION, 8);
     const select = instructionsFor('select');
     assert.equal(instructionsFor('select'), select, 'the prefix must be stable');
     assert.doesNotMatch(select, /req-1/);
     assert.doesNotMatch(select, /tableRevision/);
     assert.match(select, /Return exactly one JSON object/);
+    assert.match(select, /"profileId": <string\|null>, "reason": <string>, "evidenceIds": <string\[\]>, "support":/);
+    assert.doesNotMatch(select, /"policyCheck": <object/, 'the model no longer states the policy check');
+    assert.doesNotMatch(select, /"policyCheck": null/, 'even the abstention example omits the model check');
+    assert.match(select, /The routing-policy acknowledgment is not part of your answer/);
+    assert.match(select, /ignored redundant data/);
     assert.match(select, /missing card or annotation means unknown capability evidence/);
     assert.match(select, /adapter names the harness that will run the Buddy, not the codebase or files it may edit/);
     assert.match(select, /Working on the source, scripts, or tests of DSH, ZCode, Codex or another harness does not require running on that harness/);
@@ -121,9 +153,24 @@ describe('prompt assembly', () => {
     assert.match(select, /prefer economical, user-supported configurations over premium ones/);
     assert.doesNotMatch(select, /deepseek-flash/);
     assert.doesNotMatch(select, /deepseek-official/);
-    assert.match(select, /there is no avoid, exclude, or reject outcome/);
     assert.throws(() => instructionsFor('maintain'), /unknown decision operation/);
     assert.throws(() => instructionsFor('delete'), /unknown decision operation/);
+  });
+
+  test('the correction note is static, request-free and keyed by the stable code', () => {
+    const note = correctionMessage('answer-shape');
+    const parsed = JSON.parse(note);
+    assert.deepEqual(Object.keys(parsed), ['correction']);
+    assert.equal(parsed.correction.code, 'answer-shape');
+    assert.equal(parsed.correction.instruction, CORRECTION_NOTES['answer-shape']);
+    assert.doesNotMatch(note, /req-1/);
+    assert.doesNotMatch(note, /deepseek-flash/);
+    for (const code of RETRYABLE_ANSWER_CODES) {
+      const message = correctionMessage(code);
+      assert.ok(Buffer.byteLength(message, 'utf8') <= 512, `${code} correction is oversized`);
+      assert.doesNotMatch(message, /[^\x00-\x7f]/u, `${code} correction must stay printable ASCII`);
+    }
+    assert.equal(JSON.parse(correctionMessage('answer-unknown-code')).correction.code, 'answer-unknown-code');
   });
 
   test('the shared table precedes per-request data and requestId comes last', () => {
@@ -321,8 +368,7 @@ describe('native llm call composition', () => {
     assert.equal(calls.listed, 0, 'not even the route wait may start');
   });
 
-  test('policy violations carry bounded machine codes and are never adopted', async () => {
-    const chunks = (text) => [{ type: 'text-delta', index: 0, text }, { type: 'finish', reason: { kind: 'stop' } }];
+  test('a model policyCheck is ignored and replaced by the program-computed check (R1)', async () => {
     // A preference rule that legally matches p1 (the model field is present).
     const flashRule = [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }];
     const withFlashModel = (overrides = {}) => {
@@ -339,57 +385,131 @@ describe('native llm call composition', () => {
       request.policyFacts = derivePolicyFacts({ profiles: request.profiles, routingPreferences: request.routingPreferences, preferences: [], hardConstraints: {} });
       return request;
     };
-    // The historical inversion: a legal match stated as fallback.
-    const inverted = withFlashModel();
-    assert.deepEqual(inverted.policyFacts.taskPreference, { ruleIndex: 0, matchingProfileIds: ['p1'] });
-    const invertedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":0,"outcome":"fallback"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, inverted, { timeoutMs: 5_000 });
-    assert.equal(invertedResult.code, POLICY_OUTCOME_FALSE);
+    // The real failure shape: the model copies the input taskPreference,
+    // including matchingProfileIds, and appends outcome.
+    const echoed = withFlashModel();
+    assert.deepEqual(echoed.policyFacts.taskPreference, { ruleIndex: 0, matchingProfileIds: ['p1'] });
+    const echoedAnswer = JSON.stringify({
+      profileId: 'p1',
+      reason: 'echoing the supplied facts',
+      evidenceIds: [],
+      policyCheck: {
+        hardConstraints: {},
+        taskPreference: { ruleIndex: 0, matchingProfileIds: ['p1'], outcome: 'fallback' },
+        userPreference: 'none',
+      },
+      support: { cardProfileIds: [], annotationProfileIds: [] },
+    });
+    const echoedResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(echoedAnswer) }).llm }, echoed, { timeoutMs: 5_000 });
+    assert.equal(echoedResult.ok, true, JSON.stringify(echoedResult));
+    assert.deepEqual(Object.keys(echoedResult.decision), ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support']);
+    assert.deepEqual(echoedResult.decision.policyCheck, expectedPolicyCheck(echoed.policyFacts, echoed.routingPreferences, 'p1'));
+    assert.deepEqual(echoedResult.decision.policyCheck.taskPreference, { ruleIndex: 0, outcome: 'matched' });
+    assert.equal(echoedResult.decision.policyCheck.hardConstraints.adapter, undefined);
+    assert.equal(echoedResult.diagnostics.calls, 1, 'a tolerated echo is not a refusal');
 
-    // An invented hard constraint.
-    const invented = pluginRequest();
-    const inventedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{"adapter":"dsh"},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, invented, { timeoutMs: 5_000 });
-    assert.equal(inventedResult.code, POLICY_CONSTRAINT_MISMATCH);
+    // An invented constraint, a wrong index, and a non-integer index are all
+    // ignored the same way: the model cannot change the adopted check.
+    for (const echo of [
+      { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: 1, outcome: 'matched' }, userPreference: 'none' },
+      { hardConstraints: {}, taskPreference: { ruleIndex: false, outcome: 'matched' }, userPreference: 'none' },
+      { hardConstraints: {}, taskPreference: { ruleIndex: 0, outcome: 'alternative' }, userPreference: 'matched' },
+    ]) {
+      const answer = JSON.stringify({ profileId: 'p1', reason: 'r', evidenceIds: [], policyCheck: echo, support: { cardProfileIds: [], annotationProfileIds: [] } });
+      const result = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(answer) }).llm }, withFlashModel(), { timeoutMs: 5_000 });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual(result.decision.policyCheck, expectedPolicyCheck(withFlashModel().policyFacts, flashRule, 'p1'));
+    }
 
-    // An abstention that carries a policyCheck.
+    // An abstention may carry a policyCheck even though the returned one is null.
     const abstain = pluginRequest();
-    const abstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":null,"reason":"defer","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, abstain, { timeoutMs: 5_000 });
-    assert.equal(abstainResult.code, POLICY_CHECK_SHAPE);
+    const abstainAnswer = JSON.stringify({
+      profileId: null,
+      reason: 'defer',
+      evidenceIds: [],
+      policyCheck: { hardConstraints: {}, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' },
+      support: { cardProfileIds: [], annotationProfileIds: [] },
+    });
+    const abstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(abstainAnswer) }).llm }, abstain, { timeoutMs: 5_000 });
+    assert.equal(abstainResult.ok, true, JSON.stringify(abstainResult));
+    assert.equal(abstainResult.decision.policyCheck, null);
+  });
 
+  test('a single candidate reports none, matched or fallback from the program facts', async () => {
+    const single = pluginRequest({
+      profiles: [{ profileId: 'p1', available: true, enabled: true, evidenceIds: ['e1'] }],
+      evidence: [],
+    });
+    single.candidates = normalizeCandidates(single.profiles).candidates;
+    single.evidenceIndex = normalizeEvidence([]).evidence;
+    single.policyFacts = derivePolicyFacts({ profiles: single.profiles });
+    const answer = JSON.stringify({ profileId: 'p1', reason: 'r', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const withoutPreferences = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(answer) }).llm }, single, { timeoutMs: 5_000 });
+    assert.equal(withoutPreferences.ok, true, JSON.stringify(withoutPreferences));
+    assert.deepEqual(withoutPreferences.decision.policyCheck.taskPreference, { ruleIndex: null, outcome: 'none' });
+
+    // A rule that matches the only candidate.
+    const matched = { ...single, profiles: [{ profileId: 'p1', available: true, enabled: true, model: 'deepseek-flash' }], routingPreferences: [{ match: { model: 'deepseek-flash' }, reason: 'prefer flash' }] };
+    matched.candidates = normalizeCandidates(matched.profiles).candidates;
+    matched.evidenceIndex = normalizeEvidence([]).evidence;
+    matched.policyFacts = derivePolicyFacts({ profiles: matched.profiles, routingPreferences: matched.routingPreferences });
+    const matchedResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(answer) }).llm }, matched, { timeoutMs: 5_000 });
+    assert.deepEqual(matchedResult.decision.policyCheck.taskPreference, { ruleIndex: 0, outcome: 'matched' });
+
+    // A rule that matches no legal candidate: fallback, not a violation.
+    const fallback = { ...single, profiles: [{ profileId: 'p1', available: true, enabled: true, model: 'deepseek-pro' }], routingPreferences: [{ match: { model: 'deepseek-flash' }, reason: 'prefer flash' }] };
+    fallback.candidates = normalizeCandidates(fallback.profiles).candidates;
+    fallback.evidenceIndex = normalizeEvidence([]).evidence;
+    fallback.policyFacts = derivePolicyFacts({ profiles: fallback.profiles, routingPreferences: fallback.routingPreferences });
+    const fallbackResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(answer) }).llm }, fallback, { timeoutMs: 5_000 });
+    assert.deepEqual(fallbackResult.decision.policyCheck.taskPreference, { ruleIndex: null, outcome: 'fallback' });
+  });
+
+  test('userPreferredProfileIds drives the computed user outcome', async () => {
+    const profiles = [
+      { profileId: 'p1', available: true, enabled: true, evidenceIds: ['e1'] },
+      { profileId: 'p4', available: true, enabled: true },
+    ];
+    const preferences = [{ profileId: 'p4', mode: 'prefer' }];
+    const request = pluginRequest({ profiles, preferences, evidence: [{ evidenceId: 'e1', profileId: 'p1' }] });
+    request.candidates = normalizeCandidates(profiles).candidates;
+    request.evidenceIndex = normalizeEvidence(request.evidence).evidence;
+    request.policyFacts = derivePolicyFacts({ profiles, preferences });
+    assert.deepEqual(request.policyFacts.userPreferredProfileIds, ['p4']);
+    const answer = JSON.stringify({ profileId: 'p1', reason: 'supported deviation', evidenceIds: ['e1'], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const result = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(answer) }).llm }, request, { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.decision.policyCheck.userPreference, 'alternative');
+    assert.deepEqual(result.decision.policyCheck.taskPreference, { ruleIndex: null, outcome: 'none' });
+  });
+
+  test('candidate, evidence, support and alternative limits still refuse a bad answer', async () => {
     // Support referencing a profile that was never supplied.
-    const ghostSupport = pluginRequest();
-    const ghostResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":null,"outcome":"none"},"userPreference":"none"},"support":{"cardProfileIds":["ghost"],"annotationProfileIds":[]}}') }).llm }, ghostSupport, { timeoutMs: 5_000 });
+    const ghostAnswer = JSON.stringify({ profileId: 'p1', reason: 'r', evidenceIds: [], support: { cardProfileIds: ['ghost'], annotationProfileIds: [] } });
+    const ghostResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(ghostAnswer) }).llm }, pluginRequest(), { timeoutMs: 5_000 });
     assert.equal(ghostResult.code, POLICY_SUPPORT_UNKNOWN);
 
     // An alternative without evidence or eligible support: p4 is legal but not
     // the preferred candidate, so an unsupported deviation is refused.
-    const unsupported = withFlashModel({ annotations: [] });
-    const unsupportedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":"p4","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":0,"outcome":"alternative"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, unsupported, { timeoutMs: 5_000 });
+    const flashRule = [{ match: { model: 'deepseek-flash' }, reason: 'Prefer the flash model' }];
+    const profiles = [
+      { profileId: 'p1', available: true, enabled: true, evidenceIds: ['e1'], model: 'deepseek-flash' },
+      { profileId: 'p4', available: true, enabled: true, model: 'deepseek-pro' },
+    ];
+    const unsupported = pluginRequest({ profiles, candidates: normalizeCandidates(profiles).candidates, routingPreferences: flashRule, annotations: [] });
+    unsupported.policyFacts = derivePolicyFacts({ profiles, routingPreferences: flashRule });
+    const unsupportedAnswer = JSON.stringify({ profileId: 'p4', reason: 'r', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const unsupportedResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(unsupportedAnswer) }).llm }, unsupported, { timeoutMs: 5_000 });
     assert.equal(unsupportedResult.code, POLICY_ALTERNATIVE_UNSUPPORTED);
-
-    // A ruleIndex that disagrees with the input facts.
-    const wrongIndex = withFlashModel();
-    const wrongIndexResult = await callDecisionModel({
-      llm: fakeLlm({ chunks: chunks('{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":1,"outcome":"matched"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm,
-    }, wrongIndex, { timeoutMs: 5_000 });
-    assert.equal(wrongIndexResult.code, POLICY_INDEX_MISMATCH);
-
-    // JSON values that Python would conflate with the integer 0 (bool) or refuse
-    // as a type error: both are index mismatches here, matching Python's
-    // explicit null-or-non-bool-integer rule.
-    for (const malformed of ['false', '"0"']) {
-      const answer = '{"profileId":"p1","reason":"r","evidenceIds":[],"policyCheck":{"hardConstraints":{},"taskPreference":{"ruleIndex":' + malformed + ',"outcome":"matched"},"userPreference":"none"},"support":{"cardProfileIds":[],"annotationProfileIds":[]}}';
-      const typedResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks(answer) }).llm }, withFlashModel(), { timeoutMs: 5_000 });
-      assert.equal(typedResult.code, POLICY_INDEX_MISMATCH, malformed);
-    }
 
     // An abstention that cites evidence: the plugin's base candidate/evidence
     // layer refuses first with its established code; the typed module enforces
     // the same empty-evidenceIds rule directly (asserted below).
-    const citingAbstain = pluginRequest();
-    const citingAbstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: chunks('{"profileId":null,"reason":"defer","evidenceIds":["ev-1"],"policyCheck":null,"support":{"cardProfileIds":[],"annotationProfileIds":[]}}') }).llm }, citingAbstain, { timeoutMs: 5_000 });
+    const citingAbstainAnswer = JSON.stringify({ profileId: null, reason: 'defer', evidenceIds: ['ev-1'], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const citingAbstainResult = await callDecisionModel({ llm: fakeLlm({ chunks: answerChunks(citingAbstainAnswer) }).llm }, pluginRequest(), { timeoutMs: 5_000 });
     assert.equal(citingAbstainResult.code, 'answer-evidence-not-supplied');
-    const directAbstention = { profileId: null, reason: 'defer', evidenceIds: ['ev-1'], policyCheck: null, support: { cardProfileIds: [], annotationProfileIds: [] } };
-    assert.equal(validateDecision(directAbstention, citingAbstain.policyFacts, [], { cardProfileIds: new Set(), annotationProfileIds: new Set() }).code, POLICY_CHECK_SHAPE);
+    const directAbstention = { profileId: null, reason: 'defer', evidenceIds: ['ev-1'], support: { cardProfileIds: [], annotationProfileIds: [] } };
+    assert.equal(validateDecision(directAbstention, pluginRequest().policyFacts, [], { cardProfileIds: new Set(), annotationProfileIds: new Set() }).code, POLICY_CHECK_SHAPE);
   });
 
   test('a supported alternative is adopted with the cited support', async () => {
@@ -408,6 +528,212 @@ describe('native llm call composition', () => {
     const result = await callDecisionModel({ llm: fakeLlm({ chunks }).llm }, prefer, { timeoutMs: 5_000 });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(result.decision.support, { cardProfileIds: [], annotationProfileIds: ['p1'] });
+  });
+});
+
+describe('bounded corrective retry (R2)', () => {
+  const VALID_ANSWER = JSON.stringify({ profileId: 'p1', reason: 'valid', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+
+  test('one format refusal is corrected by one second call under the same deadline', async () => {
+    const invalid = '{"profileId":"p1","reason":"r","evidenceIds":[],"temperature":1,"support":{"cardProfileIds":[],"annotationProfileIds":[]}}';
+    const { llm, calls } = fakeLlm({ chunkSets: [answerChunks(invalid), answerChunks(VALID_ANSWER)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.stream.length, 2, 'exactly one correction');
+    assert.equal(calls.prepare.length, 4, 'each call legally re-prepares its own one-use handle');
+    assert.equal(result.diagnostics.calls, 2);
+    assert.equal(result.diagnostics.failures.length, 1);
+    assert.equal(result.diagnostics.failures[0].code, 'answer-unexpected-field');
+    assert.equal(result.diagnostics.failures[0].answer.redacted, true);
+    // The frozen input and prefix are identical; only the correction turn is new.
+    const [first, second] = calls.stream.map((entry) => entry.options);
+    assert.equal(first.system, second.system);
+    assert.equal(first.messages.length, 1);
+    assert.equal(second.messages.length, 2);
+    assert.equal(first.messages[0].content[0].text, second.messages[0].content[0].text);
+    const correction = JSON.parse(second.messages[1].content[0].text);
+    assert.equal(correction.correction.code, 'answer-unexpected-field');
+    assert.equal(correction.correction.instruction, CORRECTION_NOTES['answer-unexpected-field']);
+    assert.equal(first.signal, second.signal, 'both attempts share one overall deadline signal');
+  });
+
+  test('two invalid answers fail with the second refusal retained', async () => {
+    const { llm, calls } = fakeLlm({ chunkSets: [answerChunks('not json at all'), answerChunks('{"profileId":"p1","reason":"r"}')] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'answer-shape');
+    assert.equal(calls.stream.length, 2, 'a third call is never made');
+    assert.equal(result.diagnostics.calls, 2);
+    assert.deepEqual(result.diagnostics.failures.map((failure) => failure.code), ['answer-not-json', 'answer-shape']);
+    assert.equal(result.diagnostics.failures[0].answer.text, '<unparsed-answer>');
+  });
+
+  test('an abstention is a valid answer and is never retried', async () => {
+    const abstain = JSON.stringify({ profileId: null, reason: 'ambiguous', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+    const { llm, calls } = fakeLlm({ chunks: answerChunks(abstain) });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true);
+    assert.equal(result.decision.profileId, null);
+    assert.equal(calls.stream.length, 1);
+    assert.deepEqual(result.diagnostics, { calls: 1, failures: [] });
+  });
+
+  test('an empty visible answer is corrected once too', async () => {
+    const { llm, calls } = fakeLlm({ chunkSets: [[{ type: 'finish', reason: { kind: 'stop' } }], answerChunks(VALID_ANSWER)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.stream.length, 2);
+    assert.deepEqual(result.diagnostics.failures.map((failure) => failure.code), ['answer-empty']);
+    assert.equal(result.diagnostics.failures[0].answer.text, '<empty-answer>');
+    assert.equal(result.diagnostics.failures[0].answer.bytes, 0);
+  });
+
+  test('quota, provider, transport, tool-call and truncation failures are never retried', async () => {
+    const cases = [
+      [[{ type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: 'slow down', status: 429 } } }], 'call-failed'],
+      [[{ type: 'finish', reason: { kind: 'aborted' } }], 'call-aborted'],
+      [[{ type: 'tool-call-delta', index: 0, id: 'c', name: 'bash', argumentsDelta: '{}' }, { type: 'text-delta', index: 0, text: '{}' }, { type: 'finish', reason: { kind: 'stop' } }], 'answer-tool-call'],
+      [[{ type: 'text-delta', index: 0, text: '{"profileId":"p1"' }, { type: 'finish', reason: { kind: 'length' } }], 'answer-truncated'],
+    ];
+    for (const [chunks, code] of cases) {
+      const { llm, calls } = fakeLlm({ chunks });
+      const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+      assert.equal(result.code, code, code);
+      assert.equal(calls.stream.length, 1, `${code} must not retry`);
+      assert.equal(result.diagnostics.calls, 1, code);
+      assert.equal(result.diagnostics.failures.length, 1, code);
+    }
+  });
+
+  test('a deadline abort is never retried, and the correcting call shares the one deadline', async () => {
+    const { llm, calls } = fakeLlm({ chunkSets: [answerChunks('{"profileId":"p1","reason":"r"}'), hangUntilAborted] });
+    const started = performance.now();
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 300 });
+    const elapsed = performance.now() - started;
+    assert.equal(result.code, 'call-timeout');
+    assert.equal(calls.stream.length, 2, 'the timeout happened during the correcting second call');
+    assert.equal(calls.stream[0].options.signal, calls.stream[1].options.signal);
+    assert.ok(elapsed < 3_000, `the shared deadline fired late: ${String(elapsed)}ms`);
+  });
+
+  test('an unresolvable profile is reported once and never retried', async () => {
+    const failPrepare = Object.assign(new Error('no route'), { code: 'UNSUPPORTED_MODEL' });
+    const { llm, calls } = fakeLlm({ failPrepare });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.code, 'decision-profile-unresolved');
+    assert.equal(calls.stream.length, 0);
+    assert.deepEqual(result.diagnostics, { calls: 0, failures: [] });
+  });
+
+  test('reasoning bytes are bounded and summed across the corrected flow', async () => {
+    const first = [{ type: 'reasoning-delta', index: 0, text: 'abcd' }, ...answerChunks('not json')];
+    const second = [{ type: 'reasoning-delta', index: 0, text: 'efgh' }, ...answerChunks(VALID_ANSWER)];
+    const { llm } = fakeLlm({ chunkSets: [first, second] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.reasoningBytes, 8);
+    assert.equal(result.diagnostics.calls, 2);
+  });
+
+  test('the retryable set is exactly the enumerated answer-validation codes', () => {
+    assert.deepEqual([...RETRYABLE_ANSWER_CODES], [
+      'answer-empty',
+      'answer-not-json',
+      'answer-invalid-json',
+      'answer-shape',
+      'answer-unexpected-field',
+      'answer-profile-not-candidate',
+      'answer-evidence-not-supplied',
+      'policy-check-shape',
+      'policy-support-unknown',
+      'policy-alternative-unsupported',
+    ]);
+    for (const code of ['call-failed', 'call-aborted', 'call-timeout', 'answer-truncated', 'answer-tool-call', 'answer-too-large', 'policy-facts-mismatch', 'decision-profile-unresolved']) {
+      assert.equal(isRetryableAnswerCode(code), false, code);
+    }
+  });
+});
+
+describe('bounded visible-answer diagnostics (R3)', () => {
+  const SECRET = 'sk-live-SUPERSECRET';
+  const URL = 'https://internal.example.invalid/private?token=abcd';
+  const VALID_ANSWER = JSON.stringify({ profileId: 'p1', reason: 'valid', evidenceIds: [], support: { cardProfileIds: [], annotationProfileIds: [] } });
+
+  test('free text, unknown keys and unknown strings never enter a diagnostic', async () => {
+    const raw = JSON.stringify({
+      profileId: 'p1',
+      reason: `the user wrote ${SECRET} and ${URL}`,
+      evidenceIds: [],
+      support: { cardProfileIds: [], annotationProfileIds: [] },
+      note: `please remember ${SECRET}`,
+    });
+    const { llm } = fakeLlm({ chunkSets: [answerChunks(raw), answerChunks(VALID_ANSWER)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const rendered = JSON.stringify(result.diagnostics);
+    assert.doesNotMatch(rendered, /SUPERSECRET/);
+    assert.doesNotMatch(rendered, /internal\.example\.invalid/);
+    assert.doesNotMatch(rendered, /the user wrote/);
+    assert.doesNotMatch(rendered, /please remember/);
+    const failure = result.diagnostics.failures[0];
+    assert.equal(failure.code, 'answer-unexpected-field');
+    assert.match(failure.answer.text, /"reason":"<redacted>"/);
+    assert.match(failure.answer.text, /<unknown-field>/);
+    assert.match(failure.answer.text, /"profileId":"p1"/, 'a supplied identifier stays readable');
+    assert.equal(failure.answer.sha256, createHash('sha256').update(raw, 'utf8').digest('hex'));
+    assert.equal(failure.answer.bytes, Buffer.byteLength(raw, 'utf8'));
+    assert.equal(failure.answer.redacted, true);
+    assert.equal(failure.answer.truncated, false);
+  });
+
+  test('an unparseable answer keeps only its hash, byte count and a placeholder', async () => {
+    const raw = `Sorry, I cannot answer. ${SECRET} ${URL}`;
+    const { llm } = fakeLlm({ chunkSets: [answerChunks(raw), answerChunks(VALID_ANSWER)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true);
+    const failure = result.diagnostics.failures[0];
+    assert.equal(failure.code, 'answer-not-json');
+    assert.equal(failure.answer.text, '<unparsed-answer>');
+    assert.equal(failure.answer.bytes, Buffer.byteLength(raw, 'utf8'));
+    assert.equal(failure.answer.sha256, createHash('sha256').update(raw, 'utf8').digest('hex'));
+    assert.doesNotMatch(JSON.stringify(result.diagnostics), /SUPERSECRET/);
+  });
+
+  test('reasoning text and provider messages never enter a diagnostic', async () => {
+    const chunks = [
+      { type: 'reasoning-delta', index: 0, text: `hidden chain of thought ${SECRET}` },
+      ...answerChunks('{"profileId":"p1","reason":"r","evidenceIds":["e1"],"support":{"cardProfileIds":[],"annotationProfileIds":[]},"ghostField":"x"}'),
+    ];
+    const { llm } = fakeLlm({ chunkSets: [chunks, answerChunks(VALID_ANSWER)] });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.doesNotMatch(JSON.stringify(result.diagnostics), /hidden chain of thought/);
+    assert.doesNotMatch(JSON.stringify(result.diagnostics), /SUPERSECRET/);
+    const failure = result.diagnostics.failures[0];
+    assert.equal(failure.code, 'answer-unexpected-field');
+    assert.match(failure.answer.text, /"e1"/, 'a supplied evidence id stays readable');
+    assert.match(failure.answer.text, /<unknown-field>/);
+    assert.doesNotMatch(failure.answer.text, /ghostField/);
+  });
+
+  test('one redacted diagnostic is structurally bounded and reports truncation', () => {
+    const raw = JSON.stringify({ profileId: 'p1', reason: 'x'.repeat(5_000), evidenceIds: Array.from({ length: 50 }, (_, index) => `e${String(index)}`) });
+    const diagnostic = boundedAnswerDiagnostic(raw, new Set(['p1']));
+    assert.ok(Buffer.byteLength(diagnostic.text, 'utf8') <= MAX_DIAGNOSTIC_TEXT_BYTES);
+    assert.equal(diagnostic.truncated, true);
+    assert.equal(diagnostic.redacted, true);
+    assert.equal(diagnostic.sha256, createHash('sha256').update(raw, 'utf8').digest('hex'));
+    assert.doesNotMatch(diagnostic.text, /xxxx/);
+  });
+
+  test('the failure list covers the two-attempt flow only', async () => {
+    assert.equal(MAX_DIAGNOSTIC_FAILURES, 2);
+    const { llm } = fakeLlm({ chunks: answerChunks('nope') });
+    const result = await callDecisionModel({ llm }, pluginRequest(), { timeoutMs: 5_000 });
+    assert.equal(result.code, 'answer-not-json');
+    assert.equal(result.diagnostics.calls, 2);
+    assert.equal(result.diagnostics.failures.length, 2);
+    assert.deepEqual(result.diagnostics.failures.map((failure) => failure.code), ['answer-not-json', 'answer-not-json']);
   });
 });
 

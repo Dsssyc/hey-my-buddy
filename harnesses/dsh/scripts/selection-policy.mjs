@@ -4,11 +4,13 @@
  * This module is the Node mirror of ``src/buddy/selection_policy.py``. The
  * Python service computes the ``policyFacts`` for one request from its own
  * authoritative table; this module re-derives the same facts independently from
- * the frozen payload and validates the model's typed ``policyCheck`` against
- * them. The plugin checks before adopting a model answer, the adapter checks
- * the plugin's result document again, and Python checks a third time against
- * its immutable input before publication. No natural-language reason text is
- * ever parsed: the check is typed and structural only.
+ * the frozen payload and COMPUTES the one legal ``policyCheck`` for the selected
+ * profile. A model-provided ``policyCheck`` is ignored redundant data: it is
+ * never interpreted and can never change the adopted check. The plugin computes
+ * before adopting a model answer, the adapter computes again over the plugin's
+ * result document, and Python computes a third time against its immutable input
+ * before publication. No natural-language reason text is ever parsed: the check
+ * is typed and structural only.
  *
  * Deliberately pure: no filesystem, process, or harness access.
  *
@@ -28,7 +30,16 @@ export const MAX_ID_LENGTH = 256;
 export const TASK_OUTCOMES = Object.freeze(['none', 'matched', 'alternative', 'fallback']);
 export const USER_OUTCOMES = Object.freeze(['none', 'matched', 'alternative']);
 
-/** Stable machine codes for policy violations; Python settles each needs-host. */
+/**
+ * Stable machine codes for policy violations; Python settles each needs-host.
+ *
+ * `POLICY_CONSTRAINT_MISMATCH`, `POLICY_INDEX_MISMATCH`,
+ * `POLICY_OUTCOME_INVALID` and `POLICY_OUTCOME_FALSE` remain published codes for
+ * a document written by an older helper, but the current flow never derives them
+ * from a model answer: a model-provided `policyCheck` is ignored and the program
+ * computes the adopted one, so a false or malformed model claim cannot fail a
+ * decision that is otherwise legal.
+ */
 export const POLICY_FACTS_MISMATCH = 'policy-facts-mismatch';
 export const POLICY_CHECK_SHAPE = 'policy-check-shape';
 export const POLICY_CONSTRAINT_MISMATCH = 'policy-constraint-mismatch';
@@ -112,12 +123,14 @@ export function derivePolicyFacts({ profiles, routingPreferences = [], preferenc
 }
 
 /**
- * The one `policyCheck` a selection of `profileId` may carry.
+ * The one `policyCheck` a selection of `profileId` must carry.
  *
- * `fallback` exists only when the request supplied routing preferences and none
- * legally matched; `none` only when it supplied none. A selection outside the
- * effective preferred set with a legal preferred candidate is `alternative` — a
- * legitimate, supported choice, never a violation.
+ * The program computes and adopts this value; a model-authored `policyCheck` is
+ * ignored redundant data and never changes it. `fallback` exists only when the
+ * request supplied routing preferences and none legally matched; `none` only
+ * when it supplied none. A selection outside the effective preferred set with a
+ * legal preferred candidate is `alternative` — a legitimate, supported choice,
+ * never a violation.
  */
 export function expectedPolicyCheck(facts, routingPreferences, profileId) {
   const task = facts?.taskPreference ?? {};
@@ -142,7 +155,7 @@ export function expectedPolicyCheck(facts, routingPreferences, profileId) {
   };
 }
 
-/** Whether the stated check makes an alternative that must be supported. */
+/** Whether the program-computed check makes an alternative that must be supported. */
 export function alternativeRequiresSupport(policyCheck) {
   return policyCheck.taskPreference.outcome === 'alternative' || policyCheck.userPreference === 'alternative';
 }
@@ -156,17 +169,25 @@ function checkSupportArray(value, { supplied, scope }) {
     if (!isBoundedIdentifier(entry)) return { problem: 'support entries must be bounded identifiers' };
     if (seen.has(entry)) return { problem: 'support entries must be unique' };
     seen.add(entry);
-    if (!supplied.has(entry)) return { problem: `${JSON.stringify(entry)} was not supplied in the bounded input` };
-    if (!scope.has(entry)) return { problem: `${JSON.stringify(entry)} is unrelated to the selected or preferred candidates` };
+    // The refused value is deliberately not echoed: an unsupplied reference is
+    // model-authored text and never enters a persisted detail message.
+    if (!supplied.has(entry)) return { problem: 'a support entry was not supplied in the bounded input' };
+    if (!scope.has(entry)) return { problem: 'a support entry is unrelated to the selected or preferred candidates' };
   }
   return { entries: [...value] };
 }
 
 /**
- * Validate one recommendation's `policyCheck` and `support` against the
- * program-derived facts.
+ * Validate one recommendation's `support` against the program-derived facts and
+ * return the program-computed `policyCheck`.
  *
- * @param decision the model's answer `{profileId, reason, evidenceIds, policyCheck, support}`.
+ * The decision's own `policyCheck` field is read but never interpreted: the
+ * model neither states nor withholds the routing acknowledgment, and the one
+ * legal check for the selected profile is computed here. Candidate membership
+ * and evidence membership are enforced by the caller's base validation; this
+ * function enforces the typed support scope and the alternative-support rule.
+ *
+ * @param decision the model's answer `{profileId, reason, evidenceIds, policyCheck?, support}`.
  * @param facts the derived `policyFacts` for this request.
  * @param routingPreferences the request's task-local routing preferences.
  * @param scope `{cardProfileIds, annotationProfileIds}` sets actually supplied.
@@ -176,9 +197,6 @@ export function validateDecision(decision, facts, routingPreferences, scope) {
   const profileId = own(decision, 'profileId');
   const support = own(decision, 'support');
   if (profileId === null) {
-    if (own(decision, 'policyCheck') !== null) {
-      return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'an abstention must carry policyCheck null' };
-    }
     const evidence = own(decision, 'evidenceIds');
     if (!Array.isArray(evidence) || evidence.length > 0) {
       return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'an abstention must not cite evidence' };
@@ -191,50 +209,11 @@ export function validateDecision(decision, facts, routingPreferences, scope) {
   if (!isBoundedIdentifier(profileId)) {
     return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'profileId must be a bounded identifier' };
   }
-  const policyCheck = own(decision, 'policyCheck');
-  if (policyCheck === null || typeof policyCheck !== 'object' || Array.isArray(policyCheck) ||
-      !jsonEqual(Object.keys(policyCheck).sort(), ['hardConstraints', 'taskPreference', 'userPreference'])) {
-    return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'policyCheck must carry exactly hardConstraints, taskPreference and userPreference' };
-  }
   if (support === null || typeof support !== 'object' || Array.isArray(support) ||
       !jsonEqual(Object.keys(support).sort(), ['annotationProfileIds', 'cardProfileIds'])) {
     return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'support must carry exactly cardProfileIds and annotationProfileIds' };
   }
-  const expected = expectedPolicyCheck(facts, routingPreferences, profileId);
-  if (!jsonEqual(policyCheck.hardConstraints, expected.hardConstraints)) {
-    return { ok: false, code: POLICY_CONSTRAINT_MISMATCH, detail: 'hardConstraints must be exactly the input policy facts map' };
-  }
-  const task = policyCheck.taskPreference;
-  if (task === null || typeof task !== 'object' || Array.isArray(task) ||
-      !jsonEqual(Object.keys(task).sort(), ['outcome', 'ruleIndex'])) {
-    return { ok: false, code: POLICY_CHECK_SHAPE, detail: 'taskPreference must carry exactly ruleIndex and outcome' };
-  }
-  // JSON number semantics: 0.0 parses as the integer 0, so equality with the
-  // derived index is exact here; `false`, strings and objects are refused by the
-  // strict comparison, matching Python's explicit null-or-non-bool-integer rule.
-  if (!jsonEqual(task.ruleIndex, expected.taskPreference.ruleIndex)) {
-    return { ok: false, code: POLICY_INDEX_MISMATCH, detail: 'taskPreference.ruleIndex must be the input fact\'s rule index' };
-  }
-  if (!TASK_OUTCOMES.includes(task.outcome)) {
-    return { ok: false, code: POLICY_OUTCOME_INVALID, detail: `unknown task preference outcome ${JSON.stringify(task.outcome)}` };
-  }
-  if (task.outcome !== expected.taskPreference.outcome) {
-    return {
-      ok: false,
-      code: POLICY_OUTCOME_FALSE,
-      detail: `the program-derived task outcome for ${profileId} is ${JSON.stringify(expected.taskPreference.outcome)}`,
-    };
-  }
-  if (!USER_OUTCOMES.includes(policyCheck.userPreference)) {
-    return { ok: false, code: POLICY_OUTCOME_INVALID, detail: `unknown user preference outcome ${JSON.stringify(policyCheck.userPreference)}` };
-  }
-  if (policyCheck.userPreference !== expected.userPreference) {
-    return {
-      ok: false,
-      code: POLICY_OUTCOME_FALSE,
-      detail: `the program-derived user outcome for ${profileId} is ${JSON.stringify(expected.userPreference)}`,
-    };
-  }
+  const policyCheck = expectedPolicyCheck(facts, routingPreferences, profileId);
   const effectiveScope = new Set([
     profileId,
     ...(facts?.taskPreference?.matchingProfileIds ?? []),

@@ -154,7 +154,7 @@ function successPayload() {
     reasoningBytes: 0,
     elapsedSeconds: 0.4,
   };
-  if (answer === undefined) return { ...envelope, decision: defaultDecision(request) };
+  if (answer === undefined) return { ...envelope, decision: defaultDecision(request), ...injectedDiagnostics() };
   const parsed = JSON.parse(answer);
   // An overridden decision keeps the current strict shape: an abstention is
   // normalized to a null check and empty support (a rogue evidence override is
@@ -167,7 +167,25 @@ function successPayload() {
     }
     parsed.decision = merged;
   }
-  return { ...envelope, ...parsed };
+  return { ...envelope, ...parsed, ...injectedDiagnostics() };
+}
+
+/**
+ * A synthetic diagnostics record for the launcher-boundary tests.
+ *
+ * `MOCK_DECISION_DIAGNOSTICS` carries the raw JSON text; the literal `invalid`
+ * injects a deliberately malformed record so the launcher's validation and
+ * bounding path is exercisable without a real plugin.
+ */
+function injectedDiagnostics() {
+  const raw = process.env.MOCK_DECISION_DIAGNOSTICS;
+  if (raw === undefined) return {};
+  if (raw === 'invalid') return { diagnostics: { calls: 9, failures: [{ code: 'answer-shape' }] } };
+  try {
+    return { diagnostics: JSON.parse(raw) };
+  } catch {
+    return { diagnostics: { calls: 'nope', failures: [] } };
+  }
 }
 
 switch (scenario) {
@@ -181,6 +199,7 @@ switch (scenario) {
       status: 'error',
       code: process.env.MOCK_DECISION_CODE ?? 'call-failed',
       detail: { code: process.env.MOCK_DECISION_CODE ?? 'call-failed', message: 'synthetic provider failure' },
+      ...injectedDiagnostics(),
     }, null, 2)}\n`);
     process.exit(0);
     break;

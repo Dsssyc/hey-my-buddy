@@ -14,7 +14,9 @@
  *   its own harness credential reference per request exactly as an ordinary
  *   dsh run does, and no provider message, endpoint, or settings text crosses
  *   into the returned envelope;
- * - no automatic model retry: a failure is reported once, honestly;
+ * - no automatic model retry at this layer: the helper's single bounded
+ *   answer-format correction runs inside the same child flow, and any other
+ *   failure is reported once, honestly;
  * - no writes outside this run's private directory, and no board transaction
  *   is open across the model call (this process cannot open one at all);
  * - no global configuration is written, and a harness home whose profile is
@@ -198,6 +200,58 @@ function isText(value, max = 4_000) {
 function own(object, key) {
   if (object === null || typeof object !== 'object' || Array.isArray(object)) return undefined;
   return Object.hasOwn(object, key) ? object[key] : undefined;
+}
+
+/** Bounds for the bounded, redacted visible-answer diagnostics the child may report. */
+export const MAX_DIAGNOSTIC_FAILURES = 2;
+export const MAX_DIAGNOSTIC_TEXT_BYTES = 2_048;
+
+/** Whether a value carries exactly these own keys (order-insensitive). */
+function hasExactKeys(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const present = Object.keys(value).sort();
+  return jsonEqual(present, [...keys].sort());
+}
+
+/**
+ * Validate, bound and copy the child's bounded visible-answer diagnostics.
+ *
+ * The child's document is untrusted input: only the exact bounded shape may
+ * cross into a persisted public envelope, and anything else — extra keys, an
+ * unbounded text, a forged hash, a missing redaction flag, a failure list that
+ * exceeds the calls it claims — is dropped rather than forwarded. Diagnostics
+ * are advisory, so a malformed record never turns an otherwise valid decision
+ * into a protocol failure.
+ *
+ * @returns a fresh `{calls, failures}` record, or `undefined` when unusable.
+ */
+export function normalizeDiagnostics(value) {
+  if (!hasExactKeys(value, ['calls', 'failures'])) return undefined;
+  const calls = own(value, 'calls');
+  const failures = own(value, 'failures');
+  if (!Number.isSafeInteger(calls) || calls < 0 || calls > 2) return undefined;
+  if (!Array.isArray(failures) || failures.length > MAX_DIAGNOSTIC_FAILURES || failures.length > calls) return undefined;
+  const normalized = [];
+  for (const failure of failures) {
+    if (!hasExactKeys(failure, ['answer', 'code'])) return undefined;
+    const code = own(failure, 'code');
+    if (!isIdentifier(code, 120)) return undefined;
+    const answer = own(failure, 'answer');
+    if (!hasExactKeys(answer, ['bytes', 'redacted', 'sha256', 'text', 'truncated'])) return undefined;
+    const text = own(answer, 'text');
+    if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_DIAGNOSTIC_TEXT_BYTES) return undefined;
+    const sha256 = own(answer, 'sha256');
+    if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256)) return undefined;
+    const bytes = own(answer, 'bytes');
+    if (!Number.isSafeInteger(bytes) || bytes < 0) return undefined;
+    if (typeof own(answer, 'truncated') !== 'boolean') return undefined;
+    if (own(answer, 'redacted') !== true) return undefined;
+    normalized.push({
+      code,
+      answer: { text, sha256, bytes, truncated: own(answer, 'truncated'), redacted: true },
+    });
+  }
+  return { calls, failures: normalized };
 }
 
 /** Validate one bounded collection of JSON objects. */
@@ -780,7 +834,7 @@ function roundSeconds(value) {
 }
 
 /** The public failure envelope. */
-export function failureEnvelope(request, { code, message, details, elapsedSeconds, shutdownConfirmed }) {
+export function failureEnvelope(request, { code, message, details, elapsedSeconds, shutdownConfirmed, diagnostics }) {
   return {
     status: 'error',
     ...(request === undefined ? {} : { operation: request.operation, tableRevision: request.tableRevision }),
@@ -789,49 +843,55 @@ export function failureEnvelope(request, { code, message, details, elapsedSecond
     ...(details === undefined ? {} : { details }),
     elapsedSeconds: roundSeconds(elapsedSeconds),
     shutdownConfirmed: shutdownConfirmed === true,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
 
 /** Validate the child's success payload and map it onto the public envelope. */
 export function interpretSuccess(request, child, payload) {
+  // The bounded diagnostics travel with either outcome: a refused child answer
+  // still explains itself without leaking model text.
+  const diagnostics = normalizeDiagnostics(own(payload, 'diagnostics'));
   if (own(payload, 'operation') !== request.operation) {
-    return { error: new DecisionError('child-protocol-error', 'the decision child reported a different operation') };
+    return { error: new DecisionError('child-protocol-error', 'the decision child reported a different operation'), diagnostics };
   }
   if (request.operation === 'select') {
     const decision = own(payload, 'decision');
     if (decision === null || typeof decision !== 'object' || Array.isArray(decision)) {
-      return { error: new DecisionError('child-protocol-error', 'the decision child returned no select decision') };
+      return { error: new DecisionError('child-protocol-error', 'the decision child returned no select decision'), diagnostics };
     }
     const allowed = ['profileId', 'reason', 'evidenceIds', 'policyCheck', 'support'];
     if (Object.keys(decision).some((key) => !allowed.includes(key))) {
-      return { error: new DecisionError('child-protocol-error', 'the select decision carries an unexpected field') };
+      return { error: new DecisionError('child-protocol-error', 'the select decision carries an unexpected field'), diagnostics };
     }
     const profileId = own(decision, 'profileId');
     const reason = own(decision, 'reason');
     const evidenceIds = own(decision, 'evidenceIds');
     if (profileId !== null && !isIdentifier(profileId)) {
-      return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable profileId') };
+      return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable profileId'), diagnostics };
     }
-    if (!isText(reason)) return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable reason') };
+    if (!isText(reason)) return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable reason'), diagnostics };
     if (!Array.isArray(evidenceIds) || evidenceIds.some((entry) => !isIdentifier(entry))) {
-      return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable evidenceIds') };
+      return { error: new DecisionError('child-protocol-error', 'the select decision carries no usable evidenceIds'), diagnostics };
     }
     const candidates = new Map(own(request, 'profiles').map((entry) => [own(entry, 'profileId'), entry]));
     if (profileId !== null) {
       const candidate = candidates.get(profileId);
       if (candidate === undefined || own(candidate, 'enabled') !== true || own(candidate, 'available') !== true) {
-        return { error: new DecisionError('decision-not-candidate', `the model selected ${profileId}, which is not an enabled available candidate`) };
+        return { error: new DecisionError('decision-not-candidate', `the model selected ${profileId}, which is not an enabled available candidate`), diagnostics };
       }
       const suppliedEvidence = new Set([...evidenceIdsOf(candidate), ...evidenceIdsOfRequest(request, profileId)]);
       if (evidenceIds.some((entry) => !suppliedEvidence.has(entry))) {
-        return { error: new DecisionError('decision-evidence-unknown', 'the model cited evidence that was not supplied') };
+        return { error: new DecisionError('decision-evidence-unknown', 'the model cited evidence that was not supplied'), diagnostics };
       }
     } else if (evidenceIds.length > 0) {
-      return { error: new DecisionError('decision-evidence-unknown', 'an abstention must not cite evidence') };
+      return { error: new DecisionError('decision-evidence-unknown', 'an abstention must not cite evidence'), diagnostics };
     }
     // Independent second Node-side check of the typed policy acknowledgment,
-    // against the same frozen request the plugin saw. Python re-checks a third
-    // time against its own immutable input before adopting anything.
+    // against the same frozen request the plugin saw. A model-authored
+    // `policyCheck` inside the child decision is ignored; the adopted check is
+    // computed here from the request facts and the selected profileId, and
+    // Python re-checks it a third time against its own immutable input.
     const verdict = validateDecision(
       decision,
       derivePolicyFacts({
@@ -847,14 +907,14 @@ export function interpretSuccess(request, child, payload) {
       },
     );
     if (!verdict.ok) {
-      return { error: new DecisionError(verdict.code, `the decision answer violated the routing policy: ${verdict.detail}`) };
+      return { error: new DecisionError(verdict.code, `the decision answer violated the routing policy: ${verdict.detail}`), diagnostics };
     }
-    return {
-      envelope: {
-        ...successEnvelope(request, child, payload),
-        decision: { profileId, reason, evidenceIds: [...evidenceIds], policyCheck: verdict.policyCheck, support: verdict.support },
-      },
+    const envelope = {
+      ...successEnvelope(request, child, payload),
+      decision: { profileId, reason, evidenceIds: [...evidenceIds], policyCheck: verdict.policyCheck, support: verdict.support },
     };
+    if (diagnostics !== undefined) envelope.diagnostics = diagnostics;
+    return { envelope };
   }
 }
 
@@ -1007,6 +1067,7 @@ export async function runDecision({ inputFile, outputFile, dshBin, settingsFile,
           details: interpreted.error.details,
           elapsedSeconds: (performance.now() - started) / 1000,
           shutdownConfirmed: child.shutdownConfirmed,
+          diagnostics: interpreted.diagnostics,
         }),
         exitCode: exitCodeForFailure(code),
       };
@@ -1020,6 +1081,7 @@ export async function runDecision({ inputFile, outputFile, dshBin, settingsFile,
           details: own(failure, 'detail') ?? undefined,
           elapsedSeconds: (performance.now() - started) / 1000,
           shutdownConfirmed: child.shutdownConfirmed,
+          diagnostics: normalizeDiagnostics(own(failure, 'diagnostics')),
         }),
         exitCode: exitCodeForFailure(code),
       };
