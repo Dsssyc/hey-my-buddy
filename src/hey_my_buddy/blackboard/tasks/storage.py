@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import time
 import uuid
 
@@ -115,17 +116,22 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     return orphans, commands, known
 
 
-def runtime_usage(directory: Path, commands: list[str], known: bool, *, observations: list[str] | None = None) -> list[str]:
+def runtime_usage(directory: Path, commands: list[str], known: bool, *, reported: set[tuple[int, float]] | None = None) -> list[str]:
     if not known or os.name == 'nt':
         return ['process-inspection-unavailable']
     prefixes = {str(directory), str(directory.resolve())}
     if any(prefix in command for command in commands for prefix in prefixes):
         return ['runtime-in-use']
     opened, error, available, denied = observe_open_paths()
-    if observations is not None:
-        observations.extend(denied)
     if error or not available:
         return ['process-inspection-unavailable']
+    if reported is None:
+        reported = set()
+    for observation in denied:
+        identity = observation.pid, observation.create_time
+        if identity not in reported:
+            print(f'hey_my_buddy.storage: {observation}', file=sys.stderr, flush=True)
+            reported.add(identity)
     if any(path == prefix or path.startswith(prefix + os.sep)
            for paths in opened.values() for path in paths for prefix in prefixes):
         return ['runtime-in-use']
@@ -397,16 +403,16 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     state = store.directory.resolve()
     rows = []
     orphaned, commands, known = process_inventory(state)
+    reported: set[tuple[int, float]] = set()
     now = time.time()
-    def add(category, path, reasons, *, observations=(), **metadata):
+    def add(category, path, reasons, **metadata):
         size, fingerprint, safe = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
         if not native_path(path).exists() and not private_dirs.linked(path):
             return
         row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
-               'path': str(path), 'bytes': size, 'eligible': not reasons,
-               'reasons': sorted(set(reasons) | set(observations)),
+               'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
                'fingerprint': fingerprint, **metadata}
         rows.append(row)
         return row
@@ -539,7 +545,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             leftover = (stat.S_ISDIR(path_stat.st_mode) and
                         (build is not None or path.name.startswith('.build-') or incomplete))
             if leftover:
-                observations = []
                 identity = build[1] if build else path.name
                 reasons = (['retention-history-unproven'] if retained_ids is None else
                            ['retained-runtime'] if identity in retained_ids else [])
@@ -549,8 +554,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                     reasons.append('retention-grace')
                 reasons.extend(_runtime_lock_reasons(path))
                 if stat.S_ISDIR(path_stat.st_mode) and not reasons:
-                    reasons.extend(runtime_usage(path, commands, known, observations=observations))
-                add('runtimes', path, reasons, observations=observations)
+                    reasons.extend(runtime_usage(path, commands, known, reported=reported))
+                add('runtimes', path, reasons)
                 continue
             if not stat.S_ISDIR(path_stat.st_mode):
                 add('runtimes', path, ['runtime-format-unsupported'])
@@ -577,11 +582,10 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 current_ready = False
             if not current_ready:
                 reasons.append('runtime-identity-unproven')
-            observations = []
             if not reasons:
-                reasons.extend(runtime_usage(path, commands, known, observations=observations))
+                reasons.extend(runtime_usage(path, commands, known, reported=reported))
                 reasons.extend(_runtime_lock_reasons(path))
-            add('runtimes', path, reasons, observations=observations)
+            add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
         if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtimes:

@@ -1,6 +1,7 @@
 """Read-only process observations shared by storage and private-root checks."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import locale
 import os
 from pathlib import Path
@@ -8,6 +9,19 @@ import shutil
 import subprocess
 
 import psutil
+
+
+@dataclass(frozen=True)
+class DeniedPathObservation:
+    pid: int
+    create_time: float
+    name: str
+    read: str
+    error: str
+
+    def __str__(self) -> str:
+        return (f'process path observation denied: pid={self.pid} createTime={self.create_time!r} '
+                f'name={self.name!r} read={self.read}: {self.error}')
 
 
 class _IdentityUnavailable(Exception):
@@ -119,7 +133,7 @@ def _proc_fd_paths(pid: int) -> set[str]:
     return paths
 
 
-def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[str]]:
+def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[DeniedPathObservation]]:
     """Path references, observation failure, channel availability and denials.
 
     psutil supplies cwd and Linux mappings. Linux descriptors use /proc;
@@ -129,7 +143,7 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[st
     """
     processes, known = _processes()
     problems = [] if known else ['psutil process enumeration incomplete']
-    denied: dict[int, str] = {}
+    denied: dict[int, DeniedPathObservation] = {}
     paths: dict[int, set[str]] = {}
     for process in processes:
         created = None
@@ -161,8 +175,8 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool, list[st
                 except (psutil.Error, OSError) as name_error:
                     problems.append(_failure(process, created, 'name after denied ' + operation, name_error))
                 else:
-                    denied[process.pid] = ('process path observation denied: ' +
-                                           _failure(process, created, operation, error, name=name))
+                    denied[process.pid] = DeniedPathObservation(
+                        process.pid, created, name, operation, f'{type(error).__name__}: {error}')
                     # macOS lsof must not turn this explicit exception back into
                     # an unknown missing-PID result. Keep any positive paths.
             else:

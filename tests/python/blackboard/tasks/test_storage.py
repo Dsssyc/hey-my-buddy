@@ -1,8 +1,10 @@
 """Private protected inventory and exact-plan guards."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+from contextlib import redirect_stderr
 import stat
 import subprocess
 import sys
@@ -93,29 +95,42 @@ class StorageTests(BoardTestCase):
             os.utime(path, (expired, expired), follow_symlinks=False)
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
-    def test_storage_plan_records_denied_paths_without_blocking_an_unused_runtime(self):
+    def test_storage_plan_logs_each_denied_identity_once_without_adding_reasons(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
-        candidate = root / ('c' * 32)
-        candidate.mkdir()
-        (candidate / 'payload').write_bytes(b'private runtime')
-        self._age_runtime_entry(candidate)
+        candidates = [root / (letter * 32) for letter in ('c', 'd')]
+        for candidate in candidates:
+            candidate.mkdir()
+            (candidate / 'payload').write_bytes(b'private runtime')
+            self._age_runtime_entry(candidate)
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
             'current': 'a' * 32, 'previous': 'b' * 32,
         }), encoding='utf-8')
         target = process(104, ['agent'], name='kernel-hidden-agent', created=2345.6)
-        target.cwd.side_effect = storage.psutil.AccessDenied(104)
+        # The same identity fails different path reads in the two candidates.
+        target.cwd.side_effect = [storage.psutil.AccessDenied(104), storage.psutil.AccessDenied(104), '/']
+        target.memory_maps.side_effect = storage.psutil.AccessDenied(104)
+        log = io.StringIO()
         with (processes(target), mock.patch.object(observation, '_proc_fd_paths', return_value=set()),
               mock.patch.object(observation.psutil, 'WINDOWS', False),
               mock.patch.object(observation.psutil, 'LINUX', True),
-              mock.patch.object(observation.psutil, 'MACOS', False)):
+              mock.patch.object(observation.psutil, 'MACOS', False), redirect_stderr(log)):
             plan = storage.plan(board.store, {})
-        row = next(row for row in plan['candidates'] if row['path'] == str(candidate))
-        self.assertTrue(row['eligible'])
-        self.assertEqual(len(row['reasons']), 1)
+            first_lines = log.getvalue().splitlines()
+            target.cwd.side_effect = storage.psutil.AccessDenied(104)
+            storage.plan(board.store, {})
+        for candidate in candidates:
+            row = next(row for row in plan['candidates'] if row['path'] == str(candidate))
+            self.assertTrue(row['eligible'])
+            self.assertEqual(row['reasons'], [])
+        category = next(row for row in plan['categories'] if row['id'] == 'runtimes')
+        self.assertEqual(category['reasons'], [])
+        self.assertEqual(set(plan), {'planId', 'createdAt', 'expiresAt', 'categories', 'candidates', 'orphanProcesses'})
+        self.assertEqual(len(first_lines), 1)
+        self.assertEqual(log.getvalue().splitlines(), first_lines * 2)
         for detail in ('pid=104', 'createTime=2345.6', "name='kernel-hidden-agent'", 'read=cwd', 'AccessDenied'):
-            self.assertIn(detail, row['reasons'][0])
+            self.assertIn(detail, first_lines[0])
         saved = json.loads((board.directory / 'storage' / (plan['planId'] + '.json')).read_text())
         self.assertEqual(saved['candidates'], plan['candidates'])
 

@@ -577,7 +577,7 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertTrue(available)
         self.assertEqual(len(denied), 1)
-        self.assertIn('pid=123', denied[0])
+        self.assertIn('pid=123', str(denied[0]))
 
     def test_failed_argv_reads_use_current_starting_or_ending_state(self):
         for failure in (observation.psutil.AccessDenied(123), SystemError('proc_cmdline failed')):

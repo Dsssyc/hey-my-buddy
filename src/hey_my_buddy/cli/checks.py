@@ -64,7 +64,7 @@ from ..text import configure_utf8_output
 from .. import locking, private_dirs, state_root
 from ..errors import BoardError
 from ..paths import native_path
-from ..process_observation import observe_open_paths, observe_process_argv
+from ..process_observation import DeniedPathObservation, observe_open_paths, observe_process_argv
 from ..protocol.owned_process import owned_popen
 from ..protocol.process_handle import ProcessHandle
 from ..protocol.windows_process import WindowsAPI
@@ -648,7 +648,7 @@ def _ps_argv_table() -> list[tuple[int, list[str]]] | None:
     return [(process.pid, argv) for process, argv in rows] if not problems else None
 
 
-def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool, list[str]]:
+def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool, list[DeniedPathObservation]]:
     """PIDs referencing this root, including deleted-but-open file names.
 
     The shared observation layer distinguishes incomplete and unavailable
@@ -680,7 +680,7 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
         if pid != own and _argv_tied(argv, prefixes):
             findings[pid] = {"pid": pid, "source": "argv", "executable": Path(argv[0]).name if argv else "unknown"}
     open_pids, open_error, open_available, denied = _open_file_pids(root)
-    notes.extend(denied)
+    notes.extend(map(str, denied))
     if not open_available:
         problems.append("open-file observation unavailable (native file-reference channel missing)")
     elif open_error:

@@ -1,4 +1,6 @@
 """One identity-checked retry and the sole denied-path exception."""
+from contextlib import redirect_stderr
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -100,7 +102,7 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertTrue(available)
                 self.assertEqual(len(denied), 1)
                 for detail in ('pid=123', 'createTime=1234.5', "name='agent'", 'read=' + channel, 'AccessDenied'):
-                    self.assertIn(detail, denied[0])
+                    self.assertIn(detail, str(denied[0]))
                 self.assertEqual(target.create_time.call_count, 2)
 
     def test_other_path_errors_remain_unknown_after_the_second_read(self):
@@ -125,10 +127,26 @@ class ProcessObservationTests(unittest.TestCase):
     def test_denied_maps_keep_positive_cwd_evidence_for_storage(self):
         target = process(123, cwd='/fixture')
         target.memory_maps.side_effect = observation.psutil.AccessDenied(123)
-        notes = []
-        with processes(target), proc_references():
-            self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True, observations=notes), ['runtime-in-use'])
-        self.assertEqual(len(notes), 1)
+        log = io.StringIO()
+        with processes(target), proc_references(), redirect_stderr(log):
+            self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True), ['runtime-in-use'])
+        self.assertEqual(len(log.getvalue().splitlines()), 1)
+        self.assertIn('read=memory_maps: AccessDenied', log.getvalue())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
+    def test_storage_log_deduplicates_identity_and_reports_a_reused_pid(self):
+        target = process(123)
+        target.cwd.side_effect = observation.psutil.AccessDenied(123)
+        reported = set()
+        log = io.StringIO()
+        with processes(target), proc_references(), redirect_stderr(log):
+            for created in (1234.5, 1234.5, 1235.5):
+                target.create_time.return_value = created
+                self.assertEqual(storage.runtime_usage(Path('/fixture'), [], True, reported=reported), [])
+        lines = log.getvalue().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn('pid=123 createTime=1234.5', lines[0])
+        self.assertIn('pid=123 createTime=1235.5', lines[1])
 
     def test_denied_cwd_is_a_cleanup_note_even_when_lsof_omits_the_pid(self):
         target = process(123)
