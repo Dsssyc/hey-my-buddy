@@ -98,7 +98,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const table = screen.getByRole("table");
     const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")].filter(row => row.querySelector("th"));
     expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual([
-      "Harness 私有会话", "受管检出", "运行时", "备份", "看板与记录",
+      "Harness 私有会话", "受管检出", "运行时", "备份", "黑板与记录",
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
     expect(within(rows[0]!).getByText("2.7 GB")).toBeTruthy();
@@ -107,7 +107,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     // Structurally protected categories show — with their own tooltip.
     expect(within(rows[3]!).getByText("0 B")).toBeTruthy();
     expect(within(rows[4]!).getByText("0 B")).toBeTruthy();
-    expect(rows[4]!.querySelector('[aria-description="看板、记录及上次升级之前的看板受保护"]')).toBeTruthy();
+    expect(rows[4]!.querySelector('[aria-description="黑板、记录及上次升级之前的黑板受保护"]')).toBeTruthy();
   });
 
   it("keeps unknown category and reason codes visible instead of dropping them", async () => {
@@ -156,7 +156,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(panelResult.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.textContent).toContain("Harness 私有会话：2.7 GB");
-    expect(dialog.textContent).toContain("看板、记录和上次升级之前的看板不会删除。");
+    expect(dialog.textContent).toContain("黑板、记录和上次升级之前的黑板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     await user.tab({ shift: true });
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "确认清理" }));

@@ -2453,7 +2453,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
              "parentId": None, "mergedIntoId": None},
             {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
              "parentId": "preview-domain-ui", "mergedIntoId": None},
-            {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现看板事实。",
+            {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现黑板事实。",
              "parentId": "preview-domain-ui", "mergedIntoId": None},
             {"nodeId": "preview-domain-tokens", "name": "样式与排版", "definition": "控制台的颜色、间距与字号。",
              "parentId": "preview-domain-console", "mergedIntoId": None},
