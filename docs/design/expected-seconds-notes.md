@@ -47,3 +47,13 @@ buddy 侧分阶段跑过 contract/controller/protocol、四个 harness 的 fixtu
 `tests/probes/macro_task_console_preview.py` 的普通微任务和命令合成记录改为 `expectedSeconds`，fixture 参数改为 `expected_seconds`、默认 1800；task 规范与 task 视图同步读出该字段，合成回合也给出 `expectedSeconds`。内部 Router 记录只给出 `routerBudgetSeconds`，由既有 routing budget 加 10 秒宽限生成，嵌套 `decision` 给出实际预算与 `kind:select`；Router 档位和冻结 `budget.timeoutSeconds` 保持原义，没有给 Router 记录同时放入工作预期。
 
 本回合只执行 `PYTHONPYCACHEPREFIX="$PWD/tmp/expected-seconds/probe-pycache" python3 -m py_compile tests/probes/dsh_native_resume_smoke.py tests/probes/macro_task_console_preview.py tests/probes/router_fast.py tests/probes/router_readonly.py`，四个文件编译通过，退出 0；缓存写在检出内，`git diff --check` 通过，静态检索确认剩余 `timeoutSeconds` 都属于 Router budget。没有执行或导入四个探针模块，没有启动预览服务、运行真实 harness 或进行模型调用；这次验证只证明 Python 语法可编译，真实导入依赖与探针运行留给 Host 有意执行时核验，第一回合的测试结果保留为此前证据。
+
+## 第 3 回合：探针测试断言同步
+
+Host 报告合并树的完整检查在 234 个文件中仅 `blackboard/routing/test_router_probe.py` 失败：第二回合把探针执行规范改成新字段，但遗漏了钉着它的测试断言。本回合将 `test_mock_execute_uses_native_entry_once_and_never_auto_passes` 改为比较 `context.spec["routerBudgetSeconds"]` 与 `request.budget["timeoutSeconds"]`，继续证明探针把同一个 Router 预算交给执行，没有改预算值或验收条件。
+
+使用 `rg` 检索整个 `tests/python` 的 `timeoutSeconds`，并核查 `spec` 的索引与 `.get` 读取，修正后没有其他测试读取探针或 Router 执行规范的旧字段。其余命中属于独立 Router budget、内部控制帧、旧字段拒绝和 schema 19 升级输入；另外清除 `test_sole_candidate_selection.py` 两处和 `test_decision.py` 一处内部 selection 入参里不被当前协调器读取的旧覆盖字段，预算仍由设置生成。
+
+按 Host 指定解释器与默认进程数运行整个 `tests/python/blackboard/routing/`，包括本回合改过的 probe 和 sole-candidate 测试文件：33 个文件、517 项全部通过，退出 0，私有根已删除，日志为 `tmp/expected-seconds/routing-after-probe-sync.log`。没有运行完整检查或真实 harness 探针；Host 的完整检查失败作为上面的来源记录，本回合没有自行重跑该完整检查。
+
+目录检查通过后清除了 `test_decision.py` 的最后一处旧协调器入参，再用同一指定检查运行器单独验证该文件：35 项全部通过，退出 0，私有根已删除，日志为 `tmp/expected-seconds/routing-coordinator-inputs.log`。本回合没有测试失败或时序重跑，`git diff --check` 通过，没有新增存储或升级变更；当前无不一致情形，最终验收仍由 Host 负责。

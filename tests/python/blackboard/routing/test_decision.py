@@ -322,7 +322,7 @@ class SelectionRequestTests(DecisionTestCase):
                     request = board.store.decisions._create(
                         request_id=f"freeze-{name}", request={"kind": "select", "task": "bounded selection",
                             "constraints": constraints, "requiredCapabilities": [],
-                            "timeoutSeconds": 60, "budget": router.budget("brief")})
+                            "budget": router.budget("brief")})
                 else:
                     request = board.call("selection_request", {"requestId": f"freeze-{name}",
                                          "task": "bounded selection", **constraints})

@@ -95,8 +95,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             "sole-bounds",
             {"kind": "select", "task": "bounded selection",
              "constraints": {"harness": "dsh", "effort": "off"},
-             "requiredCapabilities": ["execution:dsh"],
-             "timeoutSeconds": 60},
+             "requiredCapabilities": ["execution:dsh"]},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
@@ -137,7 +136,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         request = board.store.decisions._create(
             "basis-freeze",
             {"kind": "select", "task": "bounded selection", "constraints": {"harness": "dsh"},
-             "requiredCapabilities": [], "timeoutSeconds": 60},
+             "requiredCapabilities": []},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
