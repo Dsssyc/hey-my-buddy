@@ -160,6 +160,11 @@ class SyntheticBoard:
             self.launch_guard = self.stack.enter_context(patch("subprocess.Popen", side_effect=AssertionError("No subprocess in synthetic board")))
             os.environ["HMB_MODEL_CATALOG_FILE"] = str(support.write_catalog_fixture(self.state))
             self.board = support.InProcessBoard(self.state, clock=self.clock)
+            # Preserve the generated SQL, while retiring every resource this board owns.
+            self.stack.callback(self.board.store.db.close)
+            self.stack.callback(self.board.live_registry.close)
+            self.stack.callback(self.board.service.harnesses.close)
+            self.stack.callback(self.board.console.close)
             with ExitStack() as generation:
                 ids = random.Random(self.seed)
                 generation.enter_context(patch("uuid.uuid4", side_effect=lambda: uuid.UUID(int=ids.getrandbits(128), version=4)))
@@ -174,9 +179,6 @@ class SyntheticBoard:
         self.close()
 
     def close(self):
-        # InProcessBoard.close unlinks its DB; only stop this fixture's console.
-        if self.board is not None and self.board.console is not None:
-            self.board.console.close()
         self.stack.close()
 
     def call(self, operation, params):

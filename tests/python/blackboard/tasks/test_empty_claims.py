@@ -53,6 +53,7 @@ class EmptyClaimTests(BoardTestCase):
         task = submit_command(board, "reopen-fixture", self.workdir("reopen-work"))
         first = admit_execution(client, NONCE)
         store_two = type(board.store)(self.directory, max_concurrent=2)
+        self.addCleanup(store_two.db.close)
         store_two.initialize()
         self.assertIsNone(admit_store(store_two, {"nonce": NONCE})["claim"])
         self.assertEqual(self.attempt_count(board, task["runId"]), 1)

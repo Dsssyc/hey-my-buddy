@@ -119,10 +119,12 @@ class ReminderBoardTests(BoardTestCase):
 class ReminderPrivateServiceTests(BoardTestCase):
     def private_silence_threshold(self, seconds):
         store = BoardStore(self.directory)
-        store.initialize()
-        with store.db.write() as connection:
-            connection.execute("UPDATE reminder_settings SET silence_seconds=? WHERE id=1", (seconds,))
-        store.db.close()
+        try:
+            store.initialize()
+            with store.db.write() as connection:
+                connection.execute("UPDATE reminder_settings SET silence_seconds=? WHERE id=1", (seconds,))
+        finally:
+            store.db.close()
 
     def test_command_worker_reminder_returns_from_cli_await_without_a_model(self):
         # A command execution is a real process, and this daemon/CLI path has no
@@ -161,10 +163,12 @@ class ReminderPrivateServiceTests(BoardTestCase):
                 attempt = BoardClient(self.directory).get(runId=run_id)["selectedAttempt"]
                 self.assertFalse(attempt["reminders"]["possiblyStuck"])
                 store = BoardStore(self.directory)
-                with store.db.read() as connection:
-                    kinds = [row[0] for row in connection.execute(
-                        "SELECT kind FROM attempt_reminders WHERE attempt_id=?", (attempt["attemptId"],))]
-                store.db.close()
+                try:
+                    with store.db.read() as connection:
+                        kinds = [row[0] for row in connection.execute(
+                            "SELECT kind FROM attempt_reminders WHERE attempt_id=?", (attempt["attemptId"],))]
+                finally:
+                    store.db.close()
                 self.assertGreaterEqual(len(kinds), 2)
                 self.assertEqual(set(kinds), {"expected-duration"})
             finally:

@@ -55,8 +55,10 @@ class HarnessServiceTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.board = BoardStore(self.directory / 'state')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.live_registry = LiveRegistry()
+        self.addCleanup(self.live_registry.close)
         self.service = BoardService(self.board, live_registry=self.live_registry, token='host', control={}, on_stop=lambda p: {}, on_restart=lambda p: {}, automatic_discovery=True)
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=None))
         self.service.harnesses.kick = Mock()

@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import runpy
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -14,7 +13,7 @@ from unittest.mock import patch
 
 from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
-    stop_private_service, wait_for, write_catalog_fixture,
+    remove_private_test_root, stop_private_service, wait_for, write_catalog_fixture,
 )
 from hey_my_buddy import locking
 from hey_my_buddy.protocol.transport import _read_endpoint
@@ -41,7 +40,7 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertEqual((directory / "receipt.json").read_text(encoding="utf-8"), "evidence")
         finally:
             if directory is not None:
-                shutil.rmtree(directory)
+                remove_private_test_root(directory)
 
     def test_child_environment_drops_inherited_ownership_and_credentials(self):
         inherited = {
@@ -122,6 +121,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 environment = _child_environment(directory, {"HMB_MODEL_CATALOG_FILE": str(catalog)})
             completed = subprocess.run([sys.executable, "-c", textwrap.dedent("""
                 import json, os
+                from contextlib import closing
                 from pathlib import Path
                 from unittest.mock import patch
                 import c_two as cc
@@ -138,9 +138,10 @@ class FixtureCleanupTests(unittest.TestCase):
                 with patch.object(home, 'default_state_dir', side_effect=AssertionError('default state lookup')):
                     state = get_state_dir()
                     store = BoardStore(state)
-                    store.initialize()
-                    ipc = configure_local_endpoint(state)
-                    payload = discover(directory=state, harnesses=[])
+                    with closing(store.db):
+                        store.initialize()
+                        ipc = configure_local_endpoint(state)
+                        payload = discover(directory=state, harnesses=[])
                 keys = {'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT', 'HOME', 'USERPROFILE',
                         'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'ZCODE_DATA_BASE_DIR',
                         'DSH_HOME', 'ZCODE_BUILTIN_PROVIDER_CONFIG_FILE', 'ZCODE_PERSONAL_PROVIDER_CONFIG_FILE',
@@ -228,23 +229,26 @@ class FixtureCleanupTests(unittest.TestCase):
                 side_effect=AssertionError("R-05: native discovery forbidden"),
             ) as native:
                 daemon = Daemon(directory)
-                daemon.store.initialize()
-                service = fixture["service"](daemon)
-                capabilities = json.loads(service.capabilities(json.dumps({"token": daemon.token})))
-                self.assertFalse(native.called, "fixture capabilities attempted native discovery")
-                self.assertNotIn("error", capabilities)
-                self.assertTrue(capabilities["adapters"]["dsh"]["available"])
-                refreshed = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
-                self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
-                payload = json.loads(catalog.read_text(encoding="utf-8"))
-                self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
-                                 payload["providers"][0]["models"][0]["id"])
-                payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
-                catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
-                reread = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
-                self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
-                                 payload["providers"][0]["models"][0]["id"])
-                self.assertFalse(native.called, "fixture catalog attempted native discovery")
+                try:
+                    daemon.store.initialize()
+                    service = fixture["service"](daemon)
+                    capabilities = json.loads(service.capabilities(json.dumps({"token": daemon.token})))
+                    self.assertFalse(native.called, "fixture capabilities attempted native discovery")
+                    self.assertNotIn("error", capabilities)
+                    self.assertTrue(capabilities["adapters"]["dsh"]["available"])
+                    refreshed = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
+                    self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
+                    payload = json.loads(catalog.read_text(encoding="utf-8"))
+                    self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
+                                     payload["providers"][0]["models"][0]["id"])
+                    payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
+                    catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
+                    reread = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
+                    self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
+                                     payload["providers"][0]["models"][0]["id"])
+                    self.assertFalse(native.called, "fixture catalog attempted native discovery")
+                finally:
+                    daemon.store.db.close()
             self.assertEqual(list((directory / "home").iterdir()), [directory / "home/.gitconfig"])
 
     def test_cleanup_stops_cli_started_replacement_after_restart(self):
@@ -272,22 +276,26 @@ class FixtureCleanupTests(unittest.TestCase):
 
             # Leave the directory available for a protocol cleanup if the assertion
             # fails; the lock FDs also let us inspect ownership after deletion.
-            with patch("support.shutil.rmtree") as remove:
+            with patch("support.remove_private_test_root") as remove:
                 fixture._cleanup()
-            remove.assert_called_once_with(directory)
-            assert_released(self, handles)
+                assert_released(self, handles)
+                for fd in handles:
+                    os.close(fd)
+                handles.clear()
+                remove.assert_called_once_with(directory)
+            remove_private_test_root(directory)
         finally:
-            if directory.exists():
-                stop_private_service(directory)
-                shutil.rmtree(directory)
             for fd in handles:
                 os.close(fd)
+            if directory.exists():
+                stop_private_service(directory)
+                remove_private_test_root(directory)
 
     def test_private_state_context_stops_its_cli_started_service(self):
         handles = []
         directory = None
         try:
-            with patch("support.shutil.rmtree") as remove:
+            with patch("support.remove_private_test_root") as remove:
                 with private_state_dir() as directory:
                     catalog = write_catalog_fixture(directory)
                     environment = _child_environment(directory, {
@@ -301,14 +309,18 @@ class FixtureCleanupTests(unittest.TestCase):
                     self.assertTrue(wait_for(lambda: _lock_held(directory / "control-daemon.lock")))
                     for path in ("control-daemon.lock", "board-owner.lock"):
                         handles.append(os.open(directory / path, os.O_RDWR))
-            remove.assert_called_once_with(directory)
-            assert_released(self, handles)
+                assert_released(self, handles)
+                for fd in handles:
+                    os.close(fd)
+                handles.clear()
+                remove.assert_called_once_with(directory)
+            remove_private_test_root(directory)
         finally:
-            if directory is not None and directory.exists():
-                stop_private_service(directory)
-                shutil.rmtree(directory)
             for fd in handles:
                 os.close(fd)
+            if directory is not None and directory.exists():
+                stop_private_service(directory)
+                remove_private_test_root(directory)
 
 
 if __name__ == "__main__":

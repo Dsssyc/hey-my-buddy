@@ -24,9 +24,11 @@ class HarnessHealthTests(BoardTestCase):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
         self.board = BoardStore(self.directory / 'health')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append((name, record)))
+        self.addCleanup(self.health.close)
         self.health.initialize()
         self.snapshot = {'harness': 'codex', 'managerRecords': [], 'candidates': [
             {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
@@ -347,10 +349,12 @@ class CatalogShelfLifeTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.store import BoardStore
         from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
         self.board = BoardStore(self.directory / 'health')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.board.evaluation = EvaluationStore(self.board)
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: self.refreshed.append(name))
+        self.addCleanup(self.health.close)
         self.health.initialize()
         self.snapshot = {'harness': 'codex', 'managerRecords': [], 'candidates': [
             {'path': '/native/codex', 'exists': True, 'fingerprint': {'mtimeNs': 1}}]}
@@ -542,6 +546,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
         self.clock = FakeClock()
         self.board = BoardStore(self.directory / 'health')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.board.evaluation = EvaluationStore(self.board, clock=self.clock)
         self.evaluation = self.board.evaluation
@@ -559,6 +564,11 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
                 'providers': [{'harness': 'dsh', 'provider': 'fixture',
                                'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
 
+    def finish_thread(self, thread, release):
+        release.set()
+        thread.join(timeout=10)
+        self.assertFalse(thread.is_alive(), f"{thread.name} did not stop")
+
     def prime_ready_health(self, health):
         """One ready health record plus a shelf-expired catalog and a due window."""
         self.evaluation.record_catalog(self.reading(('alpha',)))
@@ -571,6 +581,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         from hey_my_buddy.blackboard.catalog import catalog
         quiet = []
         health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: quiet.append(name))
+        self.addCleanup(health.close)
         health.initialize()
         self.prime_ready_health(health)
         refreshed, entered, release = [], threading.Event(), threading.Event()
@@ -596,9 +607,11 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
 
         scanner = threading.Thread(target=lambda: health.refresh('dsh'))
         scanner.start()
+        self.addCleanup(self.finish_thread, scanner, release)
         self.assertTrue(entered.wait(timeout=10), "The health stale read never started")
         validator = threading.Thread(target=request)
         validator.start()
+        self.addCleanup(self.finish_thread, validator, release)
         validator.join(timeout=0.3)
         self.assertTrue(validator.is_alive(), "The explicit request waits for the health read in flight")
         release.set()
@@ -616,6 +629,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         from hey_my_buddy.errors import BoardError
         quiet = []
         health = HarnessHealth(self.board, catalog_refresh=lambda name, record, catalog_scan_claimed=False: quiet.append(name))
+        self.addCleanup(health.close)
         health.initialize()
         self.prime_ready_health(health)
         hook_calls, entered, release = [], threading.Event(), threading.Event()
@@ -646,6 +660,7 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
         health._stale_catalog = lambda name, now: entered.wait(timeout=10) and was_stale
         validator = threading.Thread(target=request)
         validator.start()
+        self.addCleanup(self.finish_thread, validator, release)
         self.assertTrue(entered.wait(timeout=10), "The explicit read never started")
         scanned = health.refresh('dsh')
         self.assertEqual(scanned['status'], 'ready')
@@ -673,6 +688,7 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.board = self.board(clock=self.clock)
         self.evaluation = self.board.evaluation
         self.health = HarnessHealth(self.board.store, catalog_refresh=None)
+        self.addCleanup(self.health.close)
         self.ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh'], 'reason': None}
         for target, result in (
             ('_snapshot', {'harness': 'dsh', 'managerRecords': [], 'candidates': []}),
@@ -726,6 +742,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.board = self.board(clock=self.clock)
         self.evaluation = self.board.evaluation
         self.health = HarnessHealth(self.board.store, catalog_refresh=self.unknown_read)
+        self.addCleanup(self.health.close)
         self.ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh'], 'reason': None}
         for target, result in (
             ('_snapshot', {'harness': 'dsh', 'managerRecords': [], 'candidates': []}),
@@ -848,6 +865,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         board = self.board()
         service = board.service
         health = HarnessHealth(service.store, catalog_refresh=service._refresh_harness_catalog)
+        self.addCleanup(health.close)
         health.initialize()
         snapshot = {'harness': 'dsh', 'managerRecords': [], 'candidates': []}
         ready = {'harness': 'dsh', 'status': 'ready', 'version': '1.0',
@@ -884,6 +902,7 @@ class HealthProbeFailureTests(BoardTestCase):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
         self.board = BoardStore(self.directory / 'native-stop-health')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.health = HarnessHealth(self.board)
         self.addCleanup(self.health.close)
@@ -915,6 +934,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
         self.board = BoardStore(self.directory / 'account-read-health')
+        self.addCleanup(self.board.db.close)
         self.board.initialize()
         self.catalog_reads = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda *args, **kwargs: self.catalog_reads.append(args))

@@ -11,12 +11,13 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
@@ -233,7 +234,37 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
         stop_private_service(directory)
         shutdown_private_rpc()
         assert_private_processes_gone(directory)
-        shutil.rmtree(directory)
+        remove_private_test_root(directory)
+
+
+def remove_private_test_root(directory: Path) -> None:
+    """Remove a stopped fixture, retrying only Windows READONLY regular files.
+
+    The caller must first close its resources and confirm its work has stopped.
+    A sharing violation or any other deletion failure preserves the remaining tree.
+    """
+    directory = Path(directory)
+
+    def readonly_file(operation, name, error):
+        if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
+            raise error
+        path = Path(name)
+        # Never chmod a link/reparse target, including through a replaced ancestor.
+        for part in (path, *path.parents):
+            info = part.lstat()
+            attributes = getattr(info, "st_file_attributes", 0)
+            if stat.S_ISLNK(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise error
+            if part == path and (not stat.S_ISREG(info.st_mode) or not attributes & stat.FILE_ATTRIBUTE_READONLY):
+                raise error
+            if part == directory:
+                break
+        else:
+            raise error
+        os.chmod(path, stat.S_IWRITE)
+        operation(name)
+
+    shutil.rmtree(directory, onexc=readonly_file)
 
 
 def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | None = None) -> dict:
@@ -307,6 +338,14 @@ class InProcessBoard:
 
     def __init__(self, directory: Path, **options):
         self.directory = Path(directory)
+        self._resources = ExitStack()
+        try:
+            self._initialize(**options)
+        except BaseException:
+            self._resources.close()
+            raise
+
+    def _initialize(self, **options):
         clock = options.get("clock")
         self.store = BoardStore(
             self.directory,
@@ -314,6 +353,7 @@ class InProcessBoard:
             wait_capacity=options.get("wait_capacity", 4),
             **({"clock": clock} if clock is not None else {}),
         )
+        self._resources.callback(self.store.db.close)
         # One evaluation store and one decision coordinator for the whole harness:
         # the store hooks and resource implementations share selection state.
         self.store.evaluation = EvaluationStore(
@@ -335,6 +375,7 @@ class InProcessBoard:
         self.evaluation = self.store.evaluation
         self.console: Console | None = None
         self.live_registry = LiveRegistry()
+        self._resources.callback(self.live_registry.close)
         self.service = BoardService(
             self.store,
             live_registry=self.live_registry,
@@ -345,6 +386,7 @@ class InProcessBoard:
             evaluation=self.evaluation,
             console_factory=self.console_action,
         )
+        self._resources.callback(self.service.harnesses.close)
         # Native startup validation shares this synthetic health boundary. The
         # real service/discovery suites construct BoardService independently.
         self.service.harnesses.refresh = lambda name, **kwargs: self.service.harnesses.get(name)
@@ -355,6 +397,7 @@ class InProcessBoard:
             port=0,
             assets_dir=options.get("console_assets", self.directory / "console-assets"),
         )
+        self._resources.callback(lambda: self.console.close())
 
     def console_action(self, params: dict) -> dict:
         if self.console is None:  # pragma: no cover - only during construction
@@ -389,28 +432,39 @@ class InProcessBoard:
         return self.store.task_submit(params)
 
     def close(self) -> None:
-        self.live_registry.close()
-        if self.console is not None:
-            self.console.close()
-        self.store.db.close()
+        self._resources.close()
         self.store.db.path.unlink(missing_ok=True)
 
 
 class BoardTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._stack = []
+        self._cleanup_failures = []
         self.directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
-        self.addCleanup(self._cleanup)
+        super().addCleanup(self._cleanup)
+
+    def addCleanup(self, function, /, *args, **kwargs):
+        # Only observe explicitly registered cleanup; never discover resources.
+        def cleanup():
+            try:
+                function(*args, **kwargs)
+            except Exception as error:
+                self._cleanup_failures.append(error)
+                raise
+
+        super().addCleanup(cleanup)
 
     def _cleanup(self) -> None:
-        stop_private_service(self.directory)
-        for board in getattr(self, "_stack", []):
+        failures = list(self._cleanup_failures)
+
+        def attempt(action, *args):
             try:
-                board.close()
-            except Exception:  # noqa: BLE001 - cleanup must never mask the test result
-                pass
-        for handle in getattr(self, "children", []):
+                action(*args)
+            except Exception as error:
+                failures.append(error)
+
+        def stop_child(handle):
             if handle.poll() is None:
                 handle.terminate()
                 try:
@@ -418,9 +472,17 @@ class BoardTestCase(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     handle.kill()
                     handle.wait(timeout=5)
-        shutdown_private_rpc()
-        assert_private_processes_gone(self.directory)
-        shutil.rmtree(self.directory)
+
+        attempt(stop_private_service, self.directory)
+        for board in getattr(self, "_stack", []):
+            attempt(board.close)
+        for handle in getattr(self, "children", []):
+            attempt(stop_child, handle)
+        attempt(shutdown_private_rpc)
+        attempt(assert_private_processes_gone, self.directory)
+        if failures:
+            raise ExceptionGroup(f"Test resource close failed; preserved {self.directory}", failures)
+        remove_private_test_root(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)

@@ -17,6 +17,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         from hey_my_buddy.blackboard.store.store import BoardStore
         from support import enable_fixture_buddy
         store = BoardStore(self.directory)
+        self.addCleanup(store.db.close)
         store.initialize()
         enable_fixture_buddy(store, {**BUDDY, "effort": "high"})
 
