@@ -149,6 +149,24 @@ class PreparationTests(WorkflowTestCase):
             self.assertLessEqual(len(error["details"][field]), 2000)
             self.assertTrue(error["details"][field + "Truncated"])
 
+    def test_git_timeout_leaves_continuation_queued_for_retry(self):
+        board, run_id, _first, continuation_id = self.pending()
+        before = self.rows(board, run_id, continuation_id)
+        unknown = BoardError("WORKSPACE_GIT_UNKNOWN", "controlled Git wait expiration")
+        with patch.object(workspace, "prepare", side_effect=unknown):
+            blocked = self.claim(board, run_id=run_id, claim_request_id="git-unknown-claim")
+        self.assertIsNone(blocked["claim"])
+        self.assertEqual(blocked["reason"], "awaiting-workspace-preparation")
+        during = self.rows(board, run_id, continuation_id)
+        self.assertEqual(during[0]["state"], "executing")
+        self.assertEqual(during[0]["revision"], before[0]["revision"])
+        self.assertEqual(during[2]["state"], "queued")
+        self.assertIsNone(during[2]["workspace_manifest_json"])
+        self.assertIsNone(during[0]["active_request_id"])
+        resumed = self.claim(board, run_id=run_id, claim_request_id="git-unknown-retry")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+
     def test_preparation_attention_default_view_names_the_git_operation(self):
         board, run_id, _first, _continuation_id = self.pending()
         stderr = (b"warning: another Git process seems to be running\n"

@@ -17,6 +17,17 @@ BASE_SCHEMA_VERSION = 19
 DEFAULT_EXPECTED_SECONDS = 1800
 
 
+def _health_record(record: dict, observed_at) -> dict:
+    """Give stored health observations the same explicit shape as new reads."""
+    record['lastProbe'] = ({'status': 'complete', 'observedAt': observed_at,
+                            'reasonCode': record.get('reasonCode')}
+                           if observed_at is not None else None)
+    failure = record.get('accountReadFailure')
+    if failure is not None:
+        failure['status'] = 'unknown' if failure['reasonCode'] == 'deadline' else 'failed'
+    return record
+
+
 def _spec(value: dict) -> tuple[dict, int | None, int | None]:
     value = dict(value)
     old = value.pop('timeoutSeconds')
@@ -159,6 +170,11 @@ def _receipt_object(value, member: str | None = None, *, service_receipt: bool =
                                 stops=stops, by_task=by_task) for item in value]
     if not isinstance(value, dict):
         return value
+    if member == 'accountReadFailure':
+        value['status'] = 'unknown' if value['reasonCode'] == 'deadline' else 'failed'
+    if ('revision' in value and (member == 'harness'
+                                or 'harness' in value and 'checkedAt' in value)):
+        _health_record(value, value.get('checkedAt'))
     attempt_id = value.get('attemptId')
     selected = value.get('selectedAttempt')
     if attempt_id is None and isinstance(selected, dict):
@@ -233,6 +249,10 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
             _rebuild(connection, 'workflow_runs', _run)
             _rebuild(connection, 'agent_credentials', lambda row: row)
+            for row in connection.execute('SELECT harness,record_json,checked_at FROM harness_health').fetchall():
+                record = _health_record(json.loads(row['record_json']), row['checked_at'])
+                connection.execute('UPDATE harness_health SET record_json=? WHERE harness=?',
+                                   (canonical_json(record), row['harness']))
             ddl, indexes = _fresh_ddl('workflow_lead_tasks')
             connection.execute(ddl)
             for index in indexes:
@@ -248,7 +268,7 @@ def migrate(state: Path) -> None:
                 response = _receipt_object(json.loads(row['response_json']), stops=stops, by_task=by_task)
                 connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',
                                    (canonical_json(response), row['command_id']))
-            for row in connection.execute("SELECT seq,task_id,attempt_id,payload_json FROM events WHERE payload_json LIKE '%terminationReason%'").fetchall():
+            for row in connection.execute("SELECT seq,task_id,attempt_id,payload_json FROM events WHERE payload_json LIKE '%terminationReason%' OR payload_json LIKE '%accountReadFailure%' OR kind LIKE 'harness.%'").fetchall():
                 stop = stops.get(row['attempt_id'])
                 if stop is None and row['task_id'] is not None and len(by_task.get(row['task_id'], [])) == 1:
                     stop = stops.get(by_task[row['task_id']][0])

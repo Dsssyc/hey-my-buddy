@@ -22,8 +22,6 @@ import math
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
-from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -36,20 +34,7 @@ from .run_contract import NativeIdentity, RunRequest
 __all__ = [
     "CancelFlag", "ObserverInterrupt", "buddy_spec", "execution_deadline",
     "halt_owned_group", "identity_or_none", "shape_guard", "utc_now",
-    "absolute_execution_deadline",
 ]
-
-_absolute_deadline: ContextVar[float | None] = ContextVar("absolute_execution_deadline", default=None)
-
-
-@contextmanager
-def absolute_execution_deadline(deadline: float):
-    """Bind one Router's original deadline during its native call."""
-    token = _absolute_deadline.set(deadline)
-    try:
-        yield
-    finally:
-        _absolute_deadline.reset(token)
 
 
 def utc_now() -> str:
@@ -60,13 +45,11 @@ def utc_now() -> str:
 def execution_deadline(timeout_seconds: int | None) -> float:
     """The optional overall native execution deadline.
 
-    Required protocol requests share this deadline. The optional version probe,
+    Only this deadline becomes infinite. The version probe and the per-request,
     cancel and shutdown waits keep their own finite bounds, and the cancel
     flag still ends an unlimited turn.
     """
-    relative = math.inf if timeout_seconds is None else time.monotonic() + timeout_seconds
-    absolute = _absolute_deadline.get()
-    return min(relative, absolute) if absolute is not None else relative
+    return math.inf if timeout_seconds is None else time.monotonic() + timeout_seconds
 
 
 def buddy_spec(request: RunRequest) -> dict:

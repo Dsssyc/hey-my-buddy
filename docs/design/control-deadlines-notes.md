@@ -1,16 +1,16 @@
 # 控制面的时限——慢不等于坏
 
-基点为 `cbb5ffc6`，本文件记录源码候选的控制等待、修改范围和实际检查；安装态与真实 harness CLI 或 app 的忙机耗时不在本次验证内，Host 另行测量并验收。
+基点为 `cbb5ffc6`，本文件记录源码候选和检查结果；上一版曾报告完成，本回合按 Host 验收意见修正，并明确记录尚未解决的 Windows 安装监督阻塞。本候选尚不能验收。
 
-固定窗口只结束一次观察，不能凭经过时间判 harness CLI 不可用、模型目录消失或微任务失败。发现的 5 秒单次探测与 20 秒总扫描到点为 unknown，健康扫描保留原状态和已知事实；Codex CLI 的 8 秒账户窗口到点记录未知且保留尚未被新事实替换的计费；四个 harness CLI 的 25 秒原生目录窗口和 30 秒外层窗口到点返回未知目录，不覆盖最后可信目录。Claude Code CLI 不缓存未知元数据为不可用，下一次读取会重试。停止未确认、明确原生拒绝、进程退出和输入不安全各按自己的事实处理。
+固定窗口只结束一次观察，不能凭经过时间判 harness CLI 不可用、模型目录消失或微任务失败。发现的 5 秒单次探测与 20 秒总扫描到点为 unknown，健康扫描保留原状态和已知事实；Codex CLI 的 8 秒账户窗口到点记录未知且保留尚未被新事实替换的计费；四个 harness CLI 的 25 秒目录窗口和 30 秒外层窗口到点返回未知目录，外层超时后读到的错误按自己的终止处理。停止未确认、真实拒绝、进程退出和输入不安全各按实际事实处理。
 
-Router 从输入准备之前的 `started` 起算 `started + document.budget.timeoutSeconds`，冻结验证、Git 查询、阻塞 blob 读取、材料化与摘要共用该期限；原生请求只拿剩余整数秒。原绝对期限经 Router seam、private controller control frame 的 `deadlineMonotonic` 传至 controller setup 后和 native driver，启动阶段不能重置时钟；已经耗尽时不进入 native 运行，以正面的未创建子进程证据结算 deadline，并由黑板调度下一 Router。执行后的输入核验也绑定 handle 保存的同一原期限；耗尽时 `inputVerification.unchanged` 为 null、code 为 router-budget-exhausted，保留镜像和实际停机证据，不推断输入已变。回执的 elapsedMs 至少包含从准备开始的总耗时。普通 Worker 没有这个硬预算。Router 的预算值、收尾宽限、各执行器的停止与排空窗口没有增加。
+未知预检会在 get 的 queueReason 中显示 harness-probe-unknown；扫描间隔内复用同一未知观察，预检从 15 秒起退避到最多 180 秒，持续续租且可以取消。Claude Code CLI 的未知元数据短期缓存并返回不可用的观察结果，不宣称已确认可用。预检与执行使用同一续租线程，handle 出现后先交接并补发已观察的取消，再写 marker 或发布进度；没有重启续租线程。
 
-DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等待同一次协议请求的事实，使用执行期限；普通 Worker 无硬预算时可继续等待，Router 和模型目录仍受原预算限制。显式中断后的 close 保留原 30 秒窗口，实际进程回收的 settle、drain、abandon 与 terminate 宽限保持原值。协议明确拒绝、连接实际结束与停止未确认仍单独报告。
+Router 的镜像准备移到 DecisionAdapter.prepare，原生调用拿完整原预算；准备与执行后的核验分别有独立的 120 秒观察窗口，不消耗原生预算。输入观察超时为 router-input-unknown，Worker 以可见原因退避重试；核验未知时保留原生 outcome 和镜像，之后只重试核验，不重复原生调用或换 Router。已经完成的核验事实照记，elapsedMs 使用原生自报值；跨层绝对期限、剩余整数秒和 Router 专用无子进程证明已删除。通用 prepare 错误回执保留启动前已确认没有 child 的既有事实。
 
-工作区 Git、运行时依赖安装、本地 IPC 自检和服务启动的独立短失败上限已移除，普通操作依据进程退出、明确错误或就绪事实结束；Router 内的 Git 仍受本次硬预算。删除授权有效期、所有权 lease、安全凭证有效期、升级互斥锁与收尾窗口保留：到点不提交不安全的删除/升级，不把 lease 过期或未获停止证据推断为进程已停。
+普通工作区 Git 的等待恢复为 60 秒，到点为 WORKSPACE_GIT_UNKNOWN；续接准备保持排队，既不记关注也不作废续接，之后可以重试。Git 环境禁止 lazy fetch。服务冷启动观察为 20 秒，升级 command/start 为 45 秒，安装为 900 秒；到点分别返回新的 pending 码、PID 和日志位置，释放调用方锁，不发送停止信号。POSIX 安装重试与清理检查仍在运行的 wrapper/uv 所持生命周期锁；Windows 的锁交接尚有缺陷，详见本回合阻塞。
 
-清点覆盖全部 `src/hey_my_buddy/**/*.py` 的 timeout、deadline、TTL、expiry、monotonic、wait、sleep、SQLite busy 与秒数常量，逐处追到消费分支；打包前端的产品计时以对应 `apps/console/src` 标明，依赖内部调度另列。位置以函数/调用点和本次源行为为准，定义与同一等待的消费点合并，独立等待分别列行。“等待”与“等待/未知”是只结束等待的一类，“判结论”是原先到点改变结果的一类；后者的保留项均给出预算、安全或明确资源拒绝的依据。不把输出大小、容量数量或纯 elapsed 测量计入时限。
+预期时长、Router 原生预算值、收尾宽限、各执行器回收窗口、删除授权有效期、所有权 lease 和安全凭证有效期保持原值。清点覆盖源码 Python 的固定等待、TTL、expiry、monotonic、SQLite busy 与秒数常量；打包前端的产品计时以原始 TSX 文件标明，依赖内部调度另列。定义与同一等待的消费点合并，独立等待分别列行；位置以函数/调用点为准，旧行号用于定位基点。“等待”与“等待/未知”为只结束观察的一类，“判结论”为原先到点影响结论的一类，保留项说明预算或安全依据。
 
 | 类别 | 位置（相对 `src/hey_my_buddy/`，前端另注明） | 时长 | 原来 | 现在 | 为什么 |
 | --- | --- | --- | --- | --- | --- |
@@ -20,10 +20,10 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 | 判结论 | `blackboard/routing/router.py:22` | fast 60 秒 | fast Router 输入的预算 | fast Router 输入的预算 | 同上 |
 | 判结论 | `blackboard/routing/decision.py:66,678` | Router 预算外加 10 秒 | 给执行收尾；发布端仍检查冻结预算 | 给执行收尾；发布端仍检查冻结预算 | 保留停止证据，不能扩大可接受答案窗口 |
 | 判结论 | `buddy/roles/router.py:40` | Router 原生调用 60 秒 | 原生超时后无有效回答 | 原生超时后无有效回答 | Router 快速调用硬界限 |
-| 判结论 | `buddy/roles/router.py:28-33,61-115` | review 从已选 Router preset 的 60/300/600 秒计算剩余预算 | 材料化之后才起算原生调用预算，输入等待有独立失败上限 | 材料化前起算唯一绝对期限，传至 controller 与原生运行，耗尽走 Router deadline 和下一候选 | ADR-022 的 Router 硬预算；包含准备与启动耗时，收尾宽限保留 |
+| 判结论，保留原生预算 | `buddy/roles/router.py:prepare_router_review / DecisionAdapter.prepare / start` | 原生 preset 的 60/300/600 秒 | 原生调用拿完整预算 | 同左；镜像准备在 start 之前，准备与核验不扣预算 | 恢复 ADR-022 的 Router 自身预算含义 |
 | 等待/未知 | `buddy/roles/router.py:23,166` | 取消 grace 12 秒 | 超过进入强制停机，记录停机事实 | 超过进入强制停机，记录停机事实 | 回收期不证明任务完成 |
-| 判结论 | `buddy/roles/router_input.py:14-19,70-166` | 原 Git 30 秒、材料化 120 秒；现为 Router 剩余预算 | 独立上限到点报 router-input-unavailable | Git、阻塞 blob 读取、验证和摘要均用 Router 期限；耗尽报 router-budget-exhausted | 输入慢不能证明输入不可用；只有 Git 真实错误、非零退出及输入校验拒绝判不可用 |
-| 判结论，保留 Router 预算 | `buddy/roles/router.py:DecisionAdapter.collect`、`buddy/roles/router_input.py:verify` | 从准备开始的同一原绝对期限，没有新窗口 | 执行后核验没有绑定预算，Git 和摘要可阻塞；核验错误统一记 input-changed | 原期限耗尽记未知输入和 router-budget-exhausted，保留镜像；下一 Router 沿现有预算规则调度 | 硬预算不能在执行后重置；没有变化证据不能判输入已变 |
+| 判结论改未知 | `buddy/roles/router_input.py:_remaining / prepare / digest / verify` | Git 30 秒、材料化和核验各 120 秒 | 到点 router-input-unavailable | 到点 router-input-unknown；Worker 可见退避重试，保留已回答结果 | 等待耗尽不能证明输入坏，也不消费原生 Router 预算 |
+| 等待/未知 | `buddy/roles/router.py:DecisionAdapter.collect`、`buddy/roles/router_input.py:verify` | 核验独立 120 秒，Git 单次 60 秒 | 上一版绑原生期限并丢弃已回答结果 | 核验 unknown 保留 native outcome；只重试核验，已完成事实不因 native deadline 失效 | 输入证明与 Router 自身速度是不同事实 |
 | 等待/未知 | `buddy/roles/router_input.py:158` | `cat-file` 收尾等 5 秒 | 之后 kill 再 wait | 之后 kill 再 wait | 子进程回收，不证明材料化成功 |
 | 等待 | `blackboard/routing/router_settings.py:13-20` | retry interval 默认 600 秒，用户配置范围 1–2,147,483,647 秒 | 候选跳过到 `skipUntil` 后重试 | 候选跳过到 `skipUntil` 后重试 | 用户参数非执行失败时限 |
 | 等待 | `blackboard/routing/quota_routing.py:22` | quota retry 3600 秒 | 到 `eligibleAt` 再考虑候选 | 到 `eligibleAt` 再考虑候选 | 配额避让窗口 |
@@ -96,10 +96,9 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 | 等待/未知 | `buddy/harnesses/c_two_live.py:1052,1110-1116` | native connect/call 同一 100–5000 毫秒窗口 | 连接或调用超时，报告对应 transport 错误 | 连接或调用超时，报告对应 transport 错误 | 不把单次观察当任务终局 |
 | 等待/未知 | `buddy/harnesses/inquiry_bridge.py:154` | bridge thread join 1 秒 | 到点线程仍可能存活 | 到点线程仍可能存活 | 收尾证据 |
 | 等待 | `protocol/activity.py:53,199-213` | 活动发布最小间隔默认 2 秒 | 同 phase 事件节流 | 同 phase 事件节流 | 不改任务状态 |
-| 判结论 | `protocol/transport.py:296,314` | loopback listener 1 秒 | 单次身份握手超时，服务调用失败 | 取消独立 1 秒上限，等待本线程已监听的本地 socket 连接/接受事实 | 慢本地握手不能推断沙盒禁止访问；OS 明确拒绝仍报访问错误 |
-| 判结论 | `protocol/transport.py:297,315` | loopback connector 1 秒 | 同上 | 取消独立 1 秒上限，等待本线程已监听的本地 socket 连接/接受事实 | 慢本地握手不能推断沙盒禁止访问；OS 明确拒绝仍报访问错误 |
-| 判结论 | `protocol/transport.py:421` | installed service cold start 300 秒 | 到点 `SERVICE_START_TIMEOUT` | 取消固定启动失败上限；等服务 ping 就绪或实际子进程退出（包括零退出） | 慢启动维持未知；等待不删除活动 owner 的端点，不停止服务 |
-| 判结论 | `protocol/transport.py:421` | source service cold start 20 秒 | 同上 | 取消固定启动失败上限；等服务 ping 就绪或实际子进程退出（包括零退出） | 慢启动维持未知；等待不删除活动 owner 的端点，不停止服务 |
+| 判结论 | `protocol/transport.py:296,314` | loopback listener 1 秒 | 单次身份握手超时，服务调用失败 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
+| 判结论 | `protocol/transport.py:297,315` | loopback connector 1 秒 | 同上 | 回环和 UNIX 自检恢复 1 秒 connect/accept 限制，失败拒绝 launch，未创建 child | 本机 IPC 自检是启动安全前提，不是 harness 健康结论 |
+| 判结论改未知 | `protocol/transport.py:_ensure_service` | 20 秒就绪观察 | 原到点 SERVICE_START_TIMEOUT；上一版无上限 | 到点 SERVICE_START_PENDING，给 PID/log，释放 control-start.lock，不杀 child | 用户命令应有界返回未知；真实进程退出仍报告实际错误 |
 | 等待 | `protocol/transport.py:435` | 启动 poll 0.05 秒 | 检查 ready/child exit | 检查 ready/child exit | 节拍 |
 | 等待/未知 | `protocol/transport.py:478` | stop drain 默认 10 秒 | 传给服务 stop | 传给服务 stop | 仅默认参数 |
 | 等待 | `cli/blocking.py:38-41,477-543` | await 默认 86400 秒，合法 1–86400 秒 | 到点 `wait-timeout`，原 run 继续 | 到点 `wait-timeout`，原 run 继续 | Host 可重复 await 同一 run |
@@ -126,17 +125,17 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 | 等待/未知 | `blackboard/tasks/storage.py:67` | `ps` 10 秒 | 诊断超时，打开状态未证明 | 诊断超时，打开状态未证明 | 删除前不能猜测无占用 |
 | 等待/未知 | `blackboard/tasks/storage.py:93` | 单 PID `lsof` 5 秒 | 同上 | 同上 | 同上 |
 | 等待/未知 | `blackboard/tasks/storage.py:117` | 用户级 `lsof` 30 秒 | 同上 | 同上 | 同上 |
-| 判结论（Router） | `blackboard/tasks/workspace.py:30-48,120-168` | 原每次 Git 60 秒；现普通调用无上限，Router 调用取剩余预算 | 固定 60 秒到点把 Git 操作判失败 | 普通调用等退出事实；Router 的动态 deadline 保持独立于 Git 真实错误 | 不把慢 Git 当坏仓库；ContextVar 只绑定本次 Router 的预算 |
-| 判结论 | `blackboard/tasks/workspace.py:344` | 原批量写入 wait 60 秒；现同一 Router 剩余预算或 None | 到点 kill，再记录操作失败 | 普通调用等退出事实；Router 期限耗尽回收已创建进程并报 deadline，保留诊断 | 固定写入上限不能判仓库坏；真实 broken pipe 与非零退出仍报 Git 错误 |
+| 判结论改未知 | `blackboard/tasks/workspace.py:_git / _git_in` | 60 秒 | 到点判 Git 失败 | 到点 WORKSPACE_GIT_UNKNOWN，调用方不判仓库坏；续接可重试 | 保证服务请求线程和检出锁有界；禁止 lazy fetch |
+| 判结论改未知 | `blackboard/tasks/workspace.py:_write_objects` | stdin 写入与等待合计 60 秒 | 到点记操作失败 | communicate 有界，回收自身 Git 后记 WORKSPACE_GIT_UNKNOWN；真实退出/拒绝保留诊断 | 无法确认写入结果不作废续接 |
 | 判结论（条件式） | `blackboard/tasks/workflow.py:919,6328-6346` | 凭证 `expires_at` 校验；当前创建语句未给固定 TTL | 非空且过期会 `UNAUTHORIZED`；当前插入通常为 NULL | 非空且过期会 `UNAUTHORIZED`；当前插入通常为 NULL | 安全过期校验保留；不可误报成当前固定 TTL |
-| 判结论 | `install/runtime.py:332,400-406` | runtime materialization 默认 900 秒 | 到点 `RUNTIME_INSTALL_TIMEOUT` | 取消 900 秒安装失败上限及内部参数；仅依据 uv 实际退出和 READY 校验发布运行时 | 慢安装不能被定时器杀掉后判失败 |
+| 判结论改未知；Windows 阻塞 | `install/runtime.py:materialize / _materialize_locked` | 900 秒 | 原到点杀 uv 并 RUNTIME_INSTALL_TIMEOUT；上一版无上限 | 到点 RUNTIME_INSTALL_PENDING，保留进程、日志与完成记录；POSIX lifetime 锁避免活动目标被清理；Windows 未安全交接 | 有界观察与安装进程退出分开；Windows 不能据此验收 |
 | 判结论 | `install/upgrade.py:41-52` | `file_lock` 默认 0 秒 | 无锁即 `TimeoutError` | 无锁即 `TimeoutError` | 升级锁防并发；调用方通常覆盖 |
 | 等待 | `install/upgrade.py:52` | lock retry sleep 0.1 秒 | 再查锁 | 再查锁 | 节拍 |
-| 判结论 | `install/upgrade.py:121` | service command 45 秒 | 超时升级命令失败 | 取消 45 秒子进程上限；等旧/新运行时客户端实际返回 | 慢控制命令不等于升级失败；明确错误仍拒绝 |
+| 判结论改未知 | `install/upgrade.py:command / probe` | 45 秒 | 原到点升级失败；上一版无上限 | 到点 UPGRADE_COMMAND_PENDING，给 PID/output/log；journal 保留实际步骤，之后按完成和 owner 锁证据续接 | pending 不触发回滚或再猜启动状态 |
 | 判结论/未知 | `install/upgrade.py:142-156` | retire workers 默认 35 秒 | 取锁/停 Worker 逾期，升级未完成 | 取锁/停 Worker 逾期，升级未完成 | 不能猜测旧进程已停 |
 | 判结论 | `install/upgrade.py:166,546,596,611` | daemon lock 30 秒 | 逾期升级失败 | 逾期升级失败 | 安装与运行互斥 |
 | 判结论 | `install/upgrade.py:166,546,596,611` | board-owner lock 30 秒 | 逾期升级失败 | 逾期升级失败 | 独立 owner 锁等待 |
-| 判结论 | `install/upgrade.py:183-197` | 服务启动验证 45 秒 | 到点升级失败 | 取消 45 秒启动失败上限；等匹配 PID 的新端点健康结果或子进程实际退出 | 未知启动继续观察，原升级互斥、退休与回收时限不变 |
+| 判结论改未知 | `install/upgrade.py:start / recover` | 45 秒 | 原到点升级失败；上一版无上限 | 到点 UPGRADE_START_PENDING，不杀 child；健康后验证，实际进程组退出后继续恢复 | 超时与实际退出分别判断；回收窗口不变 |
 | 等待 | `install/upgrade.py:197` | 启动 poll 0.2 秒 | 重查状态 | 重查状态 | 节拍 |
 | 等待/未知 | `cli/checks.py:198,324-326` | 测试子进程 stdout/stderr drain 2 秒 | 收集已到达输出；不能保证输出完整 | 收集已到达输出；不能保证输出完整 | 检查日志回收 |
 | 等待/未知 | `cli/checks.py:202,384-389` | interrupt 后 grace 10 秒 | 未退出 suite 会 kill | 未退出 suite 会 kill | 中断回收 |
@@ -196,8 +195,8 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 | 等待 | `apps/console/src/use-macro-task-list.ts:198` | 防抖 180 毫秒 | 同上 | 同上 | 同上 |
 | 等待 | `apps/console/src/use-buddy-history.ts:18,185` | 防抖 300 毫秒 | 同上 | 同上 | 同上 |
 | 等待 | `apps/console/src/use-macro-task-timeline.ts:127` | tick 3 秒 | 更新 timeline | 更新 timeline | 同上 |
-| 等待/未知 | buddy/runtime/worker.py:Worker._execute_guarded / _Renewal.run | 复用 claim idle 2 秒、取消检查 2 秒、lease/3（最低 5 秒）续租节拍 | 两次短预检均未知时可判不可用；预检与 native start 期间没有独立续租 | 未知持续尝试；传输超时重放同一 commandId；空结果后新观察不消费失败重试；续租覆盖准备/启动，取消依实际事实 | 准备慢不能使微任务失败或丢失租约；交给 native handle 前结束旧续租者 |
-| 判结论，保留 | buddy/harnesses/native_support.py:absolute_execution_deadline / roles.run_controller.execute / roles.run_execution._launch | 同一次 Router 的绝对 monotonic deadline；原收尾 grace 不变 | controller 启动后以相对秒数重新起算 | controller setup 后已过期则不调用 native；仍有时间时四个 native driver 取原绝对期限的上界 | 硬预算属于 Router；正面无 native 子进程的停止证据允许调度下一 Router |
+| 等待/未知 | `buddy/runtime/worker.py:_execute_guarded / _wait_control_observation / _Renewal.attach` | 未知观察退避 15→30→60→120→180 秒；取消 poll 2 秒，lease/3 最低 5 秒 | 上一版未知每 2 秒重扫并重启续租线程 | 间隔内复用未知；get 显示等待原因，同一续租线程跨 handle；进度不可达不丢答案 | 未知不消费失败重试；收尾和租约语义保持 |
+| 判结论，保留原生预算 | `buddy/harnesses/native_support.py:execution_deadline / roles.run_controller.execute / roles.run_execution._launch` | 原生调用原相对预算 | 上一版跨层 deadlineMonotonic 接线 | 已删除该接线，原生仍拿满额相对预算 | 输入准备与核验不属于 Router 自身预算 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Scheduler immediate priority） | -1 毫秒 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Scheduler user-blocking priority / React lanes） | 250 毫秒 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Scheduler normal priority / React lanes） | 5000 毫秒 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
@@ -214,7 +213,7 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（Radix UI 隐藏、tooltip 与防抖回调） | 动态 scrollHideDelay / tooltip delay / debounce delay | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
 | 等待/未知 | console/assets/assets/index-CRjilw0Y.js（i18next backend 重读） | 动态 retryTimeout，指数翻倍 | 调度、加载或显示回调 | 未修改；只结束显示或加载等待，不写 authoritative board 状态 | 打包依赖的内部计时；按语义调用点列出，同一生成表达式的重复代码不重复列 |
 
-## 合并位置
+## 前一回合合并位置（已由下方修订表取代）
 
 `blackboard/tasks/workflow.py` 和 `blackboard/store/` 的源码未修改；两份 README、AGENTS、CONTEXT、skills 及其他 docs 未修改。Host 后续放开的范围只用于时限及其所在函数，以下列出 Worker 回合相关文件的实际修改，供与并行微任务合并。
 
@@ -231,7 +230,7 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 
 其他改动集中于 `blackboard/service/harness_health.py` 的未知扫描和账户观察、`buddy/harnesses/discovery.py` 的超时分类、`claude/adapter.py` 的未知元数据缓存、`dsh/native_run.py` 的协议等待、`native_support.py` 的共享执行期限，以及 `install/runtime.py`、`install/upgrade.py`、`protocol/transport.py` 的进程与就绪等待；均没有新增用户设置或兼容路径。
 
-## 测试如何等待事实
+## 前一回合测试记录
 
 `cli/test_checks_parallel.py` 等两个 suite 的启动 JSON marker 后再中断，以退出码和真实进程组状态断言；`buddy/harnesses/test_discovery_stop_timing.py` 等 ready/joined/reaped marker，再用受控 clock 命中探测窗口或等真实组消失；`blackboard/store/test_blackboard.py` 等 WaitAdmission 实际有两个 admitted 与一次 rejected；`console/test_console_sessions.py` 等 console status 的会话实际关闭；`buddy/harnesses/claude/test_claude.py` 的 early-result 不再受无关的 8 秒预算影响，依原生帧顺序判定；`buddy/harnesses/zcode/test_zcode_tool_evidence.py` 的超时分支等真实 prompt-ready 后才触发连接 deadline，取消分支仍核对 controller；`blackboard/tasks/test_workflow_worker.py` 的手动 claimant 场景先用已有 stop_private_workers 等私有自动 Worker 实际退出，避免它抢走 claim，再等 transient empty claim 后实际出现 claim；`buddy/harnesses/codex/test_native_run.py` 的三处取消场景等 TurnEvidence.observe 实际接受原生 started 事实后才取消，移除无关的短启动预算。保护性等待上限没有被用作启动或结束的同步信号。
 
@@ -239,7 +238,7 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 
 旧 Git 超时断言已改为 Router 预算下的 deadline；真实 Git 错误仍保留实际 argv、退出码、二进制诊断和因果。旧 Router 准备异常“没拿到 handle 就是不知是否停止”的断言，改为核对创建边界给出的正面 no-child 证据。共享假 controller fixture 接受并保留绝对期限，测试使用有效的冻结预算输入；没有在生产调用方增加兼容分支来迁就旧 fixture。
 
-## 实际验证
+## 前一回合验证记录
 
 所有 Python 检查仅用 `PYTHONPATH=src <Host-provided-python> -m hey_my_buddy.cli.checks <文件或目录>`，使用默认进程数，没有 --jobs 或 HMB_CHECKS_JOBS，没有改指定解释器环境。检查运行器自行建立私有系统临时根并负责清理。原始日志在忽略目录 `tmp/control-deadlines/`，下列结果不把子代理的成功报告当作 Host 验收。
 
@@ -277,6 +276,84 @@ DSH CLI 的初始化、开会话、续接、配置和正常逻辑 close 都等�
 
 最后的静态复核发现 Router 执行后核验没有绑定期限，已修复并复核通过；这里只记录源码审查，不将其当作测试或 Host 验收。`git diff --check` 通过。运行器对上述成功与失败运行均完成私有根清理，没有留下 exit 3 的未证明清理。
 
-## 要求边界
+## 本回合验收修订（第 5 回合）
 
-完整检查未运行，安装日常产品、真实 harness CLI 或 app 的原生检查、tests/probes、产品付费模型调用与日常服务/Worker 启停均未进行。忙机上真实 harness CLI 的时长、Linux/Windows 原生运行和安装态验收仍由 Host 另外处理。本次没有修改前端，编译依赖的相同生成表达式按其语义计时归并；没有已知与授权范围或要求不一致的情形。其他文档按冻结范围由 Host 更新，包括新增 `buddy/roles/router.py` 对已有 `blackboard/tasks/workspace.py` Git 预算边界的跨侧引用登记。
+Host 收回上一版共享 Router 准备/原生预算的方向，本回合按满额原生预算实现；移除 deadlineMonotonic、absolute_execution_deadline、剩余整数秒、started=None 与仅给 Router 的创建证据。镜像准备在 start 前，准备和核验未知时保留当前尝试并退避；核验重试缓存已取得的原生 outcome，进度写入的暂态错误不会丢答案。原生自报 elapsedMs 的相等断言已恢复，原“准备用完预算就切下一 Router”的测试被新“准备未知重试同一 Router”测试替代。
+
+冷启动和升级 command/start 恢复有界等待，pending 不杀子进程、不触发回滚；升级 journal 保留 pending、回滚步骤和日志，迟到的正常答复或实际退出之后可以继续恢复。安装保留独立结果记录与生命周期锁，POSIX 上即使 wrapper 丢失、uv 仍运行也拒绝重试清理目标；存储清理检查同一把锁。这一部分的 Windows 归属没有解决，不能据此放行。
+
+预检未知会写入 get 的 queueReason，扫描间隔内复用结果，Worker 退避并由同一线程续租；handle 交接与已观察取消在 marker/进度之前完成。Claude Code CLI 的未知元数据缓存 60 秒，available 不宣称可用；显式发现仍能重读。发现路径删除错误码排除清单，外层 30 秒之后读到的错误统一按自己的终止归未知；停止未确认仍单独拒绝。
+
+服务 Git 的 60 秒上限包括 fast-import stdin 和等待，环境禁止 lazy fetch；超时是 WORKSPACE_GIT_UNKNOWN，续接留在排队态，没有 attention 或 invalidated。健康持久记录的新 lastProbe 与 accountReadFailure.status 已并进原 schema 19→20 的 pending 升级，数据库记录、命令回放和相关事件都转换；新记录在未检查时明确 lastProbe=null，检查完成时 status=complete，账户超时 status=unknown，真实错误 status=failed，schema 仍为 20。冷启动测试恢复网络前提，UV_OFFLINE=1 已删除，两个旧 TIMEOUT 码在源码引用清零。
+
+| 与并行微任务合并的文件 | 本回合函数与修改 |
+| --- | --- |
+| `blackboard/tasks/workflow.py` | `_adopted_board_paths` 传播 Git unknown；`prepare_continuation_workspace` 遇 unknown 保留 queued，不记关注和作废 |
+| `blackboard/store/store.py` | `worker_progress` 接收边界校验的 waitingReason，写现有 queue_reason 并原子记录 attempt.waiting 事件，使 get 可见；没有增表或改版本 |
+| `blackboard/store/upgrade.py` | `_health_record`、`_receipt_object`、`migrate` 转换旧健康记录、accountReadFailure 及回放/事件，扩展同一 pending 升级 |
+| `buddy/roles/run_execution.py` | `discover_models` 简化外层超时后的 unknown 分类；`_launch`、`start_fast`、`start_review` 删除本微任务加的跨层 absolute deadline |
+| `buddy/roles/run_controller.py` | `execute` 删除 Router absolute deadline 的检查和上下文，保留 discovery deadline 的 unknown 状态及停机证据 |
+| `buddy/roles/controller.py` | `start_router_preparation` 删除可选 deadline 分支；Worker turn 的 prompts、turn_io、texts 均未修改 |
+| `buddy/roles/router.py`、`router_input.py` | prepare/start/collect 恢复预算含义、核验重试缓存；输入独立窗口只记未知；不再新增对 workspace 的跨侧引用 |
+| `buddy/runtime/worker.py` | `execute` 删除 Router 专用创建证据；`_execute_guarded`、`_execute_selected`、`_wait_control_observation`、`_Renewal` 可见退避与同线程交接，通用 prepare 错误保留已确认 start 前事实 |
+| `blackboard/service/service.py`、`harness_health.py` | `harness_prepare` 显示/清除未知等待原因；`initialize`、`set_path`、`refresh` 写明确 probe 形态，未知缓存不每次重扫 |
+| `blackboard/tasks/storage.py` | `_runtime_lock_paths` 同时核查活动安装的 lifetime lock，避免 POSIX 清理与继续安装并行 |
+
+### 本回合测试与结果
+
+只使用 Host 指定的 Python 检查命令，每条命令明确列一个文件，默认进程数；没有整目录、完整检查或三轮重跑。首先依次运行下表 37 个受影响文件；五个失败文件只各单独复跑一次。另新增 handle 在 marker/RPC 前交接的测试后，control_waits 文件跑出一处夹具把实际完成假装取消的断言失败，改为明确的 cancelled 原生结果后单独复跑一次通过。所有日志都在忽略目录 tmp/control-deadlines，所有运行私有根均由运行器删除，没有 exit 3。
+
+| 文件（相对 tests/python/） | 首轮 | 单独复跑 / 最终证据 |
+| --- | --- | --- |
+| `buddy/runtime/test_control_waits.py` | 通过，9 tests，exit 0 | 新增交接测试后失败一次；修正原生取消事实夹具，唯一复跑 10 tests 通过，exit 0 |
+| `buddy/runtime/test_worker_invariants.py` | 失败，exit 1 | 通过，19 tests，exit 0 |
+| `buddy/runtime/test_repair_recovery.py` | 通过，9 tests，exit 0 | 未重跑 |
+| `blackboard/service/test_harness_health.py` | 通过，41 tests，exit 0 | 未重跑 |
+| `blackboard/service/test_harness_service.py` | 通过，13 tests，exit 0 | 未重跑 |
+| `blackboard/store/test_upgrade_fixture.py` | 通过，17 tests，exit 0 | 未重跑 |
+| `blackboard/tasks/test_workspace_git_errors.py` | 通过，14 tests，exit 0 | 未重跑 |
+| `blackboard/tasks/test_workflow_preparation.py` | 通过，32 tests，exit 0 | 未重跑 |
+| `buddy/harnesses/test_discovery_stop_timing.py` | 通过，10 tests，exit 0 | 未重跑 |
+| `buddy/harnesses/claude/test_claude.py` | 通过，41 tests，exit 0 | 未重跑 |
+| `buddy/roles/test_run_controller_discovery.py` | 通过，18 tests，exit 0 | 未重跑 |
+| `buddy/roles/test_role_controller.py` | 通过，19 tests，exit 0 | 未重跑 |
+| `buddy/roles/test_router_input.py` | 通过，9 tests，exit 0 | 未重跑 |
+| `buddy/roles/test_run_native_evidence.py` | 通过，9 tests，exit 0 | 未重跑 |
+| `buddy/roles/test_registered_review.py` | 通过，4 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_decision.py` | 通过，35 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_routing_preferences.py` | 通过，19 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_single_router_claims.py` | 通过，17 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_router_failover_integration.py` | 失败，exit 1 | 唯一复跑仍失败；cwd 夹具已修，未再次验证 |
+| `buddy/harnesses/test_private_adapter_invariants.py` | 通过，14 tests，exit 0 | 未重跑 |
+| `protocol/test_transport_attach.py` | 失败，exit 1 | 通过，31 tests，exit 0 |
+| `install/test_runtime.py` | 失败，exit 1 | 通过，36 tests，exit 0 |
+| `install/test_upgrade.py` | 通过，27 tests，exit 0 | 未重跑 |
+| `install/test_upgrade_host_cutover.py` | 通过，2 tests，exit 0 | 未重跑 |
+| `install/test_upgrade_archive.py` | 通过，2 tests，exit 0 | 未重跑 |
+| `blackboard/tasks/test_storage.py` | 通过，25 tests，exit 0 | 未重跑 |
+| `blackboard/store/test_blackboard.py` | 失败，exit 1 | 通过，58 tests，exit 0 |
+| `buddy/harnesses/codex/test_native_run.py` | 通过，108 tests，exit 0 | 未重跑 |
+| `buddy/harnesses/claude/test_native_run.py` | 通过，74 tests，exit 0 | 未重跑 |
+| `buddy/harnesses/zcode/test_native_run.py` | 通过，76 tests，exit 0 | 未重跑 |
+| `buddy/harnesses/dsh/test_native_run.py` | 通过，66 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_router.py` | 通过，19 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_routing_modes.py` | 通过，11 tests，exit 0 | 未重跑 |
+| `blackboard/routing/test_single_router_requests.py` | 通过，20 tests，exit 0 | 未重跑 |
+| `blackboard/evaluation/test_evaluation.py` | 通过，17 tests，exit 0 | 未重跑 |
+| `blackboard/tasks/test_model_service_concurrency.py` | 通过，18 tests，exit 0 | 未重跑 |
+| `blackboard/tasks/test_parallel_dispatch.py` | 通过，27 tests，exit 0 | 未重跑 |
+
+首轮失败具体为：worker_invariants 与 blackboard 的准备拒绝旧断言仍期待 result=null；runtime 的并发锁测试把新 lifetime inode 混入外锁观测；transport 的自检测试重复 autospec 一个已被 setUp 替换的 socket；router_failover 仍保留上一版准备预算到点切 Router 的测试。前四个修正后复跑通过，第五个替换为准备未知重试后，唯一复跑暴露新夹具缺少 cwd，已补 mkdir，按照限制不再运行该文件。最终共 36/37 文件获得通过证据；该计数不是声称整个选择曾在同一次检查中通过。
+
+### 本回合阻塞与要求未覆盖的边界
+
+Windows 安装生命周期锁交接仍没有安全实现：当前 caller 取得锁并继承 fd 给 wrapper/uv 的办法在 POSIX 可用，但 Windows 的锁归锁定进程，继承句柄不转移已锁区域；caller 到点关闭句柄后，重试或清理可能与仍活动的 uv 并行。这是已定位的源码缺陷，不只是缺一轮测试，候选不能验收；需要独立监督进程真正持有 Windows 锁与安装子树停止证明，并覆盖 caller 退出、wrapper 丢失、uv 仍运行、重试与清理的交接。此判断依据 [Microsoft LockFile 文档](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfile)，未运行 Windows 原生安装。
+
+升级的 pending 命令若在 Windows 异常退出而未形成 JSON 回答，当前 _pending_child_gone 也缺少 Windows 的进程结束证明，可能一直保留未知；POSIX 已覆盖命令迟到完成、目标实际退出和回滚续接。Host 需协调这些 Windows 证明及原生验证，并补验已修 cwd 的 router_failover 单文件；本回合没有绕过验证次数限制，亦没有以 PID 单独猜测子树停止。
+
+## 当前要求边界
+
+本回合没有整目录或完整检查，每个命令只指定一个测试文件，使用默认进程数；没有 --jobs、HMB_CHECKS_JOBS 或偶发测试三轮复跑，也没有修改解释器环境。冷启动测试已删除 UV_OFFLINE=1，恢复锁定依赖缓存备齐前可使用网络的前提。日常安装、真实 harness CLI 或 app 原生检查、tests/probes、付费模型调用与日常服务/Worker 启停均未进行。
+
+本回合尚未完成：Windows 安装生命周期锁的归属与进程子树停止证明仍不安全；另一个 Router failover 测试在唯一单独复跑中暴露新夹具 cwd 未创建，已修但按本回合复跑次数限制没有再跑。该候选需要 Host 协调后继续，不能将 macOS 合成测试当作跨平台或安装态验收。
+

@@ -98,7 +98,9 @@ class MarkerWriteFailureTests(unittest.TestCase):
         receipt = self.worker.execute(unavailable)
         report = receipt["report"]
         self.assertEqual(report["status"], "failed")
-        self.assertIsNone(report["result"])
+        self.assertEqual(report['result']['code'], 'ADAPTER_UNAVAILABLE')
+        self.assertEqual(report['result']['stopEvidence'], {
+            'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
         self.assertIn("not an executable this worker can find", report["error"])
         self.assertEqual(report["terminationReason"], TERMINATION_HARNESS_ERROR)
         directory = self.state / "attempts" / "task-unavailable" / "attempt-unavailable"
@@ -276,7 +278,8 @@ class PreparationBoardErrorTests(unittest.TestCase):
             claim = self.claim()
             directory = self.state / "attempts" / claim["attempt"]["taskId"] / claim["attempt"]["attemptId"]
             directory.mkdir(mode=0o700, parents=True)
-            holder = {"harnessHistory": [{"retry": False, "harness": {"harness": "dsh", "revision": 3}}]}
+            holder = {"harnessHistory": [{"retry": False, "harness": {"harness": "dsh", "revision": 3}}],
+                      "preflightRenewal": worker_module._Renewal(worker, claim, None, None)}
             with self.assertRaises(BoardError) as caught:
                 worker._execute_selected(claim, claim["task"], claim["task"]["spec"],
                                          claim["attempt"], directory, holder)
@@ -295,7 +298,8 @@ class PreparationBoardErrorTests(unittest.TestCase):
             directory = self.state / "attempts" / claim["attempt"]["taskId"] / claim["attempt"]["attemptId"]
             directory.mkdir(mode=0o700, parents=True)
             receipt = worker._execute_selected(claim, claim["task"], claim["task"]["spec"],
-                                               claim["attempt"], directory, {})
+                                               claim["attempt"], directory,
+                                               {'preflightRenewal': worker_module._Renewal(worker, claim, None, None)})
         report = receipt["report"]
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["error"], "HARNESS_UNAVAILABLE: the native binary is missing")

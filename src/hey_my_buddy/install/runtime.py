@@ -329,6 +329,7 @@ def materialize(
     destination: Path | None = None,
     *,
     uv_bin: str | None = None,
+    timeout_seconds: float = 900,
     log_path: Path | None = None,
 ) -> dict:
     """Install the stable runtime, or return the existing READY one unchanged.
@@ -350,66 +351,128 @@ def materialize(
     # final location before installation starts.
     lock_path = target.parent / f".{target.name}.install.lock"
     with installation_lock(lock_path):
-        return _materialize_locked(root, target, lock_path, uv_bin, log_path)
+        return _materialize_locked(root, target, lock_path, uv_bin, timeout_seconds, log_path)
 
 
 def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str | None,
-                        log_path: Path | None) -> dict:
+                        timeout_seconds: float, log_path: Path | None) -> dict:
     working = None
     try:
         if is_ready(target):
             lock_path.unlink()
             return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
-        working = Path(tempfile.mkdtemp(prefix=f".{target.name}.build-", dir=target.parent))
-        _copy_assets(root, working)
-        absent = missing_resources(working)
-        if absent:
-            raise BoardError(
-                "RUNTIME_ASSET_MISSING",
-                "The declared runtime resources were not copied: " + ", ".join(absent),
-                resources=absent,
-            )
+        pending_path = target / '.uv-sync-pending.json'
+        result_path = target / '.uv-sync-result.json'
+        lifetime_path = target / '.uv-sync-lifetime.lock'
         record = manifest(root)
-        (working / "manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
-        # Publish the complete source tree under the FINAL content-addressed name
-        # before any environment is created inside it.
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-        working.rename(target)
-        environment = target / "venv"
-        command = [
-            uv_bin or installation_uv(),
-            "sync",
-            "--frozen",
-            "--no-dev",
-            "--python",
-            "3.12",
-            "--project",
-            str(target),
-        ]
-        environment_variables = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment), "VIRTUAL_ENV": ""}
-        log_stream = log_path.open("ab") if log_path else subprocess.DEVNULL
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(target),
-                env=environment_variables,
-                stdout=log_stream,
-                stderr=subprocess.STDOUT if log_path else subprocess.DEVNULL,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise BoardError("UV_NOT_FOUND", "uv is required to install the stable runtime") from exc
-        finally:
-            if log_path:
+        install_log = log_path or target.parent / f'.{target.name}.uv-sync.log'
+        if pending_path.exists():
+            pending = json.loads(pending_path.read_text())
+            install_log = Path(pending.get('log') or install_log)
+            if not result_path.exists():
+                try:
+                    with installation_lock(lifetime_path, blocking=False, create=False):
+                        # The wrapper and uv both release this descriptor only when
+                        # every process that could write the target has exited.
+                        shutil.rmtree(target)
+                except BlockingIOError:
+                    raise BoardError('RUNTIME_INSTALL_PENDING', 'Stable runtime installation is still unconfirmed; retry later',
+                                     pid=pending['pid'], log=str(install_log)) from None
+            else:
+                result = json.loads(result_path.read_text())
+        if not pending_path.exists():
+            working = Path(tempfile.mkdtemp(prefix=f".{target.name}.build-", dir=target.parent))
+            _copy_assets(root, working)
+            absent = missing_resources(working)
+            if absent:
+                raise BoardError(
+                    "RUNTIME_ASSET_MISSING",
+                    "The declared runtime resources were not copied: " + ", ".join(absent),
+                    resources=absent,
+                )
+            (working / "manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
+            # Publish the source tree under its final content-addressed name before
+            # the environment is created inside it.
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            working.rename(target)
+            environment = target / "venv"
+            command = [
+                uv_bin or installation_uv(), "sync", "--frozen", "--no-dev",
+                "--python", "3.12", "--project", str(target),
+            ]
+            if shutil.which(command[0]) is None:
+                raise BoardError("UV_NOT_FOUND", "uv is required to install the stable runtime")
+            environment_variables = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment), "VIRTUAL_ENV": ""}
+            # The detached wrapper records uv's exit status even when this caller
+            # returns or exits after its observation deadline.
+            script = """import json, os, subprocess, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+lock_fd = int(sys.argv[2])
+try:
+    options = {'pass_fds': (lock_fd,)} if os.name != 'nt' else {'close_fds': False}
+    result = {'returncode': subprocess.run(sys.argv[3:], check=False, **options).returncode}
+except OSError as error:
+    result = {'returncode': 127, 'error': str(error)}
+temporary = path.with_suffix('.tmp')
+with temporary.open('w') as stream:
+    json.dump(result, stream)
+    stream.flush()
+    os.fsync(stream.fileno())
+os.replace(temporary, path)
+if hasattr(os, 'O_DIRECTORY'):
+    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+"""
+            log_stream = install_log.open("ab")
+            try:
+                with installation_lock(lifetime_path) as lifetime_fd:
+                    with pending_path.open('w') as marker:
+                        json.dump({'pid': None, 'log': str(install_log)}, marker)
+                        marker.flush()
+                        os.fsync(marker.fileno())
+                    if os.name == 'nt':
+                        os.set_inheritable(lifetime_fd, True)
+                    options = {'pass_fds': (lifetime_fd,)} if os.name != 'nt' else {'close_fds': False}
+                    child = subprocess.Popen(
+                        [sys.executable, '-c', script, str(result_path), str(lifetime_fd), *command],
+                        cwd=str(target), env=environment_variables, stdin=subprocess.DEVNULL,
+                        stdout=log_stream, stderr=subprocess.STDOUT,
+                        start_new_session=True, **options,
+                    )
+                    pending_update = pending_path.with_suffix('.tmp')
+                    pending_update.write_text(json.dumps({'pid': child.pid, 'log': str(install_log)}))
+                    os.replace(pending_update, pending_path)
+                    try:
+                        child.wait(timeout=timeout_seconds)
+                    except subprocess.TimeoutExpired:
+                        raise BoardError('RUNTIME_INSTALL_PENDING', 'Stable runtime installation is still running; retry later',
+                                         pid=child.pid, log=str(install_log)) from None
+            finally:
                 log_stream.close()
-        if completed.returncode != 0:
+            if not result_path.exists():
+                try:
+                    with installation_lock(lifetime_path, blocking=False, create=False):
+                        # A killed wrapper can leave uv alive with this lock.
+                        shutil.rmtree(target)
+                except BlockingIOError:
+                    raise BoardError('RUNTIME_INSTALL_PENDING', 'Stable runtime installation is still unconfirmed; retry later',
+                                     pid=child.pid, log=str(install_log)) from None
+                raise BoardError('RUNTIME_INSTALL_FAILED', 'Stable runtime installation ended without a completion record',
+                                 pid=child.pid, log=str(install_log))
+            result = json.loads(result_path.read_text())
+        environment = target / "venv"
+        if result['returncode'] != 0:
             # An incomplete runtime is never READY and is removed so nothing can attach.
             shutil.rmtree(target, ignore_errors=True)
             raise BoardError(
                 "RUNTIME_INSTALL_FAILED",
                 "uv sync failed while installing the stable runtime; see the install log",
-                log=str(log_path) if log_path else None,
+                log=str(install_log),
             )
         interpreter = runtime_python(target)
         if not interpreter.is_file():
@@ -431,6 +494,8 @@ def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str |
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
         }
         _rewrite_environment_paths(environment, target)
+        pending_path.unlink()
+        result_path.unlink()
         (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n")
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
         lock_path.unlink()

@@ -26,6 +26,8 @@ from ...errors import BoardError
 
 DEFAULT_RETRY_SECONDS = 120
 CLAIM_IDLE_SECONDS = 2.0
+PREFLIGHT_RETRY_SECONDS = 15.0
+PREFLIGHT_MAX_RETRY_SECONDS = 180.0
 
 
 def supervisor_start_stop_path(directory: Path) -> Path | None:
@@ -332,7 +334,7 @@ class Worker:
                 self.spool.clear_startup()
                 return True
             except BoardError as error:
-                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+                if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_PENDING", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
                     self.log(f"release of {attempt_id} unavailable ({error.code}); keeping the intent")
                     return False
                 self.log(f"evidence-based release refused ({error.code}); falling back to reconcile")
@@ -345,7 +347,7 @@ class Worker:
                 worker_instance=self.instance_id,
             )
         except BoardError as error:
-            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
+            if error.code in ("SERVICE_UNAVAILABLE", "SERVICE_START_PENDING", "SERVICE_START_FAILED", "INVALID_RESPONSE"):
                 # A transport failure says nothing about ownership: keep the recovery
                 # identity and try again later instead of discarding it.
                 self.log(f"reconcile of {attempt_id} unavailable ({error.code}); keeping the intent")
@@ -548,9 +550,6 @@ class Worker:
             handle = holder.get("handle")
             implementation = holder.get("adapter")
             shutdown_confirmed = holder.get("confirmed_stopped") is True
-            creation = getattr(error, 'owned_popen_evidence', None) if spec['adapter'] == 'decision' else None
-            no_child_proof = (handle is None and creation is not None and creation.created is False
-                              and creation.shutdown_confirmed is True)
             if not shutdown_confirmed and handle is not None and implementation is not None:
                 try:
                     role_seam.worker_cancel(implementation, handle)
@@ -568,9 +567,6 @@ class Worker:
             elif not shutdown_confirmed and not holder.get("start_invoked"):
                 # Validation failed before start() could spawn anything.
                 shutdown_confirmed = True
-            elif not shutdown_confirmed and spec['adapter'] == 'decision':
-                if creation is not None and not creation.created:
-                    shutdown_confirmed = creation.shutdown_confirmed is True
             if shutdown_confirmed:
                 self._release_controller_endpoint(holder)
                 try:
@@ -586,9 +582,6 @@ class Worker:
                 {
                     "status": "failed",
                     "result": ({"status": "error", "code": error.code,
-                                **({"modelStarted": False, "stopEvidence": {
-                                    "shutdownConfirmed": True, "native": {"shutdownConfirmed": True}}}
-                                   if no_child_proof else {}),
                                 "usage": {"elapsedMs": round((time.monotonic() - started_at) * 1000),
                                           "toolCalls": None, "bytesRead": None}}
                                if isinstance(error, BoardError) and not holder.get("started") else None),
@@ -597,9 +590,7 @@ class Worker:
                     "signal": None,
                     "shutdownConfirmed": shutdown_confirmed,
                     "artifacts": [],
-                    "terminationReason": (TERMINATION_DEADLINE if spec['adapter'] == 'decision'
-                                          and isinstance(error, BoardError) and error.code == 'router-budget-exhausted'
-                                          else TERMINATION_HARNESS_ERROR),
+                    "terminationReason": TERMINATION_HARNESS_ERROR,
                 },
                 directory,
             )
@@ -633,19 +624,18 @@ class Worker:
         review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
         if name == 'decision':
             name = (claim.get('decisionInput') or {}).get('buddy', {}).get('harness')
-        if name not in HARNESSES:
-            return self._execute_selected(claim, task, spec, attempt, directory, holder)
-        history = []
-        record = None
-        for retry in (False, True):
-            unknown_reads = 0
-            renewal = _Renewal(self, claim, None, None)
-            renewal.start()
-            def cancelled(view):
-                renewal.stop()
-                renewal.join()
-                return self._preflight_cancelled(claim, directory, record, view)
-            try:
+        renewal = _Renewal(self, claim, None, None)
+        holder['preflightRenewal'] = renewal
+        renewal.start()
+        try:
+            if name not in HARNESSES:
+                return self._execute_selected(claim, task, spec, attempt, directory, holder)
+            history = []
+            record = None
+            for retry in (False, True):
+                unknown_reads = 0
+                def cancelled(view):
+                    return self._preflight_cancelled(claim, directory, record, view)
                 while True:
                     if renewal.cancel_view is not None or self.stop_requested():
                         return cancelled(renewal.cancel_view)
@@ -668,63 +658,61 @@ class Worker:
                                     raise error
                             if view.get('cancelRequested'):
                                 return cancelled(view)
-                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_TIMEOUT'):
+                        if error.code not in ('SERVICE_UNAVAILABLE', 'SERVICE_START_PENDING'):
                             raise
                         # The request may already be committed: replay its exact identity.
-                        self.stop.wait(CLAIM_IDLE_SECONDS)
+                        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
+                                         PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads, 4)))
                         continue
                     record = response['harness']
                     if record is None or (record.get('status') != 'unknown'
-                                          and record.get('lastProbe', {}).get('status') != 'unknown'):
+                                          and (record.get('lastProbe') or {}).get('status') != 'unknown'):
                         break
                     unknown_reads += 1
-                    self.stop.wait(CLAIM_IDLE_SECONDS)
-            except BaseException:
-                renewal.stop()
-                renewal.join()
-                raise
-            if renewal.cancel_view is not None or self.stop_requested():
-                return cancelled(renewal.cancel_view)
-            history.append({'retry': retry, 'harness': record})
-            if record is None or not record.get('available'):
-                renewal.stop()
-                renewal.join()
-                if not retry:
-                    continue
-                if review:
-                    return self._review_unavailable(claim, directory, history, 'router-unavailable')
-                return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
-                    'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run hey-my-buddy harnesses with refresh:true'),
-                    'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
-                    'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
-            selection = directory / 'harness-selection.json'
-            fsync_json(selection, {name: record})
-            holder['harnessEnvironment'] = {RECORD_FILE: str(selection)}
-            holder['harnessHistory'] = history
-            holder['harnessRetry'] = retry
-            holder['preflightRenewal'] = renewal
-            try:
-                with bound([record]):
-                    return self._execute_selected(claim, task, spec, attempt, directory, holder)
-            except (OSError, BoardError) as error:
-                # A start() error with no returned handle may still follow spawn.
-                # Retry only if start was never called or the previous child has
-                # independently produced complete stop proof.
-                if holder.get('start_invoked') and not holder.get('confirmed_stopped'):
-                    raise
-                startup_failure = (isinstance(error, BoardError) and error.code in {'ADAPTER_UNAVAILABLE', 'HARNESS_UNAVAILABLE', 'HARNESS_PREMODEL_FAILED'})
-                startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
-                if retry and not holder.get('started') and startup_failure:
-                    self._harness_failed(attempt, record)
+                    renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS,
+                                     PREFLIGHT_RETRY_SECONDS * 2 ** min(unknown_reads - 1, 4)))
+                if renewal.cancel_view is not None or self.stop_requested():
+                    return cancelled(renewal.cancel_view)
+                history.append({'retry': retry, 'harness': record})
+                if record is None or not record.get('available'):
+                    if not retry:
+                        continue
                     if review:
                         return self._review_unavailable(claim, directory, history, 'router-unavailable')
-                if retry or holder.get('started') or not startup_failure:
-                    raise
-            finally:
-                renewal.stop()
-                renewal.join()
-                holder.pop('preflightRenewal', None)
-        raise AssertionError('unreachable harness retry')
+                    return self.receipt(claim, {'status': 'failed', 'result': {'harness': record, 'harnessAttempts': history},
+                        'error': 'HARNESS_UNAVAILABLE: ' + str((record or {}).get('remedy') or 'Run hey-my-buddy harnesses with refresh:true'),
+                        'exitCode': None, 'signal': None, 'shutdownConfirmed': True, 'artifacts': [],
+                        'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
+                selection = directory / 'harness-selection.json'
+                fsync_json(selection, {name: record})
+                holder['harnessEnvironment'] = {RECORD_FILE: str(selection)}
+                holder['harnessHistory'] = history
+                holder['harnessRetry'] = retry
+                try:
+                    with bound([record]):
+                        return self._execute_selected(claim, task, spec, attempt, directory, holder)
+                except (OSError, BoardError) as error:
+                    if (isinstance(error, BoardError) and error.code == 'ATTEMPT_FINISHED'
+                            and (renewal.cancel_view is not None or self.stop_requested())):
+                        return cancelled(renewal.cancel_view)
+                    # A start() error with no returned handle may still follow spawn.
+                    # Retry only if start was never called or the previous child has
+                    # independently produced complete stop proof.
+                    if holder.get('start_invoked') and not holder.get('confirmed_stopped'):
+                        raise
+                    startup_failure = (isinstance(error, BoardError) and error.code in {'ADAPTER_UNAVAILABLE', 'HARNESS_UNAVAILABLE', 'HARNESS_PREMODEL_FAILED'})
+                    startup_failure = startup_failure or (isinstance(error, OSError) and error.filename in record.get('command', []))
+                    if retry and not holder.get('started') and startup_failure:
+                        self._harness_failed(attempt, record)
+                        if review:
+                            return self._review_unavailable(claim, directory, history, 'router-unavailable')
+                    if retry or holder.get('started') or not startup_failure:
+                        raise
+            raise AssertionError('unreachable harness retry')
+        finally:
+            renewal.stop()
+            renewal.join()
+            holder.pop('preflightRenewal', None)
 
     def _preflight_cancelled(self, claim, directory, record, view):
         return self.receipt(claim, {'status': 'cancelled', 'result': {'harness': record} if record else None,
@@ -770,11 +758,13 @@ class Worker:
             agent_credential=claim.get("agentCredential") or None,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
+        renewal = holder['preflightRenewal']
         preparation = role_seam.prepare_worker_run(implementation, context)
-        preflight = holder.get('preflightRenewal')
-        if preflight is not None and preflight.cancel_view is not None:
-            record = holder['harnessHistory'][-1]['harness']
-            return self._preflight_cancelled(claim, directory, record, preflight.cancel_view)
+        unknown_reads = 0
+        while preparation.error is not None and preparation.error.code == 'router-input-unknown':
+            self._wait_control_observation(claim, renewal, preparation.error.code, unknown_reads)
+            unknown_reads += 1
+            preparation = role_seam.prepare_worker_run(implementation, context)
         if not preparation.available:
             return self.receipt(
                 claim,
@@ -800,7 +790,9 @@ class Worker:
                 claim,
                 {
                     "status": "failed",
-                    "result": None,
+                    "result": {"status": "error", "code": error.code,
+                               "stopEvidence": {"shutdownConfirmed": True,
+                                                "native": {"shutdownConfirmed": True}}},
                     "error": f"{error.code}: {error.message}",
                     "exitCode": None,
                     "signal": None,
@@ -817,13 +809,11 @@ class Worker:
         holder.pop("confirmed_stopped", None)
         holder.pop("live_release_attempted", None)
         holder.pop("handle", None)
-        if preflight is not None and preflight.cancel_view is not None:
-            record = holder['harnessHistory'][-1]['harness']
-            return self._preflight_cancelled(claim, directory, record, preflight.cancel_view)
         holder["start_invoked"] = True
         handle = role_seam.worker_start(implementation, context)
         holder["handle"] = handle
         holder["started"] = True
+        renewal.attach(handle, implementation)
         # A durable marker for the recovery path, written while the handle is alive.
         # A failure here is logged and does not change supervision: the handle in
         # this process is the authority for stopping what it started.
@@ -850,43 +840,41 @@ class Worker:
                 self._nonce(),
                 "the worker spawned the adapter process",
                 phase="executing",
+                data={'waitingReason': None},
             )
         except Exception as error:  # a progress hint is never worth losing the child
             self.log(f"progress not recorded ({error!r}); the owned child keeps running")
-        if preflight is not None:
-            preflight.stop()
-            preflight.join()
-            if preflight.cancel_view is not None:
-                preflight.handle = handle
-                preflight.implementation = implementation
-                preflight._request_cancel(preflight.cancel_view)
-        renewal = _Renewal(self, claim, handle, implementation)
-        renewal.start()
-        try:
-            timeout_seconds = context.timeout_seconds
-            deadline = started + timeout_seconds if timeout_seconds is not None else None
-            timed_out = False
-            while True:
-                if self.stop_requested() and not handle.cancel_requested:
-                    self.log("stop requested; cancelling this owned process group")
-                    role_seam.worker_stop(implementation, handle, stop_initiator="unknown", grace_deadline=None)
-                if handle.wait(timeout=0.25) is not None:
-                    break
-                if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
-                        and not handle.force_stop_requested):
-                    handle.grace_expired = True
-                    self.log("Host stop grace reached; forcing the owned run to stop")
-                    role_seam.worker_cancel(implementation, handle)
-                if deadline is not None and time.monotonic() >= deadline:
-                    timed_out = True
-                    self.log("Router budget reached; cancelling this owned process group")
-                    role_seam.worker_cancel(implementation, handle)
-                    handle.wait(timeout=10)
-                    break
-        finally:
-            renewal.stop()
-            renewal.join(timeout=2)
-        outcome = role_seam.worker_collect(implementation, handle, context)
+        timeout_seconds = context.timeout_seconds
+        deadline = started + timeout_seconds if timeout_seconds is not None else None
+        timed_out = False
+        while True:
+            if self.stop_requested() and not handle.cancel_requested:
+                self.log("stop requested; cancelling this owned process group")
+                role_seam.worker_stop(implementation, handle, stop_initiator="unknown", grace_deadline=None)
+            if handle.wait(timeout=0.25) is not None:
+                break
+            if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
+                    and not handle.force_stop_requested):
+                handle.grace_expired = True
+                self.log("Host stop grace reached; forcing the owned run to stop")
+                role_seam.worker_cancel(implementation, handle)
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                self.log("Router budget reached; cancelling this owned process group")
+                role_seam.worker_cancel(implementation, handle)
+                handle.wait(timeout=10)
+                break
+        unknown_reads = 0
+        while True:
+            try:
+                outcome = role_seam.worker_collect(implementation, handle, context)
+                break
+            except BoardError as error:
+                if error.code != 'router-input-unknown':
+                    raise
+                holder['confirmed_stopped'] = True
+                self._wait_control_observation(claim, renewal, error.code, unknown_reads)
+                unknown_reads += 1
         holder["confirmed_stopped"] = outcome.shutdown_confirmed is True
         # Virtual adapters project native results. Keep the controller's retention
         # failure diagnostic in the final receipt even when that projection omits it.
@@ -935,6 +923,18 @@ class Worker:
         report["logPaths"] = context.log_paths()
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
+
+    def _wait_control_observation(self, claim, renewal, reason, retry):
+        attempt = claim['attempt']
+        try:
+            self.client.progress(self.worker_id, attempt['attemptId'], attempt['generation'], self._nonce(),
+                                 'A control observation is still unknown; it will be retried',
+                                 data={'waitingReason': reason})
+        except Exception as error:
+            self.log(f"waiting observation not recorded ({error!r}); the owned call remains pending")
+        renewal.wait(min(PREFLIGHT_MAX_RETRY_SECONDS, PREFLIGHT_RETRY_SECONDS * 2 ** min(retry, 4)))
+        if renewal.cancel_view is not None or self.stop_requested():
+            raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
 
     def _cleanup_attempt_credentials(self, claim: dict, spec: dict, task: dict, attempt: dict) -> None:
         from ...private_dirs import cleanup_attempt_credentials
@@ -1014,6 +1014,8 @@ class _Renewal(threading.Thread):
         self.handle = handle
         self.implementation = implementation
         self._done = threading.Event()
+        self._wake = threading.Event()
+        self._binding_lock = threading.RLock()
         self.cancel_view: dict | None = None
         self.attempt = claim["attempt"]
         self.nonce = worker._nonce()
@@ -1035,6 +1037,8 @@ class _Renewal(threading.Thread):
         if self.handle is not None:
             self._forward_activity()
         while not self._done.wait(self.CANCEL_POLL_SECONDS):
+            if self.worker.stop_requested():
+                self._wake.set()
             if self._cancel_observed():
                 return
             if self.handle is not None:
@@ -1057,9 +1061,27 @@ class _Renewal(threading.Thread):
         return self._request_cancel(view)
 
     def _request_cancel(self, view: dict) -> bool:
-        if self.handle is None:
+        with self._binding_lock:
             self.cancel_view = view
-            return True
+            self._wake.set()
+            if self.handle is None:
+                return False
+            self._stop_handle(view)
+        return False
+
+    def attach(self, handle, implementation) -> None:
+        """Hand native ownership to the same renewal that supervised preparation."""
+        with self._binding_lock:
+            self.handle = handle
+            self.implementation = implementation
+            if self.cancel_view is not None:
+                self._stop_handle(self.cancel_view)
+
+    def wait(self, seconds: float) -> None:
+        """Back off an unknown preflight; a stop fact wakes the owning thread."""
+        self._wake.wait(seconds)
+
+    def _stop_handle(self, view: dict) -> None:
         initiator = view.get("stopInitiator") or "unknown"
         current = self.handle.stop_initiator
         if not self.handle.cancel_requested or current != initiator:
@@ -1073,7 +1095,6 @@ class _Renewal(threading.Thread):
                                   stop_initiator=initiator, grace_deadline=deadline)
         # During a summary turn keep the lease and keep observing a console
         # escalation. The original durable deadline is never extended.
-        return False
 
     def _renew(self) -> bool:
         """Renew the lease; returns False when this worker must stop touching it."""
@@ -1244,6 +1265,7 @@ class _Renewal(threading.Thread):
 
     def stop(self) -> None:
         self._done.set()
+        self._wake.set()
 
 
 def _now() -> str:

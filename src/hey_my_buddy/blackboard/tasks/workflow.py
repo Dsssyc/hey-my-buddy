@@ -4283,7 +4283,9 @@ class WorkflowCoordinator:
                 continue
             try:
                 module.verify_sealed_output(manifest, manifest, record)
-            except BoardError:
+            except BoardError as error:
+                if error.code == "WORKSPACE_GIT_UNKNOWN":
+                    raise
                 continue
             values = record.get("adoptedPaths")
             if not isinstance(values, list):
@@ -6220,6 +6222,8 @@ class WorkflowCoordinator:
                     recovered_attempt = self._failed_turn_input(connection, run, row)
                     intent = self._continuation_intent(connection, run, row, recovered_attempt=recovered_attempt)
                 except BoardError as error:
+                    if error.code == "WORKSPACE_GIT_UNKNOWN":
+                        continue
                     # An unresolved scope conflict is a durable Host boundary, not a
                     # claim error: record the attention request and keep the site.
                     problem = {"code": error.code, "message": _head(str(error), 2000),
@@ -6259,10 +6263,10 @@ class WorkflowCoordinator:
                         # a new preparation has just observed this same checkout.
                         workspace_module().verify(manifest, require_unchanged=True)
                 except Exception as error:
-                    if isinstance(error, BoardError) and error.code == "WORKSPACE_BUSY":
+                    if isinstance(error, BoardError) and error.code in {"WORKSPACE_BUSY", "WORKSPACE_GIT_UNKNOWN"}:
                         # Another worker is preparing the same continuation. Leave it
                         # queued so that worker can publish, or a later claim can recover
-                        # its durable files. Contention is not a changed input or failure.
+                        # its durable files. An unfinished Git observation is also retryable.
                         continue
                     problem = {"code": getattr(error, "code", "WORKSPACE_PREPARE_FAILED"), "message": _head(str(error), 2000),
                                **({"details": error.details} if isinstance(error, BoardError) and error.details else {})}

@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import os
-import math
 from pathlib import Path
 import json
 import threading
-import time
 import uuid
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
-from hey_my_buddy.buddy.harnesses.native_support import execution_deadline
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
 from hey_my_buddy.buddy.roles import run_controller, run_execution
@@ -20,7 +17,7 @@ from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase, READ_SC
 
 
 class RegisteredReviewTests(NativeRunCase):
-    def review(self, *, tool_budget=4, deadline_monotonic=None):
+    def review(self, *, tool_budget=4):
         root = self.base / uuid.uuid4().hex
         root.mkdir(mode=0o700)
         control = {
@@ -34,8 +31,6 @@ class RegisteredReviewTests(NativeRunCase):
             "readOnlyRequest": {"prompt": "Choose", "outputSchema": READ_SCHEMA,
                                 "budget": {"toolCalls": tool_budget}, "captureEvidence": False},
         }
-        if deadline_monotonic is not None:
-            control["deadlineMonotonic"] = deadline_monotonic
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}):
             frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
             result = decode_run_result(frame)
@@ -43,33 +38,6 @@ class RegisteredReviewTests(NativeRunCase):
             verdict = json.loads((root / "verdict.json").read_bytes())
             payload = run_execution._review_result(result, request, verdict)
         return result, request, payload, code
-
-    def test_expired_router_deadline_skips_native_with_positive_stop_evidence(self):
-        with mock.patch.object(run_controller, "run_harness") as run:
-            result, request, payload, code = self.review(deadline_monotonic=time.monotonic() - 1)
-        run.assert_not_called()
-        self.assertEqual(code, 1)
-        self.assertEqual(result.identity, request.identity)
-        self.assertEqual(result.end.reason_code, "deadline")
-        self.assertFalse(result.model_started)
-        self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        self.assertEqual(payload["code"], "deadline")
-        self.assertTrue(payload["processState"]["shutdownConfirmed"])
-
-    def test_native_execution_uses_the_original_router_deadline(self):
-        deadline = time.monotonic() + 8
-        observed = []
-        def capture(timeout_seconds):
-            value = execution_deadline(timeout_seconds)
-            observed.append(value)
-            return value
-        with mock.patch.object(native_run, "execution_deadline", side_effect=capture):
-            result, _request, _payload, code = self.review(deadline_monotonic=deadline)
-        self.assertEqual(code, 0)
-        self.assertEqual(result.end.status, "ok")
-        self.assertTrue(observed)
-        self.assertTrue(all(value == deadline for value in observed))
-        self.assertEqual(execution_deadline(None), math.inf)
 
     def test_a_review_uses_the_stored_request_and_result_and_explicit_posture(self):
         result, request, payload, code = self.review()

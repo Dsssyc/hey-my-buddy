@@ -33,7 +33,6 @@ from pathlib import Path
 from ...errors import BoardError
 from ...protocol.contracts import HarnessRunLive
 from ..harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
-from ..harnesses.native_support import absolute_execution_deadline
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.registry import adapter, run_seam
@@ -220,20 +219,7 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
     original_identity = request.identity
     if input_error is None:
         with _controller_live(control, request, services, state_dir) as live_services:
-            deadline = control.get("deadlineMonotonic")
-            if deadline is not None and time.monotonic() >= deadline:
-                result = RunResult(identity=request.identity, harness=request.harness,
-                    end=RunEnd(status="error", reason_code="deadline",
-                               message="The Router budget expired before native execution"),
-                    buddy=ResultBuddy(requested=request.buddy), model_started=False,
-                    stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
-            elif deadline is not None:
-                with absolute_execution_deadline(deadline):
-                    result = run_harness(module, request, observer=observer, services=live_services,
-                                         cancelled=cancelled.is_set)
-            else:
-                result = run_harness(module, request, observer=observer, services=live_services,
-                                     cancelled=cancelled.is_set)
+            result = run_harness(module, request, observer=observer, services=live_services, cancelled=cancelled.is_set)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),

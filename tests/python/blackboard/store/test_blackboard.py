@@ -1364,7 +1364,9 @@ class TestExtensibility(BoardTestCase):
         worker.run_once()
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "failed")
-        self.assertIsNone(result["result"], "no adapter result exists for an unusable executable")
+        self.assertEqual(result['result']['code'], 'ADAPTER_UNAVAILABLE')
+        self.assertEqual(result['result']['stopEvidence'], {
+            'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
         self.assertIn("ADAPTER_UNAVAILABLE", result["resultMeta"]["error"])
         self.assertTrue(result["shutdownConfirmed"], "no process was ever created, so shutdown is confirmed")
         self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
@@ -1476,7 +1478,7 @@ class TestPackaging(BoardTestCase):
         if not shutil_module.which(os.environ.get("UV_BIN", "uv")):
             self.skipTest("uv is not available")
         runtime_root = self.directory / "runtime-root"
-        environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root), "UV_OFFLINE": "1"}
+        environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root)}
         self.addCleanup(lambda: self.cli("stop", "{}", env=environment, timeout=60))
         # The production cold-start path: no daemon pre-started by the test.
         code, health = self.cli("health", env=environment, timeout=600)

@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from ...errors import BoardError
@@ -12,19 +13,21 @@ from ...blackboard.tasks import workspace
 from ...private_dirs import remove_tree
 
 
-def _remaining() -> float | None:
-    try:
-        return workspace.remaining_git_seconds()
-    except BoardError as error:
-        if error.code == "deadline":
-            raise BoardError("router-budget-exhausted", "The Router budget expired while reading frozen input") from error
-        raise
+# Independent bound for preparing and checking the private mirror.
+MATERIALIZE_SECONDS = 120
 
 
-def digest(root: Path) -> str:
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BoardError("router-input-unknown", "The frozen input read did not finish within its wait")
+    return remaining
+
+
+def digest(root: Path, *, deadline: float) -> str:
     value = hashlib.sha256()
     for directory, names, files in os.walk(root, followlinks=False):
-        _remaining()
+        _remaining(deadline)
         names.sort()
         for name in sorted(names + files):
             path = Path(directory) / name
@@ -36,7 +39,7 @@ def digest(root: Path) -> str:
                 value.update(b"file\0")
                 with path.open('rb') as stream:
                     for block in iter(lambda: stream.read(65536), b''):
-                        _remaining()
+                        _remaining(deadline)
                         value.update(block)
             else:
                 value.update(b"directory\0")
@@ -44,14 +47,14 @@ def digest(root: Path) -> str:
 
 
 def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
-    _remaining()
+    deadline = time.monotonic() + MATERIALIZE_SECONDS
     if manifest is None:
         # Public standalone selection has no filesystem input. Freeze an empty
         # private directory rather than borrowing any caller checkout.
         root = directory / "frozen-input"
         root.mkdir(mode=0o700)
         try:
-            return root, digest(root)
+            return root, digest(root, deadline=deadline)
         except BoardError:
             discard(root)
             raise
@@ -60,10 +63,11 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
     try:
         workspace.verify(manifest, require_unchanged=True)
     except BoardError as error:
-        if error.code == "deadline":
-            raise BoardError("router-budget-exhausted", "The Router budget expired while verifying frozen input") from error
-        code = "router-input-changed" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"} else "router-input-unavailable"
+        code = ("router-input-unknown" if error.code == "WORKSPACE_GIT_UNKNOWN" else
+                "router-input-changed" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"}
+                else "router-input-unavailable")
         raise BoardError(code, "The frozen Router input could not be verified") from None
+    _remaining(deadline)
     root = directory / "frozen-input"
     root.mkdir(mode=0o700)
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
@@ -72,9 +76,9 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         command = ["git", "-C", manifest["checkoutRoot"], *arguments]
         try:
             result = subprocess.run(command, capture_output=True, env=environment,
-                                    timeout=_remaining(), check=False)
+                                    timeout=min(30, _remaining(deadline)), check=False)
         except subprocess.TimeoutExpired as error:
-            raise BoardError("router-budget-exhausted", "The Router budget expired while reading frozen input") from error
+            raise BoardError("router-input-unknown", "The frozen Git object read timed out") from error
         if result.returncode:
             raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
         return result.stdout
@@ -85,7 +89,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         # filters. Read raw blobs so Router bytes equal the immutable input tree,
         # through one `cat-file --batch` process rather than one process per file.
         entries = git("ls-tree", "-rz", "--full-tree", manifest["inputTree"])
-        _remaining()
+        _remaining(deadline)
         reader = subprocess.Popen(["git", "-C", manifest["checkoutRoot"], "cat-file", "--batch"],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   env=environment)
@@ -104,17 +108,17 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
             return contents
 
         def blob(object_id: str) -> bytes:
-            remaining = _remaining()
+            remaining = _remaining(deadline)
             future = pool.submit(read_blob, object_id)
             try:
                 return future.result(timeout=remaining)
             except FutureTimeout as error:
                 reader.kill()
-                raise BoardError("router-budget-exhausted", "The Router budget expired while reading frozen input") from error
+                raise BoardError("router-input-unknown", "The frozen Git object read timed out") from error
 
         links = []
         for entry in entries.split(b"\0"):
-            _remaining()
+            _remaining(deadline)
             if not entry:
                 continue
             metadata, raw_path = entry.split(b"\t", 1)
@@ -134,20 +138,18 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
                 path.write_bytes(contents)
                 path.chmod(0o555 if mode == "100755" else 0o444)
         for link in links:
-            _remaining()
+            _remaining(deadline)
             try:
                 resolved = link.resolve(strict=True)
             except FileNotFoundError:
                 resolved = link.resolve(strict=False)
             if not resolved.is_relative_to(root.resolve()):
                 raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
-        result = root, digest(root)
-        _remaining()
+        result = root, digest(root, deadline=deadline)
+        _remaining(deadline)
         return result
-    except BoardError as error:
+    except BoardError:
         discard(root)
-        if error.code == "deadline":
-            raise BoardError("router-budget-exhausted", "The Router budget expired while materializing frozen input") from error
         raise
     except (OSError, ValueError, RuntimeError):
         discard(root)
@@ -176,16 +178,17 @@ def discard(root: Path) -> None:
 
 
 def verify(manifest: dict, root: Path, expected: str) -> dict:
+    deadline = time.monotonic() + MATERIALIZE_SECONDS
     try:
-        _remaining()
         if manifest is not None:
             workspace.verify(manifest, require_unchanged=True)
-        if digest(root) != expected:
+        _remaining(deadline)
+        if digest(root, deadline=deadline) != expected:
             raise BoardError("router-input-changed", "Router snapshot changed")
-        _remaining()
+        _remaining(deadline)
     except BoardError as error:
-        if error.code in {"deadline", "router-budget-exhausted"}:
-            return {"unchanged": None, "code": "router-budget-exhausted", "manifestSha256": (manifest or {}).get("manifestSha256")}
+        if error.code in {"WORKSPACE_GIT_UNKNOWN", "router-input-unknown"}:
+            return {"unchanged": None, "code": "router-input-unknown", "manifestSha256": (manifest or {}).get("manifestSha256")}
         return {"unchanged": False, "code": "router-input-changed", "manifestSha256": (manifest or {}).get("manifestSha256")}
     except OSError:
         return {"unchanged": False, "code": "router-input-changed", "manifestSha256": (manifest or {}).get("manifestSha256")}

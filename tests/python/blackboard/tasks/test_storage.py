@@ -110,6 +110,20 @@ class StorageTests(BoardTestCase):
         self.assertFalse(candidate.exists())
         self.assertEqual(list(root.iterdir()), [])
 
+    def test_runtime_cleanup_observes_uv_lifetime_after_installer_returns(self):
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
+        candidate = root / ('c' * 32)
+        candidate.mkdir(parents=True)
+        lifetime = candidate / '.uv-sync-lifetime.lock'
+        lifetime.touch(mode=0o600)
+        fd = os.open(lifetime, os.O_RDWR)
+        try:
+            locking.lock(fd, blocking=False)
+            self.assertEqual(storage._runtime_lock_reasons(candidate), ['runtime-installation-active'])
+        finally:
+            os.close(fd)
+        self.assertEqual(storage._runtime_lock_reasons(candidate), [])
+
     def test_unbound_build_leftover_waits_for_every_existing_installation_lock(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])

@@ -4,10 +4,11 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
-from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal, TERMINATION_DEADLINE
-from hey_my_buddy.buddy.runtime.windows_process import ProcessCreationEvidence
+from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal, TERMINATION_HARNESS_ERROR
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 
 
 class ControlWaitTests(unittest.TestCase):
@@ -27,6 +28,7 @@ class ControlWaitTests(unittest.TestCase):
         self.worker.stop = Mock()
         self.worker.stop_requested = Mock(return_value=False)
         self.worker.receipt = Mock(side_effect=lambda claim, report, directory: report)
+        self.backoff = self.enterContext(patch.object(_Renewal, 'wait', autospec=True))
         self.claim = {'task': {'taskId': 'task', 'spec': {'adapter': 'codex'}},
                       'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
 
@@ -48,6 +50,7 @@ class ControlWaitTests(unittest.TestCase):
         self.assertTrue(all(not call.args[1]['retry'] for call in calls))
         self.assertEqual(len({call.args[1]['commandId'] for call in calls}), 3)
         self.worker._execute_selected.assert_called_once()
+        self.assertEqual([call.args[1] for call in self.backoff.call_args_list], [15, 30])
 
     def test_blocked_prepare_keeps_renewing_before_native_start(self):
         entered = threading.Event()
@@ -101,7 +104,7 @@ class ControlWaitTests(unittest.TestCase):
             raise BoardError('ATTEMPT_FINISHED', 'cancel arrived before prepare')
 
         self.worker.client.call.side_effect = call
-        self.worker.stop.wait.side_effect = lambda _: cancelled.set()
+        self.backoff.side_effect = lambda renewal, seconds: cancelled.set()
         self.worker._execute_selected = Mock()
         result = self.worker._execute_guarded(self.claim, self.claim['task'], self.claim['task']['spec'],
                                               self.claim['attempt'], self.root, {})
@@ -180,12 +183,9 @@ class ControlWaitTests(unittest.TestCase):
         self.assertEqual(first.args, second.args)
         self.worker.receipt.assert_not_called()
 
-    def test_router_preparation_budget_uses_no_child_proof_and_deadline_receipt(self):
-        self.claim['task']['spec']['adapter'] = 'decision'
-        error = BoardError('router-budget-exhausted', 'frozen input used the budget')
-        error.owned_popen_evidence = ProcessCreationEvidence(created=False, shutdown_confirmed=True, exit_code=None)
+    def test_failure_before_start_confirms_no_child_without_router_specific_proof(self):
+        error = BoardError('router-input-changed', 'the frozen input actually changed')
         def exhausted(claim, task, spec, attempt, directory, holder):
-            holder['start_invoked'] = True
             raise error
         self.worker._execute_guarded = exhausted
         self.worker.state_dir = self.root
@@ -197,8 +197,68 @@ class ControlWaitTests(unittest.TestCase):
         self.worker.log = Mock()
         result = self.worker.execute(self.claim)
         self.assertTrue(result['shutdownConfirmed'])
-        self.assertEqual(result['terminationReason'], TERMINATION_DEADLINE)
-        self.assertEqual(result['result']['code'], 'router-budget-exhausted')
-        self.assertIs(result['result']['modelStarted'], False)
-        self.assertEqual(result['result']['stopEvidence'], {
-            'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}})
+        self.assertEqual(result['terminationReason'], TERMINATION_HARNESS_ERROR)
+        self.assertEqual(result['result']['code'], 'router-input-changed')
+        self.assertFalse(hasattr(error, 'owned_popen_evidence'))
+
+    def test_same_renewal_hands_off_a_recorded_cancel_once_to_new_handle(self):
+        self.worker.client.call.return_value = {'task': {'cancelRequested': False}}
+        renewal = _Renewal(self.worker, self.claim, None, None)
+        handle = SimpleNamespace(stop_initiator=None, cancel_requested=False)
+        def stop(_implementation, owned, *, stop_initiator, grace_deadline):
+            owned.cancel_requested = True
+            owned.stop_initiator = stop_initiator
+        view = {'cancelRequested': True, 'stopInitiator': 'console'}
+        with patch('hey_my_buddy.buddy.runtime.worker.role_seam.worker_stop', side_effect=stop) as native_stop:
+            renewal.start()
+            try:
+                thread_id = renewal.ident
+                renewal._request_cancel(view)
+                self.assertTrue(renewal.is_alive())
+                native_stop.assert_not_called()
+                renewal.attach(handle, object())
+                self.assertEqual(renewal.ident, thread_id)
+                self.assertTrue(renewal.is_alive())
+                renewal._request_cancel(view)
+                native_stop.assert_called_once()
+            finally:
+                renewal.stop()
+                renewal.join(5)
+        self.assertFalse(renewal.is_alive())
+
+    def test_pending_input_does_not_lose_answer_when_progress_transport_is_unavailable(self):
+        self.worker.client.progress.side_effect = BoardError('SERVICE_START_PENDING', 'service still starting')
+        renewal = _Renewal(self.worker, self.claim, None, None)
+        self.worker._wait_control_observation(self.claim, renewal, 'router-input-unknown', 0)
+        self.backoff.assert_called_once_with(renewal, 15)
+        self.worker.receipt.assert_not_called()
+        self.assertEqual(self.worker.client.progress.call_args.kwargs['data'],
+                         {'waitingReason': 'router-input-unknown'})
+
+    def test_handle_gets_recorded_cancel_before_marker_or_progress_can_block(self):
+        renewal = _Renewal(self.worker, self.claim, None, None)
+        renewal._request_cancel({'cancelRequested': True, 'stopInitiator': 'console'})
+        handle = SimpleNamespace(pid=1, pgid=1, stop_initiator=None, cancel_requested=False,
+                                 grace_deadline=None, force_stop_requested=False, grace_expired=False,
+                                 wait=lambda timeout: 0)
+        self.worker.state_dir = self.root
+        self.worker._release_controller_endpoint = Mock()
+        self.worker._cleanup_attempt_credentials = Mock()
+        executor = object()
+        def stop(_implementation, owned, *, stop_initiator, grace_deadline):
+            owned.cancel_requested = True
+            owned.stop_initiator = stop_initiator
+        def marker(*args):
+            self.assertTrue(handle.cancel_requested, 'handoff precedes filesystem and RPC observations')
+        with patch('hey_my_buddy.buddy.runtime.worker.role_seam.worker_executor', return_value=executor), \
+             patch('hey_my_buddy.buddy.runtime.worker.role_seam.prepare_worker_run', return_value=SimpleNamespace(available=True, error=None)), \
+             patch('hey_my_buddy.buddy.runtime.worker.role_seam.worker_start', return_value=handle), \
+             patch('hey_my_buddy.buddy.runtime.worker.role_seam.worker_stop', side_effect=stop) as native_stop, \
+             patch('hey_my_buddy.buddy.runtime.worker.role_seam.worker_collect', return_value=AdapterOutcome('cancelled', result={}, shutdown_confirmed=True)), \
+             patch('hey_my_buddy.buddy.runtime.worker.fsync_json', side_effect=marker), \
+             patch('hey_my_buddy.install.runtime.resolve_runtime', return_value={}):
+            report = self.worker._execute_selected(self.claim, self.claim['task'], self.claim['task']['spec'],
+                                                   self.claim['attempt'], self.root, {'preflightRenewal': renewal})
+        native_stop.assert_called_once()
+        self.assertEqual(report['status'], 'cancelled')
+        self.assertEqual(report['terminationReason'], 'console-stop')

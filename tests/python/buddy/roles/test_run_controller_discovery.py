@@ -96,7 +96,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.discover()
         self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
 
-    def test_explicit_native_refusal_is_not_erased_by_outer_wait_expiry(self):
+    def test_errors_after_outer_wait_expiry_are_our_termination_and_unknown(self):
         from unittest.mock import Mock
         handle = Mock()
         handle.wait.return_value = None
@@ -104,11 +104,10 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                                               'error': 'native explicitly refused the request'},
                                      exit_code=1, stop_confirmed=True)
         with patch.object(run_execution, 'launch_controller', return_value=handle), \
-             patch.object(run_execution, 'collect_controller', return_value=collection), \
-             self.assertRaises(BoardError) as caught:
-            self.discover()
-        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
-        self.assertEqual(caught.exception.message, collection.payload['error'])
+             patch.object(run_execution, 'collect_controller', return_value=collection):
+            result = self.discover()
+        self.assertEqual(result['discoveries'][0]['status'], 'unknown')
+        handle.terminate.assert_called_once_with(grace_seconds=8)
 
     def test_emfile_before_spawn_keeps_confirmed_stop_through_role(self):
         error = OSError(errno.EMFILE, 'fixture controller logs exhausted')

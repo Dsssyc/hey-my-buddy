@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
 from hey_my_buddy.buddy.runtime.command import CommandAdapter
-from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.buddy.runtime.worker import Worker, _Renewal
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
@@ -147,7 +147,11 @@ class FailoverTests(RouterDispatchTestCase):
             worker = Worker("w-route", self.directory, client=self.client, log=lambda _message: None)
             worker.spool.write_startup({"nonce": first["nonce"], "attemptId": first["attempt"]["attemptId"]})
             directory = self.directory / "budget-attempt"
-            holder = {}
+            renewal = _Renewal(worker, first, None, None)
+            holder = {'preflightRenewal': renewal}
+            renewal.start()
+            self.addCleanup(renewal.join, 5)
+            self.addCleanup(renewal.stop)
             started = time.monotonic()
             with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
                 receipt = worker._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
@@ -163,27 +167,39 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
             self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
 
-    def test_review_preparation_budget_expiry_dispatches_next_router(self):
-        from hey_my_buddy.buddy.roles import router_input
-
-        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}):
-            request, first = self.start(review=True)
-            worker = Worker("w-route", self.directory, client=self.client, log=lambda _message: None)
-            worker.spool.write_startup({"nonce": first["nonce"], "attemptId": first["attempt"]["attemptId"]})
-            mirror = self.directory / "slow-review-mirror"
-            def slow_prepare(_manifest, _directory):
-                mirror.mkdir()
-                time.sleep(1.05)
-                return mirror, "digest"
-            with patch.object(router_input, "prepare", side_effect=slow_prepare):
-                receipt = worker.execute(first)
-            self.assertEqual(receipt["report"]["result"]["code"], "router-budget-exhausted")
-            self.assertTrue(receipt["report"]["shutdownConfirmed"])
-            self.assertIsNone(receipt["report"]["exitCode"])
-            self.assertTrue(worker.deliver(receipt))
-            second = self.next_claim(request)
-            self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
-            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
+    def test_unknown_input_preparation_retries_the_same_router_before_its_budget_starts(self):
+        class PreparingRouter(CommandAdapter):
+            def __init__(self):
+                self.calls = 0
+                self.budgets = []
+            def available(self):
+                return True, None
+            def prepare(self, context):
+                self.calls += 1
+                self.budgets.append(context.timeout_seconds)
+                if self.calls == 1:
+                    raise BoardError('router-input-unknown', 'frozen input is still being observed')
+                from pathlib import Path
+                Path(context.cwd).mkdir(parents=True, exist_ok=True)
+            def start(self, context):
+                return super().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+        request, first = self.start(review=True)
+        worker = Worker('w-route', self.directory, client=self.client, log=lambda _message: None)
+        worker.spool.write_startup({'nonce': first['nonce'], 'attemptId': first['attempt']['attemptId']})
+        renewal = _Renewal(worker, first, None, None)
+        renewal.start()
+        self.addCleanup(renewal.join, 5)
+        self.addCleanup(renewal.stop)
+        executor = PreparingRouter()
+        with patch('hey_my_buddy.buddy.roles.controller.worker_executor', return_value=executor), \
+             patch.object(renewal, 'wait') as wait:
+            receipt = worker._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
+                                               self.directory / 'prepared-attempt', {'preflightRenewal': renewal})
+        wait.assert_called_once_with(15)
+        self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
+        self.assertEqual(receipt['report']['status'], 'ok')
+        self.assertTrue(receipt['report']['shutdownConfirmed'])
+        self.assertEqual(self.current_task(request['decisionId']), request['runId'])
 
     def test_two_no_answers_keep_request_and_dispatch_receipts_without_loop(self):
         request, first = self.start()

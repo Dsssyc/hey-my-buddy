@@ -12,6 +12,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
 
@@ -315,6 +316,7 @@ class ColdStartTests(unittest.TestCase):
         self.spawn.return_value = child
         patch("hey_my_buddy.install.runtime.launch_target", return_value=LAUNCH_TARGET).start()
         sockets = patch("hey_my_buddy.protocol.transport.socket.socket", autospec=True).start()
+        self.sockets = sockets
         sockets.return_value.accept.return_value = (Mock(), None)
         self.addCleanup(patch.stopall)
 
@@ -366,6 +368,29 @@ class ColdStartTests(unittest.TestCase):
                 ensure_service(self.directory)
         self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
         self.assertEqual(self.spawn.call_count, 1)
+
+    def test_cold_start_returns_pending_without_signalling_the_child(self):
+        child = self.spawn.return_value
+        child.pid = 9876
+        with patch("hey_my_buddy.protocol.transport._healthy", return_value=None), \
+             patch("hey_my_buddy.protocol.transport.time", SimpleNamespace(monotonic=Mock(side_effect=[0, 21]), sleep=Mock())), \
+             patch("hey_my_buddy.protocol.transport.locking.unlock") as unlock:
+            with self.assertRaises(ServiceError) as failure:
+                ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, "SERVICE_START_PENDING")
+        self.assertEqual(failure.exception.details, {"pid": 9876, "log": str(self.directory / "control.log")})
+        child.terminate.assert_not_called()
+        child.kill.assert_not_called()
+        unlock.assert_called_once()
+
+    def test_preflight_local_ipc_has_a_short_deadline_and_reports_refusal(self):
+        sockets = self.sockets
+        sockets.return_value.accept.side_effect = TimeoutError("local IPC did not answer")
+        with self.assertRaises(ServiceError) as failure:
+            ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, "LAUNCH_ACCESS_DENIED")
+        self.assertEqual(sockets.return_value.settimeout.call_args_list, [call(1), call(1)])
+        self.spawn.assert_not_called()
 
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):
         """A /tmp-style state dir is trusted by cold start and by every later attach."""

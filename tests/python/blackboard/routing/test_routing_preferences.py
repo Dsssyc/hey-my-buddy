@@ -190,7 +190,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                 return {'eligible': True}
 
         calls = []
-        def start(_name, context, request, *, deadline_monotonic):
+        def start(_name, context, request):
             calls.append((context, request))
             return SimpleNamespace()
         with tempfile.TemporaryDirectory() as root:
@@ -210,7 +210,9 @@ class DecisionCapabilityTests(unittest.TestCase):
             with mock.patch("hey_my_buddy.buddy.roles.router_input.prepare", return_value=(frozen, "digest")) as prepare, mock.patch(
                 "hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Native()
             ), mock.patch("hey_my_buddy.buddy.roles.run_execution.start_review", side_effect=start):
-                handle = DecisionAdapter().start(context)
+                native_adapter = DecisionAdapter()
+                native_adapter.prepare(context)
+                handle = native_adapter.start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
             prepare.assert_called_once_with(manifest, private_root)
@@ -224,10 +226,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertTrue(request.prompt.startswith(role + "\n"))
             self.assertEqual(request.prompt[len(role) + 1:], body)
             self.assertEqual(request.output_schema, document["outputSchema"])
-            self.assertEqual({key: value for key, value in request.budget.items() if key != "timeoutSeconds"},
-                             {key: value for key, value in budget.items() if key != "timeoutSeconds"})
-            self.assertGreater(request.budget["timeoutSeconds"], 0)
-            self.assertLess(request.budget["timeoutSeconds"], budget["timeoutSeconds"])
+            self.assertEqual(request.budget, budget)
             self.assertIsNone(child.turn)
             self.assertIsNone(child.agent_credential)
             self.assertEqual(child.spec["model"], "fixture-model")
@@ -242,7 +241,7 @@ class DecisionCapabilityTests(unittest.TestCase):
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
                 mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
             with self.assertRaises(BoardError) as raised:
-                DecisionAdapter().start(context)
+                DecisionAdapter().prepare(context)
         self.assertEqual(raised.exception.code, "router-review-unsupported")
         prepare.assert_not_called()
         start.assert_not_called()

@@ -427,9 +427,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
                                                               else None))),
         log_paths=context.log_paths(), timeout_seconds=control["timeoutSeconds"],
         grace_seconds=grace_seconds)
-    if "deadlineMonotonic" in control:
-        handle.deadline = control["deadlineMonotonic"] + grace_seconds
-    elif control["timeoutSeconds"] is None:
+    if control["timeoutSeconds"] is None:
         handle.deadline = math.inf
     # These bindings are held by the process owner, independent of mutable
     # control files and native evidence written during the run.
@@ -508,8 +506,7 @@ def _read_structured_result(handle, path, project, allowed_reasons):
                 "status": "error", "code": "invalid-native-result"}
 
 
-def start_fast(module, name: str, context: ExecutionContext, request,
-               *, deadline_monotonic: float | None = None) -> ProcessHandle:
+def start_fast(module, name: str, context: ExecutionContext, request) -> ProcessHandle:
     """Run the selected fast role with no turn, tools or blackboard authority."""
     native_environment = context.environment
     cwd = Path(request.cwd)
@@ -541,8 +538,6 @@ def start_fast(module, name: str, context: ExecutionContext, request,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         "noToolRequest": request_values,
     }
-    if deadline_monotonic is not None:
-        control["deadlineMonotonic"] = deadline_monotonic
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     handle = _launch(control, context, environment=native_environment, identity=identity)
@@ -553,8 +548,7 @@ def start_fast(module, name: str, context: ExecutionContext, request,
     return handle
 
 
-def start_review(name: str, context: ExecutionContext, request,
-                 *, deadline_monotonic: float | None = None) -> ProcessHandle:
+def start_review(name: str, context: ExecutionContext, request) -> ProcessHandle:
     """Use the same process owner and run seam over the frozen review mirror."""
     from ..harnesses.registry import adapter
 
@@ -572,8 +566,6 @@ def start_review(name: str, context: ExecutionContext, request,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
-    if deadline_monotonic is not None:
-        control["deadlineMonotonic"] = deadline_monotonic
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
@@ -814,11 +806,7 @@ def discover_models(name: str) -> dict:
                 raise BoardError('HARNESS_DISCOVERY_STOP_UNCONFIRMED',
                                  'The native metadata read process stop is unconfirmed', harness=name)
             payload = collection.payload
-            refusal = (payload.get('status') == 'error' and payload.get('code') is not None
-                       and payload['code'] not in ('user-cancel', 'cancelled', 'native-disconnected',
-                                                   'transport-error', 'connection-closed', 'native-exit',
-                                                   'native-shutdown-failed'))
-            if (wait_expired and not refusal) or payload.get('status') == 'unknown':
+            if wait_expired or payload.get('status') == 'unknown':
                 return {'source': 'native-discovery', 'providers': [], 'discoveries': [{
                     'harness': name, 'status': 'unknown', 'accountStatus': 'unknown',
                     'reason': 'native-metadata-wait-expired'}]}

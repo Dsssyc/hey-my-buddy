@@ -293,6 +293,8 @@ def _cold_start_preflight(directory: Path) -> None:
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
+                listener.settimeout(1)
+                connector.settimeout(1)
                 listener.bind(('127.0.0.1', 0))
                 listener.listen(1)
                 connector.connect(listener.getsockname())
@@ -309,6 +311,8 @@ def _cold_start_preflight(directory: Path) -> None:
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
+                listener.settimeout(1)
+                connector.settimeout(1)
                 listener.bind(address)
                 listener.listen(1)
                 connector.connect(address)
@@ -414,7 +418,8 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         finally:
             os.close(log_fd)
         # Readiness is an observation; a slow live child remains unknown.
-        while True:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
             endpoint = _healthy(directory)
             if endpoint:
                 if target["stable"]:
@@ -428,6 +433,8 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
                     raise ServiceError(failure["code"], failure["message"], **(details if isinstance(details, dict) else {}))
                 raise ServiceError("SERVICE_START_FAILED", "The board daemon failed to start; inspect control.log")
             time.sleep(0.05)
+        raise ServiceError("SERVICE_START_PENDING", "The board daemon is still starting; retry the command",
+                           pid=child.pid, log=str(directory / "control.log"))
     finally:
         locking.unlock(lock_fd)
         os.close(lock_fd)

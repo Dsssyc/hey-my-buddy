@@ -452,7 +452,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
             decision = self.outcome(board, 'select_first')
-        # Router preparation now carries the creating boundary's no-child proof.
+        # Preparation fails before start(), so the Worker has no child to stop.
         self.assertEqual(decision['status'], 'needs-host')
         self.assertEqual(decision['output']['code'], 'router-input-changed')
         self.assertEqual(self.own_receipt(board, decision)['result']['code'], 'router-input-changed')
@@ -569,9 +569,7 @@ class DecisionFailureTests(DecisionTestCase):
         decision = self.outcome(board, "json_answer")
         self.assertEqual(decision["status"], "completed")
         self.assertEqual(set(decision["output"]["decision"]), {"buddyId", "reason", "evidence"})
-        self.assertGreaterEqual(decision['usage']['elapsedMs'], 200)
-        self.assertEqual(decision['usage']['toolCalls'], 1)
-        self.assertIsNone(decision['usage']['bytesRead'])
+        self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
     def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):

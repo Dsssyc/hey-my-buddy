@@ -11,8 +11,10 @@ import hashlib
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -398,7 +400,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         real_lock = runtime.locking.lock
 
         def observe_lock(fd, **options):
-            if not options.get("shared"):
+            if not options.get("shared") and os.fstat(fd).st_ino == lock_path.stat().st_ino:
                 locked_inodes.append(os.fstat(fd).st_ino)
                 if len(locked_inodes) == 2:
                     second_attempted.set()
@@ -451,6 +453,90 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertTrue(runtime.is_ready(target))
         self.assertFalse(lock_path.exists())
         self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync", "sync"])
+
+    def test_install_deadline_keeps_child_and_retry_finalizes_its_result(self):
+        gate = self.root.parent / "pending-uv-gate"
+        gate.mkdir()
+        for name in ("started", "release"):
+            os.mkfifo(gate / name)
+        started_fd = os.open(gate / "started", os.O_RDWR | os.O_NONBLOCK)
+        release_fd = os.open(gate / "release", os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, started_fd)
+        self.addCleanup(os.close, release_fd)
+        fake_uv(self.uv.parent, gate=gate)
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        log = self.root.parent / 'install.log'
+        with self.assertRaises(BoardError) as first:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv),
+                                timeout_seconds=.1, log_path=log)
+        self.assertEqual(first.exception.code, 'RUNTIME_INSTALL_PENDING')
+        self.assertGreater(first.exception.details['pid'], 0)
+        self.assertEqual(first.exception.details['log'], str(log))
+        self.assertTrue(target.is_dir())
+        self.assertFalse(runtime.is_ready(target))
+        with self.assertRaises(BoardError) as second:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv),
+                                timeout_seconds=.1, log_path=log)
+        self.assertEqual(second.exception.code, 'RUNTIME_INSTALL_PENDING')
+        self.assertEqual(second.exception.details['pid'], first.exception.details['pid'])
+        readable, _, _ = select.select([started_fd], [], [], 5)
+        self.assertTrue(readable)
+        self.assertEqual(os.read(started_fd, 64), b'started\n')
+        os.write(release_fd, b'continue\n')
+        result_path = target / '.uv-sync-result.json'
+        deadline = time.monotonic() + 5
+        while not result_path.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertTrue(result_path.exists(), log.read_text())
+        completed = runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), log_path=log)
+        self.assertTrue(completed['installed'])
+        self.assertTrue(runtime.is_ready(target))
+        self.assertEqual((self.uv.parent / 'invocations').read_text().splitlines(), ['sync'])
+
+    def test_wrapper_loss_keeps_a_running_uv_then_retries_after_lifetime_ends(self):
+        gate = self.root.parent / 'lost-wrapper-gate'
+        gate.mkdir()
+        for name in ('started', 'release'):
+            os.mkfifo(gate / name)
+        started_fd = os.open(gate / 'started', os.O_RDWR | os.O_NONBLOCK)
+        release_fd = os.open(gate / 'release', os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, started_fd)
+        self.addCleanup(os.close, release_fd)
+        fake_uv(self.uv.parent, gate=gate)
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        with self.assertRaises(BoardError) as first:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), timeout_seconds=.1)
+        self.assertEqual(first.exception.code, 'RUNTIME_INSTALL_PENDING')
+        readable, _, _ = select.select([started_fd], [], [], 5)
+        self.assertTrue(readable)
+        os.read(started_fd, 64)
+        os.kill(first.exception.details['pid'], signal.SIGKILL)
+        with self.assertRaises(BoardError) as still_running:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), timeout_seconds=.1)
+        self.assertEqual(still_running.exception.code, 'RUNTIME_INSTALL_PENDING')
+        self.assertTrue(target.exists())
+        os.write(release_fd, b'continue\n')
+        lifetime = target / '.uv-sync-lifetime.lock'
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                with runtime.installation_lock(lifetime, blocking=False, create=False):
+                    break
+            except BlockingIOError:
+                time.sleep(.05)
+        else:
+            self.fail('uv did not release its inherited installation lifetime lock')
+        completed = runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+        self.assertTrue(completed['installed'])
+        self.assertTrue(runtime.is_ready(target))
+        self.assertEqual((self.uv.parent / 'invocations').read_text().splitlines(), ['sync', 'sync'])
+
+    def test_wrapper_records_uv_spawn_error_as_terminal_install_failure(self):
+        self.uv.write_text('#!/definitely/missing/uv-interpreter\n')
+        with self.assertRaises(BoardError) as caught:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+        self.assertEqual(caught.exception.code, 'RUNTIME_INSTALL_FAILED')
+        self.assertFalse(runtime.runtime_dir(self.root, self.runtime_root).exists())
 
     def test_a_ready_runtime_keeps_its_paths_after_the_source_tree_is_replaced(self):
         target = self.materialize()

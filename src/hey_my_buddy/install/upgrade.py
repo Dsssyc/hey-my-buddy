@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 import stat
 import subprocess
+import tempfile
 import time
 import uuid
 
@@ -24,6 +25,33 @@ from ..protocol import schemas
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
+
+COMMAND_WAIT_SECONDS = 45
+START_WAIT_SECONDS = 45
+PENDING_CODES = frozenset({'UPGRADE_COMMAND_PENDING', 'UPGRADE_START_PENDING'})
+
+
+def _pending_child_gone(pending: dict, state: Path) -> bool:
+    """A completed reply or an absent private process group ends a pending call."""
+    details = pending.get('details', {})
+    output = details.get('output')
+    if isinstance(output, str):
+        path = Path(output)
+        if path.parent == state and path.name.startswith('upgrade-command-') and path.suffix == '.out':
+            try:
+                json.loads(path.read_text())
+                return True
+            except (OSError, ValueError):
+                pass
+    pid = details.get('pid')
+    if os.name != 'nt' and type(pid) is int and pid > 0:
+        try:
+            os.killpg(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+    return False
 
 
 def write_journal(path: Path, value: dict) -> None:
@@ -117,13 +145,30 @@ def command(state: Path, target: Path, method: str, params: dict | None = None) 
     client = entry_modules(target)['client']
     script = ("import json,sys; from pathlib import Path; from " + client + " import BoardClient; "
               "print(json.dumps(BoardClient(Path(sys.argv[1]),autostart=False).call(sys.argv[2],json.loads(sys.argv[3]))))")
-    result = subprocess.run([str(runtime.runtime_python(target)), '-c', script, str(state), operations[method], json.dumps(payload)],
-                            env=_environment(state, target), cwd=target, capture_output=True, text=True)
+    output_fd, output_name = tempfile.mkstemp(prefix='upgrade-command-', suffix='.out', dir=state)
+    output_path = Path(output_name)
+    log_path = state / 'upgrade-command.log'
     try:
-        data = json.loads(result.stdout)
+        with os.fdopen(output_fd, 'wb') as output, log_path.open('ab') as log:
+            child = subprocess.Popen([str(runtime.runtime_python(target)), '-c', script, str(state), operations[method], json.dumps(payload)],
+                                     env=_environment(state, target), cwd=target, stdout=output, stderr=log,
+                                     stdin=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+            try:
+                child.wait(timeout=COMMAND_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                raise BoardError('UPGRADE_COMMAND_PENDING', 'Runtime command is still running; retry after observing the service',
+                                 method=method, pid=child.pid, log=str(log_path), output=str(output_path)) from None
+        result_stdout = output_path.read_text()
+        result_returncode = child.returncode
+    finally:
+        # Keep a pending child's output path available for later inspection.
+        if 'child' not in locals() or child.poll() is not None:
+            output_path.unlink(missing_ok=True)
+    try:
+        data = json.loads(result_stdout)
     except ValueError:
         raise BoardError('UPGRADE_CLIENT_FAILED', 'Runtime client did not return a valid envelope', method=method)
-    if result.returncode or 'error' in data:
+    if result_returncode or 'error' in data:
         error = data.get('error', {})
         raise BoardError(error.get('code', 'UPGRADE_CLIENT_FAILED'), error.get('message', 'Runtime command failed'))
     return data
@@ -134,7 +179,10 @@ def probe(state: Path, target: Path) -> dict | None:
         health = command(state, target, 'health')
         if health.get('runtimeContentId') == target.name and health.get('runtimeStable'):
             return health
-    except (BoardError, subprocess.SubprocessError, OSError):
+    except BoardError as error:
+        if error.code in PENDING_CODES:
+            raise
+    except (subprocess.SubprocessError, OSError):
         pass
     return None
 
@@ -159,7 +207,10 @@ def retire_workers(state: Path, *, timeout: float = 35) -> None:
 def detach(state: Path, target: Path) -> None:
     try:
         command(state, target, 'restart', {'drainSeconds': 0, 'reason': 'coordinated idle upgrade'})
-    except (BoardError, subprocess.SubprocessError):
+    except BoardError as error:
+        if error.code in PENDING_CODES:
+            raise
+    except subprocess.SubprocessError:
         # A lost restart reply is not a stop receipt. The ownership locks below
         # must still be acquired before inspecting or restoring any state.
         pass
@@ -180,7 +231,8 @@ def start(state: Path, target: Path) -> dict:
                                  start_new_session=True, close_fds=True)
     finally:
         os.close(log)
-    while True:
+    deadline = time.monotonic() + START_WAIT_SECONDS
+    while time.monotonic() < deadline:
         if child.poll() is not None:
             from .launcher import read_private
             failure = read_private(state / 'startup-error.json') or {}
@@ -191,9 +243,14 @@ def start(state: Path, target: Path) -> dict:
             endpoint = json.loads((state / 'control.json').read_text())
             if endpoint.get('pid') == child.pid:
                 return command(state, target, 'health')
-        except (OSError, ValueError, BoardError):
+        except BoardError as error:
+            if error.code in PENDING_CODES:
+                raise
+        except (OSError, ValueError):
             pass
         time.sleep(.2)
+    raise BoardError('UPGRADE_START_PENDING', 'Replacement daemon is still starting; retry upgrade recovery',
+                     pid=child.pid, log=str(state / 'upgrade-start.log'))
 
 
 def _restore_guard(path: Path) -> None:
@@ -521,6 +578,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     'rollback':None, 'runtimePruning':pruning,
                     **({'journalError':journal_error} if journal_error is not None else {})}
         except Exception as failure:
+            if isinstance(failure, BoardError) and failure.code in PENDING_CODES:
+                # The detached child may still own or acquire this board. Keep the
+                # journal and let the next upgrade call reconcile actual ownership.
+                journal['pending'] = failure.payload()
+                write_journal(marker, journal)
+                raise
             reason = _failure_reason(failure)
             try:
                 _restore_skill(journal)
@@ -534,15 +597,23 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         error = failure.payload() if isinstance(failure, BoardError) and failure.code in ('UPGRADE_NOT_IDLE', 'BACKUP_PREFLIGHT_FAILED') else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
                         error.setdefault('details', {})['reason'] = reason
                         return {'upgraded':False, 'error':error}
+                journal.update(failure=reason, rollbackStep='detach')
+                write_journal(marker, journal)
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active)
+                journal['rollbackStep'] = 'restore'
+                write_journal(marker, journal)
                 if backed_up is not None and journal['phase'] != 'preflight':
                     with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                         restore(state, Path(backed_up['path']))
                 # A race admitted work before the old daemon detached: preserve it
                 # and restart the previous runtime without restoring an older DB.
+                journal['rollbackStep'] = 'start'
+                write_journal(marker, journal)
                 recovered = start(state, previous)
+                journal['rollbackStep'] = 'verify'
+                write_journal(marker, journal)
                 evidence = verify_started(state, previous, recovered, before) if backed_up else {'runtimeContentId':previous.name, 'workPreserved':True}
                 write_active_runtime(state, previous, preserved)
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
@@ -553,6 +624,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 return {'upgraded':False, 'error':error,
                         'backup':backed_up, 'rollback':evidence}
             except Exception as recovery:
+                if isinstance(recovery, BoardError) and recovery.code in PENDING_CODES:
+                    journal.update(pending=recovery.payload(), pendingRole='rollback')
+                    write_journal(marker, journal)
+                    raise
                 journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
                 write_journal(marker, journal)
                 write_journal(state / 'upgrade-last.json', journal)
@@ -571,6 +646,87 @@ def recover(state: Path, root: Path) -> dict:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal runtime identity cannot be verified')
     target_health = probe(state, target)
     previous_health = probe(state, previous)
+    pending = journal.get('pending')
+    if pending is not None and journal.get('pendingRole') == 'rollback':
+        step = journal.get('rollbackStep', 'detach')
+        if previous_health is None and step == 'detach':
+            if pending['code'] == 'UPGRADE_COMMAND_PENDING' and not _pending_child_gone(pending, state):
+                raise BoardError(pending['code'], pending['message'], **pending.get('details', {}))
+            if target_health is not None:
+                try:
+                    detach(state, target)
+                except BoardError as error:
+                    if error.code in PENDING_CODES:
+                        journal['pending'] = error.payload()
+                        write_journal(marker, journal)
+                    raise
+            else:
+                with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
+                    idle_snapshot(state)
+                    retire_workers(state)
+            step = journal['rollbackStep'] = 'restore'
+            write_journal(marker, journal)
+        if previous_health is None and step == 'restore':
+            with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
+                saved = journal.get('backup')
+                if saved is not None and journal['phase'] != 'preflight':
+                    current = state / 'backups/current'
+                    if Path(saved['path']) != current:
+                        raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
+                    restore(state, current)
+            step = journal['rollbackStep'] = 'start'
+            write_journal(marker, journal)
+        if previous_health is None and step in ('start', 'verify'):
+            if pending['code'] == 'UPGRADE_START_PENDING' and not _pending_child_gone(pending, state):
+                raise BoardError(pending['code'], pending['message'], **pending.get('details', {}))
+            with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
+                pass
+            try:
+                previous_health = start(state, previous)
+            except BoardError as error:
+                if error.code in PENDING_CODES:
+                    journal.update(pending=error.payload(), rollbackStep='start')
+                    write_journal(marker, journal)
+                raise
+            journal['rollbackStep'] = 'verify'
+            write_journal(marker, journal)
+        evidence = (verify_started(state, previous, previous_health, journal['before']) if journal.get('backup')
+                    else {'runtimeContentId':previous.name, 'workPreserved':True})
+        write_active_runtime(state, previous, journal.get('environment'))
+        _restore_skill(journal)
+        journal.update(phase='rolled-back', rollback=evidence)
+        write_journal(state / 'upgrade-last.json', journal)
+        clear_journal(marker)
+        return {'upgraded':False, 'recoveredJournal':True, 'backup':journal.get('backup'), 'rollback':evidence}
+    if pending is not None and journal['phase'] != 'preflight':
+        if target_health is None:
+            if not _pending_child_gone(pending, state):
+                raise BoardError(pending['code'], pending['message'], **pending.get('details', {}))
+            from .launcher import read_private
+            startup = read_private(state / 'startup-error.json') or {}
+            pid = pending.get('details', {}).get('pid')
+            failure = (startup if startup.get('pid') == pid and isinstance(startup.get('code'), str)
+                       else {'code':'UPGRADE_START_FAILED', 'message':'Replacement daemon exited before becoming healthy'})
+            journal.update(pendingRole='rollback', rollbackStep='detach', failure=failure)
+            write_journal(marker, journal)
+            return recover(state, root)
+        expected = journal.get('expected', journal['before'])
+        evidence = verify_started(state, target, target_health, expected)
+        _verify_skill_generation(journal, target, target_health)
+        if journal['phase'] != 'skill-switching':
+            journal.update(phase='skill-switching', expected=expected)
+            write_journal(marker, journal)
+        paths = _skill_paths(journal)
+        if paths is None or paths[1].exists():
+            _publish_skill(journal)
+            write_journal(marker, journal)
+        write_active_runtime(state, target, journal.get('environment'))
+        journal.update(phase='verified', verification=evidence)
+        write_journal(marker, journal)
+        write_journal(state / 'upgrade-last.json', journal)
+        _finish_skill(journal)
+        clear_journal(marker)
+        return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence}
     if journal.get('phase') == 'verified' and target_health is not None:
         evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']))
         _verify_skill_generation(journal, target, target_health)
@@ -587,6 +743,11 @@ def recover(state: Path, root: Path) -> dict:
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
+        if pending is not None and pending['code'] == 'UPGRADE_COMMAND_PENDING':
+            if not _pending_child_gone(pending, state):
+                raise BoardError(pending['code'], pending['message'], **pending.get('details', {}))
+        elif pending is not None and previous_health is None:
+            raise BoardError(pending['code'], pending['message'], **pending.get('details', {}))
         if previous_health is None:
             with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                 pass

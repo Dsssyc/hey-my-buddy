@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -76,82 +75,68 @@ class FrozenTreeEntryTests(unittest.TestCase):
             b"160000 commit " + b"a" * 40 + b"\tsubmodule",
             "Frozen Router input with submodules is not supported")
 
-    def test_expired_budget_stops_before_frozen_git_read(self):
+    def test_materialization_limit_is_independent_of_native_budget(self):
         directory = self.root / "expired"
         directory.mkdir()
-        with mock.patch.object(router_input.subprocess, "run") as git:
-            with router_input.workspace.git_deadline(time.monotonic() - 1):
-                with self.assertRaises(BoardError) as refused:
-                    router_input.prepare(self.manifest, directory)
-        self.assertEqual(refused.exception.code, "router-budget-exhausted")
+        with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
+             mock.patch.object(router_input.subprocess, "run") as git:
+            with self.assertRaises(BoardError) as refused:
+                router_input.prepare(self.manifest, directory)
+        self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
-    def test_blocked_tree_read_uses_remaining_budget_and_reports_deadline(self):
-        directory = self.root / "blocked"
-        directory.mkdir()
-        deadline = time.monotonic() + 1.5
-        def timed_out(*args, **kwargs):
-            self.assertGreater(kwargs["timeout"], 0)
-            self.assertLessEqual(kwargs["timeout"], 1.5)
-            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
-        with mock.patch.object(router_input.subprocess, "run", side_effect=timed_out):
-            with router_input.workspace.git_deadline(deadline):
-                with self.assertRaises(BoardError) as refused:
-                    router_input.prepare(self.manifest, directory)
-        self.assertEqual(refused.exception.code, "router-budget-exhausted")
-        self.assertFalse((directory / "frozen-input").exists())
-
-    def test_blocked_workspace_verification_uses_the_same_budget(self):
-        directory = self.root / "verification"
-        directory.mkdir()
-        deadline = time.monotonic() + 1.5
-        def verify_with_git(_manifest, *, require_unchanged):
-            self.assertTrue(require_unchanged)
-            router_input.workspace._git(self.checkout, "rev-parse", "HEAD")
-        def timed_out(*args, **kwargs):
-            self.assertGreater(kwargs["timeout"], 0)
-            self.assertLessEqual(kwargs["timeout"], 1.5)
-            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
-        with mock.patch.object(router_input.workspace, "verify", side_effect=verify_with_git), \
-                mock.patch.object(router_input.subprocess, "run", side_effect=timed_out):
-            with router_input.workspace.git_deadline(deadline):
-                with self.assertRaises(BoardError) as refused:
-                    router_input.prepare(self.manifest, directory)
-        self.assertEqual(refused.exception.code, "router-budget-exhausted")
-
-    def test_blocked_batch_blob_read_expires_and_reaps_git_reader(self):
+    def test_blocked_blob_reader_is_reaped_at_materialization_limit(self):
         directory = self.root / "batch"
         directory.mkdir()
         listing = subprocess.CompletedProcess([], 0, stdout=(
             b"100644 blob " + self.object_id + b"\tfirst.txt\0"))
         original_popen = subprocess.Popen
         process = None
+
         def blocked_reader(_command, **kwargs):
             nonlocal process
             process = original_popen([sys.executable, "-c", "import time; time.sleep(10)"], **kwargs)
             return process
-        with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
-                mock.patch.object(router_input.subprocess, "Popen", side_effect=blocked_reader):
-            with router_input.workspace.git_deadline(time.monotonic() + 0.1):
-                with self.assertRaises(BoardError) as refused:
-                    router_input.prepare(self.manifest, directory)
-        self.assertEqual(refused.exception.code, "router-budget-exhausted")
+
+        with mock.patch.object(router_input, "MATERIALIZE_SECONDS", 0.1), \
+             mock.patch.object(router_input.subprocess, "run", return_value=listing), \
+             mock.patch.object(router_input.subprocess, "Popen", side_effect=blocked_reader):
+            with self.assertRaises(BoardError) as refused:
+                router_input.prepare(self.manifest, directory)
+        self.assertEqual(refused.exception.code, "router-input-unknown")
         self.assertIsNotNone(process.returncode)
         self.assertFalse((directory / "frozen-input").exists())
 
-    def test_final_verification_budget_expiry_leaves_input_unknown(self):
-        with router_input.workspace.git_deadline(time.monotonic() - 1):
-            result = router_input.verify(self.manifest, self.checkout, "expected")
+    def test_indeterminate_workspace_verification_stays_unknown(self):
+        self.enterContext(mock.patch.object(router_input.workspace, "verify",
+                          side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
+        result = router_input.verify(self.manifest, self.checkout, "expected")
         self.assertIsNone(result["unchanged"])
-        self.assertEqual(result["code"], "router-budget-exhausted")
-        router_input.workspace.verify.assert_not_called()
+        self.assertEqual(result["code"], "router-input-unknown")
 
-    def test_final_verification_git_timeout_preserves_budget_cause(self):
-        with mock.patch.object(router_input.workspace, "verify", side_effect=BoardError("deadline", "wait expired")):
-            with router_input.workspace.git_deadline(time.monotonic() + 60):
-                result = router_input.verify(self.manifest, self.checkout, "expected")
+    def test_indeterminate_workspace_preparation_keeps_unknown_cause(self):
+        directory = self.root / "unknown-workspace"
+        directory.mkdir()
+        self.enterContext(mock.patch.object(router_input.workspace, "verify",
+                          side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
+        with mock.patch.object(router_input.subprocess, "run") as git:
+            with self.assertRaises(BoardError) as refused:
+                router_input.prepare(self.manifest, directory)
+        self.assertEqual(refused.exception.code, "router-input-unknown")
+        git.assert_not_called()
+
+    def test_expired_local_verification_stays_unknown(self):
+        with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
+             mock.patch.object(router_input, "digest") as digest:
+            result = router_input.verify(None, self.checkout, "expected")
         self.assertIsNone(result["unchanged"])
-        self.assertEqual(result["code"], "router-budget-exhausted")
+        self.assertEqual(result["code"], "router-input-unknown")
+        digest.assert_not_called()
+
+    def test_completed_digest_mismatch_is_changed(self):
+        result = router_input.verify(None, self.checkout, "incorrect-digest")
+        self.assertIs(result["unchanged"], False)
+        self.assertEqual(result["code"], "router-input-changed")
 
 
 if __name__ == "__main__":

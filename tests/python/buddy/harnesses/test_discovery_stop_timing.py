@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -264,8 +265,17 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
     def test_unreaped_real_group_exhausts_stop_budget_without_confirmation(self):
         with self.controlled_group('hold') as (root, command, processes):
-            result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)})
-            self.assertEqual(result, ('shutdown-unverified', b''))
+            result = []
+            started = time.monotonic()
+            thread = threading.Thread(
+                target=lambda: result.append(discovery.probe(
+                    command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)}, deadline=started + 2)),
+                daemon=True,
+            )
+            thread.start()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive(), 'probe exceeded its bounded stop wait')
+            self.assertEqual(result, [('shutdown-unverified', b'')])
             self.assertFalse(self.group_gone(processes[0].pid))
 
     def pipe_stop_after_drain(self, read_error=None):

@@ -72,6 +72,19 @@ class ClaudeFixtureCase(unittest.TestCase):
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = ClaudeAdapter()
 
+    def test_unknown_metadata_is_unavailable_and_reused_until_cache_expiry(self):
+        unknown = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'unknown',
+                                               'reason': 'native-metadata-wait-expired'}]}}
+        complete = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'complete'}]}}
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+             mock.patch.object(claude_module, '_probe_native_metadata', side_effect=[unknown, complete]) as probe, \
+             mock.patch.object(claude_module.time, 'monotonic', side_effect=[10, 11, 71]):
+            self.assertEqual(self.adapter.available(), (False, 'native-metadata-wait-expired'))
+            self.assertEqual(self.adapter.available(), (False, 'native-metadata-wait-expired'))
+            self.assertEqual(probe.call_count, 1)
+            self.assertEqual(self.adapter.available(), (True, None))
+            self.assertEqual(probe.call_count, 2)
+
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8,
                 model="claude-opus-5-5[1m]", access=None):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,

@@ -109,7 +109,8 @@ class HarnessHealth:
         with self.board.db.write() as db:
             for name in HARNESSES:
                 if db.execute('SELECT 1 FROM harness_health WHERE harness=?', (name,)).fetchone() is None:
-                    db.execute('INSERT INTO harness_health(harness) VALUES(?)', (name,))
+                    db.execute('INSERT INTO harness_health(harness,record_json) VALUES(?,?)',
+                               (name, canonical_json({'lastProbe': None})))
                     from ..catalog.catalog import CATALOG_FACT_REASONS
                     db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                                ' WHERE harness=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
@@ -158,7 +159,7 @@ class HarnessHealth:
         if path is not None and (not isinstance(path, str) or len(path) > 4096 or not Path(path).expanduser().is_absolute()):
             raise BoardError('INVALID_ARGUMENT', 'path must be an absolute executable path, or null for automatic detection')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO harness_health(harness,manual_path,revision) VALUES(?,?,1) ON CONFLICT(harness) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json='{}',checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None))
+            db.execute("INSERT INTO harness_health(harness,manual_path,revision,record_json) VALUES(?,?,1,?) ON CONFLICT(harness) DO UPDATE SET manual_path=excluded.manual_path,revision=revision+1,status='unknown',record_json=excluded.record_json,checked_at=NULL,expires_at=NULL,scan_after=NULL", (name, str(Path(path).expanduser()) if path else None, canonical_json({'lastProbe': None})))
             from ..catalog.catalog import CATALOG_FACT_REASONS
             db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_NOT_CHECKED'"
                        ' WHERE harness=? AND (unavailable_reason IS NULL OR unavailable_reason NOT IN (?,?))',
@@ -175,6 +176,9 @@ class HarnessHealth:
             if (self.board.directory / 'upgrade.json').exists():
                 return old
             now = utc_now()
+            if (not force and (old.get('lastProbe') or {}).get('status') == 'unknown'
+                    and (old.get('scanAfter') or '') > now):
+                return old
             if not force and not preflight:
                 if (old.get('scanAfter') or '') > now:
                     return old
@@ -187,7 +191,7 @@ class HarnessHealth:
             signature = location_fingerprint(snapshot)
             unchanged = old.get('locationFingerprint') == signature
             if (not force and unchanged and (old.get('expiresAt') or '') > now
-                    and old.get('lastProbe', {}).get('status') != 'unknown'):
+                    and (old.get('lastProbe') or {}).get('status') != 'unknown'):
                 if name == "codex":
                     self._codex_account_read(old)
                 if stale_catalog_due:
@@ -229,6 +233,8 @@ class HarnessHealth:
             if record.get("status") != "ready" or old.get("fingerprint") != record.get("fingerprint"):
                 retained.pop("billingByProvider", None)
             record = {**retained, **record, 'locationFingerprint': signature,
+                      'lastProbe': {'status': 'complete', 'observedAt': now,
+                                    'reasonCode': record.get('reasonCode')},
                       'systemSandbox': old['systemSandbox']}
             status = record.get('status')
             native_ready = status == 'ready'

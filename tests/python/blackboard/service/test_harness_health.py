@@ -50,9 +50,14 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(pending['lastProbe']['status'], 'unknown')
         self.discovered = {'harness': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'available': True, 'version': '2.0'}
+        cached = self.health.refresh('codex', preflight=True)
+        self.assertEqual(cached['lastProbe']['status'], 'unknown')
+        self.assertEqual(self.native.call_count, 2)
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
         recovered = self.health.refresh('codex', preflight=True)
         self.assertEqual(recovered['version'], '2.0')
-        self.assertNotIn('lastProbe', recovered)
+        self.assertEqual(recovered['lastProbe']['status'], 'complete')
 
     def test_first_slow_scan_remains_unknown_and_does_not_invalidate_buddies(self):
         self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'timeout'}

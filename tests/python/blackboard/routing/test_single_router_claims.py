@@ -274,6 +274,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         native = DecisionAdapter()
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
         self.assertTrue(native.available()[0])
+        native.prepare(context)
         handle = native.start(context)
         handle.process.wait(timeout=5)
         outcome = native.collect(handle, context)
@@ -295,7 +296,7 @@ class SingleRouterClaimTests(DecisionTestCase):
             environment={'HMB_STATE_DIR': str(board.directory)}, decision_input=document)
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False}):
             with self.assertRaises(BoardError) as failure:
-                DecisionAdapter().start(context)
+                DecisionAdapter().prepare(context)
         self.assertEqual(failure.exception.code, 'router-review-unsupported')
         self.readonly_start.assert_not_called()
         self.input_prepare.assert_not_called()
