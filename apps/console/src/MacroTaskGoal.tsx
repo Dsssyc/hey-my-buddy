@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Dialog } from "radix-ui";
+import remarkBreaks from "remark-breaks";
+import { defaultRemarkPlugins } from "streamdown";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "./api";
@@ -10,6 +12,8 @@ import { MessageResponse } from "./session-view/Markdown";
 import { formatDateTime, formatMomentMinutes } from "./i18n/format";
 import { Hint } from "./components/hint";
 import { Button } from "./components/ui/button";
+
+const goalRemarkPlugins = [...Object.values(defaultRemarkPlugins), remarkBreaks];
 
 /** A non-modal sheet stays over the lanes; Radix owns dismissal and focus return. */
 export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
@@ -59,13 +63,13 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
     <Dialog.Content ref={content} data-slot="macro-goal-card" style={geometry} className="goal-card" aria-describedby={undefined}
       onOpenAutoFocus={event => { event.preventDefault(); content.current?.focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }} tabIndex={-1}>
-      <div className="flex items-center gap-2.5 px-5 pt-3 pb-2">
+      <div className="flex items-center gap-2.5 px-6 pt-3 pb-2">
         <Dialog.Title className="text-base font-semibold">{t("goalTitle")}</Dialog.Title>
         <span className="text-xs text-ink3 tabular-nums">{t("goalRevision", { revision: selected.revision })} · {formatMomentMinutes(Date.parse(selected.createdAt), Date.now())}</span>
         <Hint text={t("goalClose")}><Dialog.Close asChild><Button variant="ghost" size="icon-sm" aria-label={t("goalClose")} className="ml-auto"><X aria-hidden="true"/></Button></Dialog.Close></Hint>
       </div>
       <div data-slot="macro-goal-scroll" className="goal-scroll">
-        <div data-slot="macro-goal-body" className="min-w-0 text-sm leading-[1.85]"><MessageResponse>{selected.body}</MessageResponse></div>
+        <div data-slot="macro-goal-body" className="min-w-0 text-sm leading-[1.85]"><MessageResponse remarkPlugins={goalRemarkPlugins}>{selected.body}</MessageResponse></div>
         <nav aria-label={t("goalHistory")} className="goal-history">
           <h3 className="mb-3 text-xs font-semibold text-ink3">{t("goalHistory")}</h3>
           {goals === null && !error && <p role="status" className="text-xs text-ink3">{t("goalLoading")}</p>}

@@ -212,3 +212,10 @@ describe("session rows", () => {
     expect(container.innerHTML).not.toContain("javascript:");
   });
 });
+
+it("leaves session soft line breaks to the Markdown renderer without enabling goal line breaks", () => {
+  const { container } = render(<MessageResponse>{"会话第一行\n会话第二行"}</MessageResponse>);
+  expect(container.textContent).toContain("会话第一行");
+  expect(container.textContent).toContain("会话第二行");
+  expect(container.querySelector("br")).toBeNull();
+});

@@ -1,5 +1,5 @@
 import { expect } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
 
@@ -66,6 +66,35 @@ for (const scene of [
     return paragraph.contains(document.elementFromPoint(glyph.x + glyph.width / 2, glyph.y + glyph.height / 2));
   }), "the first character of the goal remains visible mid-animation").toBe(true);
   await card.evaluate(element => { for (const animation of element.getAnimations()) animation.finish(); });
+  const typography = await card.evaluate(element => {
+    const frame = element.getBoundingClientRect();
+    const body = element.querySelector('[data-slot="macro-goal-body"]')!;
+    const bounds = body.getBoundingClientRect();
+    const padding = getComputedStyle(element.querySelector('[data-slot="macro-goal-scroll"]')!);
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    const textOutside: string[] = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      if ([...range.getClientRects()].some(rect => rect.width > 0 && (rect.left < bounds.left - 1 || rect.right > bounds.right + 1))) textOutside.push(node.textContent);
+    }
+    return {
+      leftPadding: padding.paddingLeft, rightPadding: padding.paddingRight,
+      inset: bounds.left - frame.left,
+      textOutside,
+      lists: [...body.querySelectorAll("ul,ol")].map(list => ({
+        position: getComputedStyle(list).listStylePosition,
+        inside: [...list.querySelectorAll("li")].every(item => {
+          const rect = item.getBoundingClientRect(); return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+        }),
+      })),
+    };
+  });
+  expect(typography.leftPadding).toBe("24px"); expect(typography.rightPadding).toBe("24px");
+  expect(typography.inset).toBeGreaterThanOrEqual(24);
+  expect(typography.textOutside, "all goal text stays within the prose column").toEqual([]);
+  expect(typography.lists.length).toBeGreaterThan(0);
+  expect(typography.lists.every(list => list.position === "inside" && list.inside), "list markers and text stay within the 24px prose inset").toBe(true);
   await page.screenshot({ path: `${captures}/${name}-open.png` });
   expect(await header.boundingBox()).toEqual(before);
   const box = (await card.boundingBox())!;
@@ -161,4 +190,30 @@ test("keeps the information row fixed while identifier copy feedback replaces th
   expect(await facts.locator(":scope > div").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))).toEqual(before);
   await expect(copy.locator('[aria-live="polite"]')).toBeEmpty();
   expect(await copy.innerText()).toContain("macro-");
+});
+
+
+test("captures the shared Streamdown typography in a Chinese dark session", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 850 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() => {
+    localStorage.setItem("hey-my-buddy.console.theme", "dark");
+    localStorage.setItem("hey-my-buddy.language", "zh");
+  });
+  await open(page, "#tasks/macro-22222222-2222-4222-8222-222222222222/preview-run-b1/5?tab=session");
+  const answer = page.locator('[data-session-row="answer"]').filter({ hasText: "路径编码一致" });
+  await expect(answer).toBeVisible();
+  const heading = answer.getByRole("heading", { name: "核对结果" });
+  await expect(heading).toHaveCSS("font-size", "24px");
+  await expect(answer.locator("ul")).toHaveCSS("list-style-position", "inside");
+  await answer.scrollIntoViewIfNeeded();
+  await mkdir(captures, { recursive: true });
+  await page.screenshot({ path: `${captures}/zh-dark-1280-session-markdown.png` });
+  const facts = await answer.evaluate(element => ({
+    heading: { size: getComputedStyle(element.querySelector("h2")!).fontSize, lineHeight: getComputedStyle(element.querySelector("h2")!).lineHeight },
+    list: { position: getComputedStyle(element.querySelector("ul")!).listStylePosition, type: getComputedStyle(element.querySelector("ul")!).listStyleType },
+    itemPadding: getComputedStyle(element.querySelector("li")!).paddingTop,
+    breaks: element.querySelectorAll("br").length,
+  }));
+  await writeFile(`${captures}/session-markdown-typography.json`, JSON.stringify(facts, null, 2) + "\n");
 });

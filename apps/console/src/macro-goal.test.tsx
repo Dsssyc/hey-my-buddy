@@ -9,9 +9,10 @@ const goal = { body: "当前目标\n\n## 范围\n\n**完成**这一批。", revi
 const old = { body: "旧版目标\n\n保留最初的全文。", revision: 1, createdAt: "2026-10-31T03:00:00Z" };
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-function harness() {
-  const timeline = macroTaskTimelineFixture(); timeline.macroTask.goal = goal;
-  const readGoals = vi.fn(async () => ({ macroTaskId: timeline.macroTask.macroTaskId, goals: [goal, old] }));
+function harness(body = goal.body) {
+  const current = { ...goal, body };
+  const timeline = macroTaskTimelineFixture(); timeline.macroTask.goal = current;
+  const readGoals = vi.fn(async () => ({ macroTaskId: timeline.macroTask.macroTaskId, goals: [current, old] }));
   const ui = (active = true) => <TooltipProvider><MacroTaskOverview timeline={timeline} summary={null} loading={false} stale={false} readGoals={readGoals} active={active} onBackToList={() => {}}/><button>外部按钮</button></TooltipProvider>;
   const view = render(ui());
   return { view, ui, timeline, readGoals, user: userEvent.setup() };
@@ -56,4 +57,15 @@ it("omits the goal information item when the record has none", () => {
   const timeline = macroTaskTimelineFixture(); timeline.macroTask.goal = null;
   const { container } = render(<MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}}/>, { wrapper: TooltipProvider });
   expect(container.querySelector('[data-slot="macro-goal-fact"]')).toBeNull();
+});
+
+it("keeps single goal line breaks while rendering Markdown and the existing GFM extensions", async () => {
+  const { user } = harness("第一行\n第二行\n\n**Markdown** 与 ~~旧内容~~\n\n| 名称 | 值 |\n| --- | --- |\n| 项目 | 目标 |");
+  await user.click(screen.getByRole("button", { name: "第一行" }));
+  const card = await screen.findByRole("dialog", { name: "目标说明" });
+  const body = card.querySelector('[data-slot="macro-goal-body"]')!;
+  await waitFor(() => expect(body.querySelector("br")).not.toBeNull());
+  expect(body.querySelector('[data-streamdown="strong"]')?.textContent).toBe("Markdown");
+  expect(body.querySelector("del")?.textContent).toBe("旧内容");
+  expect(body.querySelector("table")?.textContent).toContain("名称");
 });

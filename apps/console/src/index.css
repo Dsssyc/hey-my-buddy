@@ -2,6 +2,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./tokens.css";
+@source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
@@ -204,7 +205,7 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0 20px 18px;
+  padding: 0 24px 18px;
 }
 .goal-history { min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
 .goal-version { position: relative; display: block; width: 100%; padding: 0 0 16px 18px; text-align: left; outline: none; transition: color 150ms, background-color 150ms; }
@@ -215,7 +216,7 @@
 .goal-version:hover, .goal-version[aria-pressed="true"] { background: var(--selected-row); }
 .goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 @container (width < 600px) {
-  .goal-scroll { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; padding-inline: 12px; }
+  .goal-scroll { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
   .goal-history { padding-left: 10px; }
   .goal-version time { display: block; margin-left: 0; }
 }

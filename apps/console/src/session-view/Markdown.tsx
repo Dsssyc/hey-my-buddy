@@ -32,11 +32,12 @@ function SafeLink(props: ComponentProps<"a"> | Record<string, unknown>) {
   return <a href={safe} target="_blank" rel="noopener noreferrer" className="font-medium underline">{children as ReactNode}</a>;
 }
 
-export const MessageResponse = memo(function MessageResponse({ children }: { children: string }) {
+export const MessageResponse = memo(function MessageResponse({ children, remarkPlugins }: { children: string; remarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"] }) {
   return <Streamdown
-    className="min-w-0 break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+    className="min-w-0 break-words"
     mode="static"
     controls={false}
+    remarkPlugins={remarkPlugins}
     linkSafety={{ enabled: false }}
     skipHtml
     allowElement={(element) => element.tagName !== "img"}
