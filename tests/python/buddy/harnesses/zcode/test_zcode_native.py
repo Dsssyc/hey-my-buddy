@@ -17,8 +17,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         receipt = native_run.catalog(snapshot, {"fixture-api": "api-key"}, "fixture")
         self.assertEqual(receipt["discoveries"],
                          [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
-        self.assertTrue(any("account status is not applicable" in warning for warning in receipt["warnings"]),
-                        receipt["warnings"])
+        self.assertEqual(receipt["warnings"], [])
         models = receipt["providers"][0]["models"]
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
         self.assertEqual(models[0]["efforts"], ["low", "high"])

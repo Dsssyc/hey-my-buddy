@@ -135,7 +135,8 @@ class DescriptionSeamTests(DshRoleCase):
         description = adapter("dsh")
         eligibility = description.local_read_only_check()
         self.assertFalse(eligibility["eligible"])
-        self.assertEqual(eligibility["reasonCode"], "readonly-worker-carrier-unimplemented")
+        self.assertEqual(eligibility["reason"], {"code": "harness.readonly-worker-carrier-unimplemented",
+                                                "params": {"harness": "dsh"}})
         self.assertFalse(description.read_only_structured)
 
     def test_check_preparation_refuses_only_without_a_ready_command(self):
@@ -153,9 +154,9 @@ class DescriptionSeamTests(DshRoleCase):
         with mock.patch.object(runtime_selection, "selected", return_value=ready):
             self.assertIsNone(seam.check_preparation({}, {}))
             self.assertEqual(description.available(), (True, None))
-        bad = {"status": "login-required", "remedy": "log in to dsh"}
+        bad = {"status": "login-required", "reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
         with mock.patch.object(runtime_selection, "selected", return_value=bad):
-            self.assertEqual(description.available(), (False, "log in to dsh"))
+            self.assertEqual(description.available(), (False, "harness.login-required"))
             with self.assertRaises(Exception) as caught:
                 seam.check_preparation({}, {})
             self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
@@ -164,11 +165,11 @@ class DescriptionSeamTests(DshRoleCase):
                 mock.patch.object(discovery, "discover", return_value=detected):
             self.assertEqual(description.available(), (True, None))
             self.assertIsNone(seam.check_preparation({}, {}))
-        failed = {"status": "missing", "available": False, "remedy": "install dsh",
-                  "reasonCode": "not-found"}
+        failed = {"status": "missing", "available": False,
+                  "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}
         with mock.patch.object(runtime_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=failed):
-            self.assertEqual(description.available(), (False, "install dsh"))
+            self.assertEqual(description.available(), (False, "harness.not-found"))
             with self.assertRaises(Exception) as caught:
                 seam.check_preparation({}, {})
             self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ....errors import BoardError
+from ....protocol.reasons import reason as make_reason
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
@@ -517,6 +518,13 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     return _Spawn(process=process, handle=handle, connection=connection)
 
 
+CATALOG_READ_REASONS: dict[str, str] = {
+    "model-list-shape-unreadable": "model-list-shape-unreadable",
+    "model-cursor-shape-unreadable": "model-cursor-shape-unreadable",
+    "config-shape-unreadable": "config-shape-unreadable",
+}
+
+
 def _catalog(connection: Connection, version: str | None, provider: str | None) -> tuple[dict, set[str]]:
     data, cursor, seen = [], None, set()
     read_status, read_reason = "complete", None
@@ -542,10 +550,9 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
             raise CodexProtocolError("invalid-catalog", "Codex model cursor did not advance")
         seen.add(cursor)
     models = []
-    warnings = [f"The native model reading is incomplete: {read_reason}"] if read_reason else []
+    warnings = []
     if provider is None:
         read_status, read_reason = "unknown", "config-shape-unreadable"
-        warnings.append("The native config/read configuration is unreadable; no provider or models can be attributed")
     listed_ids: set[str] = set()
     for item in data if provider is not None else []:
         if not isinstance(item, dict) or item.get("hidden") is True:
@@ -559,7 +566,9 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
         efforts = [e.get("reasoningEffort") for e in item.get("supportedReasoningEfforts", []) if isinstance(e, dict)]
         efforts = list(dict.fromkeys(e for e in efforts if isinstance(e, str) and e))
         if not isinstance(model_id, str) or not model_id or not efforts:
-            warnings.append("A model with no usable identity or reasoning effort was omitted")
+            warning = {"reason": make_reason("catalog.model-identity-or-effort-omitted")}
+            if warning not in warnings:
+                warnings.append(warning)
             continue
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
@@ -569,9 +578,9 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
                "providers": [{"harness": "codex", "provider": provider, "displayName": provider,
                               "packageName": "codex", "packageVersion": version or "unknown", "models": models}]
                             if provider is not None else [],
-               "warnings": list(dict.fromkeys(warnings)),
+               "warnings": warnings,
                "discoveries": [{"harness": "codex", "status": read_status,
-                                **({"reason": read_reason} if read_reason else {})}]}
+                                **({"reason": make_reason(CATALOG_READ_REASONS[read_reason])} if read_reason else {})}]}
     return catalog, listed_ids
 
 
@@ -1908,10 +1917,6 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         if facts.unknown_counts:
             catalog_value["unknownEvents"] = {"countsByType": facts.unknown_counts,
                                                "total": sum(facts.unknown_counts.values())}
-        if account_status == "unknown":
-            catalog_value["warnings"] = [*catalog_value["warnings"],
-                                         "The discovery session could not confirm the Codex account; "
-                                         "whether to trust this reading is the board's judgment"]
     return catalog_value
 
 

@@ -250,7 +250,8 @@ class DecisionCapabilityTests(unittest.TestCase):
                                        decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
-        ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
+        ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={
+            'eligible': False, 'reason': {'code': 'harness.readonly-resource-missing', 'params': {}}}), \
                 mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
             with self.assertRaises(BoardError) as raised:
                 DecisionAdapter().prepare(context)

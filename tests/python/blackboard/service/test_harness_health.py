@@ -8,6 +8,14 @@ from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PA
 from support import BoardTestCase, FakeClock
 
 
+def probe_reason(code):
+    return {'code': f'harness.{code}', 'params': {'operation': 'probe'}}
+
+
+def account_reason(code):
+    return {'code': f'harness.{code}', 'params': {'operation': 'account-read'}}
+
+
 class HarnessHealthTests(BoardTestCase):
     def setUp(self):
         super().setUp()
@@ -50,7 +58,7 @@ class HarnessHealthTests(BoardTestCase):
         self.discovered = {**self.discovered, 'harness': 'dsh', 'command': ['/native/dsh']}
         self.health.refresh('dsh', force=True)
         for reason in ('slow-first', 'slow-latest'):
-            self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': reason}
+            self.discovered = {'harness': 'codex', 'status': 'unknown', 'reason': probe_reason(reason)}
             self.health.refresh('codex', force=True)
         events = self.board.events_read({'after': 0})['events']
         checked = [row for row in events if row['kind'] == 'harness.checked']
@@ -60,13 +68,13 @@ class HarnessHealthTests(BoardTestCase):
                               if row['payload']['harness'] == 'codex'), '2.0')
         unknown = [row for row in events if row['kind'] == 'harness.probe_unknown']
         self.assertEqual(len(unknown), 1)
-        self.assertEqual(unknown[0]['payload']['reasonCode'], 'slow-latest')
+        self.assertEqual(unknown[0]['payload']['reason'], probe_reason('slow-latest'))
         self.assertGreater(unknown[0]['seq'], before)
-        self.assertEqual(self.health.get('codex')['lastProbe']['reasonCode'], 'slow-latest')
+        self.assertEqual(self.health.get('codex')['lastProbe']['reason'], probe_reason('slow-latest'))
 
     def test_slow_scan_preserves_ready_health_and_next_scan_can_succeed(self):
         first = self.health.refresh('codex', force=True)
-        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'scan-timeout'}
+        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reason': probe_reason('scan-timeout')}
         pending = self.health.refresh('codex', force=True)
         self.assertEqual(pending['status'], 'ready')
         self.assertTrue(pending['available'])
@@ -85,10 +93,10 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(recovered['lastProbe']['status'], 'complete')
 
     def test_first_slow_scan_remains_unknown_and_does_not_invalidate_buddies(self):
-        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reasonCode': 'timeout'}
+        self.discovered = {'harness': 'codex', 'status': 'unknown', 'reason': probe_reason('timeout')}
         result = self.health.refresh('codex', force=True)
         self.assertEqual(result['status'], 'unknown')
-        self.assertEqual(result['lastProbe']['reasonCode'], 'timeout')
+        self.assertEqual(result['lastProbe']['reason'], probe_reason('timeout'))
         with self.board.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='harness.invalidated'").fetchone()[0], 0)
 
@@ -267,7 +275,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(readings[1]['buddies'], readings[0]['buddies'])
 
     def test_negative_auth_observation_expires_even_without_file_changes(self):
-        self.discovered = {'harness': 'codex', 'status': 'login-required', 'reasonCode': 'HARNESS_LOGIN_REQUIRED'}
+        self.discovered = {'harness': 'codex', 'status': 'login-required', 'reason': probe_reason('login-required')}
         self.assertFalse(self.health.refresh('codex')['available'])
         self.health.refresh('codex')
         self.native.assert_called_once()
@@ -468,13 +476,13 @@ class CatalogShelfLifeTests(BoardTestCase):
 
         def failing_refresh(name, record, catalog_scan_claimed=False):
             self.refreshed.append(name)
-            self.health.invalidate(name, record['revision'], 'CATALOG_UNAVAILABLE')
+            self.health.invalidate(name, record['revision'], diagnostic_code='CATALOG_UNAVAILABLE')
 
         self.health.catalog_refresh = failing_refresh
         result = self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
         self.assertFalse(result['available'], 'The post-callback record leads')
-        self.assertEqual(result['reasonCode'], 'CATALOG_UNAVAILABLE')
+        self.assertEqual(result['reason'], probe_reason('launch-failed'))
         self.assertEqual(self.health.get('codex')['revision'], result['revision'])
 
 
@@ -651,16 +659,16 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.evaluation.record_catalog(self.reading(('max',)))  # alpha:high retires
         with self.board.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=1 WHERE harness='dsh'")
-        self.health.invalidate('dsh', self.health.get('dsh')['revision'], 'HARNESS_HANDSHAKE_FAILED')
+        self.health.invalidate('dsh', self.health.get('dsh')['revision'])
         broken = self.buddies()['dsh:fixture:alpha:max']
         self.assertFalse(broken['available'], 'The health failure zeroed the retained route')
-        self.assertEqual(broken.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertEqual(broken.get('unavailableReason'), probe_reason('launch-failed'))
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
         buddies = self.buddies()
         self.assertTrue(buddies['dsh:fixture:alpha:max']['available'],
                         'Recovery itself restores the retained reading, before any publication')
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'], 'A retired effort is a catalog fact')
-        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
         self.assertFalse(buddies['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
         with self.board.store.db.read() as db:
             self.assertEqual([row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)],
@@ -715,10 +723,10 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         buddies = self.buddies()
         self.assertTrue(buddies['dsh:fixture:alpha:high']['available'])
         self.assertFalse(buddies['dsh:fixture:alpha:low']['available'])
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
         self.assertFalse(buddies['dsh:fixture:beta:high']['available'])
         self.assertEqual(buddies['dsh:fixture:beta:high']['catalogStatus'], 'unavailable')
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
         self.assertFalse(buddies['dsh:fixture:gamma:high']['available'], 'Native unavailable stays grounded')
         self.assertTrue(all(item['enabled'] for item in buddies.values()))
         self.assertEqual(set(buddies), set(self.before), 'Buddy identities survive')
@@ -732,10 +740,10 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         from hey_my_buddy.blackboard.catalog import catalog
         buddies = self.buddies()
         self.assertFalse(buddies['dsh:fixture:alpha:high']['available'])
-        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason'], 'HARNESS_NOT_CHECKED',
+        self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason'], probe_reason('not-checked'),
                          'A NULL reason must still receive the health write')
-        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
-        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies['dsh:fixture:alpha:low']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(buddies['dsh:fixture:beta:high']['unavailableReason']['code'], catalog.CONFIRMED_ABSENCE_REASON)
 
     def test_same_harness_path_recheck_preserves_confirmed_absence_and_retired_effort(self):
         # Reproduce the in-process cache stub boundary before a normal health
@@ -756,20 +764,20 @@ class CatalogHealthOwnershipTests(BoardTestCase):
 
     def test_invalidate_updates_null_reason_and_preserves_catalog_reasons(self):
         revision = self.health.get('dsh')['revision']
-        self.health.invalidate('dsh', revision, 'HARNESS_HANDSHAKE_FAILED')
+        self.health.invalidate('dsh', revision)
         high = self.buddies()['dsh:fixture:alpha:high']
         self.assertFalse(high['available'])
-        self.assertEqual(high.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertEqual(high.get('unavailableReason'), probe_reason('launch-failed'))
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
         self.assert_catalog_survives()
 
     def test_unhealthy_refresh_updates_null_reason_and_preserves_catalog_reasons(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover',
-                   return_value={'harness': 'dsh', 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED'}):
+                   return_value={'harness': 'dsh', 'status': 'unhealthy', 'reason': probe_reason('probe-failed')}):
             self.assertFalse(self.health.refresh('dsh', force=True)['available'])
         high = self.buddies()['dsh:fixture:alpha:high']
         self.assertFalse(high['available'])
-        self.assertEqual(high.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertEqual(high.get('unavailableReason'), probe_reason('probe-failed'))
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
         self.assert_catalog_survives()
 
@@ -811,7 +819,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
                 db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='dsh'")
             again = health.refresh('dsh')
         self.assertFalse(again['available'], 'The failed native re-read speaks through the record')
-        self.assertEqual(again['reasonCode'], 'CATALOG_UNAVAILABLE')
+        self.assertEqual(again['reason'], probe_reason('launch-failed'))
         self.assertEqual(health.get('dsh')['revision'], again['revision'])
 
 
@@ -827,16 +835,16 @@ class HealthProbeFailureTests(BoardTestCase):
 
     def test_unconfirmed_probe_shutdown_remains_unavailable(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
-                'harness': 'codex', 'status': 'unhealthy', 'reasonCode': 'shutdown-unverified'}):
+                'harness': 'codex', 'status': 'unhealthy', 'reason': probe_reason('shutdown-unverified')}):
             result = self.health.refresh('codex', force=True)
         self.assertFalse(result['available'])
-        self.assertEqual(result['reasonCode'], 'shutdown-unverified')
+        self.assertEqual(result['reason'], probe_reason('shutdown-unverified'))
 
     def test_failed_probe_remains_unavailable(self):
         with patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=ValueError('fixture probe failed')):
             result = self.health.refresh('codex', force=True)
         self.assertFalse(result['available'])
-        self.assertEqual(result['reasonCode'], 'HARNESS_HANDSHAKE_FAILED')
+        self.assertEqual(result['reason'], probe_reason('probe-failed'))
 
     def test_invalid_native_return_is_refused(self):
         from hey_my_buddy.errors import BoardError
@@ -885,20 +893,20 @@ class NativeAccountReadFailureTests(BoardTestCase):
             first = self.health.refresh('codex', force=True)
             self.assertFalse(first['available'])
             self.assertEqual(first['status'], 'unhealthy')
-            self.assertEqual(first['reasonCode'], 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
+            self.assertEqual(first['reason'], account_reason('shutdown-unverified'))
             again = self.health.refresh('codex', force=True)
             self.assertFalse(again['available'])
-            self.assertEqual(again['reasonCode'], first['reasonCode'])
+            self.assertEqual(again['reason'], first['reason'])
             probe.assert_called_once()  # Read throttling cannot erase the failure.
         self.assertEqual(self.catalog_reads, [])
         self.assertEqual(self.events('harness.account_observed'), [])
-        self.assertEqual(self.events('harness.invalidated')[0]['reasonCode'], first['reasonCode'])
+        self.assertEqual(self.events('harness.invalidated')[0]['reason'], first['reason'])
         with self.board.db.write() as db:
             db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE harness='codex'")
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
             recovered = self.health.refresh('codex', force=True)
         self.assertTrue(recovered['available'])
-        self.assertNotIn('reasonCode', recovered)
+        self.assertIsNone(recovered['reason'])
         self.assertNotIn('accountReadFailure', recovered)
         self.assertEqual(len(self.catalog_reads), 1)
         self.assertEqual(len(self.events('harness.account_observed')), 1)
@@ -916,12 +924,12 @@ class NativeAccountReadFailureTests(BoardTestCase):
                     result = self.health.refresh('codex', force=True)
                 self.assertTrue(result['available'])
                 self.assertEqual(result['status'], 'ready')
-                self.assertNotIn('reasonCode', result)
-                self.assertEqual(result['accountReadFailure']['reasonCode'], reason)
+                self.assertIsNone(result['reason'])
+                self.assertEqual(result['accountReadFailure']['reason'], account_reason('account-read-failed'))
                 self.assertEqual(result['billingByProvider']['unknown']['kind'], 'unknown')
                 self.assertEqual(result['accountReadFailure']['errorType'], type(error).__name__)
                 self.assertEqual(result['accountReadFailure']['message'], str(error))
-                self.assertEqual(self.events('harness.account_read_failed')[-1]['reasonCode'], reason)
+                self.assertEqual(self.events('harness.account_read_failed')[-1]['reason'], account_reason('account-read-failed'))
         self.assertEqual(self.events('harness.account_observed'), [])
         self.assertEqual(self.events('harness.invalidated'), [])
         self.assertEqual(len(self.catalog_reads), 3)
@@ -966,7 +974,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertEqual(result['status'], 'unknown')
         self.assertEqual(self.events('harness.invalidated'), [])
         failure = self.events('harness.account_read_failed')[0]
-        self.assertEqual(failure['reasonCode'], 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
+        self.assertEqual(failure['reason'], account_reason('shutdown-unverified'))
         self.assertLess(failure['revision'], failure['currentRevision'])
 
     def test_account_success_survives_quota_rpc_failure_after_confirmed_stop(self):
@@ -982,8 +990,8 @@ class NativeAccountReadFailureTests(BoardTestCase):
             handle.return_value.terminate.assert_called_once()
         self.assertTrue(result['available'])
         self.assertEqual(result['billingByProvider']['openai']['kind'], 'subscription')
-        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
-        self.assertEqual(self.events('harness.account_read_failed')[0]['reasonCode'], 'native-rpc-error')
+        self.assertEqual(result['accountReadFailure']['reason'], account_reason('account-read-failed'))
+        self.assertEqual(self.events('harness.account_read_failed')[0]['reason'], account_reason('account-read-failed'))
         self.assertEqual(self.events('harness.account_observed')[0]['billing']['openai']['kind'], 'subscription')
         self.assertFalse(self.events('harness.account_observed')[0]['quotaRecorded'])
         self.assertEqual(self.events('harness.invalidated'), [])
@@ -1004,8 +1012,8 @@ class NativeAccountReadFailureTests(BoardTestCase):
             connection.return_value.call.side_effect = [{}, CodexProtocolError('native-rpc-error', 'account RPC denied')]
             result = self.health.refresh('codex', force=True)
         self.assertTrue(result['available'])
-        self.assertNotIn('reasonCode', result)
-        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
+        self.assertIsNone(result['reason'])
+        self.assertEqual(result['accountReadFailure']['reason'], account_reason('account-read-failed'))
         self.assertEqual(result['billingByProvider']['unknown']['kind'], 'unknown')
 
     def test_non_openai_native_provider_keeps_unknown_billing_without_rejecting_login(self):

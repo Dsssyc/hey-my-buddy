@@ -188,7 +188,7 @@ class RouterPublicationTests(WorkflowTestCase):
     def test_retained_legacy_capability_uses_local_eligibility_not_certificate(self):
         board = self.board()
         self.seed(board)
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'fixture',
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reason': {'code': 'harness.readonly-unavailable', 'params': {}},
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             snapshot = board.call('console_snapshot', {})
         buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)

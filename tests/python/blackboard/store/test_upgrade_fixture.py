@@ -246,9 +246,11 @@ class UpgradeFixtureTests(unittest.TestCase):
         fresh.initialize()
         with sqlite3.connect(state / 'board.sqlite3') as upgraded, fresh.read() as baseline:
             upgraded.row_factory = sqlite3.Row
-            # Only the schema marker, NULL command links and empty deletion
-            # table differ from the installed base's stored form.
+            # Reason-bearing rows change form; all other stock stays exact.
             for table, rows in stock.items():
+                if table in {'buddies', 'catalog_observations', 'evaluation_catalog',
+                             'catalog_current', 'harness_health'}:
+                    continue
                 with self.subTest(retained_table=table):
                     self.assertEqual([dict(item) for item in upgraded.execute(f'SELECT * FROM {table} ORDER BY rowid')], rows)
             self.assertEqual(set(stock),
@@ -260,7 +262,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             # SQLite ADD COLUMN retains the old whitespace around the final
             # comma; compare the command DDL without that formatting difference.
             def structure(rows):
-                return [(kind, name, table, ''.join(sql.split()) if name == 'commands' else sql)
+                return [(kind, name, table,
+                         ''.join(sql.replace('"buddies"', 'buddies').split())
+                         if name in {'commands', 'buddies'} else sql)
                         for kind, name, table, sql in rows]
             self.assertEqual(structure(source_schema), structure(fresh_schema))
             self.assertEqual([tuple(row) for row in upgraded.execute('PRAGMA table_info(commands)')],
@@ -331,6 +335,263 @@ class UpgradeFixtureTests(unittest.TestCase):
             upgrade_schema_24_to_25(fixture['state'])
         self.assertEqual(backup.database_snapshot(connection, exact=True), before)
         self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name')), schema)
+
+    def test_health_and_catalog_reasons_preserve_native_content(self):
+        fixture, connection = self.restored('reason-conversion')
+        native = 'Native limit: 原样保留 (12/12)'
+        health = json.loads(connection.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+        health['reasonCode'] = 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
+        health['remedy'] = 'old guidance'
+        health['accountReadFailure'] = {'reasonCode': 'HARNESS_ACCOUNT_STOP_UNCONFIRMED',
+                                        'message': 'native diagnostic'}
+        health['lastProbe']['reasonCode'] = 'timeout'
+        health['lastProbe']['candidates'] = [{'reasonCode': 'node-missing', 'remedy': 'old guidance'}]
+        health['candidates'] = [{'reasonCode': 'not-found', 'status': 'missing'}]
+        connection.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'", (json.dumps(health),))
+        connection.execute("UPDATE buddies SET available=0,unavailable_reason=? WHERE model='fixture-beta'", (native,))
+        connection.execute("UPDATE buddies SET available=0,unavailable_reason=? WHERE model='fixture-alpha'",
+                           ('not present in the latest confirmed native discovery',))
+        for discovery_id, payload_json in connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog').fetchall():
+            payload = json.loads(payload_json)
+            for model in (model for provider in payload['providers'] for model in provider['models']
+                          if model['id'] == 'fixture-beta'):
+                model.update(available=False, unavailableReason=native)
+            connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                               (json.dumps(payload), discovery_id))
+        for observation_id, response_json, harnesses_json in connection.execute(
+                'SELECT observation_id,response_json,harnesses_json FROM catalog_observations').fetchall():
+            response = json.loads(response_json)
+            response['catalog']['warnings'] = [
+                'native: 文案逐字保全', 'A model with no usable identity or reasoning effort was omitted']
+            for model in (model for provider in response['catalog']['providers'] for model in provider['models']
+                          if model['id'] == 'fixture-beta'):
+                model.update(available=False, unavailableReason=native)
+            for buddy in (buddy for buddy in response['buddies'] if buddy['model'] == 'fixture-beta'):
+                buddy['unavailableReason'] = native
+            harnesses = json.loads(harnesses_json)
+            harnesses[0]['reasonCode'] = 'HARNESS_NOT_CHECKED'
+            connection.execute('UPDATE catalog_observations SET response_json=?,harnesses_json=? WHERE observation_id=?',
+                               (json.dumps(response), json.dumps(harnesses), observation_id))
+        connection.execute("UPDATE catalog_current SET reason='ACCOUNT_STATUS_UNKNOWN' WHERE harness='codex'")
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        rows = {row['model']: row for row in connection.execute('SELECT * FROM buddies')}
+        self.assertEqual((rows['fixture-beta']['unavailable_code'], rows['fixture-beta']['unavailable_content']),
+                         ('catalog.native-unavailable', native))
+        self.assertEqual(json.loads(rows['fixture-beta']['unavailable_params_json']), {})
+        self.assertEqual(rows['fixture-alpha']['unavailable_code'], 'catalog.model-absent')
+        health = json.loads(connection.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
+        self.assertEqual(health['reason'], {'code': 'harness.shutdown-unverified',
+                                             'params': {'operation': 'account-read'}})
+        self.assertEqual(health['lastProbe']['reason']['code'], 'harness.timeout')
+        self.assertEqual(health['lastProbe']['candidates'][0]['reason']['code'], 'harness.node-missing')
+        self.assertNotIn('remedy', health['lastProbe']['candidates'][0])
+        self.assertEqual(health['candidates'][0]['reason']['code'], 'harness.not-found')
+        self.assertNotIn('remedy', health)
+        self.assertEqual(health['accountReadFailure']['message'], 'native diagnostic')
+        payload = json.loads(connection.execute('SELECT payload_json FROM evaluation_catalog LIMIT 1').fetchone()[0])
+        model = next(model for provider in payload['providers'] for model in provider['models']
+                     if model['id'] == 'fixture-beta')
+        self.assertEqual(model['unavailableContent'], native)
+        self.assertEqual(model['unavailableReason']['code'], 'catalog.native-unavailable')
+        response = json.loads(connection.execute('SELECT response_json FROM catalog_observations LIMIT 1').fetchone()[0])
+        self.assertNotIn('note', response)
+        self.assertEqual(response['catalog']['warnings'],
+                         [{'reason': {'code': 'catalog.native-warning', 'params': {}},
+                           'content': 'native: 文案逐字保全'},
+                          {'reason': {'code': 'catalog.native-warning', 'params': {}},
+                           'content': 'A model with no usable identity or reasoning effort was omitted'}])
+        self.assertEqual(json.loads(connection.execute('SELECT reason FROM catalog_current').fetchone()[0]),
+                         {'code': 'catalog.account-status-unknown', 'params': {'harness': 'codex'}})
+
+    def test_known_blackboard_unknown_reason_becomes_history_and_unknown_owner_rolls_back(self):
+        fixture, connection = self.restored('reason-ownership')
+        connection.execute("UPDATE buddies SET available=0,unavailable_reason='older blackboard text' "
+                           "WHERE model='fixture-alpha'")
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute("SELECT buddy_id,unavailable_code,unavailable_params_json,unavailable_content "
+                                 "FROM buddies WHERE model='fixture-alpha'").fetchone()
+        self.assertEqual(row['unavailable_code'], 'history.reason-unavailable')
+        self.assertEqual(json.loads(row['unavailable_params_json']), {'recordId': row['buddy_id']})
+        self.assertIsNone(row['unavailable_content'])
+
+        fixture, connection = self.restored('reason-unknown-owner')
+        connection.execute("UPDATE buddies SET source='outside',available=0,unavailable_reason='ambiguous' "
+                           "WHERE model='fixture-alpha'")
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        schema = list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name'))
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+        self.assertEqual(list(connection.execute('SELECT * FROM sqlite_master ORDER BY type,name')), schema)
+
+    def test_native_description_equal_to_catalog_fact_stays_content(self):
+        fixture, connection = self.restored('catalog-fact-collision')
+        native = 'not present in the latest confirmed native discovery'
+        connection.execute('UPDATE buddies SET available=0,unavailable_reason=? WHERE model=?',
+                           (native, 'fixture-beta'))
+        for discovery_id, payload_json in connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog').fetchall():
+            payload = json.loads(payload_json)
+            for provider in payload['providers']:
+                for model in provider['models']:
+                    if model['id'] == 'fixture-beta':
+                        model.update(available=False, unavailableReason=native)
+            connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                               (json.dumps(payload), discovery_id))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute("SELECT unavailable_code,unavailable_content FROM buddies WHERE model='fixture-beta'").fetchone()
+        self.assertEqual(tuple(row), ('catalog.native-unavailable', native))
+
+    def test_unrelated_historical_native_text_does_not_override_catalog_fact(self):
+        fixture, connection = self.restored('catalog-fact-source-binding')
+        old_text = 'not present in the latest confirmed native discovery'
+        linked = connection.execute("SELECT source FROM buddies WHERE model='fixture-beta'").fetchone()[0]
+        self.assertTrue(linked.startswith('catalog:'))
+        connection.execute('UPDATE buddies SET available=0,unavailable_reason=? WHERE model=?',
+                           (old_text, 'fixture-beta'))
+        other = connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog WHERE discovery_id!=?',
+                                   (linked[len('catalog:'):],)).fetchone()
+        payload = json.loads(other['payload_json'])
+        next(model for provider in payload['providers'] for model in provider['models']
+             if model['id'] == 'fixture-beta').update(available=False, unavailableReason=old_text)
+        connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                           (json.dumps(payload), other['discovery_id']))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute("SELECT unavailable_code,unavailable_content FROM buddies WHERE model='fixture-beta'").fetchone()
+        self.assertEqual(tuple(row), ('catalog.model-absent', None))
+
+    def test_unresolved_catalog_source_rolls_back(self):
+        fixture, connection = self.restored('catalog-source-unresolved')
+        connection.execute("UPDATE buddies SET source='catalog:truncated',available=0,"
+                           "unavailable_reason='not present in the latest confirmed native discovery' "
+                           "WHERE model='fixture-beta'")
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+
+    def test_native_fallback_ambiguity_rolls_back(self):
+        fixture, connection = self.restored('native-fallback-ambiguous')
+        payload_json = connection.execute('SELECT payload_json FROM evaluation_catalog LIMIT 1').fetchone()[0]
+        payload = json.loads(payload_json)
+        payload['providers'][0]['models'][0].update(
+            available=False, unavailableReason='native route is unavailable')
+        discovery_id = connection.execute('SELECT discovery_id FROM evaluation_catalog LIMIT 1').fetchone()[0]
+        connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                           (json.dumps(payload), discovery_id))
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+
+    def test_native_discovery_uppercase_reason_remains_content(self):
+        fixture, connection = self.restored('native-discovery-uppercase')
+        observation_id = connection.execute('SELECT observation_id FROM catalog_current WHERE harness=?',
+                                            ('codex',)).fetchone()[0]
+        response = json.loads(connection.execute('SELECT response_json FROM catalog_observations WHERE observation_id=?',
+                                                 (observation_id,)).fetchone()[0])
+        response['catalog']['discoveries'][0].update(status='unknown', reason='NATIVE_UPPERCASE_DETAIL')
+        connection.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?',
+                           (json.dumps(response), observation_id))
+        connection.execute("UPDATE catalog_current SET reason='NATIVE_UPPERCASE_DETAIL' WHERE harness='codex'")
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        response = json.loads(connection.execute('SELECT response_json FROM catalog_observations WHERE observation_id=?',
+                                                 (observation_id,)).fetchone()[0])
+        discovery = response['catalog']['discoveries'][0]
+        self.assertEqual(discovery['reason'], {'code': 'catalog.native-unknown', 'params': {'harness': 'codex'}})
+        self.assertEqual(discovery['content'], 'NATIVE_UPPERCASE_DETAIL')
+        self.assertEqual(json.loads(connection.execute('SELECT reason FROM catalog_current').fetchone()[0]),
+                         discovery['reason'])
+
+    def test_account_read_protocol_code_stays_diagnostic(self):
+        fixture, connection = self.restored('account-read-diagnostic')
+        health = json.loads(connection.execute('SELECT record_json FROM harness_health').fetchone()[0])
+        health['reasonCode'] = 'deadline'
+        health['accountReadFailure'] = {'reasonCode': 'deadline', 'status': 'unknown',
+                                        'message': 'native deadline detail'}
+        connection.execute('UPDATE harness_health SET record_json=?', (json.dumps(health),))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        upgraded = json.loads(connection.execute('SELECT record_json FROM harness_health').fetchone()[0])
+        self.assertEqual(upgraded['reason'], {'code': 'harness.account-read-failed',
+                                              'params': {'operation': 'account-read'}})
+        self.assertEqual(upgraded['accountReadFailure']['reason'], upgraded['reason'])
+        self.assertEqual(upgraded['accountReadFailure']['diagnosticCode'], 'deadline')
+        self.assertEqual(upgraded['accountReadFailure']['message'], 'native deadline detail')
+
+    def test_health_without_embedded_harness_uses_table_identity_for_history(self):
+        fixture, connection = self.restored('health-history-owner')
+        connection.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
+                           (json.dumps({'reasonCode': 'OLD_HEALTH_CODE', 'available': False}),))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        health = json.loads(connection.execute('SELECT record_json FROM harness_health').fetchone()[0])
+        self.assertEqual(health['reason'],
+                         {'code': 'history.reason-unavailable', 'params': {'recordId': 'codex'}})
+
+    def test_known_native_warning_becomes_reason_and_unknown_source_rolls_back(self):
+        fixture, connection = self.restored('native-warning')
+        row = connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog LIMIT 1').fetchone()
+        payload = json.loads(row['payload_json'])
+        payload['source'] = 'codex-native-app-server'
+        payload['warnings'] = ['A model with no usable identity or reasoning effort was omitted']
+        connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                           (json.dumps(payload), row['discovery_id']))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        converted = json.loads(connection.execute('SELECT payload_json FROM evaluation_catalog WHERE discovery_id=?',
+                                                  (row['discovery_id'],)).fetchone()[0])
+        self.assertEqual(converted['warnings'],
+                         [{'reason': {'code': 'catalog.model-identity-or-effort-omitted', 'params': {}}}])
+
+        fixture, connection = self.restored('warning-unknown-owner')
+        row = connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog LIMIT 1').fetchone()
+        payload = json.loads(row['payload_json'])
+        payload['source'] = 'unrecognized-source'
+        payload['warnings'] = ['A model with no usable identity or reasoning effort was omitted']
+        connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                           (json.dumps(payload), row['discovery_id']))
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+
+    def test_upgraded_and_fresh_buddies_enforce_reason_content_constraints(self):
+        fixture, upgraded = self.restored('buddy-reason-constraints')
+        upgrade_schema_24_to_25(fixture['state'])
+        fresh = Database(self.root / 'fresh-buddy-reason-constraints')
+        fresh.initialize()
+        self.addCleanup(fresh.close)
+        with fresh.connect() as baseline:
+            for connection in (upgraded, baseline):
+                with self.subTest(database='upgrade' if connection is upgraded else 'fresh'):
+                    if connection is baseline:
+                        connection.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,source) "
+                                           "VALUES('test','test','codex','test','test','off','test')")
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("UPDATE buddies SET unavailable_code='catalog.model-absent',"
+                                           "unavailable_params_json=NULL WHERE buddy_id="
+                                           "(SELECT buddy_id FROM buddies LIMIT 1)")
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("UPDATE buddies SET unavailable_code='catalog.model-absent',"
+                                           "unavailable_params_json='{}',unavailable_content='native' "
+                                           "WHERE buddy_id=(SELECT buddy_id FROM buddies LIMIT 1)")
+                    with self.assertRaises(sqlite3.IntegrityError):
+                        connection.execute("UPDATE buddies SET unavailable_code=NULL,"
+                                           "unavailable_params_json=NULL,unavailable_content='native' "
+                                           "WHERE buddy_id=(SELECT buddy_id FROM buddies LIMIT 1)")
 
     def test_foreign_key_failure_rolls_back_schema_and_stock(self):
         fixture, connection = self.restored('invalid-foreign-key')

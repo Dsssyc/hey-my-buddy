@@ -472,7 +472,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "no-effort"}, clear=True):
             result = self.description.discover_models()
         self.assertEqual(result["providers"], [])
-        self.assertTrue(any("effort" in warning for warning in result["warnings"]))
+        self.assertEqual(result["warnings"],
+                         [{"reason": {"code": "catalog.effort-directory-omitted", "params": {}}}])
 
     def test_cancel_and_unconfirmed_stop_are_distinct(self):
         context = self.context("hang")

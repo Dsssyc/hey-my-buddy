@@ -293,7 +293,9 @@ class SingleRouterClaimTests(DecisionTestCase):
         context = ExecutionContext(task_id='task', attempt_id='attempt', generation=1,
             spec={'adapter': 'decision'}, directory=board.directory / 'blocked-adapter', runtime={},
             environment={'HMB_STATE_DIR': str(board.directory)}, decision_input=document)
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False}):
+        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
+            'eligible': False, 'reason': {'code': 'harness.readonly-worker-carrier-unimplemented',
+                                          'params': {'harness': 'dsh'}}}):
             with self.assertRaises(BoardError) as failure:
                 DecisionAdapter().prepare(context)
         self.assertEqual(failure.exception.code, 'router-review-unsupported')
@@ -346,7 +348,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                'eligible': False, 'reasonCode': 'readonly-resource-missing', 'reason': 'removed controller',
+                'eligible': False, 'reason': {'code': 'harness.readonly-resource-missing', 'params': {}},
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
             self.report(board, claim, stopped_answer(claim))
         decision = self.decision(board, request['decisionId'])

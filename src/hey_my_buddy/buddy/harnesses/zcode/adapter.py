@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from ....protocol.capabilities import adapter_capabilities
+from ....protocol.reasons import reason
 from . import native_run
 from .config import cli_command, provider_paths
 from .protocol import NativeError
@@ -26,15 +27,14 @@ class ZcodeAdapter:
         return adapter_capabilities(self.name)
 
     def local_read_only_check(self) -> dict:
-        return {"eligible": False, "reasonCode": "readonly-worker-carrier-unimplemented",
-                "reason": "ZCode review on the Worker carrier is not implemented; its separate read-only channel was removed from stage 2",
+        return {"eligible": False, "reason": reason("harness.readonly-worker-carrier-unimplemented", harness=self.name),
                 "systemSandbox": False, "sameAttemptContinuation": self.read_only_structured_resume}
 
     def available(self) -> tuple[bool, str | None]:
         from ..runtime_selection import selected
         record = selected("zcode")
         if record is not None:
-            return record.get('status') == 'ready', record.get('reasonCode')
+            return record.get('status') == 'ready', (record.get('reason') or {}).get('code')
         try:
             command = cli_command()
             provider_paths(os.environ, command)

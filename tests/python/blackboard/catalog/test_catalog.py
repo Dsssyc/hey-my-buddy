@@ -38,7 +38,8 @@ class CatalogTests(unittest.TestCase):
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
         self.assertEqual(result["discoveries"], [{"harness": "missing", "status": "unknown", "accountStatus": "unknown",
-                                                  "reason": "fixture executable missing"}])
+                                                  "reason": {"code": "harness.not-checked", "params": {"operation": "probe"}},
+                                                  "content": None}])
 
     def test_discovery_preserves_each_harness_status_and_reason(self):
         observations = {
@@ -58,10 +59,17 @@ class CatalogTests(unittest.TestCase):
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value=instances), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
-        self.assertEqual(result["discoveries"], [{"harness": name, **fact, "reason": fact.get("reason")}
-                                                 for name, fact in observations.items()])
+        self.assertEqual(result["discoveries"], [
+            {"harness": name, "status": fact["status"], "accountStatus": fact["accountStatus"],
+             "reason": ({"code": "catalog.native-unknown", "params": {"harness": name}}
+                        if fact["status"] == "unknown" and fact.get("reason") else None),
+             "content": fact.get("reason")}
+            for name, fact in observations.items()])
         self.assertEqual([entry["harness"] for entry in result["providers"]], list(observations))
-        self.assertEqual(result["warnings"], [name + " warning" for name in observations])
+        self.assertEqual(result["warnings"], [
+            {"reason": {"code": "catalog.native-warning", "params": {}},
+             "content": name + " warning", "harness": name}
+            for name in observations])
         self.assertEqual(result["source"], "; ".join(name + "-fixture" for name in observations))
         self.assertEqual(result["harnessVersion"], "; ".join(name + ":fixture-1" for name in observations))
 
@@ -73,7 +81,7 @@ class CatalogTests(unittest.TestCase):
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
         self.assertEqual(result["discoveries"], [{"harness": "dsh", "status": "complete",
-                                                 "accountStatus": "unknown", "reason": None}])
+                                                 "accountStatus": "unknown", "reason": None, "content": None}])
 
     def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
         from hey_my_buddy.buddy.harnesses.claude import adapter as claude
@@ -93,7 +101,8 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(probe.call_count, 1)
             refreshed = catalog.discover(directory=self.directory)
             self.assertEqual(refreshed["discoveries"], [{"harness": "claude", "status": "complete",
-                                                         "accountStatus": "not-applicable", "reason": None}])
+                                                         "accountStatus": "not-applicable", "reason": None,
+                                                         "content": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
             self.assertTrue(instance.available()[0])
             buddies = catalog.CatalogView.from_payload(refreshed).proposed_buddies()
@@ -123,7 +132,10 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual({item["effort"] for item in zcode if item["model"] == "deepseek-flash"}, {"low", "high"})
         self.assertTrue(all(item["buddyId"].startswith("zcode:") for item in zcode))
         self.assertTrue(all(not item["enabled"] for item in proposals))
-        self.assertFalse(next(item for item in zcode if item["model"] == "basic")["available"])
+        unavailable = next(item for item in zcode if item["model"] == "basic")
+        self.assertFalse(unavailable["available"])
+        self.assertEqual(unavailable["unavailableReason"], {"code": "catalog.native-unavailable", "params": {}})
+        self.assertEqual(unavailable["unavailableContent"], "Unsupported auth")
 
     def test_unknown_native_settings_never_enter_public_catalog_or_proposals(self):
         view = catalog.CatalogView.from_payload(self.payload())

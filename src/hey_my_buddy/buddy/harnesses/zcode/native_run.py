@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ....errors import BoardError
+from ....protocol.reasons import reason as make_reason
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
@@ -229,18 +230,13 @@ def catalog(snapshot: dict, access: dict, version: str) -> dict:
                                 "contextWindow": model.get("contextWindow"), "available": True,
                                 "inputModalities": [name for name in ("text", "image", "audio", "video", "pdf")
                                                     if formats.get("supports" + name.capitalize()) is True]})
-    warnings = []
-    if missing_effort:
-        warnings.append("Models exposing no configurable native reasoning efforts were omitted")
+    warnings = ([{"reason": make_reason("catalog.effort-directory-omitted")}] if missing_effort else [])
     if incomplete:
-        warnings.append("The native model catalog shape was not fully recognized; this reading cannot retire missing buddies")
-    if not providers and not incomplete:
-        warnings.append("The native app server returned no models with configurable reasoning efforts; this complete empty observation retires missing ZCode buddies")
-    warnings.append("The account status is not applicable to this reading: the no-prompt native "
-                    "model snapshot carries no separate account check")
+        warnings.append({"reason": make_reason("catalog.model-shape-unreadable")})
     return {"source": "zcode-native-app-server", "harness": "zcode", "harnessVersion": version,
             "discoveredAt": datetime.now(timezone.utc).isoformat(), "providers": list(providers.values()),
-            "discoveries": [{"harness": "zcode", "status": "unknown" if incomplete else "complete", "accountStatus": "not-applicable"}],
+            "discoveries": [{"harness": "zcode", "status": "unknown" if incomplete else "complete", "accountStatus": "not-applicable",
+                             **({"reason": make_reason("catalog.model-shape-unreadable")} if incomplete else {})}],
             "warnings": warnings}
 
 
@@ -1748,7 +1744,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
             catalog_value = catalog(snapshot, access, version)
             if discovery_facts.unknown_counts:
                 catalog_value["discoveries"][0]["status"] = "unknown"
-                catalog_value["warnings"].append("Native replies included unrecognized shapes: " + ", ".join(discovery_facts.unknown_counts))
+                catalog_value["discoveries"][0]["reason"] = make_reason("catalog.model-shape-unreadable")
+                catalog_value["warnings"].append({"reason": make_reason("catalog.model-shape-unreadable"),
+                                                   "diagnostic": discovery_facts.unknown_counts})
             spawn.connection.call("session/close", {"sessionId": session_id})
         finally:
             try:

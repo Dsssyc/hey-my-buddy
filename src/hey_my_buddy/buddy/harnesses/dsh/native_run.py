@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from ....errors import BoardError
+from ....protocol.reasons import reason as make_reason
 from ....private_dirs import ensure_private_dir, open_regular_fd
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
@@ -1832,9 +1833,9 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         catalog_value = (_catalog(options, version) if isinstance(options, list)
                          else _unread_catalog(options, version))
         if native_facts:
-            catalog_value["warnings"].append(
-                "ACP initialize response shape unrecognized; capability check unknown: "
-                + json.dumps(native_facts, sort_keys=True))
+            catalog_value["warnings"].append({
+                "reason": make_reason("catalog.acp-initialize-unreadable"),
+                "diagnostic": native_facts})
         _close_session(client, session_id, deadline=deadline)
     except NativeError as caught:
         error = caught
@@ -1924,26 +1925,15 @@ def _unread_catalog(options: object, version: str) -> dict:
     return _catalog_receipt(
         version, [],
         [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
-          "reason": UNREAD_CATALOG_REASON}],
-        extra_warnings=["The native session's configuration options had an unrecognized shape; "
-                        f"this catalog reading stays unknown (shape: {type(options).__name__})."])
+          "reason": make_reason("config-options-shape-unreadable")}])
 
 
-def _catalog_receipt(version: str, providers: list, discoveries: list,
-                     extra_warnings: list = ()) -> dict:
-    """The common catalog receipt: the reading's facts and its fixed warnings."""
+def _catalog_receipt(version: str, providers: list, discoveries: list) -> dict:
+    """The common catalog receipt with its native reading facts."""
     return {
         "source": "dsh-acp-session-config", "harness": "dsh", "harnessVersion": version,
         "discoveredAt": utc_now(), "providers": providers, "discoveries": discoveries,
-        "warnings": [
-            "The no-prompt ACP surface exposes the declared model and effort selectors only; "
-            "per-model effort availability and context windows stay unknown until a real session.",
-            "The account status is not applicable to this reading: the discovery launches the "
-            "installed DSH with the user's inherited HOME and DSH_HOME, so DSH loads its own "
-            "configuration and login without this module reading or copying credential content, and "
-            "the no-prompt session carries no separate account read.",
-            *extra_warnings,
-        ],
+        "warnings": [],
     }
 
 

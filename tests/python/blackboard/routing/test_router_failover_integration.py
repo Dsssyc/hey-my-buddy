@@ -41,10 +41,10 @@ class FailoverTests(RouterDispatchTestCase):
             # Review failover tests provide their own private capability for
             # every dispatch; the real DSH review carrier is deferred.
             self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": "private fixture",
+                "eligible": True, "reason": None,
                 "systemSandbox": False, "sameAttemptContinuation": True}))
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": "private fixture",
+                "eligible": True, "reason": None,
                 "systemSandbox": False, "sameAttemptContinuation": True}):
             request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self) if micro_task else self.request())
             if micro_task:
@@ -77,7 +77,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def next_claim(self, request, suffix="next"):
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": "private fixture",
+                "eligible": True, "reason": None,
                 "systemSandbox": False, "sameAttemptContinuation": True}):
             result = self.claim(suffix, task_id=self.current_task(request["decisionId"]))
         self.assertIsNotNone(result["claim"], result)

@@ -150,7 +150,7 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
                 "eligible": False, "systemSandbox": False,
-                "reasonCode": "readonly-tools-unrestricted", "reason": "fixture tools unrestricted"}):
+                "reason": {"code": "harness.readonly-tools-unrestricted", "params": {}}}):
             view = self.audit(board, self.request(board))
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["routingMode"], "review")
@@ -196,11 +196,10 @@ class SingleRouterRequestTests(BoardTestCase):
                 self.assertEqual(actual, code)
                 self.assertIn(text, reason)
             connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
-            with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reasonCode": "executable-missing", "reason": "fixture missing"}):
+            with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
                 _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-unavailable")
-            self.assertIn("executable-missing", reason)
-            self.assertIn("fixture missing", reason)
+            self.assertIn("harness.not-found", reason)
             with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
                 _, code, reason = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")

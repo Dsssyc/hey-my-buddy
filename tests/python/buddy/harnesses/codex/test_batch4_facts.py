@@ -54,7 +54,7 @@ class NativeFactsTests(unittest.TestCase):
                 connection.call.return_value = {"data": [], "nextCursor": cursor}
                 catalog, listed = native_run._catalog(connection, "version", "openai")
                 self.assertEqual(catalog["discoveries"][0], {"harness": "codex", "status": "unknown",
-                                                           "reason": "model-cursor-shape-unreadable"})
+                                                           "reason": {"code": "model-cursor-shape-unreadable", "params": {}}})
                 self.assertEqual(listed, set())
                 connection.call.assert_called_once()
 
@@ -70,8 +70,9 @@ class NativeFactsTests(unittest.TestCase):
                                                       mode, {"model": "model", "effort": "low"}, state)
                     self.assertIsNone(selected)
                     self.assertEqual(state.catalog_read["discovery"]["status"], "unknown")
-                    self.assertEqual(state.catalog_read["discovery"]["reason"], "config-shape-unreadable")
-                    self.assertTrue(state.catalog_read["warnings"])
+                    self.assertEqual(state.catalog_read["discovery"]["reason"],
+                                     {"code": "config-shape-unreadable", "params": {}})
+                    self.assertEqual(state.catalog_read["warnings"], [])
                     self.assertFalse(state.model_started)
 
     def test_readable_empty_config_still_uses_native_default_provider(self):
@@ -376,8 +377,9 @@ class NativeFactsTests(unittest.TestCase):
                 state = native_run._RunState(status="ok", raw_answer='{"answer": "retained"}', shutdown=True,
                     policy_checks={"configReadback": {"status": "unknown"},
                                    "threadReceipt": {"status": "unknown"}, "selectedModel": {"status": "unknown"}},
-                    catalog_read={"discovery": {"status": "unknown", "reason": "model-list-shape-unreadable"},
-                                  "warnings": ["incomplete reading"]})
+                    catalog_read={"discovery": {"status": "unknown",
+                                                "reason": {"code": "model-list-shape-unreadable", "params": {}}},
+                                  "warnings": []})
                 facts = native_run._RunFacts()
                 facts.note_unknown("account/updated")
                 result = native_run._build_result(request, None, state, mode, None, facts,

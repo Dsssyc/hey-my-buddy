@@ -127,8 +127,12 @@ def reason_violations(root: Path, codes: dict[str, list[str]]) -> list[str]:
         relative = path.relative_to(root).as_posix()
         module = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
         mappings = literal_mappings(module)
+        constructors = {"reason"}
+        for statement in ast.walk(module):
+            if isinstance(statement, ast.ImportFrom) and (statement.module or "").endswith("protocol.reasons"):
+                constructors.update(alias.asname or alias.name for alias in statement.names if alias.name == "reason")
         for node in ast.walk(module):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "reason"):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in constructors):
                 continue
             check_reason_call(node, mappings, codes, f"{relative}:{node.lineno}", violations)
     return violations
@@ -201,6 +205,13 @@ UNRELATED = {"skip": "not-a-reason-code"}
             any("not-registered" in item and "not registered" in item for item in violations),
             violations,
         )
+
+    def test_an_import_alias_is_checked_against_the_same_table(self):
+        prefix = "from hey_my_buddy.protocol.reasons import reason as make_reason\n"
+        self.assertEqual(scan(prefix + 'make_reason("plain")\n'), [])
+        self.assertTrue(scan(prefix + 'make_reason("not-registered")\n'))
+        self.assertTrue(scan(prefix + 'make_reason("plain", detail="x")\n'))
+        self.assertTrue(scan('def report():\n    from ...protocol.reasons import reason as make_reason\n    return make_reason("not-registered")\n'))
 
     def test_a_parameter_name_that_differs_from_the_table_fails(self):
         violations = scan('reason("plain", detail="x")\n')

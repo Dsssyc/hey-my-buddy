@@ -45,8 +45,8 @@ def command_for(harness, environment=None):
         from .discovery import discover
         record = discover(harness, environment=env)
     if record.get('status') != 'ready' or not record.get('command'):
-        raise BoardError(record.get('reasonCode') or 'HARNESS_UNAVAILABLE',
-                         record.get('remedy') or 'Run hey-my-buddy harnesses with refresh:true', harness=harness)
+        raise BoardError('HARNESS_UNAVAILABLE', 'The selected harness is unavailable',
+                         harness=harness, reason=record.get('reason'))
     return list(record['command'])
 
 

@@ -32,7 +32,8 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
     no-tool buddy disables project input.
     """
     if not getattr(native, "no_tool_structured", False):
-        raise BoardError("router-no-tool-unsupported", "Router 不可用：harness 未实现无工具结构化入口")
+        raise BoardError("router-no-tool-unsupported", "The native harness has no structured no-tool call",
+                         harness=native.name)
     root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
     if any(root.iterdir()):
         raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
@@ -52,8 +53,8 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
     """
     eligibility = native.local_read_only_check()
     if not eligibility["eligible"]:
-        detail = eligibility.get("reason") or "harness 不满足审阅模式本地资格"
-        raise BoardError("router-review-unsupported", f"Router 不可用：{detail}")
+        raise BoardError("router-review-unsupported", "The native harness cannot run the review call",
+                         harness=native.name, reason=eligibility["reason"])
     manifest = document.get("executionWorkspace")
     root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
     try:

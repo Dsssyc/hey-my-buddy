@@ -163,21 +163,24 @@ class EvaluationStore:
             "description": row["description"],
             "source": row["source"],
         }
-        if row["unavailable_reason"]:
-            view["unavailableReason"] = row["unavailable_reason"]
+        if row["unavailable_code"]:
+            view["unavailableReason"] = {"code": row["unavailable_code"],
+                                         "params": json.loads(row["unavailable_params_json"])}
+            if row["unavailable_content"] is not None:
+                view["unavailableContent"] = row["unavailable_content"]
         if "catalog_state" in row.keys():
             view["catalogState"] = row["catalog_state"] or "unknown"
-            view["catalogReason"] = row["catalog_reason"]
+            view["catalogReason"] = json.loads(row["catalog_reason"]) if row["catalog_reason"] else None
         if "catalog_state" in row.keys() or pending is not None:
             # ADR-027 rule 6: the model-level catalog judgment, separate from the
             # harness-level reading state above. Pending is per model identity.
-            from ..catalog.catalog import CONFIRMED_ABSENCE_REASON
+            from ..catalog.catalog import CATALOG_FACT_REASONS
             model_service = (row["harness"], row["provider"], row["model"])
             since = (pending or {}).get(model_service)
             if since:
                 view["catalogStatus"] = "pending"
                 view["pendingSince"] = since
-            elif not row["available"] and row["unavailable_reason"] in (CONFIRMED_ABSENCE_REASON, 'ACCOUNT_BINDING_CHANGED'):
+            elif not row["available"] and row["unavailable_code"] in (*CATALOG_FACT_REASONS, 'catalog.account-binding-changed'):
                 view["catalogStatus"] = "unavailable"
             else:
                 view["catalogStatus"] = "available"

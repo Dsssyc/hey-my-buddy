@@ -96,6 +96,27 @@ class CatalogObservationTests(BoardTestCase):
                 self.assertGreater(after[0], before[0])
                 self.assertNotEqual(after[1], before[1])
 
+    def test_native_unavailable_content_survives_publication_and_readback(self):
+        payload = catalog()
+        model = payload['providers'][0]['models'][0]
+        model['available'] = False
+        model['unavailableReason'] = '  原生限制：quota=0\n'
+        recorded = self.record(payload)
+        proposed = recorded['buddies'][0]
+        self.assertEqual(proposed['unavailableReason'], {'code': 'catalog.native-unavailable', 'params': {}})
+        self.assertEqual(proposed['unavailableContent'], model['unavailableReason'])
+        with self.e.db.read() as db:
+            row = db.execute('SELECT unavailable_code,unavailable_params_json,unavailable_content FROM buddies').fetchone()
+            self.assertEqual(tuple(row), ('catalog.native-unavailable', '{}', model['unavailableReason']))
+            current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
+            self.assertEqual(current['unavailableContent'], model['unavailableReason'])
+        with self.e.db.write() as db:
+            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+        with self.e.db.read() as db:
+            current = catalog_store.current(db).lookup('dsh', 'fixture', 'alpha')
+            self.assertEqual(current['unavailableReason'], {'code': 'catalog.native-unavailable', 'params': {}})
+            self.assertEqual(current['unavailableContent'], model['unavailableReason'])
+
     def test_addition_pending_confirmation_and_recovery_change_only_actual_facts(self):
         self.record(catalog())
         self.record(catalog(models=('alpha', 'beta')))
@@ -122,7 +143,7 @@ class CatalogObservationTests(BoardTestCase):
         self.record(catalog(models=('untrusted',), account_status='unknown'))
         self.assertEqual(self.table_facts(), facts)
         with self.e.db.write() as db:
-            db.execute("UPDATE buddies SET available=0,unavailable_reason='HARNESS_UNHEALTHY'")
+            db.execute("UPDATE buddies SET available=0,unavailable_code='harness.probe-failed',unavailable_params_json='{}'")
         restored = self.record(catalog(models=(), status='unknown'))
         self.assertGreater(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
@@ -135,11 +156,11 @@ class CatalogObservationTests(BoardTestCase):
         self.record(catalog(models=('alpha',)))
         with self.e.db.write() as db:
             db.execute('DELETE FROM catalog_current')
-            db.execute("UPDATE buddies SET enabled=1,unavailable_reason=NULL")
+            db.execute("UPDATE buddies SET enabled=1,unavailable_code=NULL,unavailable_params_json=NULL,unavailable_content=NULL")
         self.record(catalog(models=('beta',)))
         with self.e.db.read() as db:
-            missing = db.execute("SELECT available,enabled,unavailable_reason FROM buddies WHERE model='alpha'").fetchone()
-        self.assertEqual((missing['available'], missing['enabled'], missing['unavailable_reason']),
+            missing = db.execute("SELECT available,enabled,unavailable_code FROM buddies WHERE model='alpha'").fetchone()
+        self.assertEqual((missing['available'], missing['enabled'], missing['unavailable_code']),
                          (0, 1, catalog_rules.CONFIRMED_ABSENCE_REASON))
 
     def test_effort_retirement_changes_buddy_once(self):

@@ -1233,7 +1233,7 @@ class NativeCatalogEmptyTests(ZcodeFixtureCase):
         # preserving them as unknown forever.
         self.assertEqual(result["providers"], [])
         self.assertEqual(result["discoveries"], [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
-        self.assertTrue(any("empty" in warning for warning in result["warnings"]), result["warnings"])
+        self.assertEqual(result["warnings"], [])
         self.assertNotIn("fixture-secret-never-public", json.dumps(result))
 
 

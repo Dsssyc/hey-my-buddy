@@ -41,7 +41,7 @@ class CatalogTrustTests(BoardTestCase):
             row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE harness=?', (harness,)).fetchone()
             pending = catalog.pending_model_services(db)
             read_at = catalog.catalog_read_at(db, harness)
-            buddies = db.execute('SELECT buddy_id, available, unavailable_reason FROM buddies WHERE harness=?', (harness,)).fetchall()
+            buddies = db.execute('SELECT buddy_id, available, unavailable_code FROM buddies WHERE harness=?', (harness,)).fetchall()
         return row, pending, read_at, buddies
 
     def test_unknown_discovery_retains_catalog_without_confirming_model_absence(self):
@@ -59,7 +59,8 @@ class CatalogTrustTests(BoardTestCase):
             result = catalog_store.record(self.evaluation, discovered)
             row, pending, read_at, buddies = self.state()
             self.assertEqual(row['status'], 'unknown')
-            self.assertEqual(row['reason'], payload['discoveries'][0]['reason'])
+            self.assertEqual(json.loads(row['reason']), {'code': 'catalog.native-unknown', 'params': {'harness': 'dsh'}})
+            self.assertEqual(result['catalog']['discoveries'][0]['content'], payload['discoveries'][0]['reason'])
             self.assertEqual(row['discovery_id'], confirmed['discoveryId'])
             self.assertEqual(read_at, before[2])
             self.assertEqual([tuple(buddy) for buddy in buddies], [tuple(buddy) for buddy in before[3]])
@@ -144,7 +145,7 @@ class CatalogTrustTests(BoardTestCase):
                 self.record(payload)
         row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
-        self.assertEqual(row['reason'], 'ACCOUNT_STATUS_UNKNOWN')
+        self.assertEqual(json.loads(row['reason']), {'code': 'catalog.account-status-unknown', 'params': {'harness': 'dsh'}})
         self.assertIsNotNone(row['discovery_id'], 'The previously confirmed payload is retained')
         self.assertEqual(read_at, trusted_at, 'An unknown reading is not a successful read')
         self.assertEqual([p['buddy_id'] for p in buddies], ['dsh:fixture:alpha:max'])
@@ -189,7 +190,7 @@ class CatalogTrustTests(BoardTestCase):
         row, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
         self.assertFalse(buddies[0]['available'])
-        self.assertEqual(buddies[0]['unavailable_reason'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertEqual(buddies[0]['unavailable_code'], catalog.CONFIRMED_ABSENCE_REASON)
         kinds = [kind for kind, _ in self.events()]
         self.assertEqual(kinds, ['catalog.model_pending', 'catalog.model_unavailable'])
 
@@ -216,7 +217,7 @@ class CatalogTrustTests(BoardTestCase):
         row, pending, _, buddies = self.state()
         self.assertEqual(pending, {})
         self.assertTrue(buddies[0]['available'])
-        self.assertIsNone(buddies[0]['unavailable_reason'])
+        self.assertIsNone(buddies[0]['unavailable_code'])
         events = self.events()
         self.assertEqual([kind for kind, _ in events], ['catalog.model_pending', 'catalog.model_unavailable', 'catalog.model_recovered'])
         self.assertEqual(events[1][1]['pendingSince'], events[0][1]['pendingSince'], 'The confirmation names the first absence')
@@ -256,7 +257,7 @@ class CatalogTrustTests(BoardTestCase):
         by_id = {p['buddy_id']: p for p in buddies}
         self.assertTrue(by_id['dsh:fixture:alpha:max']['available'])
         self.assertFalse(by_id['dsh:fixture:alpha:high']['available'])
-        self.assertEqual(by_id['dsh:fixture:alpha:high']['unavailable_reason'], 'not present in the latest complete native discovery')
+        self.assertEqual(by_id['dsh:fixture:alpha:high']['unavailable_code'], catalog.RETIRED_EFFORT_REASON)
         self.assertEqual(self.events(), [])
 
     def test_out_of_order_observations_cannot_rewrite_the_pending_state(self):

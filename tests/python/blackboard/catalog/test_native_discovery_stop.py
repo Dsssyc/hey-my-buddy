@@ -56,7 +56,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                    'discoveries': [{'harness': 'zcode', 'status': 'complete', 'accountStatus': 'confirmed'}]}
         self.assertEqual(catalog.canonical_payload(payload)['providers'][0]['harness'], 'zcode')
         result = self.invoke(payload)
-        self.assertEqual(result['discoveries'][0].get('reason'), 'CATALOG_INVALID')
+        self.assertEqual(result['discoveries'][0]['reason'],
+                         {'code': 'catalog.discovery-failed', 'params': {'harness': 'codex', 'errorCode': 'CATALOG_INVALID'}})
 
     def test_codex_directory_creation_failure_preserves_stop_evidence(self):
         error = OSError('fixture catalog directory refused')
@@ -160,7 +161,8 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                               'processState': {'shutdownConfirmed': False}}).encode()
         with controller_log_close_failure(log=None, receipt=receipt, exit_after_receipt=True) as state:
             result = self.controller_discovery()
-            self.assertEqual(result['discoveries'][0].get('reason'), 'HARNESS_DISCOVERY_STOP_UNCONFIRMED')
+            self.assertEqual(result['discoveries'][0]['reason'],
+                             {'code': 'catalog.discovery-failed', 'params': {'harness': 'codex', 'errorCode': 'HARNESS_DISCOVERY_STOP_UNCONFIRMED'}})
             self.assertEqual(result['discoveries'][0]['status'], 'unknown')
             self.assertEqual(state['process'].poll(), 0)
 
@@ -220,7 +222,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         self.assertEqual(result['source'], 'codex-native-app-server')
         self.assertEqual(result['harnessVersion'], 'codex:unknown')
         self.assertEqual(result['discoveries'], [{'harness': 'codex', 'status': 'complete',
-                                                  'accountStatus': 'confirmed', 'reason': None}])
+                                                  'accountStatus': 'confirmed', 'reason': None, 'content': None}])
         self.assertEqual(result['providers'][0]['harness'], 'codex')
         self.assertEqual(result['providers'][0]['provider'], 'openai')
         self.assertEqual([model['id'] for model in result['providers'][0]['models']], ['fixture-model'])

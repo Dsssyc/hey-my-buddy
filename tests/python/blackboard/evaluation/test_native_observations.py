@@ -87,8 +87,8 @@ class QuotaVisibilityTests(BoardTestCase):
             observed = read_health(db, "codex")["quota"]
             self.assertEqual(observed["windows"], [])
             warning = warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
-            self.assertEqual(warning[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
-            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['code'], 'HARNESS_QUOTA_EXHAUSTED')
+            self.assertEqual(warning[0]["reason"], {"code": "HARNESS_QUOTA_EXHAUSTED", "params": {}})
+            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['reason']['code'], 'HARNESS_QUOTA_EXHAUSTED')
 
     def test_claude_normalized_rejection_without_quota_persists_and_keeps_its_native_limit_type(self):
         from unittest.mock import patch
@@ -127,7 +127,7 @@ class QuotaVisibilityTests(BoardTestCase):
             self.assertEqual(observed["windows"], [])
             self.assertNotIn("resetsAt", observed)
             self.assertEqual(warnings(db, {"harness": "claude", "provider": "fixture-api"},
-                                      now=observed_at)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
+                                      now=observed_at)[0]["reason"]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.assertEqual(failure_view(result, harness="claude"), run.native_failure.value)
         self.assertEqual(failure_view(result, harness="claude")["nativeCode"], "five_hour")
 
@@ -199,7 +199,7 @@ class QuotaVisibilityTests(BoardTestCase):
         with board.store.db.write() as db:
             record_quota(db, "codex", observed, now=observed["observedAt"])
             self.assertIsNone(exhausted(db, config, now=observed["observedAt"]))
-            self.assertEqual(warnings(db, config, now=observed["observedAt"])[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+            self.assertEqual(warnings(db, config, now=observed["observedAt"])[0]["reason"]["code"], "HARNESS_RATE_LIMIT_REPORTED")
 
 
 class NativeReceiptTests(WorkflowTestCase):
@@ -244,7 +244,7 @@ class NativeReceiptTests(WorkflowTestCase):
                     stored = db.execute("SELECT token_usage_json FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()[0]
                     self.assertEqual(json.loads(stored), expected)
         next_run = self.submit(board, request_id="native-warning", cwd=str(self.workdir("next")), **config)
-        self.assertEqual(next_run["quotaWarnings"][0]["code"], "HARNESS_QUOTA_NEAR_LIMIT")
+        self.assertEqual(next_run["quotaWarnings"][0]["reason"]["code"], "HARNESS_QUOTA_NEAR_LIMIT")
         self.assertEqual(next_run["quotaWarnings"][0]["window"]["usedPercent"], 95)
         # A delayed old result cannot replace a more recent harness observation.
         from hey_my_buddy.blackboard.evaluation.native_observations import persist

@@ -8,6 +8,7 @@ from ..evaluation import user_policy
 from .catalog import CatalogView, canonical_payload
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
+from ...protocol.reasons import reason
 
 
 def begin(evaluation, request_id=None, *, harnesses=None):
@@ -27,15 +28,22 @@ def begin(evaluation, request_id=None, *, harnesses=None):
 
 def current(db):
     providers, results = [], []
-    for row in db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id ORDER BY c.harness'):
+    for row in db.execute('SELECT c.*, d.payload_json, o.response_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id LEFT JOIN catalog_observations o ON o.observation_id=c.observation_id ORDER BY c.harness'):
         from .catalog import catalog_account_status
+        observed = json.loads(row['response_json']) if row['response_json'] else {}
+        discovery = next((item for item in observed.get('catalog', {}).get('discoveries', [])
+                          if item['harness'] == row['harness']), {})
         results.append({'harness': row['harness'], 'status': row['status'],
-                        'accountStatus': catalog_account_status(db, row['harness']), 'reason': row['reason']})
+                        'accountStatus': catalog_account_status(db, row['harness']),
+                        'reason': json.loads(row['reason']) if row['reason'] else None,
+                        'content': discovery.get('content')})
         if row['payload_json']:
             from ..service.harness_health import read_health
-            healthy = read_health(db, row['harness'])['available']
+            health = read_health(db, row['harness'])
+            healthy = health['available']
             providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
-                              'unavailableReason': m.get('unavailableReason') if healthy else 'HARNESS_UNHEALTHY'} for m in p['models']]}
+                              'unavailableReason': m.get('unavailableReason') if healthy or not m.get('available', True) else health['reason'],
+                              'unavailableContent': m.get('unavailableContent') if healthy or not m.get('available', True) else None} for m in p['models']]}
                              for p in json.loads(row['payload_json'])['providers'] if p['harness'] == row['harness'])
     if not results:
         return None
@@ -93,9 +101,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # fact is recorded as an unknown observation and replaces nothing.
             trusted = result['status'] == 'complete' and result.get('accountStatus') in TRUSTED_ACCOUNT_STATUSES
             stored_reason = None if trusted else (
-                'ACCOUNT_STATUS_UNKNOWN' if result['status'] == 'complete' else result.get('reason'))
+                reason('catalog.account-status-unknown', harness=name) if result['status'] == 'complete'
+                else result.get('reason') or reason('catalog.native-unknown', harness=name))
             selected_discovery = discovery_id if trusted else (prior['discovery_id'] if prior else None)
-            db.execute('INSERT INTO catalog_current(harness,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(harness) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, 'complete' if trusted else 'unknown', stored_reason, now))
+            db.execute('INSERT INTO catalog_current(harness,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(harness) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, 'complete' if trusted else 'unknown', canonical_json(stored_reason) if stored_reason else None, now))
             applied.append(name)
             if not trusted:
                 # Health may have recovered while the account fact stayed
@@ -134,14 +143,14 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             retained_identities = identities_from_payload(
                 prior['payload_json'] if prior is not None else None, name)
             retained = {(provider, model) for provider, model, _effort in retained_identities}
-            existing = db.execute('SELECT buddy_id,provider,model,effort,available,unavailable_reason'
+            existing = db.execute('SELECT buddy_id,provider,model,effort,available,unavailable_code'
                                   ' FROM buddies WHERE harness=?', (name,)).fetchall()
             model_service_rows: dict[tuple[str, str], list] = {}
             for row in existing:
                 model_service_rows.setdefault((row['provider'], row['model']), []).append(row)
             absent_before = {model_service for model_service, rows in model_service_rows.items()
                              if rows and all(not row['available'] for row in rows)
-                             and any(row['unavailable_reason'] == CONFIRMED_ABSENCE_REASON for row in rows)}
+                             and any(row['unavailable_code'] == CONFIRMED_ABSENCE_REASON for row in rows)}
             for model_service, rows in model_service_rows.items():
                 if model_service in model_services:
                     continue
@@ -149,9 +158,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     # An archived board can retain a user's configured buddy
                     # without retaining any catalog history. Its first trusted
                     # reading grounds the absence directly in catalog evidence.
-                    db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
+                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL'
                                ' WHERE harness=? AND provider=? AND model=?',
-                               (CONFIRMED_ABSENCE_REASON, name, *model_service))
+                               (CONFIRMED_ABSENCE_REASON, '{}', name, *model_service))
                     continue
                 # ADR-027 rule 2: disappearance is a model-identity question. An
                 # effort that vanished while its model remains is a metadata
@@ -168,16 +177,16 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                     # those efforts before the empty reading replaces it.
                     for row in rows:
                         if (row['effort'] in efforts and not row['available'] and
-                                row['unavailable_reason'] not in (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)):
-                            db.execute('UPDATE buddies SET available=1,unavailable_reason=NULL'
+                                row['unavailable_code'] not in (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)):
+                            db.execute('UPDATE buddies SET available=1,unavailable_code=NULL,unavailable_params_json=NULL,unavailable_content=NULL'
                                        ' WHERE buddy_id=?', (row['buddy_id'],))
                     transitions.append({'kind': 'catalog.model_pending', 'harness': name,
                                         'provider': model_service[0], 'model': model_service[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
                         and (moment - first_absence).total_seconds() >= CONFIRMATION_SECONDS):
-                    db.execute('UPDATE buddies SET available=0,unavailable_reason=?'
+                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL'
                                ' WHERE harness=? AND provider=? AND model=? AND available=1',
-                               (CONFIRMED_ABSENCE_REASON, name, *model_service))
+                               (CONFIRMED_ABSENCE_REASON, '{}', name, *model_service))
                     pending.pop(key, None)
                     transitions.append({'kind': 'catalog.model_unavailable', 'harness': name,
                                         'provider': model_service[0], 'model': model_service[1],
@@ -188,15 +197,19 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # retirements; enabled remains the user's intent.
             for old in existing:
                 if old['buddy_id'] not in seen and (old['provider'], old['model']) in model_services:
-                    db.execute('UPDATE buddies SET available=0,unavailable_reason=? WHERE buddy_id=?', (RETIRED_EFFORT_REASON, old['buddy_id']))
+                    db.execute('UPDATE buddies SET available=0,unavailable_code=?,unavailable_params_json=?,unavailable_content=NULL WHERE buddy_id=?',
+                               (RETIRED_EFFORT_REASON, '{}', old['buddy_id']))
             for p in entries:
-                health = db.execute('SELECT status FROM harness_health WHERE harness=?', (name,)).fetchone()
-                if health is not None and health['status'] != 'ready':
-                    p = {**p, 'available': False, 'unavailableReason': 'HARNESS_UNHEALTHY'}
+                from ..service.harness_health import read_health
+                health = read_health(db, name)
+                if p['available'] and not health['available']:
+                    p = {**p, 'available': False, 'unavailableReason': health['reason'],
+                         'unavailableContent': None}
                 existing_row = db.execute('SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?', (p['buddyId'],)).fetchone()
                 if existing_row and tuple(existing_row) != tuple(p[key] for key in ('harness', 'provider', 'model', 'effort')):
                     raise BoardError('CATALOG_INVALID', 'A native buddy ID collided with a different execution identity', buddyId=p['buddyId'])
-                db.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_reason) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_reason=excluded.unavailable_reason', (p['buddyId'], p['label'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], p['unavailableReason']))
+                unavailable = p['unavailableReason']
+                db.execute('INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json,context_window,description,source,unavailable_code,unavailable_params_json,unavailable_content) VALUES(?,?,?,?,?,?,?,0,?,?,?,?,?,?,?) ON CONFLICT(buddy_id) DO UPDATE SET label=excluded.label,available=excluded.available,capabilities_json=excluded.capabilities_json,context_window=excluded.context_window,description=excluded.description,source=excluded.source,unavailable_code=excluded.unavailable_code,unavailable_params_json=excluded.unavailable_params_json,unavailable_content=excluded.unavailable_content', (p['buddyId'], p['label'], p['harness'], p['provider'], p['model'], p['effort'], int(p['available']), canonical_json(p['capabilities']), p['contextWindow'], p['description'], p['source'], unavailable['code'] if unavailable else None, canonical_json(unavailable['params']) if unavailable else None, p['unavailableContent']))
             # ADR-027 rules 2 and 6: reappearance inside a trusted reading
             # recovers the model service, clears its first absence and says so once.
             for model_service in model_services:
@@ -225,7 +238,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             raise BoardError('CATALOG_LIMIT', 'The current native buddy set exceeds 200 buddies; no entries were silently dropped')
         if table_changed:
             db.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale, 'note': 'Native catalog facts were refreshed; existing user settings were retained. No model call was made.'}
+        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
         db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')

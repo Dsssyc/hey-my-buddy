@@ -770,7 +770,8 @@ class BuddyTests(unittest.TestCase):
         self.assertEqual(models["fast"]["efforts"], ["low"])
         self.assertEqual(models["vision"]["inputModalities"], ["text", "image"])
         self.assertTrue(all(entry["available"] for entry in models.values()))
-        self.assertTrue(any("effort" in warning for warning in result["warnings"]))
+        self.assertIn({"reason": {"code": "catalog.effort-directory-omitted", "params": {}}},
+                      result["warnings"])
         self.assertEqual(result["providers"][1]["provider"], "oauth")
         self.assertEqual(result["providers"][1]["models"][0]["id"], "account-only")
 

@@ -264,7 +264,8 @@ class Batch4FactsTests(NativeRunCase):
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
         self.assertEqual(canonical_payload(catalog)["discoveries"][0]["status"], "unknown")
         self.assertEqual(catalog["providers"][0]["models"], [])
-        self.assertIn("NoneType", catalog["warnings"][0])
+        self.assertEqual(catalog["warnings"][0]["reason"],
+                         {"code": "catalog.model-list-unreadable", "params": {"shape": "NoneType"}})
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_unread_catalog_continues_the_turn_without_checked_buddy(self):
@@ -277,7 +278,7 @@ class Batch4FactsTests(NativeRunCase):
         facts = self.observations(result)
         self.assertEqual(facts["catalogStatus"], "unknown")
         self.assertEqual(facts["buddyStatus"], "unknown")
-        self.assertIn("unread", facts["catalogWarnings"][0])
+        self.assertEqual(facts["catalogWarnings"][0]["reason"]["code"], "catalog.model-list-unreadable")
         self.assertEqual(result.native_evidence.unconfirmed, ("model-catalog",))
         self.assertIsNone(result.native_evidence.unknown_events)
 
@@ -307,7 +308,8 @@ class Batch4FactsTests(NativeRunCase):
                                 native_root=self.base / "discovery-native", timeout_seconds=10,
                                 cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
-        self.assertTrue(any("hey-my-buddy-1" in warning and "responseShape" in warning
+        self.assertTrue(any(warning.get("diagnostic", {}).get("requestId") == "hey-my-buddy-1"
+                            and "responseShape" in warning["diagnostic"]
                             for warning in catalog["warnings"]))
         self.assertEqual(self.fixture_state()["userTurns"], 0)
 

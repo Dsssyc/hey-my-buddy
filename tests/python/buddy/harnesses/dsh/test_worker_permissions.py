@@ -85,8 +85,8 @@ class WorkerPermissionTests(NativeRunCase):
         self.assertEqual(self.agent_log(), [])
 
     def test_dsh_still_has_no_router_review_mode(self):
-        self.assertEqual(adapter("dsh").local_read_only_check()["reasonCode"],
-                         "readonly-worker-carrier-unimplemented")
+        self.assertEqual(adapter("dsh").local_read_only_check()["reason"],
+                         {"code": "harness.readonly-worker-carrier-unimplemented", "params": {"harness": "dsh"}})
 
     def test_refused_operation_is_bounded_once_and_shared_by_both_evidence_paths(self):
         for inquiry in (False, True):

@@ -958,7 +958,8 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertTrue(result.model_started)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
-        self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"], "config-shape-unreadable")
+        self.assertEqual(native_run.native_evidence(result)["catalogRead"]["discovery"]["reason"],
+                         {"code": "config-shape-unreadable", "params": {}})
         self.assertIn("model-catalog", result.native_evidence.unconfirmed)
 
     def test_unreadable_catalog_continues_worker_turn_without_confirming_selection(self):
@@ -1540,7 +1541,8 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         return mock.patch.object(native_run, 'owned_popen', side_effect=owned)
 
     def test_missing_command_proves_no_native_child(self):
-        self.record.update(status='unavailable', command=[], reasonCode='HARNESS_UNAVAILABLE', remedy='fixture no harness')
+        self.record.update(status='unavailable', command=[],
+                           reason={'code': 'harness.not-found', 'params': {'operation': 'probe'}})
         with mock.patch('hey_my_buddy.buddy.harnesses.discovery.probe') as probe, \
              mock.patch.object(native_run, 'owned_popen') as create:
             with self.assertRaises(BoardError) as caught:
@@ -1727,10 +1729,11 @@ class DiscoverySeamTests(SeamCase):
                                         native_root=self.base / (case + "-native"),
                                         timeout_seconds=10, cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
-                self.assertEqual(catalog["discoveries"][0]["reason"], "config-shape-unreadable")
+                self.assertEqual(catalog["discoveries"][0]["reason"],
+                                 {"code": "config-shape-unreadable", "params": {}})
                 self.assertEqual(catalog["providers"], [])
                 self.assertEqual(catalog["billingByProvider"], {})
-                self.assertTrue(any("config" in warning.lower() for warning in catalog["warnings"]))
+                self.assertEqual(catalog["warnings"], [])
                 self.assertFalse((self.base / "discovery-trace.json").exists())
 
     def test_discovery_unreadable_rpc_result_retains_bounded_fact_without_a_turn(self):
@@ -1741,15 +1744,16 @@ class DiscoverySeamTests(SeamCase):
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
         self.assertEqual(catalog["unknownEvents"]["countsByType"],
                          {"account/updated": 1, "rpc/result-unreadable/model/list": 1})
-        self.assertEqual(catalog["warnings"], ["The native model reading is incomplete: model-list-shape-unreadable"])
+        self.assertEqual(catalog["warnings"], [])
         self.assertFalse((self.base / "discovery-trace.json").exists())
 
     def test_unreadable_catalog_continues_as_unknown_but_unconfirmed_stop_still_refuses(self):
         catalog = self.discover("confirmed")
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
-        self.assertEqual(catalog["discoveries"][0]["reason"], "model-list-shape-unreadable")
+        self.assertEqual(catalog["discoveries"][0]["reason"],
+                         {"code": "model-list-shape-unreadable", "params": {}})
         self.assertEqual(catalog["providers"][0]["models"], [])
-        self.assertEqual(catalog["warnings"], ["The native model reading is incomplete: model-list-shape-unreadable"])
+        self.assertEqual(catalog["warnings"], [])
         with self.halt_reported_unconfirmed():
             with self.assertRaises(CodexProtocolError) as unknown:
                 self.discover("unknown")
@@ -1793,8 +1797,7 @@ class CatalogTrustTests(CodexSeamCase):
                          ["fixture-model"])
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "codex", "status": "complete", "accountStatus": "unknown"}])
-        self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
-                        catalog["warnings"])
+        self.assertEqual(catalog["warnings"], [])
 
     def test_a_chatgpt_account_without_a_usable_plan_stays_unknown(self):
         # Type alone never confirms the account: a chatgpt readback whose plan
@@ -1812,8 +1815,7 @@ class CatalogTrustTests(CodexSeamCase):
                 self.assertEqual(catalog["discoveries"],
                                  [{"harness": "codex", "status": "complete",
                                    "accountStatus": "unknown"}])
-                self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
-                                catalog["warnings"])
+                self.assertEqual(catalog["warnings"], [])
 
     def _model_check_ref(self, result):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "model-check")
@@ -1917,8 +1919,8 @@ class CatalogTrustTests(CodexSeamCase):
                                 native_root=self.base / "discovery-native",
                                 timeout_seconds=10, cancelled=lambda: False)
         self.assertEqual(catalog["providers"][0]["models"], [])
-        self.assertTrue(any("omitted" in warning for warning in catalog["warnings"]),
-                        catalog["warnings"])
+        self.assertEqual(catalog["warnings"],
+                         [{"reason": {"code": "catalog.model-identity-or-effort-omitted", "params": {}}}])
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}])
 
