@@ -69,7 +69,7 @@ export default {
   "currentlyUnavailable": "Currently unavailable ({{v0}})",
   "notInTheCurrentCatalog": "Not in the current catalog",
   "disabled": "Disabled",
-  "concurrencyLimitMustBeAnIntegerFrom": "{{v0}} concurrency limit must be an integer from 1 to {{max}}; correct it.",
+  "concurrencyLimitMustBePositiveInteger": "{{v0}} concurrency limit must be a positive integer; correct it.",
   "cannotEnableItRevertThisChange": "{{v0}} {{v1}}; cannot enable it. Revert this change.",
   "cannotPinItChooseAnAvailableReasoning": "{{v0}} {{v1}}; cannot pin it. Choose an available reasoning effort.",
   "retryIntervalMustBeAnIntegerFrom": "Retry interval must be an integer from 1 to 2147483647 seconds; correct it.",

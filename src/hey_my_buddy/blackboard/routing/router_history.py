@@ -52,7 +52,7 @@ def record_outcome(connection, *, buddy_id: str, request_id: str, task_id: str |
                    facts: dict, now: str) -> dict:
     """Record one idempotent routing outcome fact; never executes anything.
 
-    The idempotency key is plane/requestId/selectionRetry/routerIndex/phase/taskId/attemptId/outcome
+    The idempotency key is routing/requestId/selectionRetry/routerIndex/phase/taskId/attemptId/outcome
     with ``routerIndex`` and the retry marker taken from ``facts``; its receipt lives in ``router_outcomes`` and
     commits in the caller's transaction together with the event. A replay with the
     same facts returns the original record, different facts raise ``CONFLICT``.
@@ -61,7 +61,7 @@ def record_outcome(connection, *, buddy_id: str, request_id: str, task_id: str |
     """
     router_index = facts["routerIndex"]
     selection_retry = facts.get("selectionRetry", False)
-    payload = {"plane": "routing", "requestId": request_id, "routerIndex": router_index,
+    payload = {"requestId": request_id, "routerIndex": router_index,
                "buddyId": buddy_id, "phase": phase, "taskId": task_id,
                "attemptId": attempt_id, "outcome": outcome, "code": code}
     if selection_retry:
@@ -96,7 +96,7 @@ def _fact_entries(connection, buddy_id: str) -> list[dict]:
         " WHERE o.buddy_id=? ORDER BY o.event_seq", (buddy_id,))
     for row in rows:
         entries.append({"seq": int(row["event_seq"]), "at": row["recorded_at"],
-                        "outcome": row["outcome"], "plane": "routing",
+                        "outcome": row["outcome"],
                         "requestId": row["request_id"], "routerIndex": row["router_index"],
                         "phase": row["phase"], "taskId": row["task_id"],
                         "attemptId": row["attempt_id"], "code": row["code"]})

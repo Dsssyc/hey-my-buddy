@@ -14,7 +14,7 @@ import unittest
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.routing import router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import Database, canonical_json, sha256_text
+from hey_my_buddy.blackboard.store.db import Database, canonical_json
 from hey_my_buddy.errors import BoardError
 
 T0 = "2026-01-01T00:00:00.000Z"
@@ -166,19 +166,18 @@ class ReserveDispatchTests(RouterSequenceTestCase):
         self.assertEqual(stored["buddy"], {key: ALPHA[key] for key in ("harness", "provider", "model", "effort")})
         self.assertEqual(stored["document"]["routerBuddyId"], ALPHA["buddyId"])
         self.assertEqual(stored["createdAt"], T0)
-        self.assertEqual(stored["inputSha256"], sha256_text(canonical_json(alpha_document())))
+        self.assertNotIn("inputSha256", stored)
 
     def test_two_dispatches_of_one_request_keep_their_own_documents_and_hashes(self):
         alpha = self.reserved("task-alpha")
         bravo = self.reserved("task-bravo", buddy=BRAVO, router_index=1)
-        self.assertNotEqual(alpha["inputSha256"], bravo["inputSha256"])
+        self.assertNotEqual(alpha["document"], bravo["document"])
         with self.board_.store.db.read() as db:
             first = router_sequence.dispatch(db, "task-alpha")
             first["document"]["task"] = "mutated"
-            first["inputSha256"] = "mutated"
             again = router_sequence.dispatch(db, "task-alpha")
         self.assertEqual(again["document"]["task"], "fix the parser")
-        self.assertEqual(again["inputSha256"], alpha["inputSha256"])
+        self.assertEqual(again["document"], alpha["document"])
         stored = self.stored("router_dispatches", "task_id", "task-alpha")
         self.assertNotIn("mutated", stored)
 
@@ -208,7 +207,7 @@ class RecordClaimTests(RouterSequenceTestCase):
                                   "decisionId": "dec-1", "routerIndex": 0, "buddyId": ALPHA["buddyId"]})
         events = self.events()
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0], {"buddyId": ALPHA["buddyId"], "plane": "routing", "requestId": "pick-1",
+        self.assertEqual(events[0], {"buddyId": ALPHA["buddyId"], "requestId": "pick-1",
                                      "routerIndex": 0, "taskId": "task-alpha", "attemptId": "att-1",
                                      "generation": 1})
         # The binding is a fresh copy; mutating it touches nothing stored.
@@ -271,7 +270,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
             self.assertEqual(router_sequence.dispatch(db, "task-bravo"), second)
             self.assertEqual(first["document"], alpha_document())
             self.assertEqual(second["document"], {**bravo_document(), "routerIndex": 0})
-            self.assertNotEqual(first["inputSha256"], second["inputSha256"])
+            self.assertNotEqual(first["document"], second["document"])
         with self.assertRaises(sqlite3.IntegrityError):
             with self.board_.store.db.write() as db:
                 router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,

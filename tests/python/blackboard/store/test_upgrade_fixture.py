@@ -289,7 +289,9 @@ class UpgradeFixtureTests(unittest.TestCase):
                              [tuple(row) for row in baseline.execute(query)])
         after = upgrade.idle_snapshot(state, column_projections=before['columnProjections'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
-        self.assertEqual(after['tables'], {**before['tables'], **before['expectedTableCounts']})
+        self.assertEqual(after['tables'], {**before['tables'],
+                                         'router_requests': before['tables']['router_requests'] + 5})
+        self.assertNotIn('expectedTableCounts', before)
         for name, fingerprint in before['fingerprints'].items():
             if name != 'meta':
                 self.assertEqual(after['fingerprints'][name],
@@ -686,6 +688,66 @@ class UpgradeFixtureTests(unittest.TestCase):
                                ('evaluation_decisions', {'task'}), ('router_outcomes', {'plane'})):
             self.assertFalse(removed & {row['name'] for row in connection.execute(f'PRAGMA table_info({table})')}, table)
 
+    def test_request_router_facts_move_to_their_frozen_rounds(self):
+        fixture, connection = self.restored()
+        expected, deleted = {}, set()
+        for row in connection.execute('SELECT rowid,decision_id,requested_json FROM decision_requests'):
+            request = json.loads(row['requested_json'])
+            facts = set()
+            for snapshot in connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                (row['decision_id'],)):
+                facts.update(json.loads(snapshot[0])['facts'])
+            if request['routingBasis']['candidateCount'] <= 1:
+                # The old writer's no-Router branch omitted a round snapshot.
+                facts.update(('routerBuddyId', 'routingMode', 'budget', 'routerCalled'))
+            copies = request.keys() & facts
+            deleted.update(copies)
+            expected[row['decision_id']] = (row['rowid'],
+                {key: value for key, value in request.items()
+                 if key not in copies and key not in ('selectionRetryInspections', 'routerBudgetSeconds')})
+        self.assertEqual(deleted, {'routerBuddyIds', 'routerIdentities', 'routingMode', 'routingBudget',
+                                  'routerRetryIntervalSeconds', 'budget', 'routerBuddyId', 'routerCalled'})
+        before = upgrade.idle_snapshot(fixture['state'])
+        self.assertIn('decision_requests', before['expectedFingerprints'])
+        self.assertNotIn('expectedTableCounts', before)
+        schema_upgrade.migrate_schema(fixture['state'])
+        for row in connection.execute('SELECT rowid,decision_id,requested_json FROM decision_requests'):
+            self.assertEqual((row['rowid'], json.loads(row['requested_json'])), expected[row['decision_id']])
+        actual = upgrade.idle_snapshot(fixture['state'], column_projections=before['columnProjections'])
+        self.assertEqual(actual['fingerprints']['decision_requests'],
+                         before['expectedFingerprints']['decision_requests'])
+        target = self.root / 'runtimes' / ('b' * 32)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        connection.execute("UPDATE decision_requests SET requested_json=json_set(requested_json,'$.task','tampered')"
+                           " WHERE rowid=(SELECT MIN(rowid) FROM decision_requests)")
+        connection.commit()
+        with self.assertRaises(BoardError) as caught:
+            upgrade.verify_started(fixture['state'], target, health, before)
+        self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+        self.assertEqual(caught.exception.details['tables'], ['decision_requests'])
+
+    def test_conflicting_request_router_copies_roll_back_the_upgrade(self):
+        cases = (('fixture-routing-answered', 'routerRetryIntervalSeconds', 999),
+                 ('fixture-routing-retry', 'routerBuddyIds', ['different-router']),
+                 ('fixture-routing-answered', 'routerBudgetSeconds', 999),
+                 ('fixture-routing-answered', 'selectionRetryInspections', []))
+        for number, (request_id, field, value) in enumerate(cases):
+            with self.subTest(request=request_id, field=field):
+                fixture, connection = self.restored(f'conflicting-router-fact-{number}')
+                row = connection.execute('SELECT decision_id,requested_json FROM decision_requests WHERE request_id=?',
+                                         (request_id,)).fetchone()
+                request = json.loads(row['requested_json'])
+                request[field] = value
+                connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
+                                   (json.dumps(request), row['decision_id']))
+                connection.commit()
+                before = (fixture['state'] / 'board.sqlite3').read_bytes()
+                with self.assertRaises(BoardError) as caught:
+                    schema_upgrade.migrate_schema(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(caught.exception.details['field'], field)
+                self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
+
     def test_task_only_initial_and_retry_rounds_preserve_old_writer_facts(self):
         fixture, connection = self.restored()
         stock = fixture['taskOnlyStock']
@@ -737,8 +799,8 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(json.loads(task_round['snapshot_json'])['baseInput'], {'task': task})
             self.assertEqual(json.loads(task_round['snapshot_json'])['inspections'], [])
             self.assertEqual(task_round['frozen_at'], rerouted_at or created_at)
-            if label.endswith('Sole') or rerouted_at:
-                self.assertIs(json.loads(task_round['snapshot_json'])['facts']['routerCalled'], False)
+            self.assertEqual(json.loads(task_round['snapshot_json'])['facts'],
+                             {'routerBuddyId': None, 'routingMode': None, 'budget': None, 'routerCalled': False})
             if original_rows:
                 appended.append(task_round['rowid'])
             self.assertEqual([row['rowid'] for row in connection.execute(

@@ -300,18 +300,15 @@ class DecisionCoordinator:
             task_text = request.get("task") or ""
             sole_candidate: sqlite3.Row | None = None
             resolution = None
-            facts = {"routerBuddyId": None, "routingMode": None, "budget": None}
+            facts = {"routerBuddyId": None, "routingMode": None, "budget": None, "routerCalled": False}
             snapshot: dict = {"facts": facts, "baseInput": {"task": task_text}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
                 # no Router configuration or model-input byte budget is needed.
                 sole_candidate = candidates[0]
-                facts["routerCalled"] = False
-                request.update(facts)
                 status, reason = "completed", make_reason("single-candidate")
             elif not candidates:
-                request.update(facts)
                 status, reason = "needs-host", self._no_candidates_reason(cooling_buddies)
             else:
                 # Admission freezes the complete common packet — candidates,
@@ -321,14 +318,12 @@ class DecisionCoordinator:
                 # leaves the Host the same frozen packet, never only a reason.
                 resolution = router.current_router(connection, now=now)
                 facts = resolution.facts
-                request.update(facts)
                 if resolution.problem is not None:
                     request["routerProblem"] = resolution.problem
                 if facts["routingMode"] is not None:
-                    request["routerBudgetSeconds"] = (60 if facts["routingMode"] == "fast" else
-                                                 facts["budget"]["timeoutSeconds"])
-                    facts["budget"] = {**facts["budget"], "timeoutSeconds": request["routerBudgetSeconds"]}
-                    request["budget"] = dict(facts["budget"])
+                    router_budget_seconds = (60 if facts["routingMode"] == "fast" else
+                                             facts["budget"]["timeoutSeconds"])
+                    facts["budget"] = {**facts["budget"], "timeoutSeconds": router_budget_seconds}
                 base_input = self._select_input(
                     connection, request_id=request_id,
                     task_text=task_text, candidates=candidates,
@@ -393,8 +388,8 @@ class DecisionCoordinator:
                     "kind": kind,
                     "status": status,
                     "taskId": task_id,
-                    **router.routing_facts(request),
-                    **({"routerCalled": False} if sole_candidate is not None else {}),
+                    **router.routing_facts({**request, **facts}),
+                    **({"routerCalled": False} if facts.get("routerCalled") is False else {}),
                 },
             )
             if sole_candidate is not None:
@@ -539,7 +534,8 @@ class DecisionCoordinator:
                                    (decision_id,)).fetchone()[0]
         identity_map = {key: resolution.buddy[key] for key in schemas.BUDDY_FIELDS}
         request = json.loads(row["requested_json"])
-        router_budget_seconds = int(request["routerBudgetSeconds"])
+        facts = router_sequence.request_snapshot(connection, decision_id)["facts"]
+        router_budget_seconds = int(facts["budget"]["timeoutSeconds"])
         task_id = self._create_task(
             connection,
             decision_id=decision_id,
@@ -587,12 +583,8 @@ class DecisionCoordinator:
             self._cancel_queued_task(connection, task, now)
             return "decision-dispatch-superseded"
         dispatch = router_sequence.dispatch(connection, task["task_id"])
-        current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
-                                           (row["decision_id"],)).fetchone()[0]
-        if dispatch["round"] != current_round:
-            self._cancel_queued_task(connection, task, now)
-            return "decision-dispatch-superseded"
-        facts = json.loads(row["requested_json"])
+        snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
+        facts = snapshot["facts"]
         from .router_history import router_state
         state = router_state(connection, buddy_id=dispatch["buddyId"],
                              interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
@@ -616,7 +608,8 @@ class DecisionCoordinator:
                 # The item's real before-model failure is recorded once; a
                 # skip-window observation here is an existing window and stays
                 # unrecorded.
-                self._record_preflight_walk(connection, row["request_id"], [entry], now=now, selection_retry=bool(facts.get("selectionRetry")))
+                self._record_preflight_walk(connection, row["request_id"], [entry], now=now,
+                                            selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
         self._cancel_queued_task(connection, task, now)
         advance = router.current_router(connection, frozen=facts, after_index=dispatch["routerIndex"], now=now)
         self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
@@ -789,10 +782,6 @@ class DecisionCoordinator:
                    "code": output["code"] if released else "router-no-answer",
                    "params": {}, "note": None,
                    "output": output, "buddy_id": None, "selected": None, "evidence": []}
-        current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
-                                           (row["decision_id"],)).fetchone()[0]
-        if dispatch["round"] != current_round:
-            checked.update(changed=True, code="router-input-changed")
         completion_event = connection.execute(
             "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='task.completed'"
             " ORDER BY seq DESC LIMIT 1", (task["task_id"], attempt["attempt_id"])).fetchone()
@@ -810,7 +799,7 @@ class DecisionCoordinator:
                     or ancestor is not None):
                 checked.update(changed=True, code="workflow-routing-fenced")
         if not cancelled and not checked["changed"] and not released:
-            checked = self._publish_select(connection, row, output=output or {}, now=now)
+            checked = self._publish_select(connection, row, dispatch=dispatch, output=output or {}, now=now)
 
         stop = (output or {}).get("stopEvidence")
         native_stopped = (isinstance(stop, dict) and stop.get("shutdownConfirmed") is True
@@ -845,7 +834,7 @@ class DecisionCoordinator:
                              output=checked["output"])
         elif outcome == "no-answer":
             record("no_answer")
-            advance = router.current_router(connection, frozen=json.loads(row["requested_json"]),
+            advance = router.current_router(connection, frozen=router_sequence.request_snapshot(connection, row["decision_id"])["facts"],
                                             after_index=dispatch["routerIndex"], now=now)
             self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now, selection_retry=bool(json.loads(row["requested_json"]).get("selectionRetry")))
             if advance.buddy is not None:
@@ -894,13 +883,13 @@ class DecisionCoordinator:
             next_round = connection.execute("SELECT MAX(round)+1 FROM router_requests WHERE decision_id=?",
                                             (row["decision_id"],)).fetchone()[0]
             router_sequence.freeze_request(connection, row["decision_id"],
-                                           snapshot={"facts": {"routerCalled": False},
+                                           snapshot={"facts": {"routerBuddyId": None, "routingMode": None,
+                                                               "budget": None, "routerCalled": False},
                                                      "baseInput": {"task": request["task"]}, "inspections": []},
                                            now=now, round=next_round)
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
                                (canonical_json(request), row["decision_id"]))
             if candidates:
-                request["routerCalled"] = False
                 connection.execute(
                     "UPDATE decision_requests SET task_id=NULL,attempt_id=NULL,generation=NULL,"
                     " output_json=NULL,selected_json=NULL,requested_json=? WHERE decision_id=?",
@@ -914,20 +903,18 @@ class DecisionCoordinator:
                              reason=no_candidates, output={"code": no_candidates["code"]})
             return
         resolution = router.current_router(connection, now=now)
-        request.update(resolution.facts)
-        request["selectionRetryInspections"] = [dict(entry) for entry in resolution.inspections]
         if resolution.problem is not None:
             request["routerProblem"] = resolution.problem
         else:
             request.pop("routerProblem", None)
         if resolution.facts["routingMode"] is not None:
-            request["routerBudgetSeconds"] = (60 if resolution.facts["routingMode"] == "fast"
-                                         else resolution.facts["budget"]["timeoutSeconds"])
-            request["budget"] = {**resolution.facts["budget"], "timeoutSeconds": request["routerBudgetSeconds"]}
+            router_budget_seconds = (60 if resolution.facts["routingMode"] == "fast"
+                                     else resolution.facts["budget"]["timeoutSeconds"])
+            resolution.facts["budget"] = {**resolution.facts["budget"], "timeoutSeconds": router_budget_seconds}
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
             candidates=candidates, hard_constraints=request.get("constraints") or {})
-        document.update({**resolution.facts, "budget": request.get("budget"),
+        document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})
         if resolution.facts["routingMode"] != "fast":
@@ -986,11 +973,9 @@ class DecisionCoordinator:
             return None
         return {"code": judged}
 
-    def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, output: dict, now: str) -> dict:
+    def _publish_select(self, connection: sqlite3.Connection, row: sqlite3.Row, *, dispatch: dict, output: dict, now: str) -> dict:
         """Check program facts without settling the request or judging the choice."""
-        dispatch = (router_sequence.dispatch(connection, row["decision_task_id"])
-                    if row["decision_task_id"] else None)
-        document = dispatch["document"] if dispatch else {}
+        document = dispatch["document"]
         request = json.loads(row["requested_json"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
                    "code": None, "params": {}, "note": None, "output": output, "buddy_id": None,
@@ -1008,7 +993,7 @@ class DecisionCoordinator:
         if review and isinstance(verification, dict) and (
                 verification.get("unchanged") is False
                 or ("manifestSha256" in verification and verification["manifestSha256"] != manifest.get("manifestSha256"))):
-            return refuse("router-input-changed", changed=True)
+            return refuse("router-out-of-bounds", changed=True, bound="input-changed")
         stop = output.get("stopEvidence")
         if (not isinstance(stop, dict) or stop.get("shutdownConfirmed") is not True
                 or not isinstance(stop.get("native"), dict) or stop["native"].get("shutdownConfirmed") is not True):
@@ -1023,7 +1008,7 @@ class DecisionCoordinator:
                        or "manifestSha256" not in verification):
             # Missing/malformed proof invalidates an answer; it does not prove
             # that the input changed. Failed calls need no successful answer proof.
-            return refuse("router-input-changed")
+            return refuse("answer-shape")
         if output.get("operation") != "select":
             return refuse("answer-shape")
         usage = output.get("usage")
@@ -1360,6 +1345,8 @@ class DecisionCoordinator:
                 return self._view(reading, row, include_audit=include_audit)
         output = json.loads(row["output_json"]) if row["output_json"] else None
         request = json.loads(row["requested_json"]) if row["requested_json"] else {}
+        snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
+        facts = snapshot["facts"]
         actor = (router_sequence.dispatch(connection, row["decision_task_id"])
                  if row["decision_task_id"] else None)
         selected = json.loads(row["selected_json"]) if row["selected_json"] else None
@@ -1371,7 +1358,7 @@ class DecisionCoordinator:
             "decisionId": row["decision_id"],
             "requestId": row["request_id"],
             "status": row["status"],
-            "task": router_sequence.request_snapshot(connection, row["decision_id"])["baseInput"]["task"],
+            "task": snapshot["baseInput"]["task"],
             "runId": row["decision_task_id"],
             "buddyId": row["buddy_id"],
             # The frozen execution identity the Host can delegate with directly,
@@ -1386,14 +1373,14 @@ class DecisionCoordinator:
             "note": row["note"],
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
-            "budget": request.get("budget"),
+            "budget": facts.get("budget"),
             "routingBasis": request.get("routingBasis"),
             "constraints": request.get("constraints", {}),
             "requiredCapabilities": request.get("requiredCapabilities", []),
             # False only for a recorded program selection; a record predating that
             # path stays null rather than claiming a Router ran.
-            "routerCalled": request.get("routerCalled"),
-            **router.routing_facts(request, actor=actor),
+            "routerCalled": facts.get("routerCalled"),
+            **router.routing_facts({**request, **facts}, actor=actor),
             "usage": (output or {}).get("usage"),
             "nativeIdentity": (output or {}).get("nativeIdentity"),
             "stopEvidence": (output or {}).get("stopEvidence"),

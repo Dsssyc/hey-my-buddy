@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from ..store.db import canonical_json, sha256_text
+from ..store.db import canonical_json
 
 CLAIM_EVENT = "router.claimed"
 _IDENTITY_FIELDS = ("harness", "provider", "model", "effort")
@@ -29,7 +29,7 @@ def _dispatch(connection, row: dict) -> dict:
                 "routerIndex": row["router_index"]}
     return {"decisionId": row["decision_id"], "taskId": row["task_id"], "routerIndex": row["router_index"],
             "round": row["round"], "buddyId": row["buddy_id"], "buddy": buddy,
-            "document": document, "inputSha256": sha256_text(canonical_json(document)),
+            "document": document,
             "createdAt": row["created_at"]}
 
 
@@ -121,7 +121,6 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
         attempt_id=attempt_id,
         payload={
             "buddyId": dispatch_document["buddyId"],
-            "plane": "routing",
             "requestId": request["request_id"],
             "routerIndex": dispatch_document["routerIndex"],
             "taskId": task_id,

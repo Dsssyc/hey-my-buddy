@@ -82,7 +82,7 @@ export default {
     concurrencyLimit: "Concurrency limit",
     occupancy: "In use: {{n}}",
     occupancyUnknown: "In use: unknown",
-    range: "An integer from {{min}} to {{max}} is needed",
+    range: "A positive integer is needed",
     note: "Note",
     locked: {
       session: "Browser authorization has expired; authorize this browser again to change this",

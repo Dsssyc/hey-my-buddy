@@ -200,7 +200,7 @@ describe("a model's concurrency", () => {
     await user.type(input, "9007199254740992");
     expect(input).toHaveProperty("value", "9007199254740992");
     expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(within(pane()).getByText(`需要 1–${Number.MAX_SAFE_INTEGER} 的整数`)).toBeTruthy();
+    expect(within(pane()).getByText("需要正整数")).toBeTruthy();
     // Blurring must not silently publish the intermediate valid prefix (3).
     await user.tab();
     expect(input).toHaveProperty("value", "9007199254740992");

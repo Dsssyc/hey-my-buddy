@@ -6,7 +6,7 @@ import {
   preferenceChanges,
   buddySettings,
 } from "./draft";
-import { MODEL_SERVICE_CONCURRENCY_MAX, concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
+import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
 import { buddyName, buddyTitle } from "./buddy-name";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
@@ -135,7 +135,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
       label: subject,
-      message: i18n.t("console:concurrencyLimitMustBeAnIntegerFrom", { v0: subject, max: MODEL_SERVICE_CONCURRENCY_MAX }),
+      message: i18n.t("console:concurrencyLimitMustBePositiveInteger", { v0: subject }),
     });
   }
   for (const setting of buddySettings(baseline, draft)) {

@@ -131,7 +131,7 @@ describe("the Router list", () => {
     const decision = (id: string) => ({
       decisionId: id, status: "completed", task: "不应出现在Buddy 页的长任务说明。".repeat(200),
       buddyId: MEDIUM_ID, selectedBuddy: null, reason: "", evidence: [],
-      createdAt: "2026-09-24T08:00:00Z", runId: id, decisionModel: null, requested: {}, input: {}, inputSha256: id, output: {},
+      createdAt: "2026-09-24T08:00:00Z", runId: id, decisionModel: null, requested: {}, input: {}, output: {},
     });
     const f = fixture(snapshot({ routers: [MEDIUM_ID], extra: { decisions: Array.from({ length: 50 }, (_, i) => decision(`history-${i}`)) } as unknown as Partial<Snapshot> }));
     await openRoles(f);

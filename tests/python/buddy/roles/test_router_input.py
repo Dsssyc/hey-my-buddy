@@ -154,7 +154,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_completed_digest_mismatch_is_changed(self):
         result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=time.monotonic() + 120)
         self.assertIs(result["unchanged"], False)
-        self.assertEqual(result["code"], "router-input-changed")
+        self.assertEqual(result["code"], "router-out-of-bounds")
 
 
 if __name__ == "__main__":

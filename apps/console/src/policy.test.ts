@@ -327,7 +327,7 @@ describe("model concurrency limits", () => {
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
-      expect(issues[0].message).toContain(`1–${Number.MAX_SAFE_INTEGER}`);
+      expect(issues[0].message).toContain("正整数");
       expect(issues[0].buddyId).toBe(worker.buddyId);
     }
     // A limit edit never depends on availability: the retired buddy's

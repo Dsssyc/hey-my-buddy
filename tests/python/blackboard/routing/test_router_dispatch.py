@@ -180,7 +180,7 @@ class AdmissionTests(RouterDispatchTestCase):
         self.assertEqual(self.dispatch_of(ineligible["runId"])["buddyId"], B)
         events = self.router_events("router.no_answer")
         recorded = [payload for _, payload in events if payload["requestId"] == "pick-disabled"]
-        self.assertEqual(recorded, [{"plane": "routing", "requestId": "pick-disabled", "routerIndex": 0,
+        self.assertEqual(recorded, [{"requestId": "pick-disabled", "routerIndex": 0,
                                      "buddyId": A, "phase": "preflight", "taskId": None, "attemptId": None,
                                      "outcome": "no_answer", "code": "router-disabled"}])
         # Replaying the same request adds no second fact.
@@ -220,7 +220,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.assertEqual(second["routerIndex"], 1)
         first = self.dispatch_of(first_task)
         self.assertEqual(first["buddyId"], A)
-        self.assertNotEqual(first["inputSha256"], second["inputSha256"])
+        self.assertNotEqual(first["document"], second["document"])
         # Only the actor graft differs between the two dispatch documents.
         actor_keys = ("buddy", "routerBuddyId", "routerBuddy", "routerIndex")
 
@@ -360,14 +360,14 @@ class ClaimTests(RouterDispatchTestCase):
                                    "generation": attempt["generation"], "decisionId": result["decisionId"],
                                    "routerIndex": 0, "buddyId": A})
         claimed = [payload for kind, payload in self.router_events("router.claimed")]
-        self.assertEqual(claimed, [{"buddyId": A, "plane": "routing", "requestId": "pick-1",
+        self.assertEqual(claimed, [{"buddyId": A, "requestId": "pick-1",
                                     "routerIndex": 0, "taskId": result["runId"],
                                     "attemptId": attempt["attemptId"], "generation": attempt["generation"]}])
         # The decision is running and its current input is the dispatch document.
         self.assertEqual(self.decision_row(result["decisionId"])["status"], "running")
         with self.board_.store.db.read() as db:
-            self.assertEqual(router_sequence.dispatch(db, result["runId"])["inputSha256"],
-                             self.dispatch_of(result["runId"])["inputSha256"])
+            self.assertEqual(router_sequence.dispatch(db, result["runId"])["document"],
+                             self.dispatch_of(result["runId"])["document"])
 
     def test_selector_model_service_reads_the_current_dispatch(self):
         result = self.request()
@@ -553,9 +553,9 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])
         snapshot = self.snapshot_of(response["decisionId"])
         dispatch = self.dispatch_of(response["runId"])
-        self.assertEqual(requested["budget"], snapshot["facts"]["budget"])
-        self.assertEqual(dispatch["document"]["budget"], requested["budget"])
-        self.assertEqual(requested["budget"]["timeoutSeconds"], 300)
+        self.assertNotIn("budget", requested)
+        self.assertEqual(dispatch["document"]["budget"], snapshot["facts"]["budget"])
+        self.assertEqual(snapshot["facts"]["budget"]["timeoutSeconds"], 300)
 
 
 if __name__ == "__main__":

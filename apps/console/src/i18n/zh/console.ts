@@ -67,7 +67,7 @@ export default {
   "currentlyUnavailable": "当前不可用（{{v0}}）",
   "notInTheCurrentCatalog": "当前不在目录中",
   "disabled": "处于停用状态",
-  "concurrencyLimitMustBeAnIntegerFrom": "{{v0}} 并发上限须为 1–{{max}} 的整数；请修改。",
+  "concurrencyLimitMustBePositiveInteger": "{{v0}} 并发上限须为正整数；请修改。",
   "cannotEnableItRevertThisChange": "{{v0}} {{v1}}；无法启用，请撤销修改。",
   "cannotPinItChooseAnAvailableReasoning": "{{v0}} {{v1}}；无法固定，请选择可用推理强度。",
   "retryIntervalMustBeAnIntegerFrom": "重试间隔须为 1–2147483647 的整数秒；请修改。",

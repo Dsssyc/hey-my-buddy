@@ -20,7 +20,7 @@ from typing import Any
 from . import fixes, micro_task, reminders
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_macro_task
-from ..routing import router
+from ..routing import router, router_sequence
 from ...protocol import schemas
 from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
@@ -830,13 +830,16 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     output = json.loads(record["output_json"]) if record and record["output_json"] else {}
     output = output if isinstance(output, dict) else {}
     usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
+    round_facts = router_sequence.request_snapshot(connection, record["decision_id"])["facts"] if record else {}
     routing = {
-        **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
+        **router.routing_facts({**json.loads(record["requested_json"]),
+                                **round_facts}
+                               if record else {}),
         "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
         "reason": reason_from_json(record["reason_code"], record["reason_params_json"]) if record else None,
         "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
-        "budget": output.get("budget"),
+        "budget": round_facts.get("budget"),
         "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead")},
     }
     abstention = bool(record and record["reason_code"] == "router-abstained")

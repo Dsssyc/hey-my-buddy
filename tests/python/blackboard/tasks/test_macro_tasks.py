@@ -928,10 +928,11 @@ class RoutingSpanTests(WorkflowTestCase):
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,requested_json,updated_at)"
                        " VALUES('recorded-decision','recorded-request','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z')",
                        (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
-                        json.dumps({'budget': {'preset': 'deep'}})))
+                        json.dumps({})))
             now = '2026-01-01T00:00:00Z'
             router_sequence.freeze_request(db, 'recorded-decision',
-                                           snapshot={'facts': {}, 'baseInput': {'task': 'task'}, 'inspections': []}, now=now)
+                                           snapshot={'facts': {'budget': (output or {}).get('budget')},
+                                                     'baseInput': {'task': 'task'}, 'inspections': []}, now=now)
             router_sequence.reserve_dispatch(db, decision_id='recorded-decision', task_id=task_id, router_index=0,
                                              buddy={'buddyId': 'frozen-router', 'harness': 'dsh', 'provider': 'fixture',
                                                     'model': 'router', 'effort': 'max'}, now=now)

@@ -311,9 +311,11 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start(review=True)
         output = self.failure(first, "provider-error")
         output["inputVerification"]["unchanged"] = False
-        self.assert_boundary(request, first, output, status="failed")
+        response = self.report(first, output, status="failed")
+        self.assertEqual(response["decision"]["outcome"], "rerouted")
+        self.assertNotEqual(self.current_task(request["decisionId"]), request["runId"])
 
-    def test_stale_dispatch_round_cannot_switch(self):
+    def test_current_dispatch_identity_survives_a_later_snapshot(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
             doc = copy.deepcopy(first["decisionInput"])
@@ -323,7 +325,7 @@ class FailoverTests(RouterDispatchTestCase):
             snapshot.pop("frozenAt")
             router_sequence.freeze_request(db, request["decisionId"], snapshot=snapshot,
                                            now=T0, round=2)
-        self.assert_boundary(request, first, self.failure(first))
+        self.assert_switch(request, first, self.failure(first))
 
     def test_result_request_and_outcome_replay_do_not_repeat_tasks_or_history(self):
         request, first = self.start()
@@ -530,7 +532,8 @@ class FailoverTests(RouterDispatchTestCase):
         with self.board_.store.db.write() as db:
             row = self.board_.store.decisions._row(db, request["decisionId"])
             before = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-            dto = self.board_.store.decisions._publish_select(db, row, output=self.answer(first), now=T0)
+            dispatch = router_sequence.dispatch(db, first["task"]["taskId"])
+            dto = self.board_.store.decisions._publish_select(db, row, dispatch=dispatch, output=self.answer(first), now=T0)
             self.assertEqual(set(dto), {"answer_valid", "abstained", "changed", "code", "params", "note", "output", "buddy_id", "selected", "evidence"})
             self.assertTrue(dto["answer_valid"])
             self.assertEqual(self.board_.store.decisions._row(db, request["decisionId"])["status"], "running")
@@ -697,7 +700,7 @@ install_no_answer_case("outer_failed_native_stopped", lambda self, claim, o: o, 
 install_no_answer_case("review_failed_missing_verification", lambda self, claim, o: {**self.failure(claim, "provider-error"), "inputVerification": None},
                       "provider-error", review=True, outer="failed")
 install_no_answer_case("review_answer_missing_verification", lambda self, claim, o: {**o, "inputVerification": None},
-                      "router-input-changed", review=True)
+                      "answer-shape", review=True)
 
 for stream in ("child", "late", "reversed", "unfinished", "unclosed"):
     install_no_answer_case("stream_" + stream, lambda self, claim, output, stream=stream: self.bad_native_stream(claim, stream),
@@ -717,7 +720,13 @@ def install_change_case(name, mutate, *, review=False, micro_task=False, outcome
         request, first = self.start(review=review, micro_task=micro_task)
         output = self.failure(first)
         mutate(self, request, first, output)
-        self.assert_boundary(request, first, output, outcome=outcome)
+        if outcome == "rerouted":
+            response = self.report(first, output)
+            self.assertEqual(response["decision"]["outcome"], "rerouted")
+            self.assertEqual(response["decision"]["status"], "queued")
+            self.assertEqual(self.outcomes(), [])
+        else:
+            self.assert_boundary(request, first, output, outcome=outcome)
     setattr(FailoverTests, "test_boundary_" + name, test)
 
 
@@ -747,8 +756,8 @@ install_change_case("route", execute_change("UPDATE workflow_routes SET state='f
 install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
 install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
 install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
-install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
-install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)
+install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True, outcome="rerouted")
+install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True, outcome="rerouted")
 
 
 for layer in ("controller", "native"):

@@ -389,7 +389,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
         self.assertEqual(row["task_id"], "task-1")
         self.assertEqual(row["attempt_id"], "att-1")
         self.assertEqual(json.loads(row["payload_json"]),
-                         {"plane": "routing", "requestId": "route-1", "routerIndex": 0, "buddyId": A,
+                         {"requestId": "route-1", "routerIndex": 0, "buddyId": A,
                           "phase": "preflight", "taskId": "task-1", "attemptId": "att-1",
                           "outcome": "no_answer", "code": "timeout"})
 

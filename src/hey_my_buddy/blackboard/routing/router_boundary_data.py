@@ -77,7 +77,7 @@ def router_trials(connection, row, *, now):
     """Every observed/dispatch item, with its own receipt; unknown stays null."""
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     request = _json(row["requested_json"], {})
-    if request.get("routerCalled") is False or (request.get("routingBasis") or {}).get("candidateCount") == 0:
+    if snapshot["facts"].get("routerCalled") is False or (request.get("routingBasis") or {}).get("candidateCount") == 0:
         return []
     current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
                                        (row["decision_id"],)).fetchone()[0]
@@ -318,8 +318,6 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
         return None
     request = _json(row["requested_json"], {})
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
-    if request.get("routerCalled") is False:
-        return None
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
         stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id)
         return build_boundary(
@@ -330,6 +328,8 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
             target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
             helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
             explicit_buddy=True)
+    if snapshot["facts"].get("routerCalled") is False:
+        return None
     trials = router_trials(connection, row, now=now)
     code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
     current = [item for item in trials if item["taskId"] == row["decision_task_id"] and item["outcome"] == "answered"]

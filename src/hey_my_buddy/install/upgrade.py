@@ -106,10 +106,10 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         snapshot = backup.database_snapshot(connection, event_head=event_head, column_projections=column_projections)
         expected = {}
         if schema == UPGRADE_BASE_SCHEMA:
-            fingerprints, counts = schema_upgrade.expected_router_fingerprints(connection)
+            fingerprints = schema_upgrade.expected_router_fingerprints(connection)
             fingerprints['events'] = schema_upgrade.expected_events_fingerprint(
                 connection, event_head=snapshot['eventHead'])
-            expected = {'expectedFingerprints': fingerprints, 'expectedTableCounts': counts}
+            expected = {'expectedFingerprints': fingerprints}
         return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected,
                 **({'columnProjections': column_projections} if column_projections is not None else {})}
 

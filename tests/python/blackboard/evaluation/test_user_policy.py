@@ -127,13 +127,25 @@ class UserPolicyTests(BoardTestCase):
         self.assertEqual([row['concurrency_limit'] for row in stored], [3])
         self.assert_denied('user_policy_publish', self.payload(self.publication_params(), 'forged-limits', modelServiceConcurrency=patch))
 
-    def test_model_service_concurrency_accepts_positive_limits_above_32(self):
+    def test_model_service_concurrency_accepts_sqlite_integer_max(self):
         grant = self.publication_params()
-        patch = [{**LIVE_MODEL_SERVICE, 'limit': 33}]
+        patch = [{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63 - 1}]
         self.user('user_policy_publish', self.payload(grant, 'raised-limit', modelServiceConcurrency=patch))
         with self.board_.store.db.read() as db:
             stored = db.execute('SELECT concurrency_limit FROM model_service_concurrency').fetchone()
-        self.assertEqual(stored['concurrency_limit'], 33)
+        self.assertEqual(stored['concurrency_limit'], 2 ** 63 - 1)
+
+    def test_model_service_concurrency_rejects_integer_beyond_sqlite_without_mutation(self):
+        with self.assertRaises(BoardError) as caught:
+            self.user('user_policy_publish', self.payload(
+                self.publication_params(), 'overflow-limit',
+                buddySettings=[{'buddyId': 'live', 'enabled': False}],
+                modelServiceConcurrency=[{**LIVE_MODEL_SERVICE, 'limit': 2 ** 63}],
+            ))
+        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM model_service_concurrency').fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT enabled FROM buddies WHERE buddy_id='live'").fetchone()[0], 1)
 
     def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
         grant = self.publication_params()

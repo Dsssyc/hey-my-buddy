@@ -1352,6 +1352,8 @@ class WorkflowCoordinator:
             "resolved": "completed", "needs-host": "needs-host", "fenced": "fenced",
         }[link["state"]]
         requested = json.loads(decision["requested_json"])
+        from ..routing.router_sequence import request_snapshot
+        routing_request = {**requested, **request_snapshot(connection, decision["decision_id"])["facts"]}
         current = self.board.decisions._view(connection, decision, include_audit=False)
         view = {
             "status": status, "decisionId": decision["decision_id"], "taskId": decision["decision_task_id"],
@@ -1361,7 +1363,7 @@ class WorkflowCoordinator:
             "note": current["note"],
             "constraints": requested.get("constraints", schemas.buddy_constraints(micro_task)),
             "requiredCapabilities": requested.get("requiredCapabilities", []),
-            "source": selection_source(requested),
+            "source": selection_source(routing_request),
             **{key: current[key] for key in (
                 "routerBuddyIds", "routerIdentities", "routingMode", "routingBudget", "budget",
                 "routerRetryIntervalSeconds", "routerProblem",
@@ -1403,6 +1405,7 @@ class WorkflowCoordinator:
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
         """Adopt a frozen recommendation with its result, under owner/lineage fencing."""
         from ..routing.router import selection_source
+        from ..routing.router_sequence import request_snapshot
         link = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (decision_id,)).fetchone()
         if link is None or link["state"] != "pending":
             return
@@ -1435,7 +1438,10 @@ class WorkflowCoordinator:
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
                                          payload={"decisionId": decision_id, "buddy": buddy,
                                                   "buddyId": decision["buddy_id"],
-                                                  "source": selection_source(json.loads(decision["requested_json"]))})
+                                                  "source": selection_source({
+                                                      **json.loads(decision["requested_json"]),
+                                                      **request_snapshot(connection, decision_id)["facts"],
+                                                  })})
                 return
         own_reason = (make_reason("routing-unusable-selection") if decision["status"] == "completed" else None)
         self._routing_attention(connection, run, now, own_reason)
@@ -1985,7 +1991,7 @@ class WorkflowCoordinator:
         no task prompt, model input/output or table payload is embedded.
         """
         from ..routing.router import routing_facts, selection_source
-        from ..routing.router_sequence import dispatch
+        from ..routing.router_sequence import dispatch, request_snapshot
         run_id = run_row["run_id"]
         total = int(
             connection.execute(
@@ -2012,6 +2018,7 @@ class WorkflowCoordinator:
         entries = []
         for row in rows:
             requested = json.loads(row["requested_json"])
+            routing_request = {**requested, **request_snapshot(connection, row["decision_id"])["facts"]}
             entries.append(
                 {
                     "decisionId": row["decision_id"],
@@ -2025,13 +2032,13 @@ class WorkflowCoordinator:
                     ),
                     "taskId": row["decision_task_id"],
                     "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
-                    "source": selection_source(requested),
+                    "source": selection_source(routing_request),
                     "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
                     "note": row["note"],
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
                     "current": bool(current_id) and row["decision_id"] == current_id,
-                    **routing_facts(requested, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
+                    **routing_facts(routing_request, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
                 }
             )
         next_cursor = None

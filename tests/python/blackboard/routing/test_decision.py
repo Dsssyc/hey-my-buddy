@@ -496,16 +496,16 @@ class DecisionFailureTests(DecisionTestCase):
         from unittest.mock import ANY, patch
         board = self.board()
         self.seed(board)
-        with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-input-changed', 'changed')):
+        with patch('hey_my_buddy.buddy.roles.router_input.prepare', side_effect=BoardError('router-out-of-bounds', 'changed')):
             decision = self.outcome(board, 'select_first')
         # Preparation fails before start(), so the Worker has no child to stop.
         self.assertEqual(decision['status'], 'needs-host')
-        self.assertEqual(decision['output']['code'], 'router-input-changed')
-        self.assertEqual(self.own_receipt(board, decision)['result']['code'], 'router-input-changed')
+        self.assertEqual(decision['output']['code'], 'router-out-of-bounds')
+        self.assertEqual(self.own_receipt(board, decision)['result']['code'], 'router-out-of-bounds')
         task = board.call('task_get', {'runId': decision['runId']})['task']
         self.assertTrue(task['shutdownConfirmed'])
         self.assertEqual(task['attemptState'], 'finished')
-        self.assertEqual(board.store.decisions.health_summary()['inputChangedCount'], 1)
+        self.assertEqual(board.store.decisions.health_summary()['boundsRejectedCount'], 1)
         self.readonly_start.assert_not_called()
 
     def test_malformed_native_output_fails_without_touching_the_table(self):
@@ -617,25 +617,27 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["usage"], {"elapsedMs": 200, "toolCalls": 1, "bytesRead": None})
         self.assertEqual(decision["nativeIdentity"]["sessionId"], "mock-native")
 
-    def test_budget_and_input_changed_are_separate_from_failures_and_abstentions(self):
+    def test_budget_and_changed_input_are_separate_from_failures_and_abstentions(self):
         clock = FakeClock()
         board = self.board(clock=clock)
         self.seed(board)
-        for mode, code in (("budget", "router-budget-exhausted"), ("deadline", "router-budget-exhausted"),
-                           ("input_changed", "router-input-changed")):
+        for mode, code in (("budget", "router-budget-exhausted"), ("deadline", "router-budget-exhausted")):
             clock.advance(601)
             decision = self.outcome(board, mode, request_id=mode)
             self.assertEqual(decision["status"], "needs-host")
             self.assertEqual(decision["output"]["code"], code)
             self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
             self.assertIsNone(decision["selectedBuddy"])
-        self.assertFalse(decision["inputVerification"]["unchanged"])
+        clock.advance(601)
+        changed = self.outcome(board, "input_changed", request_id="input_changed")
+        self.assertEqual(changed["status"], "queued")
+        self.assertNotEqual(changed["runId"], decision["runId"])
         # A changed copy is kept for inspection.
         _, changed_root, _ = self.input_verify.call_args.args
         self.assertTrue(Path(changed_root).exists())
         report = board.call("health", {})["routingHealth"]
         self.assertEqual(report["budgetExhaustedCount"], 2)
-        self.assertEqual(report["inputChangedCount"], 1)
+        self.assertEqual(report["inputChangedCount"], 0)
         self.assertEqual(report["failureCount"], 2)
         self.assertEqual(report["abstentionCount"], 0)
         self.assertEqual(report["consecutiveFailures"], 2)

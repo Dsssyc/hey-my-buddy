@@ -157,7 +157,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
               }} /></Hint>
             <span id={`${id}-occupancy`} className="text-xs text-ink3 tabular-nums">
               {row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}
-              {limitInvalid && <span className="ml-2 text-fail">{t("pane.range", { min: MODEL_SERVICE_CONCURRENCY_MIN, max: MODEL_SERVICE_CONCURRENCY_MAX })}</span>}
+              {limitInvalid && <span className="ml-2 text-fail">{t("pane.range")}</span>}
             </span>
           </div>
           <ConcurrencyNotice id={`${id}-concurrency-notice`} />

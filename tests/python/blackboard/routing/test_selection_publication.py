@@ -64,8 +64,16 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(router_sequence.request_snapshot(db, request["decisionId"], 1), original_snapshot)
             self.assertEqual(router_sequence.dispatch(db, first["task"]["taskId"])["round"], 1)
-            self.assertEqual(router_sequence.request_snapshot(db, request["decisionId"], 2)["baseInput"]["task"],
+            current_snapshot = router_sequence.request_snapshot(db, request["decisionId"], 2)
+            self.assertEqual(current_snapshot["baseInput"]["task"],
                              original_snapshot["baseInput"]["task"])
+            requested = json.loads(db.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
+                                             (request["decisionId"],)).fetchone()[0])
+            for key in ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routingMode",
+                        "routingBudget", "routerRetryIntervalSeconds", "budget", "routerBudgetSeconds",
+                        "selectionRetryInspections", "routerCalled"):
+                self.assertNotIn(key, requested)
+            self.assertEqual(current_snapshot["facts"]["budget"], current_snapshot["baseInput"]["budget"])
         second = self.next_claim(request)
         self.assertEqual([p["buddyId"] for p in second["decisionInput"]["buddies"]], [A, C])
         self.assertNotEqual(second["task"]["taskId"], first["task"]["taskId"])

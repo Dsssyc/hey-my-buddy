@@ -65,7 +65,7 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
         workspace.verify(manifest, require_unchanged=True)
     except BoardError as error:
         code = ("router-input-unknown" if error.code == "WORKSPACE_GIT_UNKNOWN" else
-                "router-input-changed" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"}
+                "router-out-of-bounds" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"}
                 else "router-input-unavailable")
         raise BoardError(code, "The frozen Router input could not be verified") from None
     _remaining(deadline)
@@ -185,12 +185,12 @@ def verify(manifest: dict | None, root: Path, expected: str, *, deadline: float)
             workspace.verify(manifest, require_unchanged=True)
         _remaining(deadline)
         if _digest(root, deadline) != expected:
-            raise BoardError("router-input-changed", "Router snapshot changed")
+            raise BoardError("router-out-of-bounds", "Router snapshot changed")
         _remaining(deadline)
     except BoardError as error:
         if error.code in {"WORKSPACE_GIT_UNKNOWN", "router-input-unknown"}:
             return {"unchanged": None, "code": "router-input-unknown", "manifestSha256": (manifest or {}).get("manifestSha256")}
-        return {"unchanged": False, "code": "router-input-changed", "manifestSha256": (manifest or {}).get("manifestSha256")}
+        return {"unchanged": False, "code": "router-out-of-bounds", "manifestSha256": (manifest or {}).get("manifestSha256")}
     except OSError:
-        return {"unchanged": False, "code": "router-input-changed", "manifestSha256": (manifest or {}).get("manifestSha256")}
+        return {"unchanged": False, "code": "router-out-of-bounds", "manifestSha256": (manifest or {}).get("manifestSha256")}
     return {"unchanged": True, "manifestSha256": (manifest or {}).get("manifestSha256"), "snapshotSha256": expected}
