@@ -5,6 +5,7 @@ import {
   MODEL_SERVICE_CONCURRENCY_DEFAULT,
   concurrencyEntryFor,
   concurrencyLimit,
+  hasModelBuddy,
   modelServices,
   preferredVariant,
   taskHost,
@@ -27,11 +28,14 @@ const taskFixture = (overrides: Partial<Task> = {}): Task => ({
 afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("console grouping and recorded attribution", () => {
-  it("has no buddy for command execution and retains pending model assignment", () => {
+  it("has no model buddy for the command and external adapters and retains pending model assignment", () => {
     expect(taskExecutor(taskFixture({ spec: { adapter: "command" },
       lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null,
         rootLeadRunId: null, project: { id: "project", label: "project", path: "~/project" },
         buddy: { harness: "codex", provider: "openai", model: "gpt-6", effort: "high" } } }))).toBeNull();
+    expect(taskExecutor(taskFixture({ spec: { adapter: "external" } }))).toBeNull();
+    expect(hasModelBuddy(taskFixture(), { adapter: "command" })).toBe(false);
+    expect(hasModelBuddy(taskFixture(), null)).toBe(true);
     expect(taskExecutor(taskFixture({ spec: { adapter: "codex" } }))).toBe("执行 buddy 待确定");
     expect(taskExecutor({ lineage: { buddy: { harness: "codex", model: "gpt-6", effort: "high" } } } as Task))
       .toBe("codex · gpt-6 / high");

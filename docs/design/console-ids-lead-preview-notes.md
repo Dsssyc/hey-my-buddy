@@ -93,3 +93,13 @@ D 用第七回合执行凭据 `submit --params-file tmp/command-record-repair-su
 第八回合因 D 交付自动叫醒；D 路由为 ZCode CLI `bigmodel-api-2 / GLM-5.3 / max`，首份固定产物 `862e3a62-06d0-4402-97e4-b6ef9e73c3e7`、提交 `813d0121`，6 个文件均在授权范围。Lead 重跑 typecheck 退出 0，5 个指定测试文件 37 项通过，退出码 0；但逐项审查发现 `hasModelBuddy(task)` 仍只读详情任务 `spec.adapter`，WorkflowPanel 仍可能把接口返回的 `{adapter: command}` 当模型 buddy：新增回归额外修改了详情任务 spec，未覆盖 Host 只替换工作流 buddy 的原始复现。此处未因测试通过而验收，也未整合首份产物。
 
 Lead 用 `continue`（`commandId: command-record-rework-1`、`expectedRevision: 4`）打回，明确要求共享规则识别实际工作流 buddy 的适配器标记、WorkflowPanel 本身不另写判断，并从原夹具只替换接口返回 buddy 做回归；复制组件去原生 title 的修复保留。调用退出码 0，D 返修累计 1 次，等待下一份交付；检查仍限先 typecheck，再原五个定向测试文件。
+
+第九回合由 D 第二份交付叫醒，最终固定产物 `633d5297-d582-4b99-a7b5-4247d3f8c2f0`、累计输出提交 `b53f519d`，仍只有原先六份授权文件。`hasModelBuddy(task, buddy)` 统一判别基础设施适配器与实际记录的 buddy 形态：执行列表、详情头部经 `taskExecutor` 传 lineage 的 buddy，WorkflowPanel 记录细节传工作流自己的 buddy；裸 adapter 标记不会进入模型名字格式化，尚待分配的模型执行保留既有待确定语义。WorkflowPanel 回归保留原详情 spec，只把接口返回 buddy 改为 `{adapter: command}`，同时断言整栏消失、没有 undefined、真实模型 buddy 仍显示；复制组件只保留 Tooltip，测试明确原生 title 不存在。
+
+Lead 重跑 typecheck 退出 0，随后 5 个定向文件（`console-data.test.ts`、`WorkflowPanel.test.tsx`、`components/CopyableIdentifier.test.tsx`、`task-presentation.test.tsx`、`task-title.test.tsx`）37 项通过，退出码 0，累计固定差异的 `git diff --check` 通过；D 原样整合为 `895f7db4`，`apps/console` 树与已测产物一致。用本回合执行凭据绑定最终 artifactId 和实际目标提交 `895f7db4` 调用 `accept`，退出码 0，返回 `accepted`、`integration.state: verified`、`reclaim.removed: true`，整合标识为 `int-474335b2-ef34-4d6c-bf67-3d8868f4aec4`。D 由 ZCode CLI `GLM-5.3 / max` 完成，返修 1 次；四项名下微任务现已全部验收，继续整合后全量检查与资源重建。
+
+本次整合后的最终验证按顺序完成：`npm --prefix apps/console test`，81 文件 1,120 项通过，退出码 0，耗时 24.41 秒；`npm --prefix apps/console run test:browser`，106 项通过，退出码 0，耗时 16.3 秒（含命令自身的 typecheck 与构建）；`npm --prefix apps/console run build` 退出码 0，重新生成打包资源；最后仍按 Host 指定解释器、默认 4 进程运行 `tests/python/cli/test_host_preview.py` 的检查器，3 项通过，私有根清理、退出码 0。原始输出分别保留在 ignored `tmp/console-command-repair-full.log`、`tmp/console-command-repair-browser.log`、`tmp/console-command-repair-build.log`、`tmp/console-command-repair-python.log`，未跑 Python 完整检查。
+
+最终 `index.html` 引用脚本 `assets/index-1SHUT5Hj.js`，资源目录只有这一份脚本，引用的图标、样式与脚本均存在；先前中间构建的 `index-iWDO4HEY.js` 已随本次资源替换移除，不交付两份并存的脚本。命令执行的执行列表、详情头部和工作流记录细节现由同一规则决定是否显示模型 buddy，等待原因英文仍保持原状；复制标识只保留 Tooltip。四项源码改动及此次两处返修均已在本 Lead 检出整合，Host 的最终验收仍待进行，没有安装或发布。
+
+名下最终共 4 项：A（Codex CLI，`gpt-6.1-sol / high`）返修 0 次，B（Codex CLI，`gpt-6.1-sol / max`）返修 1 次，C（DSH CLI，`deepseek-flash / max`）返修 0 次，D（ZCode CLI，`GLM-5.3 / max`）返修 1 次，均已验收并回收检出。此次 Host 打回表明，检查次数不能替代覆盖真实输入形态；Lead 后续审查以原始复现和三处消费路径为准，D 首份交付即使 37 项测试通过也被打回，最终回归不再添加会掩盖问题的 spec 前提。

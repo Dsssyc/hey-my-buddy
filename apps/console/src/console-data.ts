@@ -93,8 +93,28 @@ export function taskHost(task: Task) {
   const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
   return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }
+/**
+ * The buddy record the board keeps for one execution (protocol
+ * `buddy_constraints`): the four-field model identity, or — for the command
+ * and external adapters, which name no buddy — the bare adapter marker.
+ */
+export type RecordedBuddy =
+  | { harness: string; provider: string; model: string; effort: string }
+  | { adapter: string };
+/**
+ * Whether one execution has a model buddy. The command and external adapters
+ * name no buddy: the spec names the infrastructure adapter and the board's
+ * recorded buddy for the execution is the bare adapter marker, never a model
+ * identity; a model execution without an assigned buddy yet still gets one.
+ * The execution list and the detail header pass the lineage buddy; the
+ * workflow record details pass the workflow's own recorded buddy.
+ */
+export function hasModelBuddy(task: Task, buddy: RecordedBuddy | null | undefined) {
+  const adapter = task.spec?.adapter;
+  return adapter !== "command" && adapter !== "external" && (buddy == null || "harness" in buddy);
+}
 export function taskExecutor(task: Task) {
-  if (task.spec?.adapter === "command") return null;
   const buddy = task.lineage?.buddy;
+  if (!hasModelBuddy(task, buddy)) return null;
   return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
 }
