@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MacroTaskFilter, MacroTaskGroup, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 import { Hint } from "./components/hint";
 import { StateMark } from "./components/ui/state-mark";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { ScrollArea } from "./components/ui/scroll-area";
-import { formatNumber, formatRelative } from "./i18n/format";
+import { formatDateTime, formatNumber } from "./i18n/format";
 import { cn } from "cn";
 import { CopyMinus, Folder, FolderOpen, PanelLeft, RefreshCw } from "lucide-react";
 import { MacroSort } from "./MacroSort";
@@ -50,32 +50,21 @@ function GroupHeading({ label, count, open, standalone }: { label: string; count
     <span ref={labelRef} className="min-w-0 truncate font-semibold">{label}</span><span className="text-xs text-ink3 tabular-nums">{formatNumber(count)}</span>
   </button></CollapsibleTrigger></Hint>;
 }
-/** Only the time label ticks, at the next boundary its displayed unit uses. */
-function RelativeStamp({ at }: { at: number }) {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const seconds = Math.max(0, (now - at) / 1000), rounded = Math.round(seconds);
-    const unit = rounded < 60 ? 1 : rounded < 3600 ? 60 : rounded < 86400 ? 3600 : 86400;
-    const nextUnit = rounded < 60 ? 59.5 : rounded < 3600 ? 3599.5 : rounded < 86400 ? 86399.5 : Infinity;
-    const next = Math.min((Math.round(rounded / unit) + 0.5) * unit, nextUnit);
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(1, at + next * 1000 - now));
-    return () => clearTimeout(timer);
-  }, [at, now]);
-  return formatRelative(at, now);
-}
 const Entry = memo(function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: boolean; onSelect: (id: string) => void }) {
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title!).slice(0, 40).join("") : row.title!;
-  const [titleRef, clipped] = useTextClipped<HTMLSpanElement>(text);
   const waiting = row.counts.host + row.counts.review > 0;
   const mark = waiting ? "hand" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : null;
   const status = waiting ? row.counts.host > 0 ? "host" : "review" : row.counts.active > 0 ? "active" : row.counts.failed > 0 ? "failed" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "accepted" : "ended";
-  const hint = row.titleSource === "task" ? `${row.title} · ${t("source")}` : clipped ? text : undefined;
   const stamp = basis === "created" ? row.createdAt : row.lastActivityAt;
+  const hint = `${row.titleSource === "none" ? text : row.title} · ${t("entryTime", {
+    basis: t(basis === "created" ? "entryStarted" : "entryActivity"),
+    time: stamp === null ? t("unknown") : formatDateTime(Date.parse(stamp)),
+  })}${row.titleSource === "task" ? ` · ${t("source")}` : ""}`;
   return <li data-macro-task-id={row.macroTaskId}><Hint text={hint}>
-    <button type="button" data-slot="macro-entry" className={cn("grid h-[30px] w-full grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-x-2 pr-4 pl-3 text-left text-[13px] text-foreground hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
+    <button type="button" data-slot="macro-entry" className={cn("grid h-8 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[13px] text-foreground hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
       <span className="flex items-center justify-center">{mark && <Hint text={t(status)}><span className="flex"><StateMark kind={mark} className="size-2.5"/></span></Hint>}</span>
-      <span ref={titleRef} data-slot="macro-entry-title" className="min-w-0 truncate">{text}</span><time className="whitespace-nowrap pl-2.5 text-xs text-ink3 tabular-nums" dateTime={stamp ?? undefined}><span className="sr-only">{t(basis === "created" ? "sort.created" : "sort.activity")}</span>{stamp === null ? t("unknown") : <RelativeStamp at={Date.parse(stamp)}/>}</time><span className="sr-only">{t(status)}</span>
+      <span data-slot="macro-entry-title" className="min-w-0 truncate">{text}</span><span className="sr-only">{t(status)}</span>
     </button>
   </Hint></li>;
 });
@@ -87,6 +76,23 @@ function MoreEntries({ children }: { children: React.ReactNode }) {
     return () => cancelAnimationFrame(frame);
   }, []);
   return <Collapsible open={open}><CollapsibleContent>{children}</CollapsibleContent></Collapsible>;
+}
+/** A response adds one reveal batch, regardless of how many rows the service returned. */
+function GroupEntries({ rows, basis, selected, onSelect }: { rows: MacroTaskSummary[]; basis: "created" | "activity"; selected: string | null; onSelect: (id: string) => void }) {
+  const history = useRef<{ ids: string[]; ends: number[] }>({ ids: [], ends: [] });
+  const ids = rows.map(row => row.macroTaskId);
+  const previous = history.current;
+  if (ids.length !== previous.ids.length || ids.some((id, index) => id !== previous.ids[index])) {
+    const appended = previous.ids.length > 0 && ids.length > previous.ids.length
+      && previous.ids.every((id, index) => id === ids[index]);
+    history.current = { ids, ends: appended ? [...previous.ends, ids.length] : [ids.length] };
+  }
+  let start = 0;
+  return <>{history.current.ends.map((end, index) => {
+    const from = start; start = end;
+    const entries = <ul className="m-0 list-none p-0">{rows.slice(from, end).map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={selected === row.macroTaskId} onSelect={onSelect}/>)}</ul>;
+    return index === 0 ? <Fragment key="initial">{entries}</Fragment> : <MoreEntries key={`${from}:${rows[from]?.macroTaskId}`}>{entries}</MoreEntries>;
+  })}</>;
 }
 export function MacroTaskList(props: MacroTaskListProps) {
   const { t } = useTranslation("tasks");
@@ -133,8 +139,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
       {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" className="[&+&]:mt-2.5" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
         <GroupHeading label={group.project?.label ?? t("standalone")} count={group.total} open={!collapsed.has(group.id)} standalone={group.id === "standalone"}/>
         <CollapsibleContent>
-          <ul className="m-0 list-none p-0">{group.macroTasks.slice(0, 5).map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={props.selected === row.macroTaskId} onSelect={onSelect}/>)}</ul>
-          {Array.from({ length: Math.ceil(Math.max(0, group.macroTasks.length - 5) / 20) }, (_, index) => <MoreEntries key={index}><ul className="m-0 list-none p-0">{group.macroTasks.slice(5 + index * 20, 25 + index * 20).map(row => <Entry key={row.macroTaskId} row={row} basis={basis} selected={props.selected === row.macroTaskId} onSelect={onSelect}/>)}</ul></MoreEntries>)}
+          <GroupEntries key={`${props.sort}:${props.filter}:${props.query}`} rows={group.macroTasks} basis={basis} selected={props.selected} onSelect={onSelect}/>
           {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span/><span>{t("showMore")}</span></button>}
         </CollapsibleContent>
       </Collapsible>)}

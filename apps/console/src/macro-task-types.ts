@@ -21,8 +21,11 @@ const macroTaskSummaryFields = z.looseObject({
   matchingRuns: safeCount, rootRunIds: z.array(z.string()),
 });
 const macroTaskSummarySchema = macroTaskSummaryFields.refine(summary => !Object.hasOwn(summary, "goal"));
+export const macroTaskGoalSchema = z.object({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString });
+export type MacroTaskGoal = z.infer<typeof macroTaskGoalSchema>;
+export const macroTaskGoalsSchema = z.object({ macroTaskId: z.string().min(1), goals: z.array(macroTaskGoalSchema) });
 const macroTaskDetailSchema = macroTaskSummaryFields.extend({
-  goal: z.looseObject({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString }).nullable(),
+  goal: macroTaskGoalSchema.nullable(),
 });
 export type MacroTaskSummary = z.infer<typeof macroTaskSummarySchema>;
 export type MacroTaskDetail = z.infer<typeof macroTaskDetailSchema>;

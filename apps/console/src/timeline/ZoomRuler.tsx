@@ -70,6 +70,6 @@ export const ZoomRuler = forwardRef<HTMLDivElement, {
   </div></TooltipPrimitive.Trigger>
     <TooltipContent ref={setContent} side="bottom" sideOffset={8} align="start" alignOffset={anchorOffset - contentWidth / 2} sticky="always"
       collisionPadding={{ left: (bounds?.left ?? 0) + 8, right: window.innerWidth - (bounds?.right ?? window.innerWidth) + 8, top: 8, bottom: 8 }}
-      style={{ maxWidth: "min(20rem, var(--radix-tooltip-content-available-width))" }}>{t("zoomRulerHint")}</TooltipContent>
+      style={{ width: "max-content", maxWidth: "var(--radix-tooltip-content-available-width)" }}>{t("zoomRulerHint")}</TooltipContent>
   </Tooltip>;
 });

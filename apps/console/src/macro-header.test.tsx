@@ -12,7 +12,7 @@ describe("the macro task header", () => {
   it("shows the title, context and state counts, with recorded details under elapsed time", async () => {
     const timeline = macroTaskTimelineFixture();
     const onBack = vi.fn();
-    render(<section className="timeline-view"><MacroTaskOverview summary={null} timeline={timeline} loading={false}
+    render(<section className="timeline-view"><MacroTaskOverview readGoals={vi.fn()} summary={null} timeline={timeline} loading={false}
       stale={false} onBackToList={onBack} listToggle={<button>列表开关</button>} headerActions={<button>停止</button>} /></section>);
     const head = screen.getByRole("heading", { name: timeline.macroTask.title! }).closest("header")!;
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
@@ -23,19 +23,20 @@ describe("the macro task header", () => {
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();
     expect(within(head).getByRole("button", { name: "停止" })).toBeTruthy();
-    expect(head.textContent).not.toContain(timeline.macroTask.goal!.body);
+    expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.textContent).toBe(timeline.macroTask.goal!.body);
+    expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
     const user = userEvent.setup();
     await user.click(within(head).getByRole("button", { name: "‹ 宏任务" }));
     expect(onBack).toHaveBeenCalledOnce();
     await user.click(within(head).getByRole("button", { name: "时间统计" }));
     const details = screen.getByRole("dialog", { name: "时间统计" });
-    expect(details.textContent).toContain(timeline.macroTask.goal!.body);
+    expect(details.textContent).not.toContain(timeline.macroTask.goal!.body);
     expect(details.textContent).toContain("跨度");
   });
 
   it("keeps fallback title provenance in an accessible hint without a browser title tooltip", async () => {
     const summary = { ...macroTaskTimelineFixture().macroTask, titleSource: "task" as const };
-    render(<MacroTaskOverview summary={summary} timeline={null} loading={false}
+    render(<MacroTaskOverview readGoals={vi.fn()} summary={summary} timeline={null} loading={false}
       stale={false} onBackToList={() => {}} />);
     const title = screen.getByRole("heading", { name: summary.title! });
     expect(title.hasAttribute("title")).toBe(false);
@@ -47,7 +48,7 @@ describe("the macro task header", () => {
     const original = macroTaskTimelineFixture();
     const timeline = { ...original, macroTask: { ...original.macroTask,
       counts: { ...original.macroTask.counts, failed: 1 } } };
-    render(<MacroTaskOverview summary={null} timeline={timeline} loading={false}
+    render(<MacroTaskOverview readGoals={vi.fn()} summary={null} timeline={timeline} loading={false}
       stale={false} onBackToList={() => {}} />);
     const failed = document.querySelector('[data-slot="macro-overview-count-failed"]')!;
     expect(failed.textContent).toContain("1失败");

@@ -11,7 +11,8 @@ const spans = Array.from({ length: 40 }, (_, index) => ({
   buddy: { ...source.buddy!, model: `model-${index}` },
 }));
 const css = readFileSync("src/tokens.css", "utf8");
-const tokens = [...css.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|brand-mark|past): (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const tokens = [...css.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past): (#[0-9a-f]{6});/g)].map(match => match[1]!);
+const goals = [...css.matchAll(/--goal: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const executionInks = [...css.matchAll(/--execution-ink: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const lightInks = [...css.matchAll(/--execution-ink-light: (#[0-9a-f]{6});/g)].map(match => match[1]!);
 const labDistance = (left: readonly number[], right: readonly number[]) =>
@@ -80,11 +81,20 @@ describe("curated buddy palette", () => {
     for (const color of ["#ff0000", "#ff7f50", "#fa881a", "#117b2d", "#acec6e"]) expect(isUnwantedBuddyColor(rgbHexToLab(color)), color).toBe(false);
   });
 
+  it("keeps goal green separate from the nearest core colour in both themes", async () => {
+    const { BUDDY_CORE_COLORS } = await import("./buddyColors");
+    expect(goals).toEqual(["#2f8a7a", "#96dfce"]);
+    for (const goal of goals) {
+      const nearest = Math.min(...BUDDY_CORE_COLORS.map(color => labDistance(rgbHexToLab(goal), rgbHexToLab(color))));
+      expect(nearest, `${goal} / nearest core colour`).toBeGreaterThanOrEqual(25);
+    }
+  });
+
   it("extends beyond ten while respecting semantic and rejected colours, core distances and both themes' inks", async () => {
     const { buddyColorPrefix, buddyUsesLightInk, BUDDY_STATUS_DISTANCE, BUDDY_EXTENSION_CORE_DISTANCE, BUDDY_REJECTED_COLORS } = await import("./buddyColors");
     expect(BUDDY_STATUS_DISTANCE).toBe(25);
     expect(BUDDY_EXTENSION_CORE_DISTANCE).toBe(12);
-    expect(tokens).toHaveLength(16);
+    expect(tokens).toHaveLength(18);
     expect(executionInks).toHaveLength(2);
     expect(lightInks).toHaveLength(2);
     const palette = buddyColorPrefix(40);

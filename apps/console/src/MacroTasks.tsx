@@ -54,7 +54,7 @@ function StopDialog({ summary, scope, onConfirm, onCancel }: {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const title = summary.titleSource === "none" ? t("tasks:unnamed") : displayTitle(summary.titleSource, summary.title).text;
   return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
-    <DialogContent className="rounded-none text-sm" onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
+    <DialogContent className="text-sm" onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
       <DialogTitle>{t("macroStop.title")}</DialogTitle>
       <Hint text={title}><p id="stop-macro-task-name" tabIndex={0} className="truncate text-sm font-medium">{title}</p></Hint>
       <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
@@ -232,7 +232,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       {stopState?.phase === "unknown" && stop.writable && !stopping && <Hint text={t("shell:macroStop.retryHint")}><Button variant="outline" size="sm" onClick={() => stop.retryStop(selectedSummary)}>{t("shell:macroStop.retry")}</Button></Hint>}
       {stopState?.phase === "refused" && <Button variant="outline" size="sm" onClick={() => stop.dismissStop(selectedSummary.macroTaskId)}>{t("shell:macroStop.dismiss")}</Button>}
       <Popover open={menuOpen && active} onOpenChange={setMenuOpen}><Hint text={t("more")}><PopoverTrigger asChild><Button ref={menuButtonRef} data-slot="macro-menu-button" variant="ghost" size="icon-sm" aria-label={t("more")}><Ellipsis aria-hidden="true"/></Button></PopoverTrigger></Hint>
-        <PopoverContent align="end" className="w-48 rounded-none p-1" onCloseAutoFocus={event => { if (deletionOpening.current) { event.preventDefault(); deletionOpening.current = false; } }}>
+        <PopoverContent align="end" className="w-48 p-1" onCloseAutoFocus={event => { if (deletionOpening.current) { event.preventDefault(); deletionOpening.current = false; } }}>
           <Hint text={reason}><Button data-slot="macro-stop-action" variant="ghost" className="w-full justify-start" aria-label={t("shell:macroStop.title")} aria-disabled={!!reason} onClick={() => { if (!reason) { setMenuOpen(false); stop.requestStop(selectedSummary, scope); } }}>{t("stop")}</Button></Hint>
           <div className="my-1 border-t"/>
           <Button data-slot="macro-delete-action" variant="ghost" className="w-full justify-start text-fail" onClick={() => { deletionOpening.current = true; setMenuOpen(false); setDeleteTarget(selectedSummary); }}>{t("macroHeader:deletion.action")}</Button>
@@ -248,7 +248,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
     onMore={list.more} onApplyReorder={list.applyReorder} />;
 
-  const timelinePane = selected ? <TaskWork key={selected}
+  const timelinePane = selected ? <TaskWork key={selected} readGoals={api.macroTaskGoals}
     active={active} summary={selectedSummary} timeline={timeline.timeline}
     displayObservedAt={timeline.displayObservedAt} loading={timeline.loading} error={timeline.error}
     stale={timeline.stale} newRunIds={timeline.newRunIds} openedRunId={detailRunId}

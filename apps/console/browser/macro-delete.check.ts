@@ -59,7 +59,7 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
       return route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleting", deletedAt: null, failures: [
         { objectKind: "session-records", path: "/synthetic/private/session-records", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
         { objectKind: "native-session", path: "/synthetic/private/native-session", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
-          error: { message: "Permission denied", errno: 13, winerror: null } },
+          error: { message: "[Errno 13] Permission denied: '/synthetic/private/native-session'", errno: 13, winerror: null } },
       ] } } });
     }
     deleted = true;

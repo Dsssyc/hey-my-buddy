@@ -5,7 +5,7 @@ import type { RuntimeVersionInfo, Configuration, ConsoleAccess, ConsoleSession, 
 import type {
   MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskTimeline,
 } from "./macro-task-types";
-import { macroTaskPageSchema, macroTaskTimelineSchema } from "./macro-task-types";
+import { macroTaskPageSchema, macroTaskTimelineSchema, macroTaskGoalsSchema } from "./macro-task-types";
 import {
   configurationSchema, consoleAccessSchema, consoleSessionSchema, harnessHealthSchema, permissionLevelsSchema,
   preferencesSchema, providerCoolingSchema, reminderSettingsSchema, routingHealthSchema, runtimeVersionSchema, safeCount, dateString, snapshotReadSchema,
@@ -469,6 +469,12 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
+    },
+    async macroTaskGoals(macroTaskId: string, signal?: AbortSignal) {
+      const data = await request(`/macro-tasks/${encodeURIComponent(macroTaskId)}/goals`, { signal });
+      const parsed = macroTaskGoalsSchema.safeParse(data);
+      if (!parsed.success) throw new ApiError("INVALID_RESPONSE", () => i18n.t("macroHeader:goalInvalid"));
+      return parsed.data;
     },
     /** Version facts are read once by visible settings, independent of snapshots. */
     async runtimeVersion(signal?: AbortSignal): Promise<RuntimeVersionInfo> {

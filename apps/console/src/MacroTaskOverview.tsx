@@ -10,12 +10,15 @@ import { macroTaskMetrics } from "./macro-task-metrics";
 import { usageTotalsLabel } from "./usage-totals";
 import { formatDuration, formatList, formatDateTime, formatMoment, formatMomentMinutes, formatNumber } from "./i18n/format";
 import { StateMark } from "./components/ui/state-mark";
-import { CopyableIdentifier } from "./components/CopyableIdentifier";
+import { HeaderIdentifier } from "./HeaderIdentifier";
+import { MacroTaskGoal } from "./MacroTaskGoal";
+import type { ConsoleApi } from "./api";
 
 type Count = { key: "host" | "review" | "active" | "accepted" | "failed" | "ended"; mark: "hand" | "live" | "done" | "fail" | "idle"; value: number };
 
 /** One macro task's title, context, state counts and expandable recorded facts. */
-export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, onBackToList, listToggle, headerActions }: {
+export function MacroTaskOverview({ summary, timeline, loading, stale, active = true, nowMs, readGoals, onBackToList, listToggle, headerActions }: {
+  readGoals: ConsoleApi["macroTaskGoals"];
   summary: MacroTaskSummary | null;
   timeline: MacroTaskTimeline | null;
   loading: boolean;
@@ -55,7 +58,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   ];
   const startText = created === null ? t("unrecorded") : formatMomentMinutes(created, clock);
 
-  return <header data-slot="macro-overview-header" className="flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-6 @min-[700px]:grid @min-[700px]:grid-cols-[minmax(0,1fr)_auto] @min-[700px]:items-start @min-[700px]:gap-x-6 @min-[700px]:gap-y-1.5 @min-[700px]:pt-4.5 @min-[700px]:pb-4">
+  return <header data-slot="macro-overview-header" className="relative flex shrink-0 flex-col gap-2.5 border-b bg-card px-4 py-3 sm:px-8 @min-[700px]:grid @min-[700px]:grid-cols-[minmax(0,1fr)_auto] @min-[700px]:items-start @min-[700px]:gap-x-6 @min-[700px]:gap-y-1.5 @min-[700px]:pt-4.5 @min-[700px]:pb-4">
     <div className="min-w-0 flex-1 @min-[700px]:contents">
       <Button type="button" variant="ghost" size="sm" onClick={onBackToList} className="mb-1 -ml-2 hidden @max-[700px]:inline-flex">
         {t("back")}
@@ -74,7 +77,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("started")}</dt><dd className="text-ink">{startText}</dd></div>
           <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
             <PopoverTrigger asChild><button type="button" className="inline-flex items-center border-b border-dotted border-ink3 text-left text-ink transition-colors duration-150 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none" aria-label={t("statsTitle")}>{elapsed}</button></PopoverTrigger>
-            <PopoverContent ref={statsContent} align="start" aria-label={t("statsTitle")} className="w-[34rem] max-w-[calc(100vw-2rem)] rounded-none"
+            <PopoverContent ref={statsContent} align="start" aria-label={t("statsTitle")} className="w-[34rem] max-w-[calc(100vw-2rem)]"
               onOpenAutoFocus={event => { event.preventDefault(); statsContent.current?.focus(); }}>
               <div data-slot="time-stats-body" className="grid gap-2 wrap-anywhere text-sm">
                 <dl data-slot="time-stats-instants" className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums">
@@ -82,7 +85,6 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
                   <div className="flex gap-1.5"><dt className="text-ink3">{t("lastActivity")}</dt><dd>{lastActivity === null ? t("unrecorded") : <time dateTime={shown.lastActivityAt!}>{formatDateTime(lastActivity)}</time>}</dd></div>
                 </dl>
                 {shown.kind === "standalone" && <p>{t("standalone")}</p>}
-                {timeline?.macroTask.goal && <p>{timeline.macroTask.goal.body}</p>}
                 <h3 className="font-semibold">{t("statsTitle")}</h3>
                 {!timeline
                   ? <p className="text-xs text-ink2">{loading ? t("statsLoading") : t("statsMissing")}</p>
@@ -104,7 +106,8 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
               </div>
             </PopoverContent>
           </Popover></dd></div>
-          <div className="min-w-0"><dd><CopyableIdentifier value={shown.macroTaskId}/></dd></div>
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><HeaderIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
+          {timeline?.macroTask.goal && <MacroTaskGoal key={shown.macroTaskId} macroTaskId={shown.macroTaskId} goal={timeline.macroTask.goal} readGoals={readGoals} active={active}/>}
         </dl>
     </div>
     <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[700px]:col-start-2 @min-[700px]:row-start-1 @max-[700px]:w-full @max-[700px]:items-center @min-[700px]:gap-10">

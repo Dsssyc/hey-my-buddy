@@ -140,7 +140,7 @@ async function assertListGeometry(page: Page, width: number) {
       if (box.left < frame.left - 1 || box.right > frame.right + 1) offenders.push(`${element.className}: outside list`);
       if (element.scrollWidth > element.clientWidth + 1 && element.dataset.slot !== "macro-entry") offenders.push(`${element.dataset.slot}: clipped ${element.scrollWidth}/${element.clientWidth}`);
     }
-    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-entry] time, [data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger], [data-slot=macro-filter-count], [data-slot=macro-list-total]")) {
+    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger], [data-slot=macro-filter-count], [data-slot=macro-list-total]")) {
       if (element.scrollWidth > element.clientWidth + 1) offenders.push(`${element.className}: text clipped`);
     }
     return offenders;
@@ -172,7 +172,7 @@ async function assertListGeometry(page: Page, width: number) {
   expect(metrics.group.font).toBeGreaterThanOrEqual(12);
   expect(metrics.group.font).toBe(14);
   expect(metrics.entry.font).toBe(13);
-  expect(metrics.entry.height).toBe(30);
+  expect(metrics.entry.height).toBe(32);
 }
 
 async function assertSelectedTabUnderline(page: Page) {
@@ -269,7 +269,7 @@ async function assertHeaderGeometry(page: Page) {
   await expect(header).toBeVisible();
   await expectNoSidewaysScroll(page);
   const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button:not([data-slot=macro-menu-button])")]
-    .filter(element => element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
+    .filter(element => !element.closest('[data-slot="macro-goal-fact"]') && element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
     .map(element => element.textContent?.trim().slice(0, 40)));
   expect(clipped, "macro header text is clipped").toEqual([]);
   const boxes = await header.locator(":scope > div").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().toJSON()));
@@ -466,10 +466,13 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
           expect(geometry.clipped, `${text}: ${JSON.stringify(geometry)}`).toBe(clipped);
           await expect(label).toHaveCSS("text-overflow", "ellipsis");
           await expect(button).toHaveAccessibleName(new RegExp(text.slice(0, 12)));
-          if (clipped) await expect(button).toHaveAttribute("aria-description", text);
+          const isEntry = button === entry;
+          const description = isEntry ? await button.getAttribute("aria-description") : text;
+          if (isEntry) expect(description).toMatch(new RegExp(`^${text} · 最后活动：`));
+          else if (clipped) await expect(button).toHaveAttribute("aria-description", text);
           else await expect(button).not.toHaveAttribute("aria-description");
           await label.hover();
-          if (clipped) await expect(page.getByRole("tooltip")).toHaveText(text);
+          if (isEntry || clipped) await expect(page.getByRole("tooltip")).toHaveText(description!);
           else {
             await page.waitForTimeout(700);
             await expect(page.getByRole("tooltip")).toHaveCount(0);
@@ -725,7 +728,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
           height: node.getBoundingClientRect().height, font: style.fontSize };
       }));
       let measured = await styles();
-      expect(measured.every(row => row.border === "0px" && row.height === 30 && row.font === "13px")).toBe(true);
+      expect(measured.every(row => row.border === "0px" && row.height === 32 && row.font === "13px")).toBe(true);
       await assertListGeometry(page, width);
       await photograph(page, "edges-list", "zh-CN", width, theme);
       await rows.nth(1).click();

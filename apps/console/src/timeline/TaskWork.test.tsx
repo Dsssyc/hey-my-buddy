@@ -15,7 +15,7 @@ import { groupLanes, laneSummary, ownedWaits } from "./lanes";
 afterEach(cleanup);
 const setup = (overrides: Partial<TaskWorkProps> = {}) => {
   const timeline = macroTaskTimelineFixture();
-  const props: TaskWorkProps = { summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false,
+  const props: TaskWorkProps = { readGoals: vi.fn(), summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false,
     newRunIds: new Set(["r4"]), active: true, openedRunId: null, detail: () => <p>Detail</p>, onOpen: vi.fn(), onClose: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(), ...overrides };
   const view = render(<TooltipProvider delayDuration={0}><TaskWork {...props}/></TooltipProvider>);
   return { ...view, props, timeline };
@@ -479,7 +479,7 @@ describe("timeline keyboard and screen reader navigation", () => {
     function Harness() {
       const [openedRunId, setOpened] = useState<string | null>("r2");
       const timeline = macroTaskTimelineFixture();
-      return <TooltipProvider delayDuration={0}><TaskWork summary={timeline.macroTask} timeline={timeline} displayObservedAt={timeline.observedAt}
+      return <TooltipProvider delayDuration={0}><TaskWork readGoals={vi.fn()} summary={timeline.macroTask} timeline={timeline} displayObservedAt={timeline.observedAt}
         loading={false} error="" stale={false} newRunIds={new Set()} active openedRunId={openedRunId}
         detail={() => <button>Detail control</button>} onOpen={setOpened} onClose={() => setOpened(null)} onRetry={() => {}} onBackToList={() => {}}/></TooltipProvider>;
     }

@@ -372,7 +372,8 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         )
         browser = self.open(board)
         for path in ("/api/macro-tasks?limit=5",
-                     f"/api/macro-tasks/{submitted['macroTaskId']}/timeline"):
+                     f"/api/macro-tasks/{submitted['macroTaskId']}/timeline",
+                     f"/api/macro-tasks/{submitted['macroTaskId']}/goals"):
             with self.subTest(path=path):
                 status, headers, body = browser.get(path)
                 self.assertEqual(status, 200, body[:300])
@@ -386,6 +387,31 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
             with self.subTest(path=path):
                 status, _headers, _body = browser.get(path, headers={"If-None-Match": "nope"})
                 self.assertEqual(status, 200)
+
+    def test_goal_history_http_route_returns_revisions_and_rejects_query(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="goal-history", macroTask={"title": "Group", "goal": "First"})
+        board.call("workflow_goal_amend", {
+            "runId": submitted["runId"], "commandId": "goal-history-amend",
+            "goal": "Second", "expectedGoalRevision": 1, **self.control(submitted),
+        })
+        browser = self.open(board)
+        path = f"/api/macro-tasks/{submitted['macroTaskId']}/goals"
+        status, _headers, body = browser.get(path)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body), {
+            "macroTaskId": submitted["macroTaskId"],
+            "goals": [
+                {"body": "Second", "revision": 2, "createdAt": board.call("workflow_get", {"runId": submitted["runId"]})["goal"]["createdAt"]},
+                {"body": "First", "revision": 1, "createdAt": submitted["createdAt"]},
+            ],
+        })
+        for bad_path, expected in ((path + "?limit=1", 400),
+                                   ("/api/macro-tasks/macro-missing/goals", 404),
+                                   ("/api/macro-tasks/run:standalone/goals", 400)):
+            with self.subTest(path=bad_path):
+                response, _headers, _body = browser.get(bad_path)
+                self.assertEqual(response, expected)
 
 
 

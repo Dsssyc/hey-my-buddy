@@ -34,7 +34,8 @@ for (const { locale, labels, meaning } of [
     await stats.locator("dt span").first().focus();
     await expect(page.getByRole("tooltip")).toHaveText(meaning.trim());
     const copy = page.locator('[data-slot=macro-overview-header] button[aria-label*="macro-"]');
-    await expect(copy).toHaveCSS("padding-left", "8px");
+    await expect(copy).toHaveCSS("border-bottom-style", "dotted");
+    await expect(copy.locator("svg")).toHaveCount(0);
   });
 });
 

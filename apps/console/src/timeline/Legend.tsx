@@ -25,7 +25,7 @@ export function Legend() {
   ];
   return <Popover>
     <PopoverTrigger asChild><button type="button" data-slot="legend-trigger" className="shrink-0 border-b border-dotted border-ink3 text-ink2 hover:border-ink hover:text-ink focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{t("legendLabel")}</button></PopoverTrigger>
-    <PopoverContent data-slot="timeline-legend" role="dialog" aria-label={t("legendLabel")} align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-none p-4">
+    <PopoverContent data-slot="timeline-legend" role="dialog" aria-label={t("legendLabel")} align="end" sideOffset={8} className="w-[22rem] max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto p-4">
       <div className="grid gap-3">{items.map(({ key, label, meaning, mark }) =>
         <div key={key} data-slot="legend-item" data-kind={key} className="grid grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-2.5">
           <span className="flex h-5 items-center justify-center">{mark}</span>

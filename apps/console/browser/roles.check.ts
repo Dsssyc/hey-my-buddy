@@ -67,7 +67,7 @@ for (const { locale, view, list, sections, add, addTitle, routers, failures, sta
       const dialog = page.getByRole("dialog", { name: addTitle });
       await expect(dialog).toBeVisible();
       await expect(page.getByRole("tooltip")).toHaveCount(0);
-      expect(await dialog.evaluate(node => getComputedStyle(node).borderTopLeftRadius)).toBe("0px");
+      expect(await dialog.evaluate(node => getComputedStyle(node).borderTopLeftRadius)).toBe("6px");
       await expectWholeAndApart(page.locator("body"), dialog);
     });
   });

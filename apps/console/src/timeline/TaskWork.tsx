@@ -33,6 +33,7 @@ import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 import { TIMELINE_OUTSET_PX as SLACK_PX } from "./trackMarks";
 
 export type TaskWorkProps = {
+  readGoals: import("../api").ConsoleApi["macroTaskGoals"];
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
   loading: boolean; error: string; stale: boolean; newRunIds: ReadonlySet<string>; active: boolean;
   openedRunId: string | null; detail: (runId: string) => ReactNode;
@@ -355,7 +356,7 @@ export function TaskWork(props: TaskWorkProps) {
       if (next) next.focus(); else focusRow(runId);
     }
   }} data-mode={open ? "detail" : "timeline"} className="@container flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-    <MacroTaskOverview summary={props.summary} timeline={timeline} loading={props.loading} stale={props.stale} active={props.active} nowMs={nowMs}
+    <MacroTaskOverview readGoals={props.readGoals} summary={props.summary} timeline={timeline} loading={props.loading} stale={props.stale} active={props.active} nowMs={nowMs}
       onBackToList={props.onBackToList} listToggle={props.listToggle} headerActions={props.headerActions}/>
     {props.error && <div role="alert" className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("timelineReadFailed", { at: clockTime(timeline?.observedAt) })}<span className="wrap-anywhere">{props.error}</span><Button variant="outline" size="sm" aria-busy={props.loading} disabled={props.loading} onClick={props.onRetry}>{t(props.loading ? "loading" : "retry")}</Button></div>}
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}

@@ -13,7 +13,7 @@ const expected = {
   "created-asc": [alpha, beta, "standalone"],
 } as const;
 type Mode = keyof typeof expected;
-type Summary = { macroTaskId: string; createdAt: string | null; lastActivityAt: string | null };
+type Summary = { title: string | null; titleSource: string; macroTaskId: string; createdAt: string | null; lastActivityAt: string | null };
 
 function alphaGroup(page: Page) {
   return page.locator('[data-slot=macro-list] [data-slot=macro-group]')
@@ -25,13 +25,10 @@ async function rows(page: Page) {
     .evaluateAll(nodes => nodes.map(node => node.getAttribute("data-macro-task-id")));
 }
 
-/** The time each row shows: its stamp and the screen-reader name telling which time it is. */
+/** The combined hint names the full title and the time that orders the row. */
 async function times(page: Page) {
-  return alphaGroup(page).locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node => {
-    const time = node.querySelector("time");
-    return [node.getAttribute("data-macro-task-id"), time?.getAttribute("datetime") ?? null,
-            time?.querySelector(".sr-only")?.textContent ?? null];
-  }));
+  return alphaGroup(page).locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node =>
+    [node.getAttribute("data-macro-task-id"), node.querySelector("[data-slot=macro-entry]")?.getAttribute("aria-description")]));
 }
 
 for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, directionLabels] of [
@@ -144,12 +141,19 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
       }
       async function expectShown(mode: Mode) {
         const created = mode.startsWith("created");
-        const label = basisLabels[created ? 1 : 0];
         const visible = shown[mode]!;
-        await expect.poll(() => times(page)).toEqual(visible.map(id => {
-          const summary = seen[mode]![id]!;
-          return [id, created ? summary.createdAt : summary.lastActivityAt, label];
-        }));
+        const expectedHints = await page.evaluate(({ locale, created, summaries }) => {
+          const zh = locale === "zh-CN";
+          const label = zh ? created ? "开始" : "最后活动" : created ? "Started" : "Last activity";
+          const formatter = new Intl.DateTimeFormat(zh ? "zh-CN" : "en", { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" });
+          return summaries.map(summary => {
+            const stamp = created ? summary.createdAt : summary.lastActivityAt;
+            const title = summary.title ?? (zh ? "未命名" : "Unnamed");
+            const time = stamp === null ? (zh ? "未知" : "Unknown") : formatter.format(new Date(stamp));
+            return [summary.macroTaskId, `${title} · ${label}${zh ? "：" : ": "}${time}${summary.titleSource === "task" ? zh ? " · 取自首行" : " · From the first line" : ""}`];
+          });
+        }, { locale, created, summaries: visible.map(id => seen[mode]![id]!) });
+        await expect.poll(() => times(page)).toEqual(expectedHints);
       }
 
       // Choosing a basis leaves the direction alone and keeps the menu open.

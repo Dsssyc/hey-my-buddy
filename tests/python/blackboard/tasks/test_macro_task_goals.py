@@ -16,6 +16,34 @@ class MacroTaskGoalTests(WorkflowTestCase):
             **(control or self.control(run)),
         })
 
+    def test_console_goal_history_reads_all_revisions_newest_first(self):
+        board = self.board()
+        run = self.submit(board, macroTask={"title": "Group", "goal": "  Original\ntext  "})
+        self.amend(board, run, "第二版")
+        self.amend(board, run, "Third", command_id="goal-3", expected=2)
+        with board.store.db.read() as db:
+            recorded = db.execute(
+                "SELECT body,revision,created_at FROM macro_task_goals"
+                " WHERE macro_task_id=? ORDER BY revision DESC", (run["macroTaskId"],),
+            ).fetchall()
+        history = board.call("macro_task_goal_history", {"macroTaskId": run["macroTaskId"]})
+        self.assertEqual(history, {
+            "macroTaskId": run["macroTaskId"],
+            "goals": [{"body": row["body"], "revision": row["revision"], "createdAt": row["created_at"]}
+                      for row in recorded],
+        })
+        self.assertEqual([goal["revision"] for goal in history["goals"]], [3, 2, 1])
+        self.assertEqual(history["goals"][-1]["body"], "  Original\ntext  ")
+
+        for params in ({}, {"macroTaskId": "run:standalone"},
+                       {"macroTaskId": run["macroTaskId"], "extra": 1}):
+            with self.subTest(params=params), self.assertRaises(BoardError) as invalid:
+                board.call("macro_task_goal_history", params)
+            self.assertEqual(invalid.exception.code, "INVALID_ARGUMENT")
+        with self.assertRaises(BoardError) as absent:
+            board.call("macro_task_goal_history", {"macroTaskId": "macro-missing"})
+        self.assertEqual(absent.exception.code, "NOT_FOUND")
+
     def test_submission_requires_goal_and_rejects_description(self):
         board = self.board()
         for presentation in (

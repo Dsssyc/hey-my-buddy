@@ -23,7 +23,11 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await page.locator(view.ready).first().waitFor();
       if (view.name === "drawer") await page.getByRole("button", { name: "codex / openai / gpt-5-codex", exact: true }).click();
       if (view.name === "dialog") {
-        await page.getByRole("button", { name: "更多", exact: true }).click();
+        const more = page.getByRole("button", { name: "更多", exact: true });
+        await more.hover();
+        await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("border-radius", "6px");
+        await more.click();
+        await expect(page.locator('[data-slot="popover-content"]')).toHaveCSS("border-radius", "6px");
         await page.getByRole("button", { name: "停止宏任务", exact: true }).click();
         await page.getByRole("dialog").waitFor();
       }
@@ -50,6 +54,16 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
         .map(node => ({ text: node.textContent?.trim(), height: node.getBoundingClientRect().height }))
         .filter(({ height }) => height !== 28 && height !== 32));
       expect(heights, "controls use the two shared heights").toEqual([]);
+      const structuralRadii = await page.locator('[data-slot="macro-list"], [data-slot="timeline-tracks"], [data-slot="task-detail"], [data-slot="settings-page"]').evaluateAll(nodes => nodes
+        .filter(node => node.getClientRects().length)
+        .map(node => ({ slot: node.getAttribute("data-slot"), radius: getComputedStyle(node).borderRadius }))
+        .filter(({ radius }) => radius !== "0px"));
+      expect(structuralRadii, "page structures remain square").toEqual([]);
+      const floatingRadii = await page.locator(".overlay-surface").evaluateAll(nodes => nodes
+        .filter(node => node.getClientRects().length)
+        .map(node => ({ slot: node.getAttribute("data-slot"), radius: getComputedStyle(node).borderRadius })));
+      expect(floatingRadii.every(({ radius }) => radius === "6px"), "floating surfaces share the overlay radius").toBe(true);
+      if (view.name === "dialog") expect(floatingRadii.some(({ slot }) => slot === "dialog-content")).toBe(true);
     });
   });
 }
