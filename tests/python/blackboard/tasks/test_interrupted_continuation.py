@@ -157,8 +157,8 @@ class InterruptedContinuationTests(WorkflowTestCase):
         session_id = "terminal-dsh-session"
         root = native_root(self.directory, "dsh", submitted["runId"])
         sessions = root / "sessions"
-        native_path(sessions).mkdir(parents=True)
-        record_path = sessions / f"{session_id}.v3.jsonl"
+        record_path = sessions / "--encoded-cwd--" / session_id / "session.v3.jsonl"
+        native_path(record_path.parent).mkdir(parents=True)
         events = [
             {"type": "session", "version": 3, "id": session_id},
             {"type": "turn/start", "seq": 1, "data": {"turn": 1}},
@@ -198,8 +198,8 @@ class InterruptedContinuationTests(WorkflowTestCase):
         session_id = "unfinished-dsh-session"
         root = native_root(self.directory, "dsh", submitted["runId"])
         sessions = root / "sessions"
-        native_path(sessions).mkdir(parents=True)
-        record_path = sessions / f"{session_id}.v3.jsonl"
+        record_path = sessions / "--encoded-cwd--" / session_id / "session.v3.jsonl"
+        native_path(record_path.parent).mkdir(parents=True)
         events = [
             {"type": "session", "version": 3, "id": session_id},
             {"type": "turn/end", "seq": 1, "data": {"turn": 1, "reason": {"kind": "completed"}}},
