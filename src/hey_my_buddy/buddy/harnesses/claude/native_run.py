@@ -128,8 +128,9 @@ def _catalog(initialize: dict, version: str) -> dict:
     """Read native model and account facts without selecting a provider or login."""
     account = initialize.get("account")
     provider = provider_from_account(account)
-    token_source = account.get("tokenSource") if isinstance(account, dict) else None
-    account_status = "confirmed" if isinstance(token_source, str) and token_source not in ("", "none") else "unknown"
+    has_account_facts = isinstance(account, dict) and any(
+        value for field, value in account.items() if field != "apiProvider")
+    account_status = "confirmed" if has_account_facts else "unknown"
     entries = initialize.get("models")
     if not isinstance(entries, list):
         raise ClaudeProtocolError("invalid-catalog", "Claude returned no model list")

@@ -30,10 +30,12 @@ class CatalogObservationTests(BoardTestCase):
             db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy',1)", (profile_id,))
             created_revision = db.execute('SELECT created_revision FROM evaluation_profiles WHERE profile_id=?',
                                           (profile_id,)).fetchone()[0]
-        native = _catalog({'account': {'apiProvider': 'firstParty', 'tokenSource': 'subscription'},
+        native = _catalog({'account': {'apiProvider': 'firstParty', 'email': 'subscriber@example.invalid',
+                                      'organization': 'fixture-organization', 'subscriptionType': 'max'},
                            'models': [{'value': 'fixture', 'resolvedModel': 'claude-fixture',
                                        'supportedEffortLevels': ['max']}]}, 'fixture')
         self.assertEqual(native['providers'][0]['provider'], 'anthropic')
+        self.assertEqual(native['discoveries'][0]['accountStatus'], 'confirmed')
         for _ in range(2):
             self.clock.advance(3601)
             self.record(native)

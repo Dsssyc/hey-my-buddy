@@ -62,7 +62,8 @@ def initialize_response():
     return {"models": [{"value": "fixture", "resolvedModel": FIXTURE["modelId"], "displayName": "Fixture",
                         "description": "fixture", "supportsEffort": True,
                         "supportedEffortLevels": ["low", "high"]}],
-            "account": {"apiProvider": "firstParty", "tokenSource": "subscription"}}
+            "account": {"apiProvider": "firstParty", "email": "subscriber@example.invalid",
+                        "organization": "fixture-organization", "subscriptionType": "max"}}
 
 
 def outcome_frame():

@@ -398,7 +398,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
             catalog = self.adapter.discover_models()
         provider = catalog["providers"][0]
         self.assertEqual(provider["provider"], "anthropic")
-        # The account fact comes from the same initialize session's validation.
+        # The subscription account has no tokenSource; facts come from this initialize.
         self.assertEqual(catalog["discoveries"],
                          [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual([model["id"] for model in provider["models"]],
@@ -412,9 +412,11 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertTrue(state["initialize"])
         self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
         self.assertNotIn("--session-id", state["argv"])
+        self.assertEqual(state["runs"], 1)
+        self.assertNotIn("authStatusRuns", state)
 
     def test_discovery_records_unknown_login_without_a_proof_process(self):
-        for case in ("null-token", "missing-token", "no-auth"):
+        for case in ("provider-only", "empty-account", "invalid-account", "null-account", "missing-account"):
             with self.subTest(case=case):
                 (self.root / "fixture.json").unlink(missing_ok=True)
                 environment = {**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case}
@@ -431,7 +433,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 self.assertNotIn("authStatusRuns", state)
 
     def test_governed_turn_leaves_unknown_login_to_the_native_cli(self):
-        context = self.context("null-token")
+        context = self.context("provider-only")
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
