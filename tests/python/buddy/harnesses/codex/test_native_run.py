@@ -886,6 +886,23 @@ class CatalogTrustTests(CodexSeamCase):
                          {"provider": "openai", "model": "fixture-model", "effort": "low"})
         remove_coding_auth(self.base / "worker-native")
 
+    def test_a_long_multibyte_native_error_still_reaches_the_run_result(self):
+        # A native reason of repeated three-byte CJK plus four-byte characters
+        # is far past the public UTF-8 byte budget: the message travels cut on
+        # byte safety with the prefix and a readable reason, never erased to
+        # None by the bound.
+        result = self.worker_run("long-native-error")
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-rpc-error")
+        message = result.end.message
+        self.assertIsNotNone(message)
+        raw = message.encode("utf-8")
+        self.assertLessEqual(len(raw), 512)
+        self.assertTrue(raw.startswith("Codex rejected turn/start: 模型不可用".encode()),
+                        message)
+        self.assertNotIn("\N{REPLACEMENT CHARACTER}", message)
+        remove_coding_auth(self.base / "worker-native")
+
     def test_a_listed_model_with_an_unlisted_effort_is_still_refused(self):
         # The fixture catalog lists fixture-model with low/high only: a listed
         # model whose effort the reading does not list keeps its refusal.

@@ -116,6 +116,22 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["selectedModel"],
                          {"provider": "openai", "model": "fixture-model", "effort": "low"})
 
+    def test_a_long_multibyte_native_error_keeps_its_reason_in_the_public_receipt(self):
+        # The governed receipt carries the native reason past the public byte
+        # budget: cut on UTF-8 byte safety, prefix and readable CJK intact,
+        # never erased — with the absence fact still beside it.
+        outcome = self.execute(self.context("long-native-error"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "native-rpc-error")
+        error = outcome.result["error"]
+        self.assertIsNotNone(error)
+        self.assertLessEqual(len(error.encode("utf-8")), 512)
+        self.assertTrue(error.startswith("Codex rejected turn/start: 模型不可用"), error)
+        self.assertNotIn("\N{REPLACEMENT CHARACTER}", error)
+        self.assertIs(outcome.result["selectedModelListed"], False)
+        self.assertEqual(outcome.result["selectedModel"],
+                         {"provider": "openai", "model": "fixture-model", "effort": "low"})
+
     def test_coding_home_is_private_per_goal_and_keeps_source_auth_untouched(self):
         from hey_my_buddy.private_dirs import native_root
         auth = self.home / 'auth.json'

@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from ....json_codec import canonical_json, decode_strict_json
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
-#: The bound on one native error message carried into a refusal; nothing past
-#: the ``error.message`` string itself (no ``error.data`` or other content).
-MAX_NATIVE_ERROR_MESSAGE_CHARS = 256
+#: The whole native-refusal text — the ``Codex rejected <method>:`` prefix
+#: included — is bounded to the UTF-8 byte budget the public ``RunEnd.message``
+#: keeps, so a long native reason travels cut but readable, never dropped for
+#: size. Nothing past ``error.message`` is expanded (no ``error.data``).
+MAX_NATIVE_REFUSAL_BYTES = 512
 _WINDOWS_PIPE = os.name == "nt"
 
 
@@ -132,14 +134,20 @@ class Connection:
         response = self.responses.pop(request_id)
         self.pending_ids.discard(request_id)
         if "error" in response:
-            # The native refusal keeps its own bounded message beside the
-            # stable machine code; an error without a usable message keeps the
-            # method-only fallback, and nothing else of the error is expanded.
+            # The native refusal keeps its own message beside the stable
+            # machine code, cut on UTF-8 byte safety with the prefix included
+            # (the checkpoint's retained-message idiom): a long native reason
+            # reaches the caller truncated and readable instead of being
+            # erased by the public bound. An error without a usable message
+            # keeps the method-only fallback, and nothing else is expanded.
             error = response.get("error")
-            message = error.get("message") if isinstance(error, dict) else None
-            if isinstance(message, str) and message.strip():
-                raise CodexProtocolError("native-rpc-error",
-                                         f"Codex rejected {method}: {message[:MAX_NATIVE_ERROR_MESSAGE_CHARS]}")
+            native = error.get("message") if isinstance(error, dict) else None
+            if isinstance(native, str) and native.strip():
+                text = f"Codex rejected {method}: {native}"
+                raw = text.encode("utf-8")
+                if len(raw) > MAX_NATIVE_REFUSAL_BYTES:
+                    text = raw[:MAX_NATIVE_REFUSAL_BYTES].decode("utf-8", errors="ignore")
+                raise CodexProtocolError("native-rpc-error", text)
             raise CodexProtocolError("native-rpc-error", f"Codex rejected {method}")
         result = response.get("result")
         if not isinstance(result, dict):

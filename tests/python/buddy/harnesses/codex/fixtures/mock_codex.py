@@ -156,7 +156,7 @@ def main():
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
-            if case == "unlisted-model":
+            if case in ("unlisted-model", "long-native-error"):
                 send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
                     "description": "not the selected model", "hidden": False, "isDefault": True,
                     "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -210,13 +210,18 @@ def main():
             state = read_state()
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
-            if case == "unlisted-model":
+            if case in ("unlisted-model", "long-native-error"):
                 # The native answer, not the adapter's catalog reading, decides:
-                # the server rejects the turn under the selected model's own name.
+                # the server rejects the turn under the selected model's own
+                # name. The long case carries a native reason of repeated
+                # three-byte CJK plus four-byte characters, far past the
+                # public UTF-8 byte budget.
                 state['threads'][thread_id].setdefault('rejectedTurns', []).append(
                     {'model': params['model'], 'effort': params['effort']})
                 write_state(state)
-                send({"id": ident, "error": {"code": -32000, "message": f"model not found: {params['model']}"}})
+                native_reason = ("模型不可用" * 80 + "\U0001D11E" * 10) if case == "long-native-error" \
+                    else f"model not found: {params['model']}"
+                send({"id": ident, "error": {"code": -32000, "message": native_reason}})
                 continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
