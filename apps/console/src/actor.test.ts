@@ -6,11 +6,12 @@ afterEach(async () => { await i18n.changeLanguage("zh"); });
 
 describe("recorded actor roles", () => {
   it("keeps a Host's Lead-like name separate from its role and refuses the retired wire form", () => {
-    const host = { role: "host", id: "lead:literal-name" };
+    const host = { role: "host" as const, id: "lead:literal-name" };
     expect(parseActor(host)).toEqual(host);
     expect(actorText(host)).toBe("Host · lead:literal-name");
     expect(actorText({ role: "lead", id: "literal-name" })).toBe("Lead · literal-name");
     expect(parseActor("lead:literal-name")).toBeNull();
+    expect(parseActor({ role: "worker", id: "retired-role" })).toBeNull();
     expect(parseActor({ role: "host", id: { token: "invalid" } })).toBeNull();
   });
 

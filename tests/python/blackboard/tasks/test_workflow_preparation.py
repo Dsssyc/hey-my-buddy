@@ -60,7 +60,7 @@ class PreparationTests(WorkflowTestCase):
 
     def intent(self, path=None):
         return {"kind": "existing", "cwd": str(path or self.repo), "access": "write",
-                "base": {"kind": "working-tree"}, "includeUntracked": [], "writeScope": ["."], "integrator": "host-1"}
+                "base": {"kind": "working-tree"}, "includeUntracked": [], "writeScope": ["."], "integrator": {"role": "host", "id": "host-1"}}
 
     def pending(self, *, clock=None, kind="existing"):
         board = self.board(clock=clock or FakeClock())

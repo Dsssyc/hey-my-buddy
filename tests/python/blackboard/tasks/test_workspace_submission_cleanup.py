@@ -148,7 +148,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
 
     def test_preexisting_prepared_worktree_is_preserved_on_rejection(self):
         board = self.board()
-        intent = {'kind':'worktree', 'cwd':str(self.repo), 'access':'write', 'base':{'kind':'working-tree'}, 'writeScope':['.'], 'integrator':'host:host-1'}
+        intent = {'kind':'worktree', 'cwd':str(self.repo), 'access':'write', 'base':{'kind':'working-tree'}, 'writeScope':['.'], 'integrator':{'role':'host','id':'host-1'}}
         manifest = workspace.prepare(self.directory, 'rejected', intent)
         with patch.object(board.store, 'task_submit', side_effect=BoardError('ADMISSION_FAILED', 'rejected')):
             with self.assertRaises(BoardError) as caught:
@@ -335,7 +335,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         from hey_my_buddy.blackboard.tasks import storage
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
-                  'base': {'kind': 'working-tree'}, 'writeScope': ['.'], 'integrator': 'host:host-1'}
+                  'base': {'kind': 'working-tree'}, 'writeScope': ['.'], 'integrator': {'role':'host','id':'host-1'}}
         original_submit = board.store.task_submit
         for kind in ('existing', 'worktree'):
             with self.subTest(kind=kind):
@@ -405,14 +405,14 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         from hey_my_buddy.protocol import schemas
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
-                  'base': {'kind': 'working-tree'}, 'writeScope': ['.'], 'integrator': 'host:host-1'}
+                  'base': {'kind': 'working-tree'}, 'writeScope': ['.'], 'integrator': {'role':'host','id':'host-1'}}
         manifest = workspace.prepare(self.directory, 'shared-original-allocation', intent)
         checkout = Path(manifest['checkoutRoot'])
         helpers = schemas.normalize_helpers({'helpers': [
             {'requestId': 'shared-reader-one', 'task': 'read one', 'cwd': str(checkout),
              'executionWorkspace': {'kind': 'existing', 'access': 'read'}},
             {'requestId': 'shared-reader-two', 'task': 'read two', 'cwd': str(checkout),
-             'executionWorkspace': {'kind': 'existing', 'access': 'read'}}]}, host_id='host-1')
+             'executionWorkspace': {'kind': 'existing', 'access': 'read'}}]}, integrator={'role':'host','id':'host-1'})
         with patch.object(workspace, '_lock', wraps=workspace._lock) as lock:
             with board.store.workflow._helper_preparations(helpers) as prepared:
                 self.assertEqual(len(prepared), 2)

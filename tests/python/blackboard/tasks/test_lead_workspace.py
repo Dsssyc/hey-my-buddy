@@ -55,7 +55,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "submissionToken": request_id[0] * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": list(scope)},
         })
-        self.assertIsNone(submitted["control"]["hostId"])
+        self.assertNotIn("control", submitted)
         with board.store.db.read() as connection:
             owner = connection.execute(
                 "SELECT lead_run_id,lead_turn_id FROM workflow_lead_tasks WHERE owned_run_id=?",
@@ -111,7 +111,6 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "runId": child["runId"], "commandId": "lead-amend",
             "expectedRevision": view["revision"], "expectedScopeVersion": 1,
             "writeScope": ["src", "docs"], "reason": "Documentation is in the next stage",
-            **child["control"],
         }
         self._wrong_lead_refused(board, "workflow_scope_amend", params, other)
         amended = board.call("workflow_scope_amend", {**params, "credential": lead["credential"]})
@@ -135,7 +134,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "expectedRevision": view["revision"], "conflictId": conflict["conflictId"],
             "action": "restore", "paths": ["outside.txt"],
             "observedFingerprint": conflict["observedFingerprint"],
-            "reason": "Restore the unauthorized path", **child["control"],
+            "reason": "Restore the unauthorized path",
         }
         self._wrong_lead_refused(board, "workflow_workspace_resolve", params, other)
         resolved = board.call("workflow_workspace_resolve", {**params, "credential": lead["credential"]})
@@ -154,11 +153,11 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         accepted = board.call("workflow_accept", {
             "runId": child["runId"], "artifactId": view["finalArtifactId"],
             "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
-            "keepCheckout": True, **child["control"], "credential": lead["credential"],
+            "keepCheckout": True, "credential": lead["credential"],
         })
         self.assertEqual(accepted["state"], "accepted")
         self.assertTrue(checkout.exists())
-        params = {"runId": child["runId"], **child["control"]}
+        params = {"runId": child["runId"]}
         self._wrong_lead_refused(board, "workflow_reclaim", params, other)
         reclaimed = board.call("workflow_reclaim", {**params, "credential": lead["credential"]})
         self.assertTrue(reclaimed["removed"])

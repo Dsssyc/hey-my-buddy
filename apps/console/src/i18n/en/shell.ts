@@ -15,7 +15,7 @@ export default {
     },
     unrecorded: "Not recorded", identity: "{{role}} · {{id}}", recordedBy: "Recorded by",
     markerIdentity: "{{sentence}}, recorded by {{actor}}", origin: "Initiating {{role}}", reason: "Stop reason",
-    roles: { host: "Host", lead: "Lead", console: "Console", service: "Service", workflow: "Blackboard", bridge: "Bridge", worker: "Worker", agent: "Agent" },
+    roles: { host: "Host", lead: "Lead", console: "Console", service: "Service", workflow: "Blackboard", bridge: "Bridge" },
     stop: { host: "Stopped by Host", lead: "Stopped by Lead", console: "Stopped in console", service: "Service stopped", unknown: "Stopped (initiator unknown)" },
   },
   skipToContent: "Skip to main content",

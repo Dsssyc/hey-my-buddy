@@ -419,7 +419,7 @@ def normalize_control(params: dict) -> dict | None:
     A partial triple is invalid: attribution without authority is never accepted
     silently.
     """
-    present = {name: params[name] for name in CONTROL_FIELDS if name in params}
+    present = {name: params.get(name) for name in CONTROL_FIELDS if params.get(name) is not None}
     if not present:
         return None
     missing = [name for name in CONTROL_FIELDS if name not in present]
@@ -429,7 +429,7 @@ def normalize_control(params: dict) -> dict | None:
             f"Control fields must be supplied together; missing {missing[0]}",
             field=missing[0],
         )
-    host_id = optional_string(params, "hostId", max_length=256)
+    host_id = required_string(params, "hostId", max_length=256)
     generation = params.get("ownerGeneration")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
@@ -566,7 +566,8 @@ def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -
     # ordinary spec's cwd is the only source spelling, and the integrator is
     # attribution owned by the submitting Host.
     workspace_intent["cwd"] = spec["cwd"]
-    workspace_intent["integrator"] = lead_run_id if lead_run_id is not None else f"host:{host_id}"
+    workspace_intent["integrator"] = ({"role": "lead", "id": lead_run_id} if lead_run_id is not None
+                                      else {"role": "host", "id": host_id})
     return {
         "requestId": request_id,
         "hostId": host_id,
@@ -643,7 +644,7 @@ def normalize_buddy(value: Any) -> dict:
     return result
 
 
-def normalize_helpers(params: dict, *, host_id: str | None = None) -> list[dict]:
+def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
     """Validate the explicit helper specifications of one approval."""
     raw = params.get("helpers", [])
     if raw is None:
@@ -671,8 +672,8 @@ def normalize_helpers(params: dict, *, host_id: str | None = None) -> list[dict]
         # Same derivation as the parent submission: the helper's own ordinary
         # spec cwd is the source, and the integrator is the approving Host.
         workspace_intent["cwd"] = spec["cwd"]
-        workspace_intent["integrator"] = f"host:{host_id}" if host_id is not None else "host"
-        integrator = optional_bool(entry, "integrator", False)
+        workspace_intent["integrator"] = integrator
+        is_integrator = optional_bool(entry, "integrator", False)
         role = optional_string(entry, "role") or "helper"
         if role not in ("helper", "integrator"):
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}].role must be 'helper' or 'integrator'")
@@ -681,7 +682,7 @@ def normalize_helpers(params: dict, *, host_id: str | None = None) -> list[dict]
                 "requestId": request_id,
                 "spec": spec,
                 "executionWorkspace": workspace_intent,
-                "integrator": bool(integrator) or role == "integrator",
+                "integrator": is_integrator or role == "integrator",
                 "role": role,
             }
         )

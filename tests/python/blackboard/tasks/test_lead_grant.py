@@ -60,7 +60,7 @@ class LeadGrantTests(WorkflowTestCase):
             helper = self.params(delegationAuthority=value)
             helper.pop("hostId")
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
-                schemas.normalize_helpers({"helpers": [helper]})
+                schemas.normalize_helpers({"helpers": [helper]}, integrator={"role": "host", "id": "fixture-host"})
             self.assertIn("Only Host submissions", caught.exception.message)
             self.assertIn("helpers cannot carry it", caught.exception.message)
 

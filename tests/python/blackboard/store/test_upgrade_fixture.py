@@ -21,6 +21,7 @@ from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
+from hey_my_buddy.protocol import schemas
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -164,7 +165,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         converted = {'events', 'workflow_runs', 'workflow_scope_versions',
                      'workflow_workspace_conflicts', 'workflow_integrations',
                      'workspace_cleanup_plans', 'workflow_host_conclusions', 'attempt_legacy_starts',
-                     'attempts', 'commands', 'workflow_requests', 'workflow_turns', 'meta'}
+                     'attempts', 'commands', 'workflow_requests', 'meta', 'tasks', 'workflow_children'}
         self.assertEqual(after['eventHead'], before['eventHead'])
         self.assertEqual({name: value for name, value in after['fingerprints'].items() if name not in converted},
                          {name: value for name, value in before['fingerprints'].items() if name not in converted})
@@ -190,8 +191,23 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertTrue({'stop_initiator', 'grace_deadline'} <= attempt_columns)
             self.assertEqual(router.configuration(upgraded), expected_settings)
             self.assertEqual(dict(upgraded.execute('SELECT run_id,state FROM workflow_runs')), expected_runs)
-            self.assertEqual(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')),
-                             request_fingerprints)
+            self.assertEqual(set(dict(upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))),
+                             set(request_fingerprints))
+            self.assertTrue(all(row['request_fingerprint'] != request_fingerprints[row['run_id']]
+                                for row in upgraded.execute('SELECT run_id,request_fingerprint FROM workflow_runs')))
+            original_submissions = {entry['params']['requestId']: entry['params'] for entry in fixture['operations']
+                                    if entry['operation'] == 'workflow_submit'}
+            for row in upgraded.execute('SELECT r.*,t.request_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id'):
+                original = original_submissions[row['request_id']]
+                presentation = {key: original[key] for key in ('title', 'macroTask', 'macroTaskId', 'macroTaskOf')
+                                if key in original}
+                self.assertEqual(row['request_fingerprint'], schemas.workflow_request_fingerprint(
+                    json.loads(row['micro_task_json']), json.loads(row['execution_workspace_json']), row['host_id'],
+                    presentation=presentation,
+                    buddy_locked=bool(row['buddy_locked']),
+                    delegation_authority=bool(row['delegation_authority'])))
+            self.assertTrue(all(row['owner'] is None for row in upgraded.execute(
+                'SELECT t.owner FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id')))
             self.assertEqual([tuple(row) for row in upgraded.execute(
                 'SELECT buddy_id,mode,reason FROM evaluation_preferences ORDER BY buddy_id')],
                 expected_preferences)
@@ -221,8 +237,20 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE tasks SET owner=? WHERE task_id=?', ('host:lead:' + lead, owned))
         connection.execute('UPDATE workflow_scope_versions SET actor=? WHERE run_id IN (?,?) AND scope_version=1',
                            ('host:lead:' + lead, owned, unrelated))
+        connection.execute("INSERT INTO workflow_requests(request_id,run_id,kind,summary,payload_json,state,decision_json,"
+                           "expected_revision,created_at,updated_at,decided_at) VALUES(?,?,'attention','fixture','{}',"
+                           "'approved',?,1,?,?,?)",
+                           ('fixture-resolution', owned,
+                            json.dumps({'resolution': {'actor': 'host:lead:' + lead}}),
+                            '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'))
         connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
-                           (unrelated, 'workflow.takeover', json.dumps({'newHostId': 'lead:' + lead}),
+                           (unrelated, 'workflow.cancelled',
+                            json.dumps({'actor': 'host:lead:' + lead, 'reason': 'before takeover'}),
+                            '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                           (unrelated, 'workflow.takeover', json.dumps({'actor': 'host:lead:' + lead,
+                            'newHostId': 'lead:' + lead,
+                            'previousHostId': 'lead:' + lead, 'previousOwnerGeneration': 1, 'ownerGeneration': 2}),
                             '2026-01-01T00:00:00Z'))
         for run_id, actor in ((owned, 'host:lead:' + lead), (helper, 'lead:' + lead),
                               (unrelated, 'host:lead:' + lead), (lead, 'host:lead:literal-host')):
@@ -236,12 +264,17 @@ class UpgradeFixtureTests(unittest.TestCase):
                             ('message.updated', 'host:literal-bridge')):
             connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
                                (owned, kind, json.dumps({'actor': actor}), '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                           (owned, 'workflow.cancelled',
+                            json.dumps({'actor': 'host:lead:' + lead, 'reason': 'fixture cancellation'}),
+                            '2026-01-01T00:00:00Z'))
         receipt = {'runId': owned, 'ownerGeneration': 1, 'hostId': 'lead:' + lead,
                    'control': {'hostId': 'lead:' + lead},
-                   'scope': {'actor': 'host:lead:' + lead},
-                   'hostConclusion': {'actor': 'lead:' + lead},
-                   'integrations': [{'actor': 'host:lead:' + lead}],
-                   'cancellation': {'actor': 'host:lead:' + lead},
+                   'executionWorkspace': {'integrator': 'host:lead:' + lead},
+                   'scope': {'scopeVersion': 1, 'actor': 'host:lead:' + lead},
+                   'hostConclusion': {'ownerGeneration': 1, 'actor': 'lead:' + lead},
+                   'integrations': [{'createdAt': '2026-01-01T00:00:00Z', 'actor': 'host:lead:' + lead}],
+                   'cancellation': {'actor': 'host:lead:' + lead, 'reason': 'fixture cancellation'},
                    'currentTurn': {'outcome': {'actor': 'host:stay-opaque'}}}
         attempt_id = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (owned,)).fetchone()[0]
         interrupted = {'terminationReason': 'interrupted', 'result': {
@@ -251,12 +284,31 @@ class UpgradeFixtureTests(unittest.TestCase):
                            (json.dumps(interrupted), attempt_id))
         connection.execute('INSERT INTO attempt_legacy_starts VALUES(?,?)',
                            (attempt_id, '2026-01-01T00:00:00Z'))
-        receipt['task'] = {'interruptionEvidence': dict(interrupted['result']['interruptionEvidence']),
+        receipt['task'] = {'owner': 'host:lead:' + lead,
+                           'interruptionEvidence': dict(interrupted['result']['interruptionEvidence']),
                            'selectedAttempt': {'result': json.loads(json.dumps(interrupted))}}
         receipt['attempt'] = {'result': json.loads(json.dumps(interrupted))}
         connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
                            ('fixture-lead-replay', 'workflow.fixture', 'fixture-hash', json.dumps(receipt),
                             '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('fixture-host-replay', 'workflow.fixture', 'fixture-hash',
+                            json.dumps({'runId': lead, 'ownerGeneration': 1,
+                                        'control': {'hostId': 'lead:literal-host', 'controlToken': 'opaque-token'}}),
+                            '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('fixture-post-takeover', 'workflow.fixture', 'fixture-hash',
+                            json.dumps({'runId': unrelated, 'ownerGeneration': 2,
+                                        'scope': {'scopeVersion': 1, 'actor': 'host:lead:' + lead},
+                                        'cancellation': {'actor': 'host:lead:' + lead,
+                                                         'reason': 'before takeover'}}),
+                            '2026-01-01T00:00:01Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('fixture-post-takeover-task', 'task.cancel', 'fixture-hash',
+                            json.dumps({'task': {'taskId': unrelated,
+                                                 'cancellation': {'actor': 'host:lead:' + lead,
+                                                                  'reason': 'before takeover'}}}),
+                            '2026-01-01T00:00:01Z'))
         connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
                            ('fixture-task-replay', 'task.cancel', 'fixture-hash',
                             json.dumps({'task': {'cancellation': {'actor': 'console:literal-host'}}}),
@@ -272,10 +324,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'SELECT run_id,host_id FROM workflow_runs WHERE run_id IN (?,?,?,?)',
                 (owned, helper, unrelated, lead))),
                 {owned: None, helper: None, unrelated: 'lead:' + lead, lead: 'lead:literal-host'})
-            self.assertEqual(upgraded.execute('SELECT owner FROM tasks WHERE task_id=?', (owned,)).fetchone()[0], lead)
+            self.assertIsNone(upgraded.execute('SELECT owner FROM tasks WHERE task_id=?', (owned,)).fetchone()[0])
             self.assertEqual(tuple(upgraded.execute(
                 "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
-                (owned,)).fetchone()), ('lead', lead))
+                (owned,)).fetchone()), ('host', 'fixture-host'))
             self.assertEqual(tuple(upgraded.execute(
                 "SELECT actor_role,actor_id FROM events WHERE kind='task.submitted' AND task_id=?",
                 (lead,)).fetchone()), ('host', 'fixture-host'))
@@ -287,11 +339,11 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(actors, {owned: ('lead', lead), helper: ('lead', lead),
                                       unrelated: ('host', 'lead:' + lead), lead: ('host', 'lead:literal-host')})
             self.assertEqual([tuple(row) for row in upgraded.execute(
-                "SELECT actor_role,actor_id FROM events WHERE kind='task.cancel_requested' AND actor_id='console:literal-host'")],
-                [('host', 'console:literal-host')])
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.cancel_requested' AND actor_id='literal-host'")],
+                [('console', 'literal-host')])
             self.assertEqual([tuple(row) for row in upgraded.execute(
-                "SELECT actor_role,actor_id FROM events WHERE kind='message.updated' AND actor_id='host:literal-bridge'")],
-                [('bridge', 'host:literal-bridge')])
+                "SELECT actor_role,actor_id FROM events WHERE kind='message.updated' AND actor_id='literal-bridge'")],
+                [('host', 'literal-bridge')])
             for row in rows:
                 payload = json.loads(row['payload_json'])
                 self.assertNotIn('actor', payload)
@@ -300,7 +352,41 @@ class UpgradeFixtureTests(unittest.TestCase):
             replay = json.loads(upgraded.execute(
                 "SELECT response_json FROM commands WHERE command_id='fixture-lead-replay'").fetchone()[0])
             self.assertIsNone(replay['hostId'])
-            self.assertIsNone(replay['control']['hostId'])
+            self.assertNotIn('control', replay)
+            host_replay = json.loads(upgraded.execute(
+                "SELECT response_json FROM commands WHERE command_id='fixture-host-replay'").fetchone()[0])
+            self.assertEqual(host_replay['control']['controlToken'], 'opaque-token')
+            post_takeover = json.loads(upgraded.execute(
+                "SELECT response_json FROM commands WHERE command_id='fixture-post-takeover'").fetchone()[0])
+            scope_actor = upgraded.execute('SELECT actor_role,actor_id FROM workflow_scope_versions '
+                                           'WHERE run_id=? AND scope_version=1', (unrelated,)).fetchone()
+            self.assertEqual(post_takeover['scope']['actor'],
+                             {'role': scope_actor['actor_role'], 'id': scope_actor['actor_id']})
+            cancellation_actor = next(row for row in upgraded.execute(
+                "SELECT actor_role,actor_id,payload_json FROM events WHERE kind='workflow.cancelled' AND task_id=?",
+                (unrelated,)) if json.loads(row['payload_json']).get('reason') == 'before takeover')
+            expected_cancellation = {'role': cancellation_actor['actor_role'], 'id': cancellation_actor['actor_id']}
+            self.assertEqual(post_takeover['cancellation']['actor'], expected_cancellation)
+            task_replay = json.loads(upgraded.execute(
+                "SELECT response_json FROM commands WHERE command_id='fixture-post-takeover-task'").fetchone()[0])
+            self.assertEqual(task_replay['task']['cancellation']['actor'], expected_cancellation)
+            self.assertIsNone(replay['task']['owner'])
+            self.assertEqual(replay['executionWorkspace']['integrator'], {'role': 'lead', 'id': lead})
+            self.assertEqual(json.loads(upgraded.execute(
+                'SELECT execution_workspace_json FROM workflow_runs WHERE run_id=?', (owned,)).fetchone()[0])['integrator'],
+                {'role': 'lead', 'id': lead})
+            self.assertEqual(json.loads(upgraded.execute(
+                'SELECT workspace_intent_json FROM workflow_children WHERE child_task_id=?', (helper,)).fetchone()[0])['integrator'],
+                {'role': 'lead', 'id': lead})
+            takeover = json.loads(upgraded.execute("SELECT payload_json FROM events WHERE kind='workflow.takeover' "
+                                                   'AND task_id=?', (unrelated,)).fetchone()[0])
+            self.assertIsNone(takeover['previousHostId'])
+            self.assertEqual(takeover['newHostId'], 'lead:' + lead)
+            self.assertEqual(tuple(upgraded.execute("SELECT actor_role,actor_id FROM events WHERE kind='workflow.takeover' "
+                                                    'AND task_id=?', (unrelated,)).fetchone()), ('lead', lead))
+            resolution = json.loads(upgraded.execute(
+                'SELECT decision_json FROM workflow_requests WHERE request_id=?', ('fixture-resolution',)).fetchone()[0])
+            self.assertEqual(resolution['resolution']['actor'], {'role': 'lead', 'id': lead})
             for field in ('scope', 'hostConclusion', 'cancellation'):
                 self.assertEqual(replay[field]['actor'], {'role': 'lead', 'id': lead})
             self.assertEqual(replay['integrations'][0]['actor'], {'role': 'lead', 'id': lead})
@@ -337,3 +423,46 @@ class UpgradeFixtureTests(unittest.TestCase):
         with sqlite3.connect(fixture['state'] / 'board.sqlite3') as unchanged:
             self.assertEqual(unchanged.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
             self.assertEqual(unchanged.execute('SELECT COUNT(*) FROM attempt_legacy_starts').fetchone()[0], 1)
+
+    def test_unknown_actor_refuses_conversion_atomically(self):
+        fixture, connection = self.restored()
+        run_id = fixture['stableIds']['delivered']
+        connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                           (run_id, 'workflow.fixture_actor', json.dumps({'actor': 'worker:untrusted'}),
+                            '2026-01-01T00:00:00Z'))
+        connection.commit()
+        connection.close()
+        before = (fixture['state'] / 'board.sqlite3').read_bytes()
+        with self.assertRaises(BoardError) as caught:
+            board_upgrade.migrate(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_ACTOR')
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as preserved:
+            self.assertEqual(preserved.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
+            self.assertEqual(preserved.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+        self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
+
+    def test_unrecoverable_submission_identity_refuses_conversion(self):
+        fixture, connection = self.restored()
+        connection.execute('UPDATE workflow_runs SET request_fingerprint=? WHERE run_id=?',
+                           ('0' * 64, fixture['stableIds']['delivered']))
+        connection.commit()
+        connection.close()
+        with self.assertRaises(BoardError) as caught:
+            board_upgrade.migrate(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_UNRECOVERABLE_REQUEST')
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as preserved:
+            self.assertEqual(preserved.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
+
+    def test_malformed_product_actor_refuses_conversion_atomically(self):
+        fixture, connection = self.restored()
+        run_id = fixture['stableIds']['delivered']
+        connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                           (run_id, 'workflow.fixture_actor', json.dumps({'actor': {'role': 'host', 'id': 'x'}}),
+                            '2026-01-01T00:00:00Z'))
+        connection.commit()
+        connection.close()
+        before = (fixture['state'] / 'board.sqlite3').read_bytes()
+        with self.assertRaises(BoardError) as caught:
+            board_upgrade.migrate(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_ACTOR')
+        self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)

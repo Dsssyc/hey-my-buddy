@@ -866,6 +866,8 @@ class WorkflowCoordinator:
         if scope is not None and scope["kind"] == AGENT_KIND:
             self._active_credential(connection, scope)
             return {"role": "lead", "id": scope["runId"]}, "lead"
+        if run_row["host_id"] is None:
+            raise BoardError("UNAUTHORIZED", "A Lead-owned micro task requires an active execution credential or authenticated console")
         control = schemas.normalize_control(params)
         if control is None:
             raise BoardError(
@@ -891,8 +893,23 @@ class WorkflowCoordinator:
         expected = self.db.control_token_verifier(control["controlToken"])
         if not hmac.compare_digest(expected, run_row["control_verifier"]):
             raise BoardError("UNAUTHORIZED", "Invalid control capability for this run")
-        # An unnamed control holder is attributed to the capability's run.
-        return {"role": "host", "id": control["hostId"] or run_row["run_id"]}, "host"
+        return {"role": "host", "id": control["hostId"]}, "host"
+
+    def _owner_actor(self, connection, run_row) -> dict:
+        """Current ownership comes from the controlling run and its Lead relation."""
+        row = connection.execute(
+            "WITH RECURSIVE owners(run_id) AS (SELECT ? UNION ALL "
+            "SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id) "
+            "SELECT r.host_id,l.lead_run_id FROM owners o JOIN workflow_runs r USING(run_id) "
+            "LEFT JOIN workflow_lead_tasks l ON l.owned_run_id=r.run_id "
+            "WHERE NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
+            (run_row["run_id"],),
+        ).fetchone()
+        if row["host_id"] is not None:
+            return {"role": "host", "id": row["host_id"]}
+        if row["lead_run_id"] is not None:
+            return {"role": "lead", "id": row["lead_run_id"]}
+        raise BoardError("STATE_INTEGRITY", "A micro task has no recorded current owner")
 
     def _expect_revision(self, run_row, expected: int | None) -> None:
         if expected is None:
@@ -1733,8 +1750,7 @@ class WorkflowCoordinator:
             try:
                 store_params = {
                     "requestId": request_id,
-                    "owner": normalized["owner"] or (lead["runId"] if lead else f"host:{host_id}"),
-                    **{key: spec[key] for key in schemas.SUBMIT_FIELDS | {"harness"} if key in spec},
+                                        **{key: spec[key] for key in schemas.SUBMIT_FIELDS | {"harness"} if key in spec},
                 }
                 task_id = str(uuid.uuid4())
                 try:
@@ -1862,7 +1878,7 @@ class WorkflowCoordinator:
         """
         import hmac
 
-        if not submission_token or not run_row["submission_verifier"]:
+        if run_row["host_id"] is None or not submission_token or not run_row["submission_verifier"]:
             return None
         if run_row["owner_generation"] != 1:
             return None
@@ -1879,6 +1895,8 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             run_row = self._run_row(connection, run_id)
             view = self.compact(connection, run_row)
+            if run_row["host_id"] is None:
+                return {**view, "duplicate": False}
             control = {
                 "hostId": run_row["host_id"],
                 "ownerGeneration": run_row["owner_generation"],
@@ -2099,8 +2117,8 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
-            submitting_host = owner["host_id"]
-        helpers = schemas.normalize_helpers(params, host_id=submitting_host)
+            integrator = self._owner_actor(connection, owner)
+        helpers = schemas.normalize_helpers(params, integrator=integrator)
         request_key = {
             "runId": run_id,
             "requestId": request_id,
@@ -2672,7 +2690,7 @@ class WorkflowCoordinator:
             (
                 helper_task_id,
                 request_id,
-                f"helper:{run_row['run_id']}",
+                None,
                 canonical_json(spec),
                 canonical_json(spec),
                 fingerprint,
@@ -3322,6 +3340,8 @@ class WorkflowCoordinator:
             raise BoardError("STALE_GENERATION", "The current Host no longer matches this takeover receipt")
         if console_authority is not None:
             return
+        if run_row["host_id"] is None:
+            raise BoardError("UNAUTHORIZED", "A Lead-owned micro task has no Host control capability")
         control = schemas.normalize_control(params)
         if control is None or control["ownerGeneration"] != expected_generation:
             raise BoardError(
@@ -6377,7 +6397,7 @@ class WorkflowCoordinator:
             **({"accessReason": choice["accessReason"]} if choice["access"] == "full" else {}),
             "base": {"kind": "working-tree", **({"ref": sealed["commit"]} if sealed.get("commit") else {})},
             "includeUntracked": included,
-            "integrator": manifest.get("integrator") or "host",
+            "integrator": self._owner_actor(connection, run_row),
             "writeScope": scope["writeScope"] or manifest.get("writeScope") or ["."],
         }
 
@@ -6657,7 +6677,6 @@ class WorkflowCoordinator:
         ).fetchone()
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
-        from ...home import control_file_path
         cursor = self.board._head_of(connection)
         previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else 0
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
@@ -6672,8 +6691,7 @@ class WorkflowCoordinator:
                   "activeRequestId": row["active_request_id"], "turnId": row["current_turn_id"],
                   "attemptId": row["current_attempt_id"] or row["final_attempt_id"],
                   "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"],
-                  "changedSincePreviousTurn": row["activity_seq"] > previous_cursor,
-                  "controlFile": str(control_file_path(self.board.directory, row["run_id"], row["owner_generation"]))}
+                  "changedSincePreviousTurn": row["activity_seq"] > previous_cursor}
                  for row in rows]
         return {"ownedMicroTasks": facts, "ownedMicroTaskTotal": total, "ownedFactsCursor": cursor,
                 "ownedMicroTasksTruncated": total - len(facts)}

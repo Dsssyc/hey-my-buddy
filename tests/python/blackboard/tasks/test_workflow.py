@@ -164,7 +164,7 @@ class WorkflowTestCase(BoardTestCase):
             "commandId": command_id,
             "expectedRevision": view["revision"],
             "decision": decision,
-            **self.control(view),
+            **({} if extra.get("credential") else self.control(view)),
             **extra,
         }
         return board.call("workflow_decide", params)
@@ -182,7 +182,8 @@ class WorkflowTestCase(BoardTestCase):
             "helperPolicy": helper_policy,
             **extra,
         }
-        params.update(self.control(view))
+        if not extra.get("credential"):
+            params.update(self.control(view))
         return board.call("workflow_continue", params)
 
     def accept_run(self, board, view, *, artifact_id=None, note="inspected the sealed diff", **extra):
@@ -192,7 +193,7 @@ class WorkflowTestCase(BoardTestCase):
             "artifactId": artifact_id or view["finalArtifactId"],
             "note": note,
             "notRequired": "this fixture is reviewed without a separate repository target",
-            **self.control(view),
+            **({} if extra.get("credential") else self.control(view)),
         }
         params.update(extra)
         return board.call("workflow_accept", params)

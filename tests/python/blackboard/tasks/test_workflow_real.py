@@ -96,7 +96,7 @@ class RealWorkspaceTestCase(BoardTestCase):
             "cwd": str(cwd or self.repo),
             "access": access,
             "base": {"kind": "working-tree"},
-            "integrator": "host:host-1",
+            "integrator": {"role": "host", "id": "host-1"},
         }
         if access == "write":
             intent["writeScope"] = ["."]

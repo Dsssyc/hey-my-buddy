@@ -1,4 +1,6 @@
-export type Actor = { role: string; id: string };
+export const ACTOR_ROLES = ["host", "lead", "console", "service", "workflow", "bridge"] as const;
+export type ActorRole = (typeof ACTOR_ROLES)[number];
+export type Actor = { role: ActorRole; id: string };
 
 /** The five recorded states of one harness in the console snapshot. */
 export type HarnessStatus = "unknown" | "ready" | "missing" | "login-required" | "unhealthy";
@@ -198,7 +200,7 @@ export type Task = {
   delegationAuthority?: boolean;
   task: string;
   status: string;
-  owner: string;
+  owner: string | null;
   cwd: string;
   revision: number;
   createdAt: string;

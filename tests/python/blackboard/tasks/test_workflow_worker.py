@@ -261,8 +261,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
         credential.chmod(0o600)
         incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
-        controller = controller_environment(self.directory, incoming,
-                                            turn_input=response["claim"]["turn"]["input"])
+        controller = controller_environment(self.directory, incoming)
         child = child_environment(source=controller)
         self.assertNotIn("HMB_STATE_DIR", child)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", child)
@@ -298,14 +297,13 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                                               "stateDir": str(self.directory)}))
             credential.chmod(0o600)
             incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
-            controller = controller_environment(self.directory, incoming,
-                                                turn_input=response["claim"]["turn"]["input"])
+            controller = controller_environment(self.directory, incoming)
             environment = child_environment(source=controller)
             self.assertNotIn("HMB_STATE_DIR", environment)
             self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", environment)
             prompt = worker_prompt("Hand out a bounded task", response["claim"]["turn"]["input"],
                                    delivery=(), credential_file=str(credential))
-            path_text = prompt.split("Your private attempt credential file is ", 1)[1].split(". For every", 1)[0]
+            path_text = prompt.split("Credential file path: ", 1)[1].split("\n", 1)[0]
             prompt_path = json.loads(path_text)
             self.assertEqual(prompt_path, str(credential))
             self.assertNotIn(response["claim"]["agentCredential"], prompt)
@@ -334,8 +332,8 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             # with a fresh environment, as a native harness may do.
             fixture_harness = (
                 "import json,subprocess,sys; prompt=sys.stdin.read(); "
-                "path=json.loads(prompt.split('Your private attempt credential file is ',1)[1]"
-                ".split('. For every',1)[0]); "
+                "path=json.loads(prompt.split('Credential file path: ',1)[1]"
+                ".split('\\n',1)[0]); "
                 "command=subprocess.run([sys.executable,'-c',sys.argv[1],sys.argv[2]],"
                 "env={'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True); "
                 "sys.stdout.write(command.stdout); sys.stderr.write(command.stderr); "

@@ -17,10 +17,7 @@ def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]
     if turn_input.get("context", {}).get("delegationAuthority") is True:
         lead = (resource_path("roles.lead").read_text(encoding="utf-8"),)
         if credential_file is not None:
-            lead += (f"Your private attempt credential file is {canonical_json(credential_file)}. "
-                     "For every hey-my-buddy launcher command you run, set HMB_AGENT_CREDENTIAL_FILE "
-                     "to this path in that command's environment. The launcher selects the board named "
-                     "inside the file. Never read or copy the token into a prompt or result.",)
+            lead += (f"Credential file path: {canonical_json(credential_file)}",)
     return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(turn_input)))
 
 

@@ -56,7 +56,7 @@ def native_environment(environment, *, harness):
     return clean(environment, command=command_for(harness, environment))
 
 
-def controller_environment(directory, environment=None, *, read_only=False, turn_input=None):
+def controller_environment(directory, environment=None, *, read_only=False):
     """Only trusted Python controllers receive the private command selection."""
     source = (_environment.get() or os.environ) if environment is None else environment
     from .discovery import native_environment
@@ -69,7 +69,7 @@ def controller_environment(directory, environment=None, *, read_only=False, turn
         if key in source:
             env[key] = source[key]
     if not read_only:
-        for key in ('HMB_AGENT_CREDENTIAL', 'HMB_AGENT_CREDENTIAL_FILE', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID'):
+        for key in ('HMB_AGENT_CREDENTIAL_FILE',):
             if key in source:
                 env[key] = source[key]
     if source.get('HMB_DEV_SOURCE') == '1':

@@ -17,16 +17,17 @@ from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environmen
 
 class HarnessDiscoveryTests(unittest.TestCase):
     def test_controller_keeps_credential_private_from_native_harness(self):
-        source = {"HMB_STATE_DIR": "/private/board", "HMB_AGENT_CREDENTIAL": "secret",
+        source = {"HMB_STATE_DIR": "/private/board",
                   "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
+                  "HMB_TASK_ID": "task", "HMB_ATTEMPT_ID": "attempt",
                   "HMB_RUNTIME_ROOT": "/private/runtime", "HMB_DEV_SOURCE": "1",
                   "HMB_WORKER_ID": "worker"}
-        ordinary = controller_environment(Path("/private/attempt"), source,
-                                          turn_input={"context": {"delegationAuthority": False}})
+        ordinary = controller_environment(Path("/private/attempt"), source)
         self.assertEqual(ordinary["HMB_AGENT_CREDENTIAL_FILE"], source["HMB_AGENT_CREDENTIAL_FILE"])
-        lead = controller_environment(Path("/private/attempt"), source,
-                                      turn_input={"context": {"delegationAuthority": True}})
-        self.assertEqual(lead["HMB_AGENT_CREDENTIAL_FILE"], source["HMB_AGENT_CREDENTIAL_FILE"])
+        self.assertNotIn("HMB_TASK_ID", ordinary)
+        self.assertNotIn("HMB_ATTEMPT_ID", ordinary)
+        read_only = controller_environment(Path("/private/attempt"), source, read_only=True)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", read_only)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", discovery.native_environment(source))
 
     def test_claude_reports_native_provider_and_unknown_billing_without_refusal(self):
@@ -476,7 +477,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
         environment = NoEnumeration({"PATH": "/usr/bin", "HOME": "/home/user",
                                      "LC_CTYPE": "en_US.UTF-8", "LC_SECRET_TOKEN": "private",
-                                     "OPENAI_API_KEY": "private", "HMB_AGENT_CREDENTIAL": "private",
+                                     "OPENAI_API_KEY": "private", "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt",
                                      "ANTHROPIC_BASE_URL": "third-party"})
         result = discovery.native_environment(environment)
         self.assertEqual(result["LC_CTYPE"], "en_US.UTF-8")
@@ -502,12 +503,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
                                                    "HTTPS_PROXY": "proxy", "OPENAI_API_KEY": "secret",
                                                    "ANTHROPIC_BASE_URL": "third-party",
-                                                   "HMB_AGENT_CREDENTIAL": "internal"}, command=[str(cli)])
+                                                   "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt"}, command=[str(cli)])
             self.assertEqual(result["PATH"].split(":")[0], str(cli.parent))
             self.assertEqual(result["HOME"], "/home/user")
             self.assertNotIn("OPENAI_API_KEY", result)
             self.assertNotIn("ANTHROPIC_BASE_URL", result)
-            self.assertNotIn("HMB_AGENT_CREDENTIAL", result)
+            self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", result)
 
     def test_native_environment_preserves_the_users_dsh_home_verbatim(self):
         source = {"HOME": "/users/fixture", "DSH_HOME": "/users/fixture/config.v2 用户 设置",

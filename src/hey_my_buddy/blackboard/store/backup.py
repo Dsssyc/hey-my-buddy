@@ -297,7 +297,7 @@ def preflight_command(params: dict) -> dict:
     from ...protocol import schemas
     from ... import home
     schemas.reject_unknown(params, set(), 'backup-preflight')
-    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot inspect Host backup sources')
     state = Path(os.environ.get('HMB_STATE_DIR') or home.default_state_dir()).expanduser().absolute()
     return preflight(state)

@@ -55,7 +55,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                 schemas.normalize_helpers({"helpers": [{
                     "requestId": "helper", "task": "Check a dependency", "cwd": root,
                     "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "spec": {"task": "nested helper"}}]})
+                    "spec": {"task": "nested helper"}}]}, integrator={"role": "host", "id": "fixture-host"})
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_duplicate_workspace_fields_are_rejected_and_derived_instead(self):
@@ -71,14 +71,14 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             # The normalized intent still carries both, derived from the top level.
             normalized = schemas.normalize_workflow_submit(self.submit_params(root))
             self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
-            self.assertEqual(normalized["executionWorkspace"]["integrator"], "host:host-1")
+            self.assertEqual(normalized["executionWorkspace"]["integrator"], {"role": "host", "id": "host-1"})
             owned = schemas.normalize_workflow_submit({**self.submit_params(root), "owner": "named-owner"})
-            self.assertEqual(owned["executionWorkspace"]["integrator"], "host:host-1")
+            self.assertEqual(owned["executionWorkspace"]["integrator"], {"role": "host", "id": "host-1"})
             helper = schemas.normalize_helpers({"helpers": [{
                 "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                "executionWorkspace": {"kind": "existing", "access": "write"}}]})[0]
+                "executionWorkspace": {"kind": "existing", "access": "write"}}]}, integrator={"role": "host", "id": "fixture-host"})[0]
             self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
-            self.assertEqual(helper["executionWorkspace"]["integrator"], "host")
+            self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "fixture-host"})
 
     def test_owner_attribution_never_changes_the_host_or_submission_identity(self):
         with tempfile.TemporaryDirectory() as root:
@@ -91,8 +91,8 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             helper = schemas.normalize_helpers({"helpers": [{
                 "requestId": "helper", "task": "Inspect a dependency", "cwd": root,
                 "owner": "display-only", "executionWorkspace": {"kind": "existing"}
-            }]}, host_id="actual-host")[0]
-            self.assertEqual(helper["executionWorkspace"]["integrator"], "host:actual-host")
+            }]}, integrator={"role": "host", "id": "actual-host"})[0]
+            self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "actual-host"})
 
     def test_retired_routing_inputs_are_rejected_with_the_three_expressions(self):
         retired = {
@@ -118,7 +118,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                 schemas.normalize_helpers({"helpers": [{
                     "requestId": "helper", "task": "Check a dependency", "cwd": root,
                     "executionWorkspace": {"kind": "existing", "access": "write"},
-                    "inheritRoutingPreferences": True}]})
+                    "inheritRoutingPreferences": True}]}, integrator={"role": "host", "id": "fixture-host"})
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
             self.assertIn("inheritRoutingPreferences", raised.exception.message)
 
@@ -136,7 +136,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     with self.assertRaises(BoardError):
                         schemas.normalize_helpers({"helpers": [{
                             "requestId": "helper", "task": "Check a dependency", "cwd": root,
-                            "executionWorkspace": {"kind": "existing", "access": "write"}, **partial}]})
+                            "executionWorkspace": {"kind": "existing", "access": "write"}, **partial}]}, integrator={"role": "host", "id": "fixture-host"})
             # Both complete expressions normalize: the whole quadruple, and none of it.
             complete = schemas.normalize_workflow_submit({**self.submit_params(root), **BUDDY})
             self.assertEqual(schemas.buddy_constraints(complete["spec"]), BUDDY)

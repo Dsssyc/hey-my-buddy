@@ -894,7 +894,7 @@ class BoardStore:
         if micro_task is None and spec["adapter"] in schemas.CODING_HARNESSES:
             raise BoardError("MICRO_TASK_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain micro-task")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
-        owner = schemas.optional_string(params, "owner") or "cli"
+        owner = None if micro_task is not None else schemas.optional_string(params, "owner") or "cli"
         fingerprint = schemas.spec_fingerprint(spec)
         request = {"requestId": request_id, "fingerprint": fingerprint}
 

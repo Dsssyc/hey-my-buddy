@@ -14,7 +14,7 @@ export default {
     },
     unrecorded: "未记录", identity: "{{role}} · {{id}}", recordedBy: "记录来源",
     markerIdentity: "{{sentence}}，记录来源 {{actor}}", origin: "发起 {{role}}", reason: "停止理由",
-    roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接", worker: "Worker", agent: "Agent" },
+    roles: { host: "Host", lead: "Lead", console: "控制台", service: "服务", workflow: "黑板", bridge: "桥接" },
     stop: { host: "Host 停止", lead: "Lead 停止", console: "在控制台停止", service: "服务停止", unknown: "停止（发起者未知）" },
   },
   skipToContent: "跳至主要内容",

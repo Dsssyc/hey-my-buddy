@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from itertools import product
 import json
 from pathlib import Path
 import sqlite3
@@ -12,28 +13,59 @@ from .db import SCHEMA, SCHEMA_VERSION, canonical_json
 
 BASE_SCHEMA_VERSION = 20
 _REBUILT = (
-    'events', 'workflow_runs', 'workflow_scope_versions', 'workflow_workspace_conflicts',
+    'tasks', 'events', 'workflow_runs', 'workflow_scope_versions', 'workflow_workspace_conflicts',
     'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions',
 )
-_ACTOR_TABLES = frozenset(_REBUILT) - {'workflow_runs', 'events'}
+_ACTOR_TABLES = frozenset(_REBUILT) - {'tasks', 'workflow_runs', 'events'}
 
 
-def _actor(value: str, lead_id: str | None = None, *, prior_lead: bool = False) -> tuple[str, str]:
-    if lead_id is not None and value == 'lead:' + lead_id:
+_BARE_ACTORS = {
+    'cli': ('host', 'cli'), 'service': ('service', 'service'),
+    'service-stop': ('service', 'stop'), 'bridge': ('bridge', 'bridge'),
+    'live-bridge': ('bridge', 'live-bridge'), 'bridge-journal': ('bridge', 'bridge-journal'),
+}
+
+
+def _actor(value: str, run_id: str | None, generation: int | None,
+           inherited: dict[str, str], known_hosts: set[str]) -> tuple[str, str]:
+    """One conversion for stored rows, event authors and product receipt actors."""
+    if not isinstance(value, str):
+        raise BoardError('UPGRADE_INVALID_ACTOR', 'Malformed schema-20 actor', runId=run_id)
+    lead_id = inherited.get(run_id)
+    if lead_id is not None and value in ('lead:' + lead_id, 'host:lead:' + lead_id) and generation == 1:
         return 'lead', lead_id
-    if prior_lead and lead_id is not None and value == 'host:lead:' + lead_id:
-        return 'lead', lead_id
-    if value.startswith('host:'):
+    if value in _BARE_ACTORS:
+        return _BARE_ACTORS[value]
+    if value.startswith('host:') and value[5:]:
         return 'host', value[5:]
-    if value == 'service-stop':
-        return 'service', 'stop'
-    if value == 'service':
-        return 'service', 'service'
     if ':' in value:
         role, identifier = value.split(':', 1)
-        if role in {'console', 'workflow', 'bridge', 'worker', 'agent', 'service'}:
+        if role in {'lead', 'console', 'service', 'workflow', 'bridge'} and identifier:
             return role, identifier
-    return 'host', value
+    if value in known_hosts:
+        return 'host', value
+    raise BoardError('UPGRADE_INVALID_ACTOR', f'Unknown schema-20 actor {value!r}', runId=run_id)
+
+
+def _generation(connection: sqlite3.Connection, run_id: str | None, *, seq: int | None = None,
+                created_at: str | None = None, explicit: int | None = None) -> int | None:
+    if run_id is None:
+        return None
+    if explicit is not None:
+        if not isinstance(explicit, int) or explicit < 1:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Invalid owner generation', runId=run_id)
+        return explicit
+    if seq is not None:
+        count = connection.execute("SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.takeover' AND seq<?",
+                                   (run_id, seq)).fetchone()[0]
+        return 1 + count
+    takeovers = list(connection.execute("SELECT created_at FROM events WHERE task_id=? AND kind='workflow.takeover'",
+                                        (run_id,)))
+    if not takeovers:
+        return 1
+    if created_at is None or any(row[0] == created_at for row in takeovers):
+        raise BoardError('UPGRADE_AMBIGUOUS_GENERATION', 'Cannot establish actor owner generation', runId=run_id)
+    return 1 + sum(row[0] < created_at for row in takeovers)
 
 
 def _remove_legacy_evidence(container: dict) -> bool:
@@ -64,82 +96,149 @@ def _remove_legacy_receipt_result(response: dict) -> bool:
     return changed
 
 
-def _normalize_actor(container: dict, lead_id: str | None, *, prior_lead: bool = False) -> bool:
+def _normalize_actor(container: dict, run_id: str | None, generation: int | None,
+                     inherited: dict[str, str], known_hosts: set[str]) -> bool:
     actor = container.get('actor')
     if isinstance(actor, str):
-        role, identifier = _actor(actor, lead_id, prior_lead=prior_lead)
+        role, identifier = _actor(actor, run_id, generation, inherited, known_hosts)
         container['actor'] = {'role': role, 'id': identifier}
         return True
+    if actor is not None:
+        raise BoardError('UPGRADE_INVALID_ACTOR', 'Malformed schema-20 actor', runId=run_id)
     return False
 
 
-def _event_actor(connection: sqlite3.Connection, row: dict, actor: str,
-                 inherited: dict[str, str], first_takeover: dict[str, int]) -> tuple[str, str]:
-    kind = row['kind']
-    if kind.startswith('workflow.'):
-        prior_lead = row['task_id'] in inherited and row['seq'] < first_takeover.get(row['task_id'], 2**63)
-        return _actor(actor, inherited.get(row['task_id']), prior_lead=prior_lead)
-    if kind == 'message.updated':
-        return 'bridge', actor
-    if kind == 'task.cancelled' and actor == 'service':
-        task = connection.execute('SELECT spec_json FROM tasks WHERE task_id=?', (row['task_id'],)).fetchone()
-        if task is not None and json.loads(task[0]).get('decision'):
-            return 'service', 'service'
-    return 'host', actor
+def _host_id(value: str | None, run_id: str, generation: int,
+             inherited: dict[str, str]) -> str | None:
+    lead_id = inherited.get(run_id)
+    return None if lead_id is not None and generation == 1 and value == 'lead:' + lead_id else value
+
+
+def _owner_at_generation(connection: sqlite3.Connection, run_id: str, generation: int,
+                         inherited: dict[str, str]) -> dict[str, str]:
+    run = connection.execute('SELECT host_id,owner_generation FROM workflow_runs WHERE run_id=?',
+                             (run_id,)).fetchone()
+    if run is None or generation > run['owner_generation']:
+        raise BoardError('UPGRADE_AMBIGUOUS_GENERATION', 'Receipt has no matching owner generation', runId=run_id)
+    host_id = run['host_id']
+    if generation < run['owner_generation']:
+        takeover = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.takeover' "
+                                      "ORDER BY seq", (run_id,)).fetchall()
+        values = [json.loads(event[0]) for event in takeover]
+        if generation == 1:
+            match = next((value for value in values if value.get('previousOwnerGeneration') == 1), None)
+            host_id = match.get('previousHostId') if match is not None else None
+        else:
+            match = next((value for value in values if value.get('ownerGeneration') == generation), None)
+            host_id = match.get('newHostId') if match is not None else None
+        if match is None:
+            raise BoardError('UPGRADE_AMBIGUOUS_GENERATION', 'Takeover history cannot identify receipt owner',
+                             runId=run_id)
+    if host_id is None:
+        lead_id = inherited.get(run_id)
+        if lead_id is None:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Unowned workflow run has no Lead relationship', runId=run_id)
+        return {'role': 'lead', 'id': lead_id}
+    return {'role': 'host', 'id': host_id}
+
+
+def _nested_generation(connection: sqlite3.Connection, run_id: str | None,
+                       kind: str, value: dict) -> int | None:
+    if run_id is None:
+        return None
+    if kind == 'scope' and value.get('scopeVersion') == 1:
+        return 1
+    if kind == 'hostConclusion' and value.get('ownerGeneration') is not None:
+        return _generation(connection, run_id, explicit=value['ownerGeneration'])
+    timestamp = value.get('updatedAt') if kind in ('scope', 'workspaceConflicts') else value.get('createdAt')
+    return _generation(connection, run_id, created_at=timestamp)
+
+
+def _cancellation_generation(connection: sqlite3.Connection, run_id: str | None,
+                             value: dict, inherited: dict[str, str], known_hosts: set[str]) -> int | None:
+    if run_id is None:
+        return None
+    actor = value.get('actor')
+    matches = set()
+    for event in connection.execute("SELECT seq,payload_json,actor_role,actor_id FROM events WHERE task_id=? "
+                                    "AND kind IN ('workflow.cancelled','workflow.helper_cancelled')", (run_id,)):
+        payload = json.loads(event['payload_json'])
+        reason = payload.get('reason')
+        reason = (reason.strip()[:4000] or None) if isinstance(reason, str) else None
+        if reason != value.get('reason'):
+            continue
+        generation = _generation(connection, run_id, seq=event['seq'])
+        if _actor(actor, run_id, generation, inherited, known_hosts) == (event['actor_role'], event['actor_id']):
+            matches.add(generation)
+    if len(matches) != 1:
+        raise BoardError('UPGRADE_AMBIGUOUS_GENERATION', 'Cancellation receipt has no unique event generation',
+                         runId=run_id)
+    return matches.pop()
 
 
 def _rewrite_receipt_view(connection: sqlite3.Connection, view: dict, inherited: dict[str, str],
-                          converted: set[str], fallback_run_id: str | None = None) -> bool:
+                          known_hosts: set[str], fallback_run_id: str | None = None,
+                          created_at: str | None = None) -> bool:
     """Update product-owned fields of a saved workflow response, not native content."""
     changed = False
     for nested in view.get('results', ()):
         if isinstance(nested, dict):
-            changed |= _rewrite_receipt_view(connection, nested, inherited, converted)
+            changed |= _rewrite_receipt_view(connection, nested, inherited, known_hosts,
+                                             fallback_run_id, created_at)
     run_id = view.get('runId') or fallback_run_id
     lead_id = inherited.get(run_id)
-    original_generation = view.get('ownerGeneration')
-    prior_lead = original_generation == 1
-    if lead_id is not None:
-        run = connection.execute('SELECT host_id,request_fingerprint,execution_workspace_json FROM workflow_runs WHERE run_id=?',
-                                 (run_id,)).fetchone()
-        if run is not None:
-            if run_id in converted and prior_lead and view.get('hostId') == 'lead:' + lead_id:
-                view['hostId'] = None
+    generation = _generation(connection, run_id, explicit=view.get('ownerGeneration'), created_at=created_at)
+    run = (connection.execute('SELECT request_fingerprint FROM workflow_runs WHERE run_id=?',
+                              (run_id,)).fetchone() if run_id is not None else None)
+    if run is not None:
+        receipt_owner = _owner_at_generation(connection, run_id, generation, inherited)
+        if lead_id is not None and generation == 1 and view.get('hostId') == 'lead:' + lead_id:
+            view['hostId'] = None
+            changed = True
+        if 'requestFingerprint' in view and view['requestFingerprint'] != run['request_fingerprint']:
+            view['requestFingerprint'] = run['request_fingerprint']
+            changed = True
+        workspace = view.get('executionWorkspace')
+        if isinstance(workspace, dict) and isinstance(workspace.get('integrator'), str):
+            workspace['integrator'] = receipt_owner
+            changed = True
+        if receipt_owner['role'] == 'lead' and 'control' in view:
+            del view['control']
+            changed = True
+        task = view.get('task')
+        if isinstance(task, dict):
+            if 'owner' in task:
+                task['owner'] = None
                 changed = True
-            if run_id in converted and 'requestFingerprint' in view and view['requestFingerprint'] != run['request_fingerprint']:
-                view['requestFingerprint'] = run['request_fingerprint']
+            workflow = task.get('workflow')
+            if (lead_id is not None and generation == 1 and isinstance(workflow, dict)
+                    and workflow.get('hostId') == 'lead:' + lead_id):
+                workflow['hostId'] = None
                 changed = True
-            workspace = view.get('executionWorkspace')
-            if isinstance(workspace, dict) and workspace.get('integrator') == 'host:lead:' + lead_id:
-                workspace['integrator'] = lead_id
+            lineage = task.get('lineage')
+            if (lead_id is not None and generation == 1 and isinstance(lineage, dict)
+                    and lineage.get('currentHostId') == 'lead:' + lead_id):
+                lineage['currentHostId'] = None
                 changed = True
-            control = view.get('control')
-            if run_id in converted and prior_lead and isinstance(control, dict) and control.get('hostId') == 'lead:' + lead_id:
-                control['hostId'] = None
-                changed = True
-            task = view.get('task')
-            if isinstance(task, dict):
-                if run_id in converted and prior_lead and task.get('owner') == 'host:lead:' + lead_id:
-                    task['owner'] = lead_id
-                    changed = True
-                workflow = task.get('workflow')
-                if run_id in converted and prior_lead and isinstance(workflow, dict) and workflow.get('hostId') == 'lead:' + lead_id:
-                    workflow['hostId'] = None
-                    changed = True
-                lineage = task.get('lineage')
-                if run_id in converted and prior_lead and isinstance(lineage, dict) and lineage.get('currentHostId') == 'lead:' + lead_id:
-                    lineage['currentHostId'] = None
-                    changed = True
     for key in ('cancellation', 'scope', 'hostConclusion', 'cleanup'):
         value = view.get(key)
-        if isinstance(value, dict):
-            changed |= _normalize_actor(value, lead_id, prior_lead=prior_lead)
+        if isinstance(value, dict) and value.get('actor') is not None:
+            if not isinstance(value['actor'], str):
+                _normalize_actor(value, run_id, None, inherited, known_hosts)
+            record_generation = (_cancellation_generation(connection, run_id, value, inherited, known_hosts)
+                                 if key == 'cancellation'
+                                 else _nested_generation(connection, run_id, key, value))
+            changed |= _normalize_actor(value, run_id, record_generation, inherited, known_hosts)
     for key in ('workspaceConflicts', 'integrations'):
         values = view.get(key)
         if isinstance(values, list):
             for value in values:
-                if isinstance(value, dict):
-                    changed |= _normalize_actor(value, lead_id, prior_lead=prior_lead)
+                if isinstance(value, dict) and value.get('actor') is not None:
+                    if not isinstance(value['actor'], str):
+                        _normalize_actor(value, run_id, None, inherited, known_hosts)
+                    changed |= _normalize_actor(value, run_id,
+                                                _nested_generation(connection, run_id, key, value),
+                                                inherited, known_hosts)
     return changed
 
 
@@ -155,47 +254,164 @@ def _target_structure() -> tuple[dict[str, str], dict[str, list[str]]]:
     return tables, indexes
 
 
+def _request_fingerprint(connection: sqlite3.Connection, row: dict,
+                         inherited: dict[str, str]) -> str:
+    """Recover the original request by matching its stored schema-20 digest."""
+    from ...protocol import schemas
+
+    run_id = row['run_id']
+    old_workspace = json.loads(row['execution_workspace_json'])
+    old_spec = json.loads(row['micro_task_json'])
+    hosts = {row['host_id']}
+    if run_id in inherited:
+        hosts.add('lead:' + inherited[run_id])
+    for event in connection.execute("SELECT kind,payload_json FROM events WHERE task_id=? AND kind IN "
+                                    "('task.submitted','workflow.helper_admitted','workflow.takeover','workflow.macro_task_created')",
+                                    (run_id,)):
+        payload = json.loads(event['payload_json'])
+        if event['kind'] == 'task.submitted':
+            hosts.add(payload.get('microTask', {}).get('sourceHostId'))
+        elif event['kind'] == 'workflow.helper_admitted':
+            hosts.add(payload.get('sourceHostId'))
+        elif event['kind'] == 'workflow.takeover':
+            hosts.add(payload.get('previousHostId'))
+    titles = [None, row['title']] if row['title'] else [None]
+    macro_presentations = [{}]
+    if row['macro_task_id']:
+        macro_presentations.extend(({'macroTaskId': row['macro_task_id']},
+                                    {'macroTaskOf': row['macro_task_id']}))
+        macro_presentations.extend({'macroTaskOf': earlier[0]} for earlier in connection.execute(
+            'SELECT run_id FROM workflow_runs WHERE macro_task_id=? AND created_at<=? AND run_id<>?',
+            (row['macro_task_id'], row['created_at'], run_id)))
+        macro = connection.execute('SELECT title FROM macro_tasks WHERE macro_task_id=?',
+                                   (row['macro_task_id'],)).fetchone()
+        creation = connection.execute("SELECT payload_json FROM events WHERE task_id=? "
+                                      "AND kind='workflow.macro_task_created' ORDER BY seq LIMIT 1",
+                                      (run_id,)).fetchone()
+        if macro is not None and creation is not None:
+            description = json.loads(creation[0]).get('description')
+            candidate = {'title': macro[0]}
+            if description is not None:
+                candidate['description'] = description
+            macro_presentations.append({'macroTask': candidate})
+    workspaces = [old_workspace]
+    turn = connection.execute('SELECT access,access_reason FROM workflow_turns WHERE run_id=? ORDER BY turn_index LIMIT 1',
+                              (run_id,)).fetchone()
+    if turn is not None and (old_workspace.get('access'), old_workspace.get('accessReason')) != (turn[0], turn[1]):
+        earlier = {**old_workspace, 'access': turn[0]}
+        if turn[1] is None:
+            earlier.pop('accessReason', None)
+        else:
+            earlier['accessReason'] = turn[1]
+        workspaces.append(earlier)
+    for host, workspace, title, macro in product(hosts, workspaces, titles, macro_presentations):
+        if host is None and run_id not in inherited:
+            continue
+        presentation = {**macro, **({'title': title} if title else {})}
+        if schemas.workflow_request_fingerprint(old_spec, workspace, host, presentation=presentation,
+                                                buddy_locked=bool(row['buddy_locked']),
+                                                delegation_authority=bool(row['delegation_authority'])) != row['request_fingerprint']:
+            continue
+        new_workspace = dict(workspace)
+        lead_id = inherited.get(run_id)
+        initial_lead = lead_id is not None and host == 'lead:' + lead_id
+        new_workspace['integrator'] = ({'role': 'lead', 'id': lead_id} if initial_lead
+                                       else {'role': 'host', 'id': host})
+        return schemas.workflow_request_fingerprint(old_spec, new_workspace,
+                                                     None if initial_lead else host,
+                                                     presentation=presentation,
+                                                     buddy_locked=bool(row['buddy_locked']),
+                                                     delegation_authority=bool(row['delegation_authority']))
+    raise BoardError('UPGRADE_UNRECOVERABLE_REQUEST', 'Original workflow request does not match preserved fingerprint',
+                     runId=run_id)
+
+
+def _current_owners(connection: sqlite3.Connection, owned: dict[str, str]) -> dict[str, dict[str, str]]:
+    runs = {row['run_id']: row for row in connection.execute(
+        'SELECT run_id,host_id,owner_generation FROM workflow_runs')}
+    parents = dict(connection.execute('SELECT child_task_id,parent_run_id FROM workflow_children'))
+    result = {}
+    for run_id in runs:
+        root = run_id
+        visited = set()
+        while root in parents:
+            if root in visited:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow child relationship has a cycle', runId=run_id)
+            visited.add(root)
+            root = parents[root]
+        controlling = runs.get(root)
+        if controlling is None:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Workflow child has no controlling run', runId=run_id)
+        host_id = controlling['host_id']
+        lead_id = owned.get(root)
+        if (lead_id is not None and controlling['owner_generation'] == 1
+                and host_id in (None, 'lead:' + lead_id)):
+            result[run_id] = {'role': 'lead', 'id': lead_id}
+        elif host_id is not None:
+            result[run_id] = {'role': 'host', 'id': host_id}
+        else:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Controlling run has no owner', runId=run_id)
+    return result
+
+
 def _rebuild(connection: sqlite3.Connection, table: str, sql: str, indexes: list[str],
              owned: dict[str, str], inherited: dict[str, str], converted: set[str],
-             first_takeover: dict[str, int]) -> None:
+             known_hosts: set[str], workflow_ids: set[str], fingerprints: dict[str, str],
+             current_owners: dict[str, dict[str, str]]) -> None:
     rows = [dict(row) for row in connection.execute(f'SELECT * FROM "{table}"')]
     connection.execute(f'DROP TABLE "{table}"')
     connection.execute(sql)
     for row in rows:
-        if table == 'workflow_runs':
+        if table == 'tasks':
+            if row['task_id'] in workflow_ids:
+                row['owner'] = None
+        elif table == 'workflow_runs':
+            row['request_fingerprint'] = fingerprints[row['run_id']]
             if row['run_id'] in converted:
                 row['host_id'] = None
-            if row['run_id'] in owned:
-                workspace = json.loads(row['execution_workspace_json'])
-                if workspace.get('integrator') == 'host:lead:' + owned[row['run_id']]:
-                    workspace['integrator'] = owned[row['run_id']]
-                    row['execution_workspace_json'] = canonical_json(workspace)
-                if row['run_id'] in converted:
-                    from ...protocol import schemas
-                    row['request_fingerprint'] = schemas.workflow_request_fingerprint(
-                        json.loads(row['micro_task_json']), workspace, None,
-                        presentation={'title': row['title']} if row['title'] else {},
-                        buddy_locked=bool(row['buddy_locked']),
-                        delegation_authority=bool(row['delegation_authority']))
+            workspace = json.loads(row['execution_workspace_json'])
+            lead_id = inherited.get(row['run_id'])
+            if row['host_id'] is None and lead_id is None:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Unowned workflow run has no Lead relationship',
+                                 runId=row['run_id'])
+            workspace['integrator'] = current_owners[row['run_id']]
+            row['execution_workspace_json'] = canonical_json(workspace)
         elif table == 'events':
             payload = json.loads(row['payload_json'])
             actor = payload.pop('actor', None)
-            role, identifier = (_event_actor(connection, row, actor, inherited, first_takeover)
+            if actor is not None and not isinstance(actor, str):
+                raise BoardError('UPGRADE_INVALID_ACTOR', 'Malformed schema-20 event actor', runId=row['task_id'])
+            generation = _generation(connection, row['task_id'], seq=row['seq'])
+            role, identifier = (_actor(actor, row['task_id'], generation, inherited, known_hosts)
                                 if isinstance(actor, str) else (None, None))
             if row['kind'] == 'task.submitted' and isinstance(payload.get('microTask'), dict):
-                if row['task_id'] in owned:
-                    role, identifier = 'lead', owned[row['task_id']]
-                elif isinstance(payload['microTask'].get('sourceHostId'), str):
-                    role, identifier = 'host', payload['microTask']['sourceHostId']
+                source = payload['microTask'].get('sourceHostId')
+                if isinstance(source, str):
+                    source_role, source_id = _actor('host:' + source, row['task_id'], generation,
+                                                    inherited, known_hosts)
+                    payload['microTask']['sourceHostId'] = None if source_role == 'lead' else source_id
+                    if role is None:
+                        role, identifier = source_role, source_id
+            if row['kind'] == 'workflow.helper_admitted' and isinstance(payload.get('sourceHostId'), str):
+                payload['sourceHostId'] = _host_id(payload['sourceHostId'], row['task_id'], generation, inherited)
+            if row['kind'] == 'workflow.takeover':
+                previous = payload.get('previousOwnerGeneration')
+                if previous is None:
+                    raise BoardError('UPGRADE_AMBIGUOUS_GENERATION', 'Takeover omits previous generation',
+                                     runId=row['task_id'])
+                payload['previousHostId'] = _host_id(payload.get('previousHostId'), row['task_id'], previous, inherited)
+                payload['newHostId'] = _host_id(payload.get('newHostId'), row['task_id'], previous + 1, inherited)
             _remove_legacy_evidence(payload)
             row['payload_json'] = canonical_json(payload)
             row['actor_role'], row['actor_id'] = role, identifier
         elif table in _ACTOR_TABLES:
             actor = row.pop('actor')
-            prior_lead = (row.get('scope_version') == 1 if table == 'workflow_scope_versions'
-                          else row.get('owner_generation') == 1 if table == 'workflow_host_conclusions'
-                          else False)
-            role, identifier = (_actor(actor, inherited.get(row.get('run_id')), prior_lead=prior_lead)
+            generation = _generation(connection, row.get('run_id'),
+                                     explicit=(row.get('owner_generation') or
+                                               (1 if table == 'workflow_scope_versions' and row['scope_version'] == 1 else None)),
+                                     created_at=(row.get('updated_at') if table == 'workflow_workspace_conflicts'
+                                                 else row.get('created_at')))
+            role, identifier = (_actor(actor, row.get('run_id'), generation, inherited, known_hosts)
                                 if actor is not None else (None, None))
             row['actor_role'], row['actor_id'] = role, identifier
         columns = list(row)
@@ -235,38 +451,73 @@ def migrate(state: Path) -> None:
                 'SELECT run_id,host_id,owner_generation FROM workflow_runs')
                 if row['run_id'] in inherited and row['owner_generation'] == 1
                 and row['host_id'] == 'lead:' + inherited[row['run_id']]}
-            first_takeover = dict(connection.execute(
-                "SELECT task_id,MIN(seq) FROM events WHERE kind='workflow.takeover' GROUP BY task_id"))
+            known_hosts = {row[0] for row in connection.execute('SELECT host_id FROM workflow_runs WHERE host_id IS NOT NULL')}
+            workflow_ids = {row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')}
+            current_owners = _current_owners(connection, owned)
+            for event in connection.execute("SELECT payload_json FROM events WHERE kind IN "
+                                            "('task.submitted','workflow.helper_admitted','workflow.takeover')"):
+                payload = json.loads(event[0])
+                for value in (payload.get('microTask', {}).get('sourceHostId'), payload.get('sourceHostId'),
+                              payload.get('previousHostId'), payload.get('newHostId')):
+                    if isinstance(value, str):
+                        known_hosts.add(value)
+            fingerprints = {row['run_id']: _request_fingerprint(connection, dict(row), inherited)
+                            for row in connection.execute('SELECT * FROM workflow_runs')}
             for table in _REBUILT:
                 _rebuild(connection, table, tables[table], indexes[table], owned, inherited,
-                         converted, first_takeover)
-            for run_id, lead_id in owned.items():
-                if run_id in converted:
-                    connection.execute("UPDATE tasks SET owner=? WHERE task_id=? AND owner=?",
-                                       (lead_id, run_id, 'host:lead:' + lead_id))
+                         converted, known_hosts, workflow_ids, fingerprints, current_owners)
+            for row in connection.execute('SELECT child_task_id,workspace_intent_json FROM workflow_children'):
+                workspace = json.loads(row['workspace_intent_json'])
+                run = connection.execute('SELECT host_id FROM workflow_runs WHERE run_id=?',
+                                         (row['child_task_id'],)).fetchone()
+                if run is None:
+                    raise BoardError('UPGRADE_INVALID_BOARD', 'Helper has no workflow run', runId=row['child_task_id'])
+                workspace['integrator'] = current_owners[row['child_task_id']]
+                connection.execute('UPDATE workflow_children SET workspace_intent_json=? WHERE child_task_id=?',
+                                   (canonical_json(workspace), row['child_task_id']))
             connection.execute('DROP TABLE attempt_legacy_starts')
             for row in connection.execute("SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL"):
                 payload = json.loads(row['result_json'])
                 if isinstance(payload, dict) and _remove_legacy_attempt_result(payload):
                     connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?',
                                        (canonical_json(payload), row['attempt_id']))
-            for row in connection.execute("SELECT request_id,run_id,decision_json FROM workflow_requests WHERE decision_json IS NOT NULL"):
+            for row in connection.execute("SELECT request_id,run_id,decision_json,decided_at FROM workflow_requests WHERE decision_json IS NOT NULL"):
                 decision = json.loads(row['decision_json'])
-                if isinstance(decision, dict) and _normalize_actor(decision, inherited.get(row['run_id'])):
+                generation = _generation(connection, row['run_id'], created_at=row['decided_at'])
+                changed = False
+                if isinstance(decision, dict):
+                    changed |= _normalize_actor(decision, row['run_id'], generation, inherited, known_hosts)
+                    if isinstance(decision.get('resolution'), dict):
+                        changed |= _normalize_actor(decision['resolution'], row['run_id'], generation,
+                                                    inherited, known_hosts)
+                if changed:
                     connection.execute('UPDATE workflow_requests SET decision_json=? WHERE request_id=?',
                                        (canonical_json(decision), row['request_id']))
-            for row in connection.execute('SELECT command_id,kind,task_id,response_json FROM commands'):
+            for row in connection.execute('SELECT command_id,kind,task_id,response_json,created_at FROM commands'):
                 response = json.loads(row['response_json'])
                 if not isinstance(response, dict):
                     continue
-                changed = (_rewrite_receipt_view(connection, response, inherited, converted, row['task_id'])
+                changed = (_rewrite_receipt_view(connection, response, inherited, known_hosts,
+                                                row['task_id'], row['created_at'])
                            if row['kind'].startswith(('workflow.', 'macro_task.')) else False)
                 if row['kind'] in ('task.cancel', 'task.acknowledge'):
                     task = response.get('task')
                     cancellation = task.get('cancellation') if isinstance(task, dict) else None
-                    if isinstance(cancellation, dict) and isinstance(cancellation.get('actor'), str):
-                        task_id = task.get('runId') or task.get('taskId') or row['task_id']
-                        changed |= _normalize_actor(cancellation, inherited.get(task_id))
+                    task_id = (task.get('runId') or task.get('taskId') or row['task_id']) if isinstance(task, dict) else row['task_id']
+                    if (isinstance(task, dict) and 'owner' in task and task_id is not None
+                            and connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?', (task_id,)).fetchone()):
+                        task['owner'] = None
+                        changed = True
+                    if isinstance(cancellation, dict) and cancellation.get('actor') is not None:
+                        if not isinstance(cancellation['actor'], str):
+                            _normalize_actor(cancellation, task_id, None, inherited, known_hosts)
+                        cancellation_generation = (
+                            _cancellation_generation(connection, task_id, cancellation, inherited, known_hosts)
+                            if task_id in workflow_ids else
+                            _generation(connection, task_id, created_at=row['created_at']))
+                        changed |= _normalize_actor(cancellation, task_id,
+                                    cancellation_generation,
+                                    inherited, known_hosts)
                 changed |= _remove_legacy_receipt_result(response)
                 if changed:
                     connection.execute('UPDATE commands SET response_json=? WHERE command_id=?',

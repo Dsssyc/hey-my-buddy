@@ -108,7 +108,7 @@ class ConsoleCliTestCase(unittest.TestCase):
     def setUp(self) -> None:
         # This process runs inside a Buddy attempt, so clear both scoped-credential
         # variables for every case and restore them afterwards.
-        names = ("HMB_AGENT_CREDENTIAL", "HMB_AGENT_CREDENTIAL_FILE")
+        names = ("HMB_AGENT_CREDENTIAL_FILE",)
         previous = {name: os.environ.get(name) for name in names}
         for name in names:
             os.environ.pop(name, None)
@@ -248,27 +248,10 @@ class LocalOptionTests(ConsoleCliTestCase):
 class CredentialTests(ConsoleCliTestCase):
     """An attempt-scoped credential never reaches a local action or an RPC."""
 
-    def test_environment_credential_is_refused_before_anything_happens(self):
-        rpc = FakeRpc()
-        browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
-        with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL": "scoped-token"}):
-            with mock.patch.object(transport, "_call_service", rpc), mock.patch.object(
-                console_cli.webbrowser, "open", browser
-            ):
-                code, result, stderr = self.run_cli("console", '{"action":"open","wait":true}')
-            # The credential is never stripped or borrowed: it stays in the environment.
-            self.assertEqual(os.environ["HMB_AGENT_CREDENTIAL"], "scoped-token")
-        self.assertEqual(code, 1)
-        self.assertEqual(result["error"]["code"], "FORBIDDEN")
-        self.assertNotIn("scoped-token", json.dumps(result))
-        self.assertEqual(stderr, "")
-        self.assertEqual(rpc.calls, [])
-        self.assertEqual(browser.call_args_list, [])
-
-    def test_credential_file_is_refused_the_same_way(self):
+    def test_credential_file_is_refused_before_anything_happens(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "credential.json"
-            path.write_text(json.dumps({"token": "file-token"}))
+            path.write_text(json.dumps({"token": "file-token", "stateDir": directory}))
             os.chmod(path, 0o600)
             rpc = FakeRpc()
             with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(path)}):
@@ -281,7 +264,7 @@ class CredentialTests(ConsoleCliTestCase):
     def test_malformed_credential_pins_keep_the_existing_unauthorized_semantics(self):
         rpc = FakeRpc()
         environments = (
-            {"HMB_AGENT_CREDENTIAL": " "},
+            {"HMB_AGENT_CREDENTIAL_FILE": " "},
             {"HMB_AGENT_CREDENTIAL_FILE": "/absent/credential.json"},
         )
         for environment in environments:

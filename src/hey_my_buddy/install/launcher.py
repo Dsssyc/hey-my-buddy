@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import tempfile
 import uuid
 
 LAUNCH_KEYS = {'HMB_MAX_CONCURRENT': (1, 32), 'HMB_WAIT_CAPACITY': (1, 1024)}
@@ -85,10 +86,21 @@ def is_model_endpoint(key: str) -> bool:
 
 def clean_host_environment() -> None:
     """Scrub only a Host entry. An attempt credential always keeps Worker scope."""
-    scoped = 'HMB_AGENT_CREDENTIAL' in os.environ or 'HMB_AGENT_CREDENTIAL_FILE' in os.environ
+    scoped = 'HMB_AGENT_CREDENTIAL_FILE' in os.environ
+    os.environ.pop('HMB_AGENT_CREDENTIAL_FD', None)
     for key in list(os.environ):
         if (not scoped and key in HOST_INTERNAL_KEYS) or is_model_endpoint(key):
             os.environ.pop(key, None)
+
+
+def _validate_agent_credential(value: object) -> dict:
+    from hey_my_buddy.errors import BoardError
+    if not isinstance(value, dict) or not isinstance(value.get('token'), str) or not value['token'].strip():
+        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no token')
+    state = value.get('stateDir')
+    if not isinstance(state, str) or not state or not Path(state).is_absolute():
+        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no absolute stateDir')
+    return value
 
 
 def agent_credential_document() -> dict | None:
@@ -103,16 +115,33 @@ def agent_credential_document() -> dict | None:
         value = read_private(Path(path_value).expanduser())
     except (BoardError, OSError, ValueError) as error:
         raise BoardError('UNAUTHORIZED', 'The attempt credential file is unreadable') from error
-    if not isinstance(value, dict) or not isinstance(value.get('token'), str) or not value['token'].strip():
-        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no token')
-    state = value.get('stateDir')
-    if not isinstance(state, str) or not state or not Path(state).is_absolute():
-        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no absolute stateDir')
-    return value
+    return _validate_agent_credential(value)
 
 
-def credential_state_dir() -> Path | None:
-    value = agent_credential_document()
+def take_agent_credential_document() -> dict | None:
+    """Consume the launcher's inherited private descriptor, or read a direct CLI file."""
+    from hey_my_buddy.errors import BoardError
+    descriptor = os.environ.pop('HMB_AGENT_CREDENTIAL_FD', None)
+    if descriptor is None:
+        return agent_credential_document()
+    if 'HMB_AGENT_CREDENTIAL_FILE' not in os.environ or not descriptor.isdecimal():
+        raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is invalid')
+    try:
+        fd = int(descriptor)
+        if fd < 3:
+            raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is invalid')
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and info.st_mode & 0o077):
+            raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is not private')
+        with os.fdopen(fd, 'rb') as stream:
+            raw = stream.read(65537)
+        value = json.loads(raw)
+    except (OSError, ValueError, OverflowError) as error:
+        raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is unreadable') from error
+    return _validate_agent_credential(value)
+
+
+def credential_state_dir(value: dict | None = None) -> Path | None:
     return Path(value['stateDir']).resolve() if value is not None else None
 
 
@@ -308,7 +337,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         clean_host_environment()
         from hey_my_buddy.home import default_state_dir
-        scoped_state = credential_state_dir()
+        credential = agent_credential_document()
+        scoped_state = credential_state_dir(credential)
         state = scoped_state or Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
         if scoped_state is not None:
             os.environ['HMB_STATE_DIR'] = str(scoped_state)
@@ -319,9 +349,19 @@ def main(argv: list[str] | None = None) -> int:
             target = selected_runtime(state)
             if target is not None:
                 python = str(_runtime_python(target))
-                os.execve(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], runtime_environment(target))
+                environment = runtime_environment(target)
+                if credential is not None:
+                    # The source file was read once. Transfer its validated contents
+                    # through an anonymous private descriptor across exec, never argv/env.
+                    with tempfile.TemporaryFile(mode='w+b') as transfer:
+                        transfer.write(json.dumps(credential).encode('utf-8'))
+                        transfer.seek(0)
+                        os.set_inheritable(transfer.fileno(), True)
+                        environment['HMB_AGENT_CREDENTIAL_FD'] = str(transfer.fileno())
+                        os.execve(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
+                os.execve(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
         from hey_my_buddy.cli.main import main as cli_main
-        return cli_main(args)
+        return cli_main(args, credential_document=credential)
     except Exception as error:
         from hey_my_buddy.errors import BoardError
         payload = error.payload() if isinstance(error, BoardError) else {'code':'LAUNCH_FAILED', 'message':str(error)}

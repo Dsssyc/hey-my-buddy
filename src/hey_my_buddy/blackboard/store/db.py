@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS tasks (
     task_id                 TEXT PRIMARY KEY,
     request_id              TEXT NOT NULL UNIQUE,
-    owner                   TEXT NOT NULL,
+    owner                   TEXT,
     spec_json               TEXT NOT NULL,
     spec_canonical_json     TEXT NOT NULL,
     input_fingerprint       TEXT NOT NULL,
@@ -236,7 +236,8 @@ CREATE TABLE IF NOT EXISTS events (
     actor_role   TEXT,
     actor_id     TEXT,
     created_at   TEXT NOT NULL,
-    CHECK ((actor_role IS NULL) = (actor_id IS NULL))
+    CHECK ((actor_role IS NULL) = (actor_id IS NULL)),
+    CHECK (actor_role IS NULL OR actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
@@ -740,7 +741,8 @@ CREATE TABLE IF NOT EXISTS workflow_scope_versions (
     manifest_sha256     TEXT,
     stopped_evidence_json TEXT NOT NULL,
     created_at          TEXT NOT NULL,
-    PRIMARY KEY (run_id, scope_version)
+    PRIMARY KEY (run_id, scope_version),
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 """,
     """
@@ -778,7 +780,8 @@ CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     UNIQUE(run_id, attempt_id, observed_fingerprint),
-    CHECK ((actor_role IS NULL) = (actor_id IS NULL))
+    CHECK ((actor_role IS NULL) = (actor_id IS NULL)),
+    CHECK (actor_role IS NULL OR actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 """,
     """
@@ -814,6 +817,7 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     actor_role            TEXT NOT NULL,
     actor_id              TEXT NOT NULL,
     created_at            TEXT NOT NULL,
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge')),
     UNIQUE(binding_sha256)
 );
 """,
@@ -843,7 +847,8 @@ CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     revision         INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     applied_at       TEXT,
-    expires_at       TEXT NOT NULL
+    expires_at       TEXT NOT NULL,
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 """,
     """
@@ -969,7 +974,8 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     actor_role       TEXT NOT NULL,
     actor_id         TEXT NOT NULL,
     command_id       TEXT NOT NULL UNIQUE,
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+    CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
 """
 HOST_CONCLUSION_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id)"

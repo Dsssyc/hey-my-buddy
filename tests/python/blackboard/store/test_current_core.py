@@ -22,6 +22,15 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_event_actor_roles_are_closed_to_production_roles(self):
+        board = self.board()
+        with board.store.db.write() as connection:
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute("INSERT INTO events(kind,payload_json,actor_role,actor_id,created_at) "
+                                   "VALUES('fixture','{}','worker','one','2026-01-01T00:00:00Z')")
+            connection.execute("INSERT INTO events(kind,payload_json,actor_role,actor_id,created_at) "
+                               "VALUES('fixture','{}','service','service','2026-01-01T00:00:00Z')")
+
     def old_database(self, directory, version, *, has_meta=True):
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "board.sqlite3"

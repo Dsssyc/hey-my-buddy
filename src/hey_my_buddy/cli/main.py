@@ -33,7 +33,7 @@ from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
 from ..home import control_file_path
-from ..install.launcher import agent_credential_document, credential_state_dir, service_environment
+from ..install.launcher import agent_credential_document, credential_state_dir, service_environment, take_agent_credential_document
 from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
 from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
 
@@ -232,8 +232,8 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
     }
 
 
-def _worker_command(action: str, params: dict, state: Path) -> dict:
-    if _agent_credential() is not None:
+def _worker_command(action: str, params: dict, state: Path, *, credential: str | None = None) -> dict:
+    if credential is not None:
         raise BoardError("FORBIDDEN", "An attempt credential cannot manage service workers")
     if action == "worker-start":
         from ..install.upgrade import file_lock
@@ -316,23 +316,14 @@ _CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
-def _agent_credential() -> str | None:
-    """The attempt-scoped credential from the environment, never the administrator token."""
-    token = os.environ.get("HMB_AGENT_CREDENTIAL")
-    if token is not None:
-        if not token.strip():
-            raise BoardError(
-                "UNAUTHORIZED",
-                "HMB_AGENT_CREDENTIAL is empty; an attempt-scoped credential is never replaced by the "
-                "administrator token",
-            )
-        return token.strip()
-    path_value = os.environ.get("HMB_AGENT_CREDENTIAL_FILE")
-    if path_value is None:
-        return None
-    if not path_value.strip():
-        raise BoardError("UNAUTHORIZED", "HMB_AGENT_CREDENTIAL_FILE is empty")
-    return agent_credential_document()["token"].strip()
+_NO_CREDENTIAL_DOCUMENT = object()
+
+
+def _agent_credential(document=_NO_CREDENTIAL_DOCUMENT) -> str | None:
+    """Use only a private attempt credential file or its in-process document."""
+    if document is _NO_CREDENTIAL_DOCUMENT:
+        document = agent_credential_document()
+    return document["token"].strip() if document is not None else None
 
 
 def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
@@ -353,8 +344,8 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     host_id = control.get("hostId")
     generation = control.get("ownerGeneration")
     token = control.get("controlToken")
-    if "hostId" not in control or (host_id is not None and (not isinstance(host_id, str) or not host_id.strip())):
-        raise BoardError("INVALID_ARGUMENT", "control.hostId must be null or a nonempty string")
+    if not isinstance(host_id, str) or not host_id.strip():
+        raise BoardError("INVALID_ARGUMENT", "control.hostId must be a nonempty string")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "control.ownerGeneration must be a positive integer")
     if not isinstance(token, str) or not token.strip():
@@ -362,7 +353,7 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     path = _control_path(run_id, generation, state_dir)
     payload = json.dumps(
         {
-            "hostId": host_id.strip() if host_id is not None else None,
+            "hostId": host_id.strip(),
             "ownerGeneration": generation,
             "controlToken": token.strip(),
             "runId": run_id,
@@ -441,13 +432,13 @@ def _read_control(path_value: str) -> dict:
     host_id = value.get("hostId")
     generation = value.get("ownerGeneration")
     token = value.get("controlToken")
-    if "hostId" not in value or (host_id is not None and (not isinstance(host_id, str) or not host_id.strip())):
-        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be null or a nonempty string")
+    if not isinstance(host_id, str) or not host_id.strip():
+        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be a nonempty string")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "controlFile ownerGeneration must be a positive integer")
     if not isinstance(token, str) or not token.strip():
         raise BoardError("INVALID_ARGUMENT", "controlFile controlToken must be a nonempty string")
-    return {"hostId": host_id.strip() if host_id is not None else None,
+    return {"hostId": host_id.strip(),
             "ownerGeneration": generation, "controlToken": token.strip()}
 
 
@@ -622,7 +613,7 @@ def _help_command(arguments: list[str]) -> int:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DOCUMENT) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["help"]:
         return _help_command(argv[1:])
@@ -652,7 +643,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         params = _parse_parameters(_parameters_text(args))
-        scoped_state = credential_state_dir() if args.method != "console" else None
+        if credential_document is _NO_CREDENTIAL_DOCUMENT:
+            credential_document = take_agent_credential_document()
+        credential = _agent_credential(credential_document)
+        scoped_state = credential_state_dir(credential_document)
         state_dir = scoped_state or get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
@@ -670,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
             from ..install.skill_install import paths
             result = paths(params)
         elif args.method in LOCAL_METHODS:
-            result = _worker_command(args.method, params, state_dir)
+            result = _worker_command(args.method, params, state_dir, credential=credential)
         elif args.method == "console":
             # Console keeps its one canonical JSON argument, but `browser` and `wait`
             # are CLI-local: console_cli validates and strips them, launches the
@@ -678,11 +672,10 @@ def main(argv: list[str] | None = None) -> int:
             # attempt-scoped credential is refused before any local action or RPC.
             from . import console_cli
 
-            result = console_cli.run(params, state_dir=state_dir, credential=_agent_credential())
+            result = console_cli.run(params, state_dir=state_dir, credential=credential)
         elif args.method == "await":
             from .blocking import WaitAbandoned, await_run, recovery_commands
 
-            credential = _agent_credential()
             def wait_service(method, parameters, directory):
                 return _call_service(method, {**parameters, **({"credential": credential} if credential is not None else {})}, directory)
             try:
@@ -691,7 +684,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(_dumps(_abandoned(abandoned, recovery_commands(abandoned.request_id, abandoned.run_id))))
                 return 1
         else:
-            credential = _agent_credential()
             if credential is not None:
                 if not isinstance(params, dict):
                     raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")

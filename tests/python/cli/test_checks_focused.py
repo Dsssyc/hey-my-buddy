@@ -38,7 +38,7 @@ class FocusedChecksTests(unittest.TestCase):
                 "        self.assertEqual(Path(os.environ['TMPDIR']), state.parent / 'tmp')\n"
                 "        self.assertEqual(Path(os.environ['HMB_RUNTIME_ROOT']), state.parent / 'runtime')\n"
                 "        self.assertNotIn('HMB_RUNTIME', os.environ)\n"
-                "        self.assertNotIn('HMB_AGENT_CREDENTIAL', os.environ)\n"
+                "        self.assertNotIn('HMB_AGENT_CREDENTIAL_FD', os.environ)\n"
                 "        self.assertEqual(Path.home().parent, state.parent.parent)\n"
                 f"        marker = Path({str(self.markers)!r}) / __name__\n"
                 "        self.assertFalse(marker.exists(), 'file ran twice')\n"
@@ -56,8 +56,8 @@ class FocusedChecksTests(unittest.TestCase):
         with (
             patch.object(checks, "__file__", str(self.root / "src/hey_my_buddy/cli/checks.py")),
             patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
-                                  "HMB_RUNTIME": "/fixture/pinned-runtime",
-                                  "HMB_AGENT_CREDENTIAL": "fixture-credential"}),
+                                    "HMB_RUNTIME": "/fixture/pinned-runtime",
+                                    "HMB_AGENT_CREDENTIAL_FD": "17"}),
             patch.object(checks, "_ps_argv_table", return_value=process_table),
             patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),

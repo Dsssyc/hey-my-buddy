@@ -10,9 +10,9 @@ class LauncherSelectionTests(BoardTestCase):
         root=(self.directory/'runtime').resolve();target=root/('a'*32);target.mkdir(parents=True)
         launcher.write_active_runtime(self.directory,target,{'HMB_MAX_CONCURRENT':'7','HMB_WAIT_CAPACITY':'32'})
         clean={k:v for k,v in os.environ.items() if k not in ('HMB_RUNTIME','HMB_DEV_SOURCE')}
-        with mock.patch.dict(os.environ,{**clean,'HMB_RUNTIME_ROOT':str(root),'HMB_AGENT_CREDENTIAL':'scoped-fixture'},clear=True), mock.patch('hey_my_buddy.install.runtime.is_ready',return_value=True):
+        with mock.patch.dict(os.environ,{**clean,'HMB_RUNTIME_ROOT':str(root),'HMB_AGENT_CREDENTIAL_FILE':'/private/attempt'},clear=True), mock.patch('hey_my_buddy.install.runtime.is_ready',return_value=True):
             self.assertEqual(launcher.selected_runtime(self.directory),target)
-            self.assertEqual(launcher.runtime_environment(target)['HMB_AGENT_CREDENTIAL'],'scoped-fixture')
+            self.assertEqual(launcher.runtime_environment(target)['HMB_AGENT_CREDENTIAL_FILE'],'/private/attempt')
         self.assertEqual(launcher.launch_defaults(self.directory)['HMB_MAX_CONCURRENT'],'7')
         self.assertEqual((self.directory/'active-runtime.json').stat().st_mode & 0o777,0o600)
 

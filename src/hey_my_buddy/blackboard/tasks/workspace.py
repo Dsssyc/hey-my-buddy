@@ -597,11 +597,10 @@ def _intent(intent):
     base = intent.get("base")
     if not isinstance(base, dict) or set(base) - {"kind", "ref"} or base.get("kind") not in ("commit", "working-tree"):
         raise BoardError("INVALID_WORKSPACE", "Workspace base must select commit or working-tree")
-    if not isinstance(intent.get("integrator"), str) or not intent["integrator"].strip():
-        raise BoardError("INVALID_WORKSPACE", "Workspace integrator must be explicit")
+    integrator = _actor_identity(intent.get("integrator"), "Workspace integrator", ("host", "lead"))
     if intent.get("targetRef") is not None and (not isinstance(intent["targetRef"], str) or not intent["targetRef"].strip()):
         raise BoardError("INVALID_WORKSPACE", "targetRef must be an attribution string")
-    result = dict(intent, base=dict(base))
+    result = dict(intent, base=dict(base), integrator=integrator)
     if not isinstance(intent.get("cwd"), str) or not intent["cwd"] or "\0" in intent["cwd"]:
         raise BoardError("INVALID_WORKSPACE", "cwd must be a directory path")
     # Resolving a ref belongs to first preparation, not replay normalization.
@@ -617,6 +616,14 @@ def _intent(intent):
     if base["kind"] == "commit" and result["includeUntracked"]:
         raise BoardError("INVALID_WORKSPACE", "Untracked input requires a working-tree base")
     return result
+
+
+def _actor_identity(value, label, roles=("host", "lead", "console")):
+    if (not isinstance(value, dict) or set(value) != {"role", "id"}
+            or value.get("role") not in roles
+            or not isinstance(value.get("id"), str) or not value["id"].strip()):
+        raise BoardError("INVALID_WORKSPACE", label + " must have an allowed role and nonempty id")
+    return dict(value)
 
 
 def _mkdir(path):
@@ -828,11 +835,13 @@ def _validate_manifest(manifest):
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
     if isinstance(manifest, dict) and manifest.get("access") == "full":
         fields.add("accessReason")
-    if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] != 1:
+    if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2):
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
     if expected != manifest["manifestSha256"]:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
+    if manifest["version"] == 2:
+        _actor_identity(manifest["integrator"], "Workspace integrator", ("host", "lead"))
     if manifest["exclusionPolicy"] != _EXCLUSION_POLICY:
         raise BoardError("INVALID_WORKSPACE", "Unsupported workspace exclusion policy")
     snapshot_fields = {"repositoryPath", "stagedCommit", "stagedTree", "inputRef", "stagedRef", "executionSelectors",
@@ -981,7 +990,7 @@ def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None
 
 
 def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None):
-    _write_once(directory / "request.json", _json({"version": 1, "requestId": request_id, "intent": intent}))
+    _write_once(directory / "request.json", _json({"version": 2, "requestId": request_id, "intent": intent}))
     manifest = _record(directory / "manifest.json")
     if preparation is not None:
         preparation["replayed"] = manifest is not None
@@ -1026,7 +1035,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
                        _observe(Path(actual["checkoutRoot"]), selectors)["fingerprint"])
         snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
-        manifest = {"version": 1, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
+        manifest = {"version": 2, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
                     "repositoryId": actual["repositoryId"], "access": intent["access"],
                     "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
@@ -1720,7 +1729,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
     snapshot["adoptedPaths"] = adopted
-    record = {"version": 1, "kind": "resolution", "action": action, "actor": actor, "reason": reason,
+    record = {"version": 2, "kind": "resolution", "action": action, "actor": actor, "reason": reason,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1761,7 +1770,7 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
-    record = {"version": 1, "kind": "abandoned-site", "action": "abandon", "actor": actor, "reason": reason,
+    record = {"version": 2, "kind": "abandoned-site", "action": "abandon", "actor": actor, "reason": reason,
               "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
               "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
               "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
@@ -1789,7 +1798,7 @@ def _resolution_result(action, state, artifact, resolved, preserved, remaining, 
     }
 
 
-def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, reason: str = "", actor: str = ""):
+def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, reason: str = "", actor: dict | None = None):
     """Mechanically settle one recorded out-of-scope failure site.
 
     ``restore`` returns the selected paths to their authorized content while
@@ -1802,6 +1811,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
     """
     with _errors():
         _validate_manifest(manifest)
+        actor = _actor_identity(actor, "Workspace resolution actor")
         if action not in RESOLUTION_ACTIONS:
             raise BoardError("INVALID_WORKSPACE", "Resolution action must be restore, adopt or abandon")
         if not isinstance(observed_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", observed_fingerprint) is None:
@@ -1943,7 +1953,10 @@ def _validate_output_record(final_input, artifact):
     commit = artifact.get("commit")
     ref = artifact.get("ref")
     output_id = _sha(_json([artifact.get("taskId"), artifact.get("attemptId")]))
-    if artifact.get("kind") == "resolution" and artifact.get("action") in ("restore", "adopt"):
+    if (artifact.get("kind") == "resolution" and artifact.get("version") in (1, 2)
+            and artifact.get("action") in ("restore", "adopt")):
+        if artifact["version"] == 2:
+            _actor_identity(artifact.get("actor"), "Workspace resolution actor")
         expected_ref = (f"refs/hey-my-buddy/workspaces/{final_input['workspaceId']}/resolutions/"
                         f"{output_id}-{artifact['action']}")
     elif artifact.get("kind") == "host-output":

@@ -891,7 +891,7 @@ def task_view(entry: dict) -> dict:
                             "routerBudgetSeconds": entry["routing"]["budget"]["timeoutSeconds"]}
     view: dict[str, Any] = {
         "runId": entry["runId"], "taskId": entry["runId"], "requestId": entry["requestId"],
-        "owner": "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
+        "owner": None if entry["kind"] in ("micro-task", "helper") else "synthetic-worker-1", "adapter": adapter, "cwd": entry["cwd"], "task": entry["task"],
         "spec": spec, "inputFingerprint": digest(f"{entry['runId']}-fingerprint"), "fingerprintVersion": 3,
         "requiredCapabilities": [], "exclusiveResources": [], **duration,
         "status": entry["status"], "state": entry["status"], "queueReason": None,

@@ -50,7 +50,7 @@ class StorageOrphanTests(WorkflowTestCase):
     def orphan(self, request_id='orphan-request'):
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write',
                   'base': {'kind': 'working-tree'}, 'includeUntracked': [],
-                  'writeScope': ['.'], 'integrator': 'host:host-1'}
+                  'writeScope': ['.'], 'integrator': {'role': 'host', 'id': 'host-1'}}
         manifest = workspace.prepare(self.directory, request_id, intent)
         checkout = Path(manifest['checkoutRoot'])
         planned = self.board_instance.call('storage_plan', {})

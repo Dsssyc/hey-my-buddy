@@ -393,7 +393,7 @@ def _finish_skill(journal: dict) -> None:
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     from ..blackboard.store.store import BoardStore
     schemas.reject_unknown(params, set(), 'upgrade')
-    if os.environ.get('HMB_AGENT_CREDENTIAL') or os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
+    if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
     state = get_state_dir().resolve()
     root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
