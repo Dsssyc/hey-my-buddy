@@ -178,10 +178,12 @@ class LeadOwnedTests(WorkflowTestCase):
         child = self.owned(board, claim)
         cred = {"credential": claim["agentCredential"]}
         self.assertEqual(board.call("task_get", {"requestId": "owned", **cred})["task"]["runId"], child["runId"])
-        self.assertEqual(board.call("task_wait", {"runId": child["runId"], "timeoutMs": 0, **cred})["runId"], child["runId"])
+        for operation in ("task_wait", "events_wait"):
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
+                board.call(operation, {"runId": child["runId"], "timeoutMs": 0, **cred})
+            self.assertEqual(caught.exception.code, "FORBIDDEN")
         board.call("artifact_list", {"runId": child["runId"], **cred})
         board.call("events_read", {"runId": child["runId"], **cred})
-        board.call("events_wait", {"runId": child["runId"], "timeoutMs": 0, **cred})
         board.call("inquiry_observe", {"runId": child["runId"], "inquiryId": "question", "question": "Status?", **cred})
         message = board.call("message_get", {"runId": child["runId"], "inquiryId": "question", **cred})["message"]
         board.call("message_get", {"messageId": message["messageId"], **cred})

@@ -177,6 +177,7 @@ export type Lineage = {
   project: { id: string; path: string | null; label: string };
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
   delegationAuthority?: boolean;
+  leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
 export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
 export type TaskQuery = {

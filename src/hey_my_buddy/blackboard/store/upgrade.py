@@ -84,6 +84,12 @@ def _run(row: dict) -> dict:
     return row
 
 
+def _continuation(row: dict) -> dict:
+    row['kind'] = 'manual' if row['authorized_by'] == 'manual' else 'helper'
+    row['trigger_event_json'] = None
+    return row
+
+
 def _stop_origin(actor) -> tuple[str, str]:
     if isinstance(actor, str):
         if actor.startswith('host:') and actor[5:]:
@@ -232,6 +238,7 @@ def migrate(state: Path) -> None:
             _rebuild(connection, 'workflow_turns', lambda row: _turn(connection, row))
             _rebuild(connection, 'attempts', lambda row: _attempt(row, stops))
             _rebuild(connection, 'workflow_runs', _run)
+            _rebuild(connection, 'workflow_continuations', _continuation)
             _rebuild(connection, 'agent_credentials', lambda row: row)
             ddl, indexes = _fresh_ddl('workflow_lead_tasks')
             connection.execute(ddl)

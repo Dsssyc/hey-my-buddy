@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import type { Lineage, Task } from "./types";
 
 /** Where a micro task title came from; the Worker result summary is never one. */
 export type TitleSource = "title" | "task" | "none";
@@ -78,7 +78,12 @@ export function needsReview(task: Task): boolean {
 export function taskStatus(task: Task): string {
   if (["cancelling", "reconciliation-needed"].includes(task.status)) return task.status;
   if (task.workflow?.state === "cancelled" && task.workflowShutdown?.unconfirmedCount) return "cancelling";
-  return task.workflow?.state || task.status;
+  return displayWorkflowState(task.workflow?.state || task.status, task.lineage?.leadOwnership);
+}
+
+/** Presentation only: the stored state stays awaiting-host for a Lead-owned micro task. */
+export function displayWorkflowState(state: string, leadOwnership?: Lineage["leadOwnership"]): string {
+  return state === "awaiting-host" && leadOwnership ? "awaiting-lead" : state;
 }
 
 export function canRetry(task: Task): boolean {

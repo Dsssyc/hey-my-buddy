@@ -71,6 +71,39 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual([row[1] for row in current.execute('PRAGMA table_info(agent_credentials)')], columns)
             self.assertEqual(list(current.execute(f'SELECT {projection} FROM agent_credentials ORDER BY credential_id')), before)
 
+    def test_upgrade_preserves_continuation_authority_and_records_its_kind(self):
+        fixture, old = self.restored()
+        run_id = old.execute('SELECT run_id FROM workflow_runs LIMIT 1').fetchone()[0]
+        for identifier, authority, request_id in (
+                ('old-manual', 'manual', None), ('old-helper', 'auto', 'old-request')):
+            old.execute(
+                'INSERT INTO workflow_continuations(continuation_id,run_id,authorized_by,request_id,'
+                'expected_revision,input_text,input_bytes,state,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                (identifier, run_id, authority, request_id, 1, 'resume', 6, 'consumed', '2026-01-01T00:00:00Z'))
+        old.commit()
+        old.close()
+        board_upgrade.migrate(fixture['state'])
+        with Database(fixture['state']).connect() as current:
+            rows = [tuple(row) for row in current.execute(
+                'SELECT continuation_id,authorized_by,kind,trigger_event_json FROM workflow_continuations'
+                ' WHERE continuation_id IN (?,?) ORDER BY continuation_id', ('old-helper', 'old-manual'))]
+            self.assertEqual(rows, [('old-helper', 'auto', 'helper', None),
+                                    ('old-manual', 'manual', 'manual', None)])
+            current.execute("UPDATE workflow_runs SET state='waiting-owned' WHERE run_id=?", (run_id,))
+            current.execute("UPDATE workflow_turns SET disposition='waiting' WHERE run_id=?", (run_id,))
+            trigger = json.dumps({'seq': 3, 'kind': 'workflow.owned.returned', 'runId': 'owned'})
+            current.execute(
+                'INSERT INTO workflow_continuations(continuation_id,run_id,authorized_by,kind,'
+                'trigger_event_json,expected_revision,input_text,input_bytes,state,created_at)'
+                ' VALUES(?,?,?,?,?,?,?,?,?,?)',
+                ('wakeup-1', run_id, 'auto', 'lead-wakeup', trigger, 1, 'wake', 4, 'queued', '2026-01-01T00:00:01Z'))
+            with self.assertRaises(sqlite3.IntegrityError):
+                current.execute(
+                    'INSERT INTO workflow_continuations(continuation_id,run_id,authorized_by,kind,'
+                    'trigger_event_json,expected_revision,input_text,input_bytes,state,created_at)'
+                    ' VALUES(?,?,?,?,?,?,?,?,?,?)',
+                    ('wakeup-2', run_id, 'auto', 'lead-wakeup', trigger, 1, 'wake', 4, 'recorded', '2026-01-01T00:00:02Z'))
+
     def test_failed_upgrade_leaves_native_bindings_byte_for_byte_unchanged(self):
         fixture, connection = self.restored()
         bindings = self.native_bindings(fixture['state'])

@@ -64,6 +64,16 @@ const REMOVED_CONTROLS = [
 ];
 
 describe("micro task workflow console (0.15.1 read-only)", () => {
+  it("names a Lead-owned decision boundary and a waiting Lead", async () => {
+    const f = fixture();
+    f.workflow.task.lineage!.leadOwnership = { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: f.props.task.createdAt };
+    render(<WorkflowPanel {...f.props} />);
+    expect(await screen.findByText(/等待 Lead 决定：补充并发测试/)).toBeTruthy();
+    expect(screen.getByText("等待 Lead 决定", { exact: true })).toBeTruthy();
+    await userEvent.setup().click(screen.getByText("记录细节（微任务与回合）"));
+    expect(screen.getByText("等待 Lead")).toBeTruthy();
+  });
+
   it("shows the recorded turn count without deriving a model-call count", async () => {
     const f = fixture();
     Object.assign(f.workflow, { counts: { turns: 3, openRequests: 1 }, continuationCount: 3 });

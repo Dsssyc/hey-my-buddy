@@ -246,7 +246,8 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
                             attention_path: Path, session_tools: list[dict] | tuple[dict, ...],
                             completion_tool: str,
                             inquiry: dict | None = None,
-                            inquiry_tools: tuple[str, ...] = ()) -> SessionServiceMount:
+                            inquiry_tools: tuple[str, ...] = (),
+                            delegation_authority: bool = False) -> SessionServiceMount:
     """Prepare one run's session-service mount; no process is started.
 
     The naming is the mechanical rule the native driver and the role share: one
@@ -276,7 +277,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     checkpoint_tool = qualified.get("hey_my_buddy_checkpoint")
     answer_tool = qualified.get("hey_my_buddy_answer_inquiry")
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
-              "attentionPath": str(attention_path)}
+              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
     if inquiry is not None and isinstance(inquiry.get("resultsPath"), str):
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
     bridge_path = root / "finish-bridge.json"
@@ -298,7 +299,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
                      attention_path: Path, session_tools, completion_tool: str,
                      validate_outcome,
                      inquiry: dict | None, inquiry_tools: tuple[str, ...],
-                     native_stderr: str) -> BoundSessionServices:
+                     native_stderr: str, delegation_authority: bool = False) -> BoundSessionServices:
     """Expose only the binding the role actually consumes, without a process.
 
     The role supplies the mechanical mount and outcome validator.
@@ -309,7 +310,8 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
         invocation_root=invocation_root, identity=identity, input_sha256=input_sha256,
         attention_path=attention_path, session_tools=session_tools,
         completion_tool=completion_tool,
-        inquiry=inquiry, inquiry_tools=inquiry_tools)
+        inquiry=inquiry, inquiry_tools=inquiry_tools,
+        delegation_authority=delegation_authority)
     return BoundSessionServices(
         description=SessionService(
             tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),

@@ -32,6 +32,7 @@ from ..install import runtime
 from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
+from ..home import control_file_path
 from ..install.launcher import service_environment
 from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
 from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
@@ -352,7 +353,7 @@ def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
     directory = state_dir / "controls"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
-    return directory / f"{run_id}.g{generation}.json"
+    return control_file_path(state_dir, run_id, generation)
 
 
 def _save_control(run_id: str, control: dict, state_dir: Path) -> str:

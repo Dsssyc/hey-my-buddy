@@ -109,6 +109,18 @@ class MicroTaskTestCase(WorkflowTestCase):
             if cursor is None:
                 return collected, pages
 
+    def assign_lead_ownership(self, board, owned_run_id, lead_run_id):
+        with board.store.db.write() as connection:
+            turn = connection.execute(
+                "SELECT turn_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1",
+                (lead_run_id,),
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at)"
+                " VALUES(?,?,?,?)",
+                (owned_run_id, lead_run_id, turn["turn_id"], board.store.now()),
+            )
+
 
 class MicroTaskProvenanceTests(MicroTaskTestCase):
     def test_micro_task_reports_source_and_current_host_with_the_source_project(self):
@@ -424,6 +436,29 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(compact_task["lineage"], listed)
         self.assertNotIn("task", compact_task)
         self.assertNotIn("spec", compact_task)
+
+
+class LeadHistoryFilterTests(MicroTaskTestCase):
+    def test_host_filter_excludes_a_lead_owned_helper_tree(self):
+        board = self.board()
+        self.register(board)
+        lead = self.submit(board, request_id="lead-filter-owner", host_id="host-lead",
+                           cwd=str(self.workdir("lead-filter-owner")))
+        self.finish_turn(board, self.claim(board, run_id=lead["runId"], claim_request_id="lead-filter-claim"))
+
+        root, helper = self.parent_and_helper(board)
+        self.finish_turn(board, self.claim(board, run_id=helper, claim_request_id="lead-helper-yields"),
+                         disposition="assistance")
+        self.assign_lead_ownership(board, root["runId"], lead["runId"])
+
+        pending = self.submit(board, request_id="unowned-host-boundary", host_id="host-other",
+                              cwd=str(self.workdir("unowned-host-boundary")))
+        self.finish_turn(board, self.claim(board, run_id=pending["runId"], claim_request_id="unowned-host-claim"),
+                         disposition="assistance")
+
+        hosted = self.history(board, filter="host", limit=100)
+        self.assertEqual([row["runId"] for row in hosted["runs"]], [pending["runId"]])
+        self.assertEqual(hosted["total"], 1)
 
 
 class HistoryPagingTests(MicroTaskTestCase):

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./types";
-import { excerpt, needsReview, taskTitle, titleTooltip } from "./task-state";
+import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
   runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
@@ -21,6 +21,17 @@ describe("awaiting review", () => {
     expect(needsReview({ ...delivered, status: "concluded" })).toBe(false);
     expect(needsReview({ ...delivered, workflowShutdown: undefined })).toBe(false);
     expect(needsReview({ ...delivered, resultAvailable: false })).toBe(false);
+  });
+});
+
+describe("Lead ownership display", () => {
+  it("shows Lead-owned boundaries separately from Host boundaries", () => {
+    const boundary = task({ status: "completed", workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    expect(taskStatus(boundary)).toBe("awaiting-host");
+    expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
+      rootRunId: "run-1", project: { id: "p", path: null, label: "p" }, buddy: null,
+      leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: boundary.createdAt } } })).toBe("awaiting-lead");
+    expect(taskStatus({ ...boundary, workflow: { ...boundary.workflow!, state: "waiting-owned" } })).toBe("waiting-owned");
   });
 });
 

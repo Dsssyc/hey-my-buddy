@@ -22,8 +22,7 @@ import unittest
 from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
-from hey_my_buddy.buddy.roles import turn_io
-from hey_my_buddy.buddy.roles import worker_services
+from hey_my_buddy.buddy.roles import session_mcp, turn_io, worker_services
 from hey_my_buddy.install.runtime import resource_path
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
@@ -42,7 +41,7 @@ class WorkerServicesCase(unittest.TestCase):
 
     @staticmethod
     def outcome(disposition: str) -> dict:
-        request = None if disposition == "completed" else {
+        request = None if disposition in ("completed", "waiting") else {
             "summary": "help", "attempted": "tried", "neededWork": "decide",
             "expectedArtifacts": [], "acceptance": "decided"}
         return {"disposition": disposition, "summary": "fixture", "remaining": [], "decisions": [],
@@ -91,6 +90,22 @@ class MicroTaskPromptTests(unittest.TestCase):
                 self.assertIn("create, switch, move or delete branches or tags", scope)
                 self.assertIn("leave changes in the workspace", scope)
                 self.assertIn("commit on the current detached HEAD", scope)
+
+    def test_waiting_is_offered_only_to_a_lead_turn(self):
+        ordinary = worker_services.session_tools()[-1]["inputSchema"]
+        lead = worker_services.session_tools(delegation_authority=True)[-1]["inputSchema"]
+        self.assertNotIn("waiting", ordinary["properties"]["disposition"]["enum"])
+        self.assertIn("waiting", lead["properties"]["disposition"]["enum"])
+        self.assertNotIn("waiting", worker_services.OUTCOME_SCHEMA["properties"]["disposition"]["enum"])
+
+    def test_mcp_tool_listing_uses_the_bound_turn_authority(self):
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        for authorized in (False, True):
+            with self.subTest(authorized=authorized):
+                response = session_mcp.respond(message, {"delegationAuthority": authorized})
+                finish = response["result"]["tools"][-1]
+                self.assertEqual("waiting" in finish["inputSchema"]["properties"]["disposition"]["enum"],
+                                 authorized)
 
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
         prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
@@ -162,6 +177,17 @@ class RoleBoundaryTests(unittest.TestCase):
 
 
 class FinishBoundaryTests(WorkerServicesCase):
+    def test_waiting_finish_requires_delegation_authority_and_null_request(self):
+        waiting = self.outcome("waiting")
+        refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")
+        self.assertEqual(refused["reason"], "invalid-arguments")
+        self.configuration["delegationAuthority"] = True
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", waiting))
+        self.assertEqual(receipt["outcome"], waiting)
+        waiting["request"] = self.outcome("attention")["request"]
+        refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")
+        self.assertEqual(refused["reason"], "invalid-arguments")
+
     def test_an_accepted_finish_mints_a_receipt_bound_to_this_attempt_and_input(self):
         receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
         self.assertEqual(receipt["version"], 1)
@@ -178,22 +204,28 @@ class FinishBoundaryTests(WorkerServicesCase):
         self.assertIn("the outcome must contain exactly the current outcome fields", envelope["detail"])
         self.assertEqual(turn_io.validate_outcome(self.outcome("completed")), None)
 
-    def test_an_outstanding_native_request_blocks_only_completed(self):
+    def test_an_outstanding_native_request_blocks_completed_and_waiting(self):
         self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
-        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
-        self.assertEqual(envelope["reason"], "attention-outstanding")
-        self.assertIn("attention", envelope["detail"])
+        self.configuration["delegationAuthority"] = True
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)), "hey_my_buddy_finish_turn")
+                self.assertEqual(envelope["reason"], "attention-outstanding")
+                self.assertIn("attention", envelope["detail"])
         for disposition in ("assistance", "attention"):
             with self.subTest(disposition=disposition):
                 receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))
                 self.assertEqual(receipt["outcome"]["disposition"], disposition)
 
-    def test_a_pending_inquiry_blocks_only_completed_and_names_the_question(self):
+    def test_a_pending_inquiry_blocks_completed_and_waiting_and_names_the_question(self):
         self.queue()
-        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
-        self.assertEqual(envelope["reason"], "inquiry-pending")
-        self.assertIn("[q-1] what is the deployment word?", envelope["detail"])
-        self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
+        self.configuration["delegationAuthority"] = True
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)), "hey_my_buddy_finish_turn")
+                self.assertEqual(envelope["reason"], "inquiry-pending")
+                self.assertIn("[q-1] what is the deployment word?", envelope["detail"])
+                self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
         receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("assistance")))
         self.assertEqual(receipt["outcome"]["disposition"], "assistance")
 

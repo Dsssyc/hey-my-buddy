@@ -33,7 +33,7 @@ export type MacroTaskStopStatus = {
 };
 
 const ACTIVE_TASK_STATUS = new Set(["queued", "running", "cancelling", "reconciliation-needed"]);
-const ACTIVE_ROW_STATE = new Set(["executing", "waiting-helpers", "awaiting-host"]);
+const ACTIVE_ROW_STATE = new Set(["executing", "waiting-helpers", "awaiting-host", "waiting-owned"]);
 
 /** Whether a summary still has members a macro task stop could cancel. */
 export function stoppableSummary(summary: MacroTaskSummary | null): boolean {

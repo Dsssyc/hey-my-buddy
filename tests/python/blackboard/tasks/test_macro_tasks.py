@@ -192,6 +192,18 @@ class PendingRootCountTests(WorkflowTestCase):
         self.finish_turn(board, claim, disposition='assistance')
         return submitted
 
+    def assign_lead_ownership(self, board, owned_run_id, lead_run_id):
+        with board.store.db.write() as connection:
+            turn = connection.execute(
+                "SELECT turn_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1",
+                (lead_run_id,),
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at)"
+                " VALUES(?,?,?,?)",
+                (owned_run_id, lead_run_id, turn["turn_id"], board.store.now()),
+            )
+
     def test_pending_root_count_dedups_helpers_under_their_root(self):
         from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
         board = self.board()
@@ -230,6 +242,30 @@ class PendingRootCountTests(WorkflowTestCase):
             claim = self.claim(board, claim_request_id=f'pending-bulk-{index:03d}-claim', run_id=run_id)
             self.finish_turn(board, claim, disposition='assistance')
         self.assertEqual(pending_root_count(board.store), 105)
+
+    def test_pending_count_ignores_a_lead_owned_helper_boundary(self):
+        from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
+        board = self.board()
+        self.register(board)
+        lead = self.submit(board, request_id='pending-lead-owner', cwd=str(self.workdir('pending-lead-owner')))
+        self.finish_turn(board, self.claim(board, run_id=lead['runId'], claim_request_id='pending-lead-claim'))
+
+        root = self.submit(board, request_id='pending-owned-root', cwd=str(self.workdir('pending-owned-root')))
+        self.finish_turn(board, self.claim(board, run_id=root['runId'], claim_request_id='pending-root-claim'),
+                         disposition='assistance')
+        view = board.call('workflow_get', {'runId': root['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], command_id='owned-helper',
+                               helpers=[{'requestId': 'pending-owned-helper', 'task': 'assist',
+                                         'cwd': str(self.workdir('pending-owned-helper')),
+                                         'executionWorkspace': {'kind': 'existing', 'access': 'write'}}])
+        helper = approved['children'][0]['taskId']
+        self.finish_turn(board, self.claim(board, run_id=helper, claim_request_id='owned-helper-yields'),
+                         disposition='assistance')
+        self.assign_lead_ownership(board, root['runId'], lead['runId'])
+
+        self.assertEqual(pending_root_count(board.store), 0)
+        self.park_on_host(board, 'pending-unowned')
+        self.assertEqual(pending_root_count(board.store), 1)
 
 
 class MacroTaskReadTests(WorkflowTestCase):
@@ -365,6 +401,45 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(timeline['events'][0]['label'], '派发')
         self.assertNotIn('controlToken', json.dumps(timeline))
 
+    def test_lead_owned_waits_count_as_active_and_timeline_projects_ownership(self):
+        board = self.board()
+        self.register(board)
+        lead = self.submit(board, request_id='timeline-lead-owner', cwd=str(self.workdir('timeline-lead-owner')))
+        self.finish_turn(board, self.claim(board, run_id=lead['runId'], claim_request_id='timeline-lead-claim'))
+        root = self.submit(board, request_id='timeline-owned-root', kind='worktree',
+                           cwd=str(self.workdir('timeline-owned-root')),
+                           macroTask={'title': 'Lead owned work'})
+        self.finish_turn(board, self.claim(board, run_id=root['runId'], claim_request_id='timeline-root-claim'),
+                         disposition='assistance')
+        view = board.call('workflow_get', {'runId': root['runId']})
+        approved = self.decide(board, view, view['activeRequest']['requestId'], command_id='timeline-helper',
+                               helpers=[{'requestId': 'timeline-owned-helper', 'task': 'assist',
+                                         'cwd': str(self.workdir('timeline-owned-helper')),
+                                         'executionWorkspace': {'kind': 'existing', 'access': 'write'}}])
+        helper = approved['children'][0]['taskId']
+        self.finish_turn(board, self.claim(board, run_id=helper, claim_request_id='timeline-helper-claim'),
+                         disposition='assistance')
+        with board.store.db.write() as connection:
+            turn = connection.execute(
+                "SELECT turn_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1",
+                (lead['runId'],),
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at)"
+                " VALUES(?,?,?,?)",
+                (root['runId'], lead['runId'], turn['turn_id'], board.store.now()),
+            )
+            connection.execute("UPDATE workflow_runs SET state='waiting-owned' WHERE run_id=?", (root['runId'],))
+
+        timeline = board.call('macro_task_timeline', {'macroTaskId': root['macroTaskId']})
+        summary = timeline['macroTask']
+        self.assertEqual(summary['state'], 'active')
+        self.assertEqual(summary['counts']['active'], 2)
+        self.assertEqual(summary['counts']['host'], 0)
+        rows = {row['runId']: row for row in timeline['rows']}
+        self.assertEqual(rows[root['runId']]['leadOwnership']['leadRunId'], lead['runId'])
+        self.assertIsNone(rows[helper]['leadOwnership'])
+
     def test_a_lease_expired_execution_that_reported_and_confirmed_its_stop_ends_definitely(self):
         board = self.board()
         self.register(board)
@@ -413,6 +488,9 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(wait['state'], 'cancelled')
         self.assertIsNotNone(wait['endAt'])
         self.assertGreaterEqual(wait['endAt'], wait['startAt'])
+        events = board.call('macro_task_timeline', {'macroTaskId': first['macroTaskId']})['events']
+        cancelled = next(event for event in events if event['eventKind'] == 'workflow.cancelled')
+        self.assertEqual(cancelled['stopInitiator'], 'host')
 
     def test_a_host_continuation_closes_the_superseded_wait(self):
         board, first, _second, _loose = self.grouped_board()

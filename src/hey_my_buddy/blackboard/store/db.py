@@ -462,7 +462,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     access_reason       TEXT,
     expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed')),
-    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
+    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention','waiting')),
     outcome_json        TEXT,
     outcome_truncated_json TEXT,
     provenance_json     TEXT,
@@ -520,7 +520,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     workspace_id            TEXT,
     workspace_manifest_sha256 TEXT,
     state                   TEXT NOT NULL
-        CHECK (state IN ('executing','awaiting-host','waiting-helpers','delivered','accepted','concluded','cancelled','failed')),
+        CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
     active_request_id       TEXT,
     current_turn_id         TEXT,
     current_attempt_id      TEXT,
@@ -635,7 +635,9 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     run_id            TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     command_id        TEXT,
     authorized_by     TEXT NOT NULL CHECK (authorized_by IN ('manual','auto')),
+    kind              TEXT NOT NULL CHECK (kind IN ('manual','helper','lead-wakeup')),
     request_id        TEXT,
+    trigger_event_json TEXT,
     expected_revision INTEGER NOT NULL,
     input_text        TEXT NOT NULL,
     input_bytes       INTEGER NOT NULL,
@@ -647,7 +649,11 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     attempt_id        TEXT,
     turn_id           TEXT,
     created_at        TEXT NOT NULL,
-    consumed_at       TEXT
+    consumed_at       TEXT,
+    CHECK ((kind='manual' AND authorized_by='manual' AND trigger_event_json IS NULL)
+        OR (kind='helper' AND authorized_by='auto' AND trigger_event_json IS NULL)
+        OR (kind='lead-wakeup' AND authorized_by='auto' AND trigger_event_json IS NOT NULL
+            AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
 );
 """,
     """
@@ -655,7 +661,11 @@ CREATE INDEX IF NOT EXISTS workflow_continuations_run_idx ON workflow_continuati
 """,
     """
 CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_auto_unique
-    ON workflow_continuations(run_id, request_id) WHERE authorized_by='auto';
+    ON workflow_continuations(run_id, request_id) WHERE kind='helper';
+""",
+    """
+CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_lead_pending_unique
+    ON workflow_continuations(run_id) WHERE kind='lead-wakeup' AND state IN ('recorded','queued');
 """,
     # Durable workspace reservations independent of attempt capacity. The partial
     # unique index is the relational guarantee that one checkout has at most one

@@ -13,6 +13,7 @@ import secrets
 import sys
 import tempfile
 import uuid
+from functools import partial
 from pathlib import Path
 
 from ...errors import BoardError
@@ -144,11 +145,13 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     return payload
 
 
-def _worker_facts(result) -> dict:
+def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
     from ..harnesses.registry import worker_format
     from ..harnesses.run_contract import WorkerPermission
 
     format = worker_format(result.harness)
+    if format is not None and delegation_authority:
+        format = format.for_turn({"context": {"delegationAuthority": True}})
     payload = _base_result(result)
     if format is not None:
         payload.update(format.receipt_fields(result))
@@ -253,7 +256,8 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
         completion = result.completion_evidence
         if completion is not None and result.native_identity is not None:
             payload["nativeTurnId"] = result.native_identity.turn_id
-        outcome, provenance, truncated = worker_delivery(result)
+        outcome, provenance, truncated = worker_delivery(
+            result, delegation_authority=turn_input.get("context", {}).get("delegationAuthority") is True)
         if isinstance(outcome, dict) and isinstance(provenance, dict):
             # The micro task turn record is this role's document: the attempt
             # identity, input hash and prompt hash are the role's own facts,
@@ -275,11 +279,13 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
     return payload
 
 
-def worker_delivery(result) -> tuple[dict, dict, dict]:
+def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict, dict, dict]:
     """Judge the role's delivery once through the selected completion policy."""
     from ..harnesses.registry import worker_format
 
     format = worker_format(result.harness)
+    if format is not None and delegation_authority:
+        format = format.for_turn({"context": {"delegationAuthority": True}})
     if format is not None:
         facts = _evidence(result, "native-turn-facts")
         if not isinstance(facts, dict):
@@ -288,7 +294,8 @@ def worker_delivery(result) -> tuple[dict, dict, dict]:
     provenance = _evidence(result, "turn-provenance")
     outcome = result.value.parsed.value if result.value is not None and result.value.parsed else None
     if (result.value is None or result.value.schema_status != "valid"
-            or validate_outcome(outcome) is not None or not isinstance(provenance, dict)):
+            or validate_outcome(outcome, delegation_authority=delegation_authority) is not None
+            or not isinstance(provenance, dict)):
         raise BoardError("INVALID_ARGUMENT", "The Worker run did not deliver its valid outcome and provenance")
     return outcome, provenance, {}
 
@@ -300,6 +307,7 @@ def worker_request(control: dict, module):
     if not isinstance(turn_input, dict):
         raise BoardError("INVALID_ARGUMENT", "the micro task input is not an object")
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
+    delegation_authority = turn_input.get("context", {}).get("delegationAuthority") is True
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
     task_text = Path(control["taskFile"]).read_text()
@@ -310,16 +318,20 @@ def worker_request(control: dict, module):
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention_path,
-            session_tools=worker_services.session_tools(), completion_tool="hey_my_buddy_finish_turn",
+            session_tools=worker_services.session_tools(delegation_authority=delegation_authority),
+            completion_tool="hey_my_buddy_finish_turn",
             inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
-            validate_outcome=validate_outcome,
+            validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
+            delegation_authority=delegation_authority,
             native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
         prompt = worker_services.micro_task_prompt(
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
         services, descriptions = binding.services, (binding.description,)
-        schema, scope = worker_services.OUTCOME_SCHEMA, permission.tool_scope
+        schema, scope = worker_services.outcome_schema_for(
+            delegation_authority=delegation_authority), permission.tool_scope
     else:
+        format = format.for_turn(turn_input)
         prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, permission.tool_scope
         services = _native_services(control, module, scope)
         descriptions = ()
@@ -637,7 +649,8 @@ class WorkerRunExecutor:
         if result is not None:
             payload = _base_result(result)
             try:
-                payload = _worker_facts(result)
+                payload = _worker_facts(result, delegation_authority=(context.turn_input or {}).get(
+                    "context", {}).get("delegationAuthority") is True)
                 reports_invalid = _worker_reports(result, payload)
                 request = _read_request(handle)
                 if reports_invalid:
@@ -700,8 +713,8 @@ class WorkerRunExecutor:
                                             if type(attention_requests) is int and attention_requests >= 0 else None)
         elif format.interaction_kind == "permissions":
             payload["attentionRequired"] = bool((attention_requests or 0) + (attention.get("resultDenials") or 0))
-        if payload.get("attentionRequired") is True and record is not None and record["outcome"]["disposition"] == "completed":
-            error = ("a native interactive request was refused during this turn; a completed outcome "
+        if payload.get("attentionRequired") is True and record is not None and record["outcome"]["disposition"] in ("completed", "waiting"):
+            error = ("a native interactive request was refused during this turn; a completed or waiting outcome "
                      "cannot stand in for the Host attention that request requires")
         original_completed = (result is not None and payload.get("status") == "ok"
                               and result.identity == handle.role_run_identity and exit_code == 0 and shutdown

@@ -46,7 +46,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         })["claim"]
         self.assertIsNotNone(claimed)
         return {"runId": submitted["runId"], "turnId": claimed["turn"]["turnId"],
-                "credential": claimed["agentCredential"]}
+                "credential": claimed["agentCredential"], "control": submitted["control"], "claim": claimed}
 
     def _child(self, board, lead: dict, request_id: str, *, scope=("src",)) -> dict:
         submitted = board.call("workflow_submit", {
@@ -162,4 +162,25 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self._wrong_lead_refused(board, "workflow_reclaim", params, other)
         reclaimed = board.call("workflow_reclaim", {**params, "credential": lead["credential"]})
         self.assertTrue(reclaimed["removed"])
+        self.assertFalse(checkout.exists())
+
+    def test_host_conclusion_of_lead_concludes_and_reclaims_owned_checkout(self):
+        board, lead, _other = self._board_with_leads()
+        child = self._child(board, lead, "child-auto-conclude")
+        claim, manifest, checkout = self._claim_child(board, child)
+        (checkout / "src" / "feature.py").write_text("value = 2\n")
+        seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
+        self._finish_child(board, child, claim, seal=seal)
+        board.call("workflow_cancel", {"runId": lead["runId"], **lead["control"]})
+        attempt = lead["claim"]["attempt"]
+        board.call("worker_result", {
+            "workerId": "lead-worker", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": "l" * 16, "status": "cancelled", "result": {"status": "cancelled"},
+            "shutdownConfirmed": True,
+        })
+        concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work", **lead["control"]})
+        self.assertEqual(concluded["state"], "concluded")
+        current = board.call("workflow_get", {"runId": child["runId"]})
+        self.assertEqual(current["state"], "concluded")
+        self.assertIn(lead["runId"], current["hostConclusion"]["note"])
         self.assertFalse(checkout.exists())

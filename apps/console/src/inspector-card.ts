@@ -181,7 +181,7 @@ export function buildInspectorCard(
       fields.push({ label: "类型", value: "排队" }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push({ label: "结果", value: span.endAt ? "已认领" : "仍在排队" });
     } else if (span.kind === "host") {
-      fields.push({ label: "类型", value: "等待 Host" }, microTaskField(row), spanTimingValue(span, observedAtMs));
+      fields.push({ label: "类型", value: row.leadOwnership ? "等待 Lead" : "等待 Host" }, microTaskField(row), spanTimingValue(span, observedAtMs));
       fields.push(span.summary
         ? { label: "结果", value: outcomeLabel(span, outcome), title: span.summary }
         : { label: "结果", value: outcomeLabel(span, outcome) });

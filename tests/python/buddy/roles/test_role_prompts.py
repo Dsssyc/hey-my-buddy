@@ -57,7 +57,7 @@ class RolePromptTests(unittest.TestCase):
                 "You are a Worker whose micro task carries delegation authority",
                 "Everything in the Worker text above applies to you towards your Host",
                 "through the blackboard with the hey-my-buddy launcher, within the limits the task states",
-                "`submit`", "`await`", "`get`", "`continue`", "`accept`", "`conclude`",
+                "`submit`", "`waiting`", "`get`", "`continue`", "`accept`", "`conclude`",
                 "You answer to your Host for the whole task",
                 "You cannot grant delegation authority, change settings, or act on micro tasks that are not yours",
                 "Anything that needs the user goes to your Host as a request",

@@ -25,3 +25,8 @@ def default_state_dir() -> Path:
 
 def default_runtime_root() -> Path:
     return data_root() / "runtime"
+
+
+def control_file_path(state_dir: Path, run_id: str, generation: int) -> Path:
+    """The location of the CLI's saved control capability; no file is read here."""
+    return state_dir / "controls" / f"{run_id}.g{generation}.json"

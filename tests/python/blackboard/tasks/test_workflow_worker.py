@@ -275,14 +275,16 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, submitted = self.cli("submit", json.dumps({
                 **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
                 "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
+                "requiredCapabilities": ["launcher-private"],
                 "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead tasks"},
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh"]}), env=self.env())
+            code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh", "launcher-private"]}), env=self.env())
             self.assertEqual(code, 0, registered)
             code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
                                                                   "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
             self.assertEqual(code, 0, response)
+            self.assertIsNotNone(response.get("claim"), response)
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
             credential.chmod(0o600)
