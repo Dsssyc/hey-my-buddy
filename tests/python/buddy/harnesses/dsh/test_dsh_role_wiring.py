@@ -25,7 +25,7 @@ from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam, worker_format
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    decode_run_request, decode_run_result, encode_run_result as encode_run_result_str)
+    decode_run_result)
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor
 
@@ -90,8 +90,7 @@ class DshRoleCase(unittest.TestCase):
 
     def micro_task_record(self, context, *, permission=False, answer=False) -> None:
         checkpoint, _answer, finish = qualified_tools(context.attempt_id)
-        extra = ["--prompt-mode", "micro-task", "--bridge-config",
-                 str(context_root(context, "dsh") / "finish-bridge.json"),
+        extra = ["--prompt-mode", "micro-task",
                  "--finish-tool", finish, "--checkpoint-tool", checkpoint]
         if permission:
             extra.append("--micro-task-permission")
@@ -103,7 +102,7 @@ class DshRoleCase(unittest.TestCase):
         self.micro_task_record(context, permission=permission, answer=answer)
         executor = worker_executor("dsh")
         handle = executor.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait((context.timeout_seconds or 15) + 15),
                              "the role controller did not settle within its deadline")
         return handle, executor.collect(handle, context)
@@ -194,7 +193,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 self.record.write_text(json.dumps(record))
                 executor = worker_executor("dsh")
                 handle = executor.start(context)
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.2) if h.group_alive() else None)
+                self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.2), h.wait(15)) if not h.finished else None)
                 self.assertIsNotNone(handle.wait(30))
                 outcome = executor.collect(handle, context)
                 self.assertEqual(outcome.status, "failed")
@@ -206,8 +205,8 @@ class WorkerRegisteredRunTests(DshRoleCase):
         context = self.context()
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        request = decode_run_request(Path(handle.role_run_control["requestFile"]).read_bytes())
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        request = handle.request
+        result = handle.result
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.identity, handle.role_run_identity)
         self.assertEqual(request.tool_scope, "write")
@@ -231,14 +230,12 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertIn("nativeAttention", outcome.result)
         self.assertFalse(outcome.result["attentionRequired"],
                          "no native interactive request was refused in this turn")
-        self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")
+        self.assertEqual(handle.pid, os.getpid())
 
     def test_an_answered_host_question_flows_through_the_micro_task_turn(self):
         import threading
         import time as time_module
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request as decode_request
-        from hey_my_buddy.json_codec import decode_strict_json
         context = self.context()
         self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")
@@ -248,18 +245,17 @@ class WorkerRegisteredRunTests(DshRoleCase):
             handle = executor.start(context)
             holder.append(handle)
             self.addCleanup(lambda: handle.terminate(grace_seconds=0.2)
-                            if handle.group_alive() else None)
+                            if not handle.finished else None)
 
         thread = threading.Thread(target=attempt)
         thread.start()
         root = context_root(context, "dsh")
-        request_file = root / "role-run-request.json"
         deadline = time_module.monotonic() + 30
-        while time_module.monotonic() < deadline and not request_file.is_file():
+        while time_module.monotonic() < deadline and not (holder and holder[0].request):
             time_module.sleep(0.05)
-        self.assertTrue(request_file.is_file(), "the controller never published its run request")
-        request = decode_request(request_file.read_bytes())
-        control = decode_strict_json((root / "role-run-control.json").read_bytes())
+        self.assertTrue(holder and holder[0].request, "the inline run never published its request")
+        request = holder[0].request
+        control = holder[0].role_run_control
         from hey_my_buddy.buddy.roles.live import handle_live_binding
         channel = None
         while time_module.monotonic() < deadline:
@@ -288,7 +284,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed",
                          "the answered question no longer blocks the completed finish")
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
         report = json.loads(Path(reference.location).read_text())
         self.assertEqual(report["answered"], 1)
@@ -312,7 +308,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         context = self.context()
         handle, original = self.execute(context)
         self.assertEqual(original.status, "ok", original.to_report())
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
         value = json.loads(Path(reference.location).read_text())
         value["receiptVerified"] = False
@@ -331,7 +327,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 context = self.context(attempt=f"attempt-{kind}", index=2 if kind == "attention-report" else 1)
                 handle, original = self.execute(context, permission=True)
                 self.assertEqual(original.status, "ok", original.to_report())
-                result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+                result = handle.result
                 reference = next(ref for ref in result.evidence_refs if ref.kind == kind)
                 path = Path(reference.location)
                 path.write_bytes(path.read_bytes() + b" ")
@@ -348,10 +344,9 @@ class WorkerRegisteredRunTests(DshRoleCase):
         context = self.context()
         handle, original = self.execute(context)
         self.assertEqual(original.status, "ok", original.to_report())
-        path = Path(handle.log_paths["stdout"])
-        fields = decode_run_result(path.read_bytes()).to_payload()
+        fields = handle.result.to_payload()
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        path.write_text(encode_run_result_str(decode_run_result(fields)))
+        handle.result = decode_run_result(fields)
         refused = worker_executor("dsh").collect(handle, context)
         self.assertEqual(refused.status, "failed")
         self.assertIs(refused.shutdown_confirmed, False,

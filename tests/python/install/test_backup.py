@@ -14,7 +14,7 @@ from support import BoardTestCase
 class BackupTests(BoardTestCase):
     def test_roundtrip_one_generation_and_excluded_regenerable_data(self):
         board = self.board()
-        for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'workers/local/receipts/a.json', 'workers/local/startup.json', 'worker-pool.json', 'workspaces/large', 'harnesses/zcode/native'):
+        for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'attempts/run/attempt/result-receipt.json', 'workers/local/startup.json', 'worker-pool.json', 'workspaces/large', 'harnesses/zcode/native'):
             p = board.directory / name
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text('{}')
@@ -23,7 +23,7 @@ class BackupTests(BoardTestCase):
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertIn('state/controls/x.json', manifest['files'])
-        self.assertIn('state/workers/local/receipts/a.json', manifest['files'])
+        self.assertIn('state/attempts/run/attempt/result-receipt.json', manifest['files'])
         self.assertIn('state/workers/local/startup.json', manifest['files'])
         self.assertIn('state/worker-pool.json', manifest['files'])
         self.assertFalse(any('workspaces' in p or 'harnesses' in p for p in manifest['files']))
@@ -33,6 +33,23 @@ class BackupTests(BoardTestCase):
         self.assertEqual(json.loads((current / 'state/controls/x.json').read_text()), {'new': True})
         self.assertEqual([p.name for p in current.parent.iterdir() if p.is_dir()], ['current'])
         self.assertEqual((current / 'state/controls/x.json').stat().st_mode & 0o777, 0o600)
+
+    def test_execution_receipts_are_durable_state_and_startup_secrets_are_excluded(self):
+        from hey_my_buddy.protocol import attempt_evidence
+        board = self.board()
+        directory = board.directory / "attempts" / "run" / "attempt"
+        directory.mkdir(mode=0o700, parents=True)
+        for name in ("result-receipt.json", "result-delivery.json", "execution.stdout.log", "execution.stderr.log"):
+            (directory / name).write_text("{}")
+        for name in ("execution-start.json", "execution-live.json", "execution-stop.json"):
+            (directory / name).write_text('{"private":"launch-secret"}')
+        files = backup.verify(Path(board.call("backup", {})["path"]))["files"]
+        for name in ("result-receipt.json", "result-delivery.json", "execution.stdout.log", "execution.stderr.log"):
+            self.assertIn("state/attempts/run/attempt/" + name, files)
+        for name in ("execution-start.json", "execution-live.json", "execution-stop.json"):
+            self.assertNotIn("state/attempts/run/attempt/" + name, files)
+        self.assertFalse(attempt_evidence.is_evidence("result-receipt.json"))
+        self.assertFalse(attempt_evidence.is_evidence("execution-live.json"))
 
     def test_verify_refuses_consumed_upgrade_schema(self):
         board = self.board()

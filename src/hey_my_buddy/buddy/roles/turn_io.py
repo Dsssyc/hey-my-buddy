@@ -130,7 +130,6 @@ def write_turn_files(context: ExecutionContext) -> None:
             "attemptId": context.attempt_id, "generation": context.generation, "turnId": context.turn_id,
             "stateDir": context.environment["HMB_STATE_DIR"],
         })
-        context.environment["HMB_AGENT_CREDENTIAL_FILE"] = str(context.credential_file())
 
 
 def workspace_cwd(context: ExecutionContext) -> str:

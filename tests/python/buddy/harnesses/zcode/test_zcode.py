@@ -65,7 +65,7 @@ class ZcodeFixtureCase(unittest.TestCase):
 
     def execute(self, context):
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
         outcome = self.adapter.collect(handle, context)
         return handle, outcome
@@ -85,7 +85,7 @@ class ZcodeFixtureCase(unittest.TestCase):
                                  "the owned endpoint was left behind")
         # LIFO: stop the actual held group before cleaning its captured endpoint.
         self.addCleanup(release)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
 
     def live_channel(self, handle):
         """The holder's bound C-Two channel of this own run, once its ready file lands."""
@@ -134,9 +134,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         """The attempt-private journal path from the role's real control record."""
         from hey_my_buddy.private_dirs import context_root
 
-        control = json.loads((context_root(context, "zcode") / "role-run-control.json").read_text())
-        self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
-        return Path(control["inquiry"]["resultsPath"])
+        return context.directory / "inquiry.results.jsonl"
 
     def inquiry_records(self, context, inquiry_id):
         """The durable journal's ordered records of one inquiry of this attempt."""
@@ -149,22 +147,25 @@ class ZcodeFixtureCase(unittest.TestCase):
     def release(self, context):
         from hey_my_buddy.private_dirs import context_root
 
-        (context_root(context, "zcode") / "native-logs" / "release-turn").touch()
+        next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("release-turn").touch()
 
     def native_log(self, context, name):
         from hey_my_buddy.private_dirs import context_root
 
-        path = context_root(context, "zcode") / "native-logs" / name
-        return path.read_text() if path.exists() else ""
+        path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
+        return path.read_text() if path is not None and path.exists() else ""
 
     def wait_file(self, context, name, timeout=20):
         from hey_my_buddy.private_dirs import context_root
 
-        path = context_root(context, "zcode") / "native-logs" / name
+        path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and not path.exists():
+        while time.monotonic() < deadline:
+            path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
+            if path is not None:
+                return path.read_text()
             time.sleep(0.05)
-        return path.read_text() if path.exists() else None
+        return None
 
     def wait_native_input(self, context, timeout=20):
         """Block until the fixture recorded this turn's input, bounded in time.
@@ -236,19 +237,19 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         # descriptor or the report.
         from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, "zcode")
-        control = json.loads((private_root / "role-run-control.json").read_text())
+        control = handle.role_run_control
         self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
         self.assertEqual(control, handle.role_run_control)
         self.assertFalse((private_root / "inquiry.json").exists(),
                          "the retired per-turn inquiry.json must not be written")
         material = control["live"]
-        self.assertEqual(set(material), {"instanceId", "token", "readyFile"}, material)
+        self.assertEqual(set(material), {"instanceId", "token"}, material)
         self.assertEqual(len(material["instanceId"]), 64)
         self.assertEqual(len(material["token"]), 64)
-        ready = Path(material["readyFile"])
+        ready = handle.execution_live_file
         self.assertEqual(ready.parent, context_root(context, "zcode"))
         self.assertEqual(oct(ready.stat().st_mode & 0o777), "0o600")
-        descriptor = json.loads(ready.read_text())
+        descriptor = json.loads(ready.read_text())["descriptor"]
         self.assertEqual(set(descriptor), {"address", "name", "instanceId", "hostPid", "endpointCredential"}, descriptor)
         self.assertEqual(descriptor["instanceId"], material["instanceId"])
         self.assertEqual(descriptor["hostPid"], handle.pid)
@@ -350,11 +351,11 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_failed_turn_can_reconstruct_a_new_root_without_a_verified_session(self):
         first_context = self.context("tool-error")
-        _, first = self.execute(first_context)
+        first_handle, first = self.execute(first_context)
         self.assertEqual(first.status, "failed", first.to_report())
         self.assertNotIn("turn", first.result)
         from hey_my_buddy.private_dirs import context_root
-        root = Path(json.loads((context_root(first_context, "zcode") / "role-run-control.json").read_text())["nativeRoot"])
+        root = Path(first_handle.role_run_control["nativeRoot"])
         prior_session = json.loads((root / "sessions.fixture.json").read_text())["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
         self.assertEqual(second.status, "ok", second.to_report())
@@ -423,10 +424,11 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_absent_budget_still_honors_explicit_cancellation(self):
         context = self.context("hang", timeout=None)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
         self.wait_native_input(context)
         self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
@@ -435,7 +437,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
         context = self.context(timeout=10)
         handle = self.adapter.start(context)
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertGreater(handle.deadline, time.monotonic())
         self.assertFalse(math.isinf(handle.deadline))
 
@@ -451,7 +453,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         context = self.context()
         handle, result = self.execute(context)
         self.assertEqual(result.status, "ok", result.to_report())
-        Path(handle.log_paths["stdout"]).write_text("incomplete controller output")
+        handle.result = None
         uncertain = self.adapter.collect(handle, context)
         self.assertEqual(uncertain.status, "failed")
         self.assertFalse(uncertain.shutdown_confirmed)
@@ -491,6 +493,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         handle = self.adapter.start(context)
         self.wait_native_input(context)
         self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)

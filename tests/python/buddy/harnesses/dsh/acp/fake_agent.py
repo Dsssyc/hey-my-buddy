@@ -172,6 +172,9 @@ class FakeAgent:
     # -- MCP stub mounting -------------------------------------------------
 
     def mount_stub(self, entry: dict) -> dict:
+        if "hey_my_buddy.buddy.roles.session_mcp" in entry.get("args", []):
+            arguments = entry["args"]
+            self.bridge_config = arguments[arguments.index("--config") + 1]
         name = entry.get("name")
         env = entry.get("env")
         if env is not None and not isinstance(env, list):

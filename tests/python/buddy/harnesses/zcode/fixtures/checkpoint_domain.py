@@ -148,8 +148,9 @@ def serve():
         nonlocal cleaned
         if not cleaned:
             if handle is not None:
-                if handle.group_alive():
+                if not handle.finished:
                     fixture.adapter.cancel(handle)
+                    fixture.assertIsNotNone(handle.wait(15))
                 fixture.assertTrue(handle.shutdown_confirmed(),
                                    "owned controller stop unconfirmed; native state unknown")
             fixture.assertTrue(fixture.doCleanups(), "owned fixture cleanup unconfirmed")
@@ -171,16 +172,16 @@ def serve():
                     fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
                                         "holder must use its own actual process-level IPC domain")
                     material = handle.role_run_control["live"]
-                    descriptor = json.loads(Path(material["readyFile"]).read_text())
+                    descriptor = json.loads(handle.execution_live_file.read_text())["descriptor"]
                     facts = {"attemptId": context.attempt_id, "ownerPid": os.getpid(),
                              "controllerPid": handle.pid, "instanceId": material["instanceId"],
                              "token": material["token"], "address": descriptor["address"],
                              "state": str(state), "runtime": str(runtime), "home": str(home),
                              "ipcRoot": str(cc.local_endpoint_context().root),
-                             "live": handle.process.poll() is None}
+                             "live": handle.exit_code is None}
                 elif operation == "live":
                     channel = fixture.ready_channel(handle)
-                    facts = {"live": handle.process.poll() is None}
+                    facts = {"live": handle.exit_code is None}
                 elif operation == "ask":
                     _, asked = fixture.ask(handle, command["id"], command["question"], channel)
                     facts = {"correlation": asked.native_correlation.value}
@@ -189,7 +190,7 @@ def serve():
                 elif operation == "finish-accepted":
                     fixture.assertIsNotNone(fixture.wait_file(context, "finish-accepted"))
                 elif operation == "late-asked":
-                    (context_root(context, "zcode") / "native-logs" / "late-asked").touch()
+                    next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("late-asked").touch()
                 elif operation == "collect":
                     fixture.assertIsNotNone(handle.wait(40), "controller did not exit")
                     outcome = fixture.adapter.collect(handle, context)

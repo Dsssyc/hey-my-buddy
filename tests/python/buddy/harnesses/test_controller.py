@@ -1,10 +1,4 @@
-"""The shared mechanical controller layer, against private model-free fixtures.
-
-One real plain-Python child proves the launch wiring end to end; real callers
-(run_execution._launch, structured_call.collect) prove that the baseline's
-evaluation order, log-file creation, descriptor finalization and outer stop
-coercion survive the shared face, including on the failure paths.
-"""
+"""Shared discovery process mechanics and inline Router collection over private fixtures."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -22,23 +16,18 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import base, controller
-from hey_my_buddy.buddy.harnesses import runtime_selection
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.runtime import windows_process
 from hey_my_buddy.buddy.runtime.windows_process import ProcessCreationEvidence
-from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
     collect_controller,
     launch_controller,
     read_strict_result,
-    router_stop_confirmed,
     signal_name,
     stop_confirmed,
 )
 from hey_my_buddy.buddy.roles import structured_call
-from hey_my_buddy.buddy.roles import run_execution
-from hey_my_buddy.buddy.roles import turn_io
 
 
 CHILD_SOURCE = "print('controller-out')"
@@ -452,89 +441,6 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             self.assertIsNone(state["process"].poll())
 
 
-class CodexCallerLaunchOrderTests(unittest.TestCase):
-    """The shared caller used by Codex keeps the baseline's FD boundary.
-
-    The baseline opened the run's logs first and evaluated the working directory
-    and environment only inside the spawn ``try``: an evaluation failure leaves
-    both log files behind, closes their descriptors in the ``finally`` and never
-    spawns. The probe ``controller-first-review`` pinned exactly this.
-    """
-
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="controller-caller-")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-
-    def run_caller(self, failure):
-        directory = self.root / f"attempt-{failure}"
-        directory.mkdir(mode=0o700)
-        paths = {"stdout": str(directory / "stdout"), "stderr": str(directory / "stderr")}
-        context = SimpleNamespace(directory=directory, environment={}, log_paths=lambda: paths,
-                                  timeout_seconds=None, turn_input=None)
-        trace = []
-        opened = []
-        original_open_logs = controller.open_logs
-
-        def traced_open_logs(traced_paths):
-            trace.append("logs")
-            pair = original_open_logs(traced_paths)
-            opened.extend(pair)
-            return pair
-
-        class LaunchControl(dict):
-            def __getitem__(self, key):
-                if key == "cwd":
-                    trace.append("cwd")
-                    if failure == "cwd":
-                        raise ValueError("fixture cwd failure")
-                return super().__getitem__(key)
-
-        control = LaunchControl(privateRoot=str(directory / "private"), cwd=str(directory),
-                                operation="worker", harness="codex", timeoutSeconds=None)
-        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
-
-        def traced_env(*_args, **_kwargs):
-            trace.append("env")
-            if failure == "env":
-                raise ValueError("fixture env failure")
-            return {}
-
-        def traced_spawn(*_args, **_kwargs):
-            trace.append("spawn")
-            raise OSError("fixture spawn failure")
-
-        with mock.patch.object(controller, "open_logs", traced_open_logs), \
-                mock.patch.object(runtime_selection, "controller_environment", traced_env), \
-                mock.patch.object(windows_process.subprocess, "Popen", traced_spawn):
-            raised = None
-            try:
-                run_execution._launch(control, context, environment={}, identity=identity)
-            except (ValueError, OSError) as error:
-                raised = error
-        return paths, trace, opened, raised
-
-    def assert_failure_leaves_finalized_logs(self, failure, expected_trace, expected_error):
-        paths, trace, opened, raised = self.run_caller(failure)
-        self.assertEqual(trace, expected_trace)
-        self.assertIsInstance(raised, expected_error)
-        self.assertEqual(raised.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
-        self.assertTrue(Path(paths["stdout"]).exists(), "the baseline leaves both logs behind")
-        self.assertTrue(Path(paths["stderr"]).exists(), "the baseline leaves both logs behind")
-        for descriptor in opened:
-            with self.assertRaises(OSError, msg="the finally must close every opened descriptor"):
-                os.fstat(descriptor)
-
-    def test_cwd_failure_keeps_the_baseline_order_logs_then_cwd(self):
-        self.assert_failure_leaves_finalized_logs("cwd", ["logs", "cwd"], ValueError)
-
-    def test_env_failure_keeps_the_baseline_order_logs_cwd_then_env(self):
-        self.assert_failure_leaves_finalized_logs("env", ["logs", "cwd", "env"], ValueError)
-
-    def test_spawn_failure_still_finalizes_the_opened_logs(self):
-        self.assert_failure_leaves_finalized_logs("spawn", ["logs", "cwd", "env", "spawn"], OSError)
-
-
 class StrictReadTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-read-")
@@ -639,30 +545,6 @@ class StopConfirmedTests(unittest.TestCase):
         self.assertEqual(observations, [True])
 
 
-class RouterStopTests(unittest.TestCase):
-    """The Router rule coerces the outer observation with ``is True`` as well."""
-
-    RECEIPT = {"processState": {"shutdownConfirmed": True}}
-
-    def test_true_outer_confirms(self):
-        handle = FakeHandle(True)
-        self.assertIs(router_stop_confirmed(self.RECEIPT, handle), True)
-        self.assertEqual(handle.calls, 1)
-
-    def test_non_boolean_outer_values_never_confirm(self):
-        for value in (1, "unknown", None, False):
-            with self.subTest(value=value):
-                handle = FakeHandle(value)
-                self.assertIs(router_stop_confirmed(self.RECEIPT, handle), False)
-                self.assertEqual(handle.calls, 1)
-
-    def test_a_missing_or_untrue_receipt_skips_the_outer_observation(self):
-        handle = FakeHandle(True)
-        self.assertIs(router_stop_confirmed({}, handle), False)
-        self.assertIs(router_stop_confirmed({"processState": {"shutdownConfirmed": 1}}, handle), False)
-        self.assertEqual(handle.calls, 0)
-
-
 class RealStopTests(unittest.TestCase):
     def test_a_terminated_real_child_confirms_only_with_its_receipt(self):
         temporary = tempfile.TemporaryDirectory(prefix="controller-stop-")
@@ -756,16 +638,12 @@ def _review_handle(root, outer=True):
         "nativeFailure": None,
         "value": {"schemaStatus": "valid", "parsed": {"answer": "ok"}},
     })
-    stdout = root / "stdout"
-    stdout.write_text(rc.encode_run_result(result))
-    request_file = root / "request.json"
-    request_file.write_text(rc.encode_run_request(request))
-    verdict_file = root / "verdict.json"
-    verdict_file.write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
-    return SimpleNamespace(process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
+    return SimpleNamespace(exit_code=0, result=result, request=request,
+                           verdict={"stopReason": None, "elapsedMs": 1},
                            shutdown_confirmed=lambda: outer, role_run_identity=request.identity,
-                           role_run_control={"operation": "review", "harness": request.harness,
-                                             "requestFile": str(request_file), "verdictFile": str(verdict_file)})
+                           role_run_original_identity=request.identity, role_run_active_identity=request.identity,
+                           wrap_up_started=False,
+                           role_run_control={"operation": "review", "harness": request.harness})
 
 
 class RouterCollectCoercionTests(unittest.TestCase):
@@ -795,40 +673,12 @@ class RouterCollectCoercionTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="controller-router-bad-")
         self.addCleanup(temporary.cleanup)
         handle = _review_handle(Path(temporary.name))
-        Path(handle.log_paths["stdout"]).write_bytes(b"{broken")
+        handle.result = None
+        handle.shutdown_confirmed = lambda: False
         outcome = structured_call.collect(handle)
         self.assertEqual(outcome.status, "failed")
         self.assertIs(outcome.shutdown_confirmed, False)
         self.assertEqual(outcome.result["code"], "invalid-native-result")
-
-
-class ReplacedEvidenceTests(unittest.TestCase):
-    """A replaced evidence path never becomes the collected native result.
-
-    The private-path guard and the ordinary-file check of the Router's read are
-    what make a replaced final component — here a link pointing at an outside
-    payload that claims a clean confirmed stop — behave exactly like an
-    unreadable one: the real ``structured_call.collect`` folds it into its own
-    invalid-native-result refusal instead of reading through the replacement.
-    """
-
-    def test_a_replaced_stdout_link_still_refuses_at_the_real_collect(self):
-        with tempfile.TemporaryDirectory(prefix="controller-replaced-") as name:
-            root = Path(name)
-            outside = root / "outside"
-            outside.mkdir()
-            handle = _review_handle(root)
-            stdout = Path(handle.log_paths["stdout"])
-            valid_result = stdout.read_bytes()
-            self.assertEqual(structured_call.collect(handle).status, "ok")
-            (outside / "payload.json").write_bytes(valid_result)
-            stdout.unlink()
-            stdout.symlink_to(outside / "payload.json")
-            outcome = structured_call.collect(handle)
-            self.assertEqual(outcome.status, "failed", outcome.to_report())
-            self.assertIs(outcome.shutdown_confirmed, False)
-            self.assertEqual(outcome.result["code"], "invalid-native-result")
-            self.assertEqual((outside / "payload.json").read_bytes(), valid_result)
 
 
 class SignalNameTests(unittest.TestCase):

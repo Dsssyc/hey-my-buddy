@@ -92,7 +92,7 @@ class CandidatePrepareTests(BoardTestCase):
             executor.prepare(context)
 
     def control(self, context: ExecutionContext) -> dict:
-        return decode_strict_json((context_root(context, "dsh") / "role-run-control.json").read_bytes())
+        return context.role_run_control
 
     def test_candidate_native_resume_prepares_one_micro_task_native_root_for_both_attempts(self):
         before = registry_adapter("dsh").native_resume
@@ -115,21 +115,22 @@ class CandidatePrepareTests(BoardTestCase):
         self.assertTrue(native.is_dir())
         self.assertEqual(stat.S_IMODE(native.stat().st_mode) & 0o777, 0o700)
 
-        # Each attempt still holds its own input, control and credential
-        # reference; only the dummy token this test minted exists anywhere.
+        # Each attempt holds its own input and credential; the run control is
+        # an in-process object rather than a second-process handoff file.
         for context, root, entry in ((first, first_root, first_control), (second, second_root, second_control)):
             self.assertEqual(entry["inputFile"], str(context.turn_input_file()))
             self.assertEqual(entry["outputFile"], str(context.turn_output_file()))
             self.assertEqual(entry["cwd"], str(Path(self.workdir())))
             self.assertTrue((context.directory / "turn-input.json").is_file())
             self.assertTrue((context.directory / "task.txt").is_file())
-            self.assertTrue((root / "role-run-control.json").is_file())
+            self.assertFalse((root / "role-run-control.json").exists())
             credential = root / "agent-credential.json"
             self.assertTrue(credential.is_file())
             document = decode_strict_json(credential.read_bytes())
             self.assertEqual(document["token"], DUMMY_CREDENTIAL)
             self.assertEqual(document["attemptId"], context.attempt_id)
-            self.assertEqual(context.environment.get("HMB_AGENT_CREDENTIAL_FILE"), str(credential))
+            self.assertEqual(entry["credentialFile"], str(credential))
+            self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
 
     def test_different_tasks_prepare_isolated_native_roots(self):
         before = registry_adapter("dsh").native_resume

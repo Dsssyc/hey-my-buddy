@@ -1,4 +1,4 @@
-"""Model-free, real private service/Worker/controller C-Two integration.
+"""Model-free, real private service/Worker/execution C-Two integration.
 
 Run this file in its own Python process, as the check runner normally does.
 Every process belongs to this fixture and has a saved Popen; no default board
@@ -47,6 +47,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.logs = []
         self.service = self.worker = self.foreign = None
         self.service_endpoint = None
+        self.killed_execution = False
         self.descriptors = {}
         self.env = _child_environment(self.state, {
             "TMPDIR": str(self.root / "tmp"), "HMB_CHECKS_TMPDIR": str(self.root / "tmp"),
@@ -117,13 +118,15 @@ class CTwoIntegrationTests(unittest.TestCase):
             self.descriptors["worker"] = self.worker_descriptor.address
             self.assertEqual(value["errors"], [])
             self.assertTrue(value["running"] or value["bound"],
-                            "own Worker round ended before its controller attached")
-            return value if value["bound"] and value["controller"] else None
+                            "own Worker round ended before its execution attached")
+            return value if value["bound"] and value["execution"] else None
 
-        value = self.until(attached, "actual Worker renewal tick did not attach its live controller")
-        self.controller = LiveEndpointDescriptor.from_payload(value["controller"])
+        value = self.until(attached, "actual Worker renewal tick did not attach its live execution")
+        self.execution_descriptor = LiveEndpointDescriptor.from_payload(value["execution"])
         self.worker_descriptor = LiveEndpointDescriptor.from_payload(value["worker"])
-        self.descriptors.update(worker=self.worker_descriptor.address, controller=self.controller.address)
+        self.assertEqual(self.execution_descriptor.host_pid, value["executionPid"])
+        self.assertNotEqual(self.execution_descriptor.host_pid, self.worker_descriptor.host_pid)
+        self.descriptors.update(worker=self.worker_descriptor.address, execution=self.execution_descriptor.address)
         return value
 
     def start_foreign(self):
@@ -150,16 +153,18 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE((self.state / "ipc").stat().st_mode), 0o700)
 
     def assert_same_connection_survives_expiry(self):
-        # The ready descriptor/request are role outputs, not invented wire data.
+        # The live descriptor/request are inline role outputs, not invented wire data.
         from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request
-        requests = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/role-run-request.json"))
+        requests = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"))
         self.assertEqual(len(requests), 1)
         request = decode_run_request(requests[0].read_bytes())
-        controls = json.loads(requests[0].with_name("role-run-control.json").read_text())
-        query = dict(identity=request.identity, instance_id=self.controller.instance_id,
-                     token=controls["live"]["token"])
+        materials = list(self.state.glob("attempts/*/*/execution-live.json"))
+        self.assertEqual(len(materials), 1)
+        material = json.loads(materials[0].read_text())
+        query = dict(identity=request.identity, instance_id=self.execution_descriptor.instance_id,
+                     token=material["token"])
         slow_frame = LiveWireObserve(**query, after_seq=999, limit=1)
-        with cc.connect(HarnessRunLive, name=self.controller.name, address=self.controller.address,
+        with cc.connect(HarnessRunLive, name=self.execution_descriptor.name, address=self.execution_descriptor.address,
                         timeout=1) as peer:
             with self.assertRaises(CallDeadlineExceeded):
                 cc.with_call_options(peer, timeout=0.03).observe(canonical_json(slow_frame.to_payload()))
@@ -169,7 +174,7 @@ class CTwoIntegrationTests(unittest.TestCase):
             self.assertEqual(capabilities["inquiryDelivery"], "cooperative-checkpoint")
         self.assertIsNone(self.worker.poll())
         self.assertTrue(exchange(self.worker, {"op": "status"})["running"])
-        self.assertEqual(self.endpoint_status(self.controller.address)["status"], "present")
+        self.assertEqual(self.endpoint_status(self.execution_descriptor.address)["status"], "present")
         self.record("same-connection-deadline.json", {
             "sdkDeadlineRaised": True, "samePeerFollowupSucceeded": True, "peerStillPresent": True})
 
@@ -184,15 +189,16 @@ class CTwoIntegrationTests(unittest.TestCase):
             "inquiryId": "through-service", "question": "Commit this private inquiry.", "timeoutMs": 2000})
         self.record("service-inquiry.json", observation)
         self.assertTrue(observation["bridge"]["enabled"])
-        self.assertTrue(observation["bridge"]["observed"], "service -> Worker -> controller must return a commit")
+        self.assertTrue(observation["bridge"]["observed"], "service -> Worker -> execution must return a commit")
         self.assertEqual(observation["inquiry"]["state"], "queued")
         self.assertEqual(observation["journal"]["entries"], 1)
-        journals = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-journal.jsonl"))
+        journals = list(self.state.glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/native-journal.jsonl"))
         self.assertEqual(len(journals), 1)
         committed = json.loads(journals[0].read_text())
         self.assertEqual(committed["requestId"], "through-service")
         self.assertEqual(committed["identity"]["taskId"], self.run_id)
-        exchange(self.worker, {"op": "kill-controller" if kill else "finish"})
+        exchange(self.worker, {"op": "kill-execution" if kill else "finish"})
+        self.killed_execution = kill
 
         def finished():
             value = exchange(self.worker, {"op": "status"})
@@ -201,23 +207,28 @@ class CTwoIntegrationTests(unittest.TestCase):
         value = self.until(finished, "own Worker did not finish its single main-loop round")
         self.record("worker-final.json", value)
         self.assertEqual(value["errors"], [])
-        self.assertEqual(len(value["reports"]), 1)
-        self.assertTrue(value["reports"][0]["shutdownConfirmed"])
-        self.assertTrue(value["reports"][0]["result"]["processState"]["shutdownConfirmed"])
+        self.assertEqual(len(value["reports"]), 0 if kill else 1)
+        if not kill:
+            self.assertTrue(value["reports"][0]["shutdownConfirmed"])
+            self.assertTrue(value["reports"][0]["result"]["processState"]["shutdownConfirmed"])
+        native_stop = json.loads(journals[0].with_name("native-stopped.json").read_text())
+        self.assertTrue(native_stop["eofObserved"], "owned native child observes execution pipe EOF")
         self.assertIsNotNone(value["cleanup"], "owning Worker must record its endpoint cleanup")
         self.assertEqual(value["cleanup"]["outcome"], "reaped" if kill else "already-absent")
-        self.assertEqual(self.endpoint_status(self.controller.address)["status"], "absent")
+        self.assertEqual(self.endpoint_status(self.execution_descriptor.address)["status"], "absent")
         self.assertEqual(self.endpoint_status(self.worker_descriptor.address)["status"], "absent")
         self.assertIsNone(self.foreign.poll(), "foreign owned peer must survive the holder's reclamation")
         self.assertEqual(self.endpoint_status(self.foreign_descriptor.address)["status"], "present")
         task = self.client.get(runId=self.run_id)
-        self.assertTrue(task["shutdownConfirmed"], "two-layer fact must reach authoritative board")
+        # A killed execution has no durable native stop receipt. Endpoint
+        # reclamation alone cannot establish native shutdown on the board.
+        self.assertEqual(task["shutdownConfirmed"], not kill)
         self.record("task-final.json", task)
 
     def test_normal_stop_and_same_connection_after_deadline(self):
         self.exercise(kill=False)
 
-    def test_holder_reaps_killed_controller_and_preserves_foreign_peer(self):
+    def test_holder_reaps_killed_execution_and_preserves_foreign_peer(self):
         self.exercise(kill=True)
 
     def stop_owned(self):
@@ -247,7 +258,11 @@ class CTwoIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(endpoint, "service start failed; retain root for Host")
             stopped = _request(endpoint, "service_control", {
                 "action": "stop", "drainSeconds": 1, "reason": "owned integration fixture"}, state_dir=self.state)
-            self.assertTrue(stopped["stopped"])
+            self.record("service-stop.json", stopped)
+            self.assertEqual(stopped["stopped"], not self.killed_execution)
+            if self.killed_execution:
+                self.assertTrue(stopped["unresolvedAttempts"],
+                                "killed execution retains its unconfirmed native receipt")
 
         try:
             stop_peer(self.worker, "Worker", 20)

@@ -22,7 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, wait_for, stop_private_workers
+from support import BoardTestCase, run_claim_in_process, wait_for, stop_private_workers
 
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
@@ -30,6 +30,7 @@ from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.blackboard.store.db import TERMINATION_REASONS
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import UNCERTAIN_QUEUE_REASON
+from hey_my_buddy.private_dirs import attempt_root
 from hey_my_buddy.buddy.runtime.worker import (
     TERMINATION_COMPLETED,
     TERMINATION_DEADLINE,
@@ -46,7 +47,10 @@ from hey_my_buddy.buddy.runtime.worker import (
     _Renewal,
     classify_termination,
 )
-from hey_my_buddy.protocol.process_identity import _creation_time, inspect_process_identity, stop_orphan_process
+from hey_my_buddy.protocol.process_identity import (
+    _creation_time, inspect_process_identity, native_process_journal_path,
+    read_native_process_journal, stop_orphan_process,
+)
 
 SOURCE_ROOT = Path(__file__).resolve().parents[4] / "src"
 TEST_ROOT = Path(__file__).resolve().parent
@@ -277,90 +281,6 @@ class RenewalAndRefusal(RecoveryBase):
         self.assertEqual([entry["state"] for entry in live.board.store.resource_claims()], ["held"])
         self.assertTrue(live.handle.group_alive(), "the owned child was never replaced or restarted")
 
-    def test_a_durable_receipt_is_replayed_instead_of_resuming_execution(self):
-        live = self.live_attempt()
-        live.implementation.cancel(live.handle)
-        live.handle.wait(15)
-        attempt = live.attempt
-        live.worker.spool.write(
-            attempt["attemptId"],
-            {
-                "attemptId": attempt["attemptId"],
-                "taskId": attempt["taskId"],
-                "generation": attempt["generation"],
-                "workerId": "w-live",
-                "nonce": live.nonce,
-                "commandId": f"result:{attempt['attemptId']}",
-                "report": {
-                    "status": "ok",
-                    "result": {"status": "ok"},
-                    "exitCode": 0,
-                    "signal": None,
-                    "error": None,
-                    "shutdownConfirmed": True,
-                    "artifacts": [],
-                    "terminationReason": "completed",
-                },
-                "createdAt": "2026-01-01T00:00:01.000Z",
-            },
-        )
-        live.board.store.reconcile_startup()
-        self.assertFalse(live.renewal()._renew(), "delivering the receipt ends this renewal thread")
-        result = live.client.result(runId=live.task["runId"])
-        self.assertEqual(result["status"], "completed", result)
-        self.assertEqual(result["resultMeta"]["terminationReason"], "completed")
-        self.assertEqual(result["attemptId"], attempt["attemptId"])
-        self.assertEqual(
-            [event for event in live.client.read_events(after=0)["events"] if event["kind"] == "attempt.reconciled"],
-            [],
-            "a completed attempt is never reconciled back to executing",
-        )
-
-
-class CompletionDuringOutage(RecoveryBase):
-    def test_a_completion_during_the_outage_is_replayed_and_never_re_executed(self):
-        board = self.board()
-        online = {"value": False}
-        real_call = board.call
-
-        def flaky(operation: str, params: dict) -> dict:
-            if operation == "worker_result" and not online["value"]:
-                raise BoardError("SERVICE_UNAVAILABLE", "simulated daemon outage")
-            return real_call(operation, params)
-
-        client = BoardClient(self.directory, call=flaky)
-        cwd = self.workdir()
-        log = cwd / "executions.txt"
-        task = client.submit(
-            requestId="outage-1",
-            task="count executions",
-            cwd=str(cwd),
-            adapter="command",
-            argv=["/bin/sh", "-c", f"echo run >> {log}"],
-            expectedSeconds=60,
-        )["task"]
-        worker = Worker("w-outage", self.directory, client=client, retry_seconds=2, log=silent)
-        worker.register()
-        self.assertEqual(worker.run_once(), "replay")
-        self.assertEqual(len(log.read_text().splitlines()), 1)
-        attempt_id = worker.spool.read_startup()["attemptId"]
-
-        # The service restarts while the receipt cannot be committed: the attempt is
-        # authoritatively uncertain, not failed and not re-runnable.
-        board.store.reconcile_startup()
-        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "uncertain")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "running")
-
-        online["value"] = True
-        self.assertEqual(worker.run_once(), "replayed")
-        self.assertEqual(len(log.read_text().splitlines()), 1, "a durable receipt must never execute twice")
-        result = client.result(runId=task["runId"])
-        self.assertEqual(result["status"], "completed", result)
-        self.assertEqual(result["resultMeta"]["terminationReason"], "completed")
-        self.assertEqual(result["attemptId"], attempt_id)
-        self.assertIsNone(worker.spool.read(attempt_id), "the receipt is cleared only after the commit")
-
-
 class TerminationTruth(RecoveryBase):
     def test_expected_duration_does_not_stop_command_and_cancel_still_works(self):
         board = self.board(lease_seconds=15)
@@ -372,7 +292,8 @@ class TerminationTruth(RecoveryBase):
         )["task"]
         worker = Worker("w-unlimited", self.directory, client=client, lease_seconds=15, log=silent)
         worker.register()
-        worker.run_once()
+        with run_claim_in_process():
+            worker.run_once()
         result = client.result(runId=finished["runId"])
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_COMPLETED)
@@ -383,11 +304,13 @@ class TerminationTruth(RecoveryBase):
             adapter="command", argv=["/bin/sh", "-c", "sleep 60"], expectedSeconds=1,
         )["task"]
         outcome: dict = {}
-        thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="unlimited-run")
-        thread.start()
-        self.assertTrue(wait_for(lambda: client.get(runId=pending["runId"])["status"] == "running", 20))
-        client.cancel(runId=pending["runId"], reason="operator request")
-        thread.join(timeout=40)
+        with run_claim_in_process() as active:
+            thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="unlimited-run")
+            thread.start()
+            self.assertTrue(wait_for(lambda: active and client.get(runId=pending["runId"])["status"] == "running", 20))
+            client.cancel(runId=pending["runId"], reason="operator request")
+            active[-1].request_stop("unknown")
+            thread.join(timeout=40)
         self.assertFalse(thread.is_alive(), "an ordinary execution must remain cancellable")
         cancelled = client.result(runId=pending["runId"])
         self.assertEqual(cancelled["status"], "cancelled")
@@ -447,25 +370,24 @@ class TerminationTruth(RecoveryBase):
         worker = Worker("w-cancel", self.directory, client=client, lease_seconds=15, log=silent)
         worker.register()
         outcome: dict = {}
-        thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="run-once")
-        thread.start()
-        self.assertTrue(wait_for(lambda: client.get(runId=task["runId"])["status"] == "running", 20))
-        client.cancel(runId=task["runId"], reason="operator request")
-        thread.join(timeout=40)
+        with run_claim_in_process() as active:
+            thread = threading.Thread(target=lambda: outcome.update(result=worker.run_once()), name="run-once")
+            thread.start()
+            self.assertTrue(wait_for(lambda: active and client.get(runId=task["runId"])["status"] == "running", 20))
+            client.cancel(runId=task["runId"], reason="operator request")
+            active[-1].request_stop("unknown")
+            thread.join(timeout=40)
         self.assertFalse(thread.is_alive(), "the worker must observe the durable cancel intent and stop its child")
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_UNKNOWN_STOP)
         self.assertEqual(result["stopInitiator"], "unknown")
         self.assertNotIn("stopInitiator", result["resultMeta"])
-
-
-
 class RealDaemonRestart(RecoveryBase):
     """The same regression over the real daemon and a real detached supervisor."""
 
     @unittest.skipUnless(os.name == "posix", "real Worker crash injection uses POSIX processes")
-    def test_killed_worker_with_surviving_child_is_stopped_and_interrupted(self):
+    def test_killed_worker_with_surviving_execution_stops_it_without_reexecution(self):
         self._crash_worker_with_child(kill_child=False)
 
     @unittest.skipUnless(os.name == "posix", "real Worker crash injection uses POSIX processes")
@@ -539,9 +461,22 @@ class RealDaemonRestart(RecoveryBase):
                 self.assertEqual(starts.read_text().splitlines(), ["start"])
                 result = self.cli("result", json.dumps({"runId": run_id}), env=environment)[1]
                 self.assertEqual(result["attemptId"], attempt_id)
-                self.assertEqual(result["resultMeta"]["terminationReason"], "interrupted")
-                kind = result["result"]["interruptionEvidence"]["kind"]
-                self.assertEqual(kind, "identity-absent" if kill_child else "worker-stopped")
+                if kill_child:
+                    self.assertEqual(result["resultMeta"]["terminationReason"], "interrupted")
+                    self.assertEqual(result["result"]["interruptionEvidence"]["kind"], "identity-absent")
+                else:
+                    self.assertEqual(result["resultMeta"]["terminationReason"], "unknown-stop")
+                    self.assertTrue(result["resultMeta"]["shutdownConfirmed"])
+                    self.assertEqual(inspect_process_identity(identity), "identity-absent")
+                    journal_root = attempt_root(self.directory, "command", run_id, attempt_id)
+                    journal = read_native_process_journal(
+                        native_process_journal_path(journal_root, identity),
+                        {"taskId": run_id, "attemptId": attempt_id, "generation": 1})
+                    self.assertIsNotNone(journal)
+                    self.assertEqual(journal["pending"], 0)
+                    self.assertTrue(journal["identities"])
+                    self.assertTrue(all(inspect_process_identity(native) == "identity-absent"
+                                        for native in journal["identities"]))
                 client = BoardClient(self.directory, autostart=False)
                 self.assertTrue(wait_for(lambda: any(
                     row["workerId"] == f"crash-{suffix}" and row["pid"] == replacement.pid

@@ -11,6 +11,7 @@ FILES = frozenset({
     'task.txt', 'turn-input.json', 'turn-output.json', 'result.json',
     'spawn.intent', 'spawn.marker', 'harness-selection.json', 'harness-prestart-failure.json',
     'runner.stdout.log', 'runner.stderr.log', 'native.stderr.log',
+    'execution.stdout.log', 'execution.stderr.log',
     'activity.json', 'native-usage.json', 'attention.json',
     'inquiry.results.jsonl', 'inquiry.sock.error.json',
     'codex-control.json', 'claude-control.json', 'readonly-control.json', 'no-tool-control.json',

@@ -63,22 +63,17 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
             {"HMB_STATE_DIR": str(self.root / "state"), "HMB_RUNTIME_ROOT": str(self.root / "runtime"),
              "HMB_DEV_SOURCE": "1"})
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
-        process = SimpleNamespace(returncode=0)
-        handle = SimpleNamespace(process=process, log_paths=context.log_paths(), shutdown_confirmed=lambda: True)
         module = SimpleNamespace(check_preparation=lambda *_args: None, native_evidence=lambda _result: {})
         self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
-        with (mock.patch.object(controller, "owned_popen", return_value=process) as spawn,
-              mock.patch.object(controller, "ProcessHandle", return_value=handle)):
-            self.assertIs(run_execution.start_fast(module, "codex", context, request), handle)
-        control = handle.role_run_control
-        self.assertEqual(spawn.call_args.args[0][-2:], ["--control", str(Path(control["privateRoot"]) / "role-run-control.json")])
-        frame, _services, _observer, _correction = run_execution.fast_request(control, module)
-        Path(control["requestFile"]).write_text(rc.encode_run_request(frame))
-        Path(control["verdictFile"]).write_text(json.dumps({"stopReason": None, "elapsedMs": 1}))
-        result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
-            value=rc.RunValue( schema_status="unknown", raw="{}"),
-            stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
-        Path(handle.log_paths["stdout"]).write_text(rc.encode_run_result(result))
+        def execute(control, handle, state_dir):
+            frame, _services, _observer, _correction = run_execution.fast_request(control, module)
+            result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
+                value=rc.RunValue(schema_status="unknown", raw="{}"),
+                stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
+            return result, frame, {"stopReason": None, "elapsedMs": 1}, 0
+        with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=execute):
+            handle = run_execution.start_fast(module, "codex", context, request)
+            self.assertEqual(handle.wait(5), 0)
         return context, request, handle
 
     def assert_sentinels(self):
@@ -108,7 +103,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                              "noToolRequest": {"prompt": "malicious replacement"}}
                 control_path = Path(handle.role_run_control["privateRoot"]) / "role-run-control.json"
                 if replace_with_link:
-                    control_path.unlink()
+                    control_path.unlink(missing_ok=True)
                     control_path.symlink_to(self.outside / "control.json")
                 control_path.write_text(json.dumps(malicious))
                 request.output_schema["properties"] = {"mutated": {"type": "string"}}
@@ -260,7 +255,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
              "cwd": str(fixture.cwd), "routerBudgetSeconds": 3}, evidence, {}, fixture.environment)
         request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.wait(8), 0)
         outcome = read_only.collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -303,17 +298,11 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
                 handle = start_router_preparation(FastPreparation(native.name,  request, context, fixture.cwd))
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
+                self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.1), h.wait(15)) if not h.finished else None)
                 self.assertEqual(handle.wait(8), 0)
                 from hey_my_buddy.buddy.roles.structured_call import collect
                 outcome = collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                from hey_my_buddy.protocol.process_identity import native_process_journal_path, read_native_process_journal
-                journal_path = native_process_journal_path(context_root(context, adapter.name), handle.identity())
-                journal = read_native_process_journal(journal_path, {
-                    'taskId': context.task_id, 'attemptId': context.attempt_id, 'generation': context.generation})
-                self.assertIsNotNone(journal, 'Router recovery must find the native identities at the fixed attempt root')
-                self.assertEqual(journal['pending'], 0)
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
                            else json.loads((evidence / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
@@ -336,7 +325,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                                              router.answer_schema(["legal"]), router.budget())
         handle = start_router_preparation(ReviewPreparation("codex", CodexAdapter(), request, context,
                                                             (None, fixture.cwd, "fixture-digest")))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20))
         outcome = read_only.collect(handle)
         self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
@@ -379,7 +368,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 decision_adapter = DecisionAdapter()
                 decision_adapter.prepare(context)
                 handle = decision_adapter.start(context)
-                self.addCleanup(lambda h=handle: h.terminate(grace_seconds=0.1) if h.group_alive() else None)
+                self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.1), h.wait(15)) if not h.finished else None)
                 self.assertIsNotNone(handle.wait(8))
                 outcome = decision_adapter.collect(handle, context)
                 self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
@@ -407,10 +396,10 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = handle.role_run_control
                 self.assertEqual(set(control["inquiry"]), {"resultsPath"})
-                self.assertTrue(Path(control["live"]["readyFile"]).is_relative_to(context_root(context, "dsh")))
+                self.assertEqual(handle.execution_live_file, context_root(context, "dsh") / "execution-live.json")
                 self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
                 self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())
-                request = rc.decode_run_request(Path(control["requestFile"]).read_bytes())
+                request = handle.request
                 self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
                 self.assertTrue(Path(request.private_state.invocation_root).is_relative_to(context_root(context, "dsh")))
                 records = list((Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
@@ -419,7 +408,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
                 self.assertEqual({path: path.read_bytes() for path in records}, before_cleanup)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
-                self.assertTrue(Path(handle.log_paths["stdout"]).is_file())
+                self.assertIsNotNone(handle.result)
                 self.assert_partition(context)
 
         claude = self.fixture(claude_tests.ClaudeAdapterTests)

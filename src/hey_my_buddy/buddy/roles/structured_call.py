@@ -6,11 +6,7 @@ import json
 from pathlib import Path
 
 from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
-from ..harnesses.controller import (
-    collect_controller,
-    read_plain_evidence,
-    router_stop_confirmed,
-)
+from ..harnesses.controller import read_plain_evidence
 from ...errors import BoardError
 from ...private_dirs import ensure_private_dir
 from .turn_io import private_json, canonical_json, guard_private_path
@@ -127,11 +123,9 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
 def collect(handle: ProcessHandle) -> AdapterOutcome:
     from .run_execution import read_fast_result, read_review_result
     project = read_review_result if handle.role_run_control["operation"] == "review" else read_fast_result
-    read = lambda path: project(handle, path)
-    collection = collect_controller(handle, read=read, stop=router_stop_confirmed)
-    payload = collection.payload
-    stopped = collection.stop_confirmed
-    status = "ok" if payload.get("status") == "ok" and handle.process.returncode == 0 and stopped else "failed"
+    payload = project(handle)
+    stopped = handle.shutdown_confirmed() is True
+    status = "ok" if payload.get("status") == "ok" and handle.exit_code == 0 and stopped else "failed"
     if stopped and payload.get("status") == "cancelled":
         status = "cancelled"
     if stopped and getattr(handle, "no_tool", False) is True:
@@ -154,4 +148,4 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
             payload = {**payload, "status": "error", "code": "evidence-retention-failed", "evidenceRetention": diagnostic}
             status = "failed"
     return AdapterOutcome(status=status, result=payload, error=payload.get("code") if status != "ok" else None,
-                          exit_code=handle.process.returncode, shutdown_confirmed=stopped)
+                          exit_code=handle.exit_code, shutdown_confirmed=stopped)

@@ -89,11 +89,11 @@ class RolePromptTests(unittest.TestCase):
                                     for authority in (False, True)):
                 turn["context"] = {"delegationAuthority": authority}
                 turn_io.private_json(root / "input.json", turn)
-                with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}), \
-                        mock.patch.dict("os.environ", {"HMB_AGENT_CREDENTIAL_FILE": str(root / "agent-credential.json")}, clear=False):
+                with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
                                "directory": str(root), "cwd": str(root), "invocationId": "invocation",
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
+                               "credentialFile": str(root / "agent-credential.json"),
                                "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                                "timeoutSeconds": 1}
                     request, _, _, error = run_execution.worker_request(control, module)

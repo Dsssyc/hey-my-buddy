@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from unittest.mock import patch
+from support import run_claim_in_process
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
@@ -464,7 +465,8 @@ class TestWorkflowRouting(WorkflowTestCase):
         submitted = self.routed(board, requiredCapabilities=["effort:high"])
         worker = Worker("routing-worker", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
-        self.assertEqual(worker.run_once(), "ran")
+        with run_claim_in_process():
+            self.assertEqual(worker.run_once(), "ran")
         selected = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(selected["routing"]["status"], "completed")
         self.assertEqual(selected["buddy"], {key: SECOND_BUDDY[key] for key in BUDDY})
@@ -479,10 +481,10 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(len(held), 1)
         control = held[0].role_run_control
         self.assertEqual(control["attemptId"], selected["routing"]["attemptId"])
-        self.assertEqual(control["fixture"]["document"], audit["input"])
+        self.assertEqual(held[0].request.identity.attempt_id, selected["routing"]["attemptId"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
         self.assertTrue(audit["stopEvidence"]["shutdownConfirmed"])
-        self.assertEqual(worker.spool.pending(), [])
+        self.assertEqual(worker.pending_receipts(), [])
         self.assertTrue(self.routed(board, requiredCapabilities=["effort:high"])["duplicate"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import signal
 import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
@@ -20,7 +19,7 @@ from ..harnesses.base import (
 from ..harnesses.run_contract import HARNESS_NAMES, HarnessRun, RunFeedback, RunRequest, RunResult
 
 if TYPE_CHECKING:
-    from .run_execution import WorkerRunExecutor
+    from .run_execution import InlineRunHandle, WorkerRunExecutor
 
 __all__ = [
     'FastPreparation',
@@ -87,12 +86,12 @@ def prepare_worker_run(executor: Adapter | WorkerRunExecutor, context: Execution
     return WorkerPreparation(available=True)
 
 
-def worker_start(executor: Adapter | WorkerRunExecutor, context: ExecutionContext) -> ProcessHandle:
+def worker_start(executor: Adapter | WorkerRunExecutor, context: ExecutionContext) -> ProcessHandle | InlineRunHandle:
     """Start one role attempt; the runtime keeps the returned handle."""
     return executor.start(context)
 
 
-def worker_collect(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
+def worker_collect(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle | InlineRunHandle, context: ExecutionContext) -> AdapterOutcome:
     return executor.collect(handle, context)
 
 
@@ -114,7 +113,7 @@ def stop_termination_reason(*, shutdown_confirmed: bool, stop_initiator: str | N
     return "unknown-stop"
 
 
-def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *, grace_seconds: float | None = None) -> None:
+def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle | InlineRunHandle, *, grace_seconds: float | None = None) -> None:
     """Cancel through the executor; a None grace keeps each adapter's own default."""
     with handle.stop_lock:
         if handle.force_stop_requested:
@@ -128,7 +127,7 @@ def worker_cancel(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, 
             executor.cancel(handle, grace_seconds=grace_seconds)
 
 
-def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
+def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle | InlineRunHandle, *,
                 stop_initiator: str, grace_deadline: float | None) -> None:
     """Route the first stop request through the selected executor's policy."""
     with handle.stop_lock:
@@ -141,22 +140,14 @@ def worker_stop(executor: Adapter | WorkerRunExecutor, handle: ProcessHandle, *,
         executor.stop(handle, stop_initiator=stop_initiator, grace_deadline=grace_deadline)
 
 
-def start_wrap_up(handle: ProcessHandle, deadline: float, *, stop_initiator: str = "host") -> None:
+def start_wrap_up(handle: InlineRunHandle, deadline: float, *, stop_initiator: str = "host") -> None:
     """Interrupt the current native turn once, with its bounded wrap-up intent."""
-    from .turn_io import private_json
-    from .run_execution import _STOP_CONTROL
-
-    control = handle.role_run_control
-    private_json(Path(control["privateRoot"]) / _STOP_CONTROL, {
-        "kind": "host-wrap-up", "graceDeadline": deadline,
-        "binding": handle.role_run_identity.to_payload(),
-    }, exclusive=True)
     handle.stop_initiator = stop_initiator
     handle.wrap_up_started = True
     handle.grace_deadline = deadline
     handle.cancel_requested = True
     handle.signalled_at = time.monotonic()
-    handle.signal_group(signal.SIGTERM)
+    handle.cancelled.set()
 
 
 # -- the Router's preparation results and carrier call point ------------------
@@ -204,7 +195,7 @@ class ReviewPreparation:
             object.__setattr__(self, "run_module", run_seam(self.harness))
 
 
-def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> ProcessHandle:
+def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -> InlineRunHandle:
     """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A

@@ -60,7 +60,7 @@ class NoToolCodexTests(unittest.TestCase):
                                     "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment)
         request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(timeout + 9), "the fast role controller did not exit")
         return collect(handle), handle.role_run_control, directory
 
@@ -130,7 +130,7 @@ class NoToolCodexTests(unittest.TestCase):
                                     "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment)
         request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(8))
         outcome = collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.result)

@@ -2,7 +2,7 @@
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.buddy.runtime.execution import Execution
 from support import BoardTestCase
 
 
@@ -28,26 +28,29 @@ class HarnessStartupTests(BoardTestCase):
         self.client = Mock(state_dir=self.directory / 'state')
         self.record = {'harness': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
         self.client.call.return_value = {'harness': self.record}
-        self.worker = Worker('fixture', self.directory / 'state', client=self.client)
-        self.assertEqual(self.client.state_dir, self.worker.state_dir,
-                         'Injected client must carry the private Worker state path')
-        self.worker.spool.write_startup({'nonce': 'fixture-owned-nonce'})
         self.attempt = {'attemptId': 'attempt-1', 'generation': 1}
-        self.claim = {'attempt': self.attempt}
+        self.claim = {'attempt': self.attempt,
+                      'task': {'taskId': 'task-1', 'spec': {'adapter': 'codex', 'harness': 'codex'}}}
+        self.execution = Execution(self.claim, self.directory / 'state', 'fixture',
+                                   'fixture-owned-nonce', client=self.client)
+        self.assertEqual(self.client.state_dir, self.execution.state_dir,
+                         'Injected client must carry the private execution state path')
         self.directory.joinpath('attempt').mkdir()
 
     def execute(self, holder):
-        return self.worker._execute_guarded(self.claim, {}, {'adapter': 'codex', 'harness': 'codex'}, self.attempt, self.directory / 'attempt', holder)
+        return self.execution._execute_guarded(self.claim, self.claim['task'],
+                                               self.claim['task']['spec'], self.attempt,
+                                               self.directory / 'attempt', holder)
 
     def test_pre_model_failure_rechecks_once_and_retains_both_choices(self):
         holder = {}
-        with patch.object(self.worker, '_execute_selected', side_effect=[BoardError('HARNESS_PREMODEL_FAILED', 'before input'), {'done': True}]):
+        with patch.object(self.execution, '_execute_selected', side_effect=[BoardError('HARNESS_PREMODEL_FAILED', 'before input'), {'done': True}]):
             self.assertEqual(self.execute(holder), {'done': True})
         self.assertEqual([call.args[1]['retry'] for call in self.client.call.call_args_list], [False, True])
         self.assertEqual(len(holder['harnessHistory']), 2)
 
     def test_second_pre_model_failure_marks_unavailable_without_a_third_start(self):
-        with patch.object(self.worker, '_execute_selected', side_effect=BoardError('HARNESS_PREMODEL_FAILED', 'before input')) as start:
+        with patch.object(self.execution, '_execute_selected', side_effect=BoardError('HARNESS_PREMODEL_FAILED', 'before input')) as start:
             with self.assertRaises(BoardError):
                 self.execute({})
         self.assertEqual(start.call_count, 2)
@@ -58,7 +61,7 @@ class HarnessStartupTests(BoardTestCase):
         def working(*args):
             holder['started'] = True
             raise BoardError('HARNESS_PREMODEL_FAILED', 'cannot prove pre-model shutdown')
-        with patch.object(self.worker, '_execute_selected', side_effect=working) as start:
+        with patch.object(self.execution, '_execute_selected', side_effect=working) as start:
             with self.assertRaises(BoardError):
                 self.execute(holder)
         self.assertEqual(start.call_count, 1)

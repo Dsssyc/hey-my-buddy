@@ -146,15 +146,14 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.omit_first_request = True
         failed = self.context(timeout=30)
         failed.spec["model"] = "GLM-5.3-Flash"
-        _, first = self.execute(failed)
+        failed_handle, first = self.execute(failed)
         self.assertEqual(first.status, "failed", first.to_report())
         self.assertEqual(first.result.get("code"), "finish-tool-failed")
         self.assertTrue(first.shutdown_confirmed)
         self.assertNotIn("turn", first.result)
         self.assertFalse(failed.turn_output_file().exists())
         self.assertTrue(any(request["missingRequestRejected"] for request in self.requests))
-        from hey_my_buddy.private_dirs import context_root
-        root = Path(json.loads((context_root(failed, "zcode") / "role-run-control.json").read_text())["nativeRoot"])
+        root = Path(failed_handle.role_run_control["nativeRoot"])
         previous = next(json.loads(path.read_text())["sessionId"] for path in root.glob("*.json"))
         self.omit_first_request = False
         recovered = self.context(index=2, mode="reconstructed-new-session", effort="high", timeout=30)

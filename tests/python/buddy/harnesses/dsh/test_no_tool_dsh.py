@@ -20,7 +20,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import adapter
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result, encode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles import structured_call
 
@@ -83,7 +83,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
                                           timeout_seconds=timeout, capture_evidence=capture)
         handle = start_router_preparation(
             FastPreparation("dsh",  request, context, self.cwd))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(timeout + 10))
         return context, handle, structured_call.collect(handle)
 
@@ -95,15 +95,14 @@ class FastRegisteredSeamTests(DshNoToolTests):
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertEqual(outcome.result["correctionCount"], 0)
         self.assertEqual(outcome.result["rawAnswer"], '{"choice":"a"}')
-        # The registered seam's control files replace the retired no-tool control:
-        # the request and verdict live in the run's own invocation root.
-        request = decode_run_request(Path(handle.role_run_control["requestFile"]).read_bytes())
-        result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+        # The role holds the native request and result in memory.
+        request = handle.request
+        result = handle.result
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(request.tool_scope, "none")
         self.assertEqual(request.session_services, ())
         self.assertFalse((context.directory / "no-tool-control.json").exists())
-        self.assertEqual(handle.process.args[2], "hey_my_buddy.buddy.roles.run_controller")
+        self.assertEqual(handle.pid, os.getpid())
 
     def test_capture_reports_the_launch_scope_as_native_evidence(self):
         _, _, outcome = self.invoke(capture=True)
@@ -131,27 +130,25 @@ class FastRegisteredSeamTests(DshNoToolTests):
     def test_a_foreign_result_cannot_borrow_the_owned_run_identity(self):
         _, handle, outcome = self.invoke()
         self.assertEqual(outcome.status, "ok")
-        path = Path(handle.log_paths["stdout"])
-        fields = decode_run_result(path.read_bytes()).to_payload()
+        fields = handle.result.to_payload()
         fields["identity"]["invocationId"] = "foreign-invocation"
-        path.write_text(encode_run_result(decode_run_result(fields)))
+        handle.result = decode_run_result(fields)
         refused = structured_call.collect(handle)
         self.assertEqual(refused.status, "failed")
         self.assertEqual(refused.result["code"], "invalid-native-result")
         self.assertFalse(refused.shutdown_confirmed)
 
-    def test_both_native_and_controller_groups_are_required_for_fast_stop(self):
+    def test_execution_completion_and_native_stop_are_required_for_fast_stop(self):
         _, handle, outcome = self.invoke()
         self.assertTrue(outcome.shutdown_confirmed)
-        path = Path(handle.log_paths["stdout"])
-        raw = path.read_bytes()
+        raw = handle.result.to_payload()
         with mock.patch.object(handle, "shutdown_confirmed", return_value=False):
             refused = structured_call.collect(handle)
             self.assertFalse(refused.shutdown_confirmed)
             self.assertEqual(refused.status, "failed")
-        fields = decode_run_result(raw).to_payload()
+        fields = raw
         fields["stopEvidence"]["native"]["groupState"] = "unknown"
-        path.write_text(encode_run_result(decode_run_result(fields)))
+        handle.result = decode_run_result(fields)
         refused = structured_call.collect(handle)
         self.assertFalse(refused.shutdown_confirmed)
         self.assertEqual(refused.status, "failed")

@@ -79,24 +79,14 @@ class _UnreapedProcess:
 def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped, shutdown,
                        tool_calls, correction_count, checked_model, answer, native_receipt,
                        elapsed_ms):
-    """替身 start：按生产 ``start_review``/``_launch`` 的同一形状冻结材料。
-
-    真实 ``RunIdentity``、invocation 私有根与 native 根、``role-run-control.json``、
-    ``role-run-request.json``（真实 ``review_request`` 构造 + ``encode_run_request``）、
-    ``role-run-verdict.json`` 与 ``encode_run_result`` 的 ``RunResult`` 帧全部按生产
-    编解码落地；``handle.role_run_control``/``role_run_identity`` 与 ``_launch`` 同形。
-    唯一的模拟是原生子进程与模型本身：子进程在本进程内即时完成，setUp 的
-    进程/网络守卫因此保持不变。structured_call.collect 一层不替换。
-    """
-    from hey_my_buddy.buddy.harnesses.base import open_logs
+    """以真实请求和结果对象模拟一次进程内 review，不启动模型或网络。"""
     from hey_my_buddy.buddy.harnesses.run_contract import (
         CheckedBuddy, CheckedValue, EvidenceRef, NativeIdentity, ResultBuddy,
         RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer,
-        decode_run_result, encode_run_request, encode_run_result)
+        decode_run_result)
     from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
     from hey_my_buddy.buddy.roles import run_execution
-    from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, guard_private_path, private_json
-    from hey_my_buddy.json_codec import decode_strict_json
+    from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, guard_private_path
     from hey_my_buddy.private_dirs import context_root, ensure_private_dir
 
     ensure_private_dir(context.directory)
@@ -106,6 +96,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     control = {
         "operation": "review", "harness": harness, "privateRoot": str(private),
         "directory": str(context.directory),
+        "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
@@ -120,18 +111,11 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
                     "checkedModel": checked_model, "answer": answer,
                     "nativeReceipt": native_receipt, "elapsedMs": elapsed_ms},
     }
-    control.update(invocationId=identity.invocation_id,
-                   requestFile=str(private / "role-run-request.json"),
-                   verdictFile=str(private / "role-run-verdict.json"),
-                   # 生产把 result 帧写在 controller stdout 上；替身把帧单列成文件，
-                   # 真实 runner.stdout.log 保留同一帧的角色投影（见函数尾注释）。
-                   resultFile=str(private / "role-run-result.json"))
+    control.update(invocationId=identity.invocation_id)
     for log_path in context.log_paths().values():
         guard_private_path(Path(log_path))
-    private_json(private / "role-run-control.json", control)
-    # —— 子进程替身：真实角色构造器与 codec，然后立刻退出 ——
+    # —— 原生运行替身：真实角色请求构造器，随后直接交对象 ——
     built_request, _services, _observer, _correction = run_execution.review_request(control, None)
-    _private_bytes(Path(control["requestFile"]), encode_run_request(built_request).encode(), exclusive=True)
     if mutation:
         mutation(Path(request.cwd), Path(control["directory"]).parent)
     if isinstance(answer, str):
@@ -169,30 +153,19 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         evidence_refs=evidence_refs,
     )
     verdict = {"stopReason": None, "elapsedMs": elapsed_ms}
-    private_json(Path(control["verdictFile"]), verdict, exclusive=True)
-    frame = encode_run_result(result)
-    _private_bytes(Path(control["resultFile"]), frame.encode(), exclusive=True)
-    # 留存的原生 runner 日志：生产子进程的 stdout 是 RunResult 帧；本夹具把同一帧的
-    # 角色投影作为脱敏样本写进 runner 日志，收集器读取绑定指名的帧文件。
-    stdout, stderr = open_logs(context.log_paths())
-    os.close(stdout)
-    os.close(stderr)
-    projected = run_execution._review_result(decode_run_result(frame), built_request, verdict)
+    projected = run_execution._review_result(result, built_request, verdict)
     Path(context.log_paths()["stdout"]).write_text(canonical_json(projected) + "\n", encoding="utf-8")
-    # timeout：wait 永远超时；stopped=False：leader 已退出但持有组永不确认消失。
+    handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
+    handle.result = result
+    handle.request = built_request
+    handle.verdict = verdict
+    handle.exit_code = 0
+    handle.done.set()
     if timeout:
-        process = _UnreapedProcess()
-    elif not stopped:
-        process = _UnconfirmedExit()
+        handle.wait = Mock(return_value=None)
     else:
-        process = _GoneProcess(0)
-    handle = ProcessHandle(process, own_group=True,
-                           log_paths={**context.log_paths(), "stdout": control["resultFile"]})
-    # 进程持有者冻结的同一两份绑定（_launch 的语义）。
-    handle.role_run_control = decode_strict_json(canonical_json(control))
-    handle.role_run_identity = identity
-    # 真实句柄行为之上的记录用 spy；wait/terminate 的真实语义不变。
-    handle.wait = Mock(side_effect=handle.wait)
+        handle.wait = Mock(side_effect=handle.wait)
+    handle.shutdown_confirmed = Mock(return_value=stopped and shutdown)
     handle.terminate = Mock(side_effect=handle.terminate)
     return handle
 

@@ -81,14 +81,14 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             context = ExecutionContext("task", "attempt", 1, {}, Path(directory), {}, {})
             context.turn = {"input": {"resumeMode": "initial"}}
             context.effective_workspace = {"partial": True}
-            control = {"nativeRoot": directory}
+            control = {"nativeRoot": directory, "harness": "zcode"}
             handle = SimpleNamespace(role_run_control=control, role_run_identity=result.identity,
+                                     role_run_original_identity=result.identity, result=result,
                                      role_run_active_control=control, role_run_active_identity=result.identity,
-                                     cancel_requested=False, log_paths={})
-            collection = SimpleNamespace(payload=result, exit_code=0, stop_confirmed=True)
+                                     cancel_requested=False, log_paths={},
+                                     exit_code=0, shutdown_confirmed=lambda: True)
             partial = [{"kind": "partial-workspace", "location": directory}]
-            with mock.patch.object(run_execution, "collect_controller", return_value=collection), \
-                    mock.patch.object(run_execution, "_read_request", return_value=self.request()), \
+            with mock.patch.object(run_execution, "_read_request", return_value=self.request()), \
                     mock.patch.object(run_execution, "_artifacts", return_value=partial), \
                     mock.patch.object(run_execution, "worker_delivery") as delivery, \
                     mock.patch.object(turn_io, "read_turn", return_value=(None, None)), \
@@ -105,12 +105,12 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.artifacts, partial)
 
     def router_collect(self, payload, mode="fast"):
-        collection = SimpleNamespace(payload=payload, stop_confirmed=True)
         context = SimpleNamespace(decision_input={"buddy": {}, "budget": {},
                                                  "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(role_run_control={"operation": mode},
-                                 process=SimpleNamespace(returncode=0))
-        with mock.patch.object(structured_call, "collect_controller", return_value=collection), \
+                                 exit_code=0, shutdown_confirmed=lambda: True)
+        project = "read_review_result" if mode == "review" else "read_fast_result"
+        with mock.patch("hey_my_buddy.buddy.roles.run_execution." + project, return_value=payload), \
                 mock.patch.object(router.router, "routing_facts", return_value={}):
             return router.DecisionAdapter().collect(handle, context)
 

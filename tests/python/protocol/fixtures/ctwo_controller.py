@@ -1,7 +1,7 @@
-"""Owned, model-free processes for the service -> Worker -> controller proof.
+"""Owned, model-free processes for the service -> Worker -> execution proof.
 
-The simulated native child commits the journal before the controller publishes
-facts. The actual WorkerRunExecutor stages the role control/request; only native
+The simulated native child commits the journal before the execution publishes
+facts. The actual WorkerRunExecutor starts the inline role; only native
 launch and collection are injected. No framing, process discovery or PID adoption.
 All material is retained. Cooperative teardown addresses saved Popen objects.
 """
@@ -22,12 +22,14 @@ from unittest.mock import patch
 import c_two as cc
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, write_ready_material
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import (
     InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
 )
-from hey_my_buddy.buddy.harnesses.run_contract import encode_run_request
-from hey_my_buddy.buddy.roles import controller as role_seam, run_execution
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    RunEnd, RunResult, StopEvidence, StopLayer, encode_run_request,
+)
+from hey_my_buddy.buddy.roles import controller as role_seam, inline_run
 from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
 from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.json_codec import canonical_json
@@ -134,27 +136,17 @@ class OneSlowCallEndpoint(CTwoLiveEndpoint):
         return super().observe(request_json)
 
 
-def controller(control_path: Path, state_dir: Path):
-    from hey_my_buddy.buddy.harnesses.registry import run_seam
-
-    control = json.loads(control_path.read_text())
-    root = Path(control["privateRoot"])
-    request, _services, _observer, error = run_execution.worker_request(control, run_seam("dsh"))
-    if error is not None:
-        raise error
-    write_fact(control["requestFile"], json.loads(encode_run_request(request)))
-    endpoint = OneSlowCallEndpoint(request.identity,
-        LiveCapabilities(inquiry_delivery="cooperative-checkpoint"), HarnessRunLive,
-        token=control["live"]["token"], instance_id=control["live"]["instanceId"],
-        state_dir=state_dir)
+def simulated_run(module, request, *, services, **options):
+    """Inject only the native driver; production inline role owns the endpoint."""
+    root = Path(request.private_state.invocation_root)
+    write_fact(root / "fixture-request.json", json.loads(encode_run_request(request)))
+    endpoint = services.live
     process = subprocess.Popen([sys.executable, str(SELF), "native", "--root", str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     owned = ProcessHandle(process, own_group=False, log_paths={})
     try:
-        descriptor = endpoint.start()
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
             agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))
-        write_ready_material(control["live"]["readyFile"], descriptor)
         while not (root / "finish.request").exists():
             incoming = endpoint.consume_request(0.02)
             if incoming is None:
@@ -168,57 +160,45 @@ def controller(control_path: Path, state_dir: Path):
             endpoint.settle_request(incoming.request_id,
                 LiveReply(status="queued", observed=True, state="queued"))
     finally:
-        # Closing only this child's input also works if the controller is killed:
-        # OS pipe closure lets the native child record its actual EOF and exit.
         try:
             process.stdin.close()
-            try:
-                process.wait(timeout=5)
-                write_fact(root / "native-collected.json", {
-                    "exitCode": process.returncode, "shutdownConfirmed": owned.shutdown_confirmed()})
-            finally:
-                process.stdout.close()
+            process.wait(timeout=5)
+            stopped = owned.shutdown_confirmed()
+            write_fact(root / "native-collected.json", {
+                "exitCode": process.returncode, "shutdownConfirmed": stopped})
         finally:
-            endpoint.stop()
+            process.stdout.close()
+    return RunResult(identity=request.identity, harness=request.harness,
+        end=RunEnd(status="error", reason_code="native-refused", message="model-free fixture"),
+        model_started=False, stop_evidence=StopEvidence(
+            native=StopLayer(group_state="gone" if stopped else "unknown")))
 
 
 class SimulatedExecutor(WorkerRunExecutor):
     def __init__(self):
         super().__init__(SimpleNamespace(name="dsh", native_resume=False,
             available=lambda: (True, None)), SimpleNamespace(check_preparation=lambda *a: None))
-        self.handles = []
-        self.reports = []
-
-    def start(self, context):
-        launcher = run_execution.launch_controller
-
-        def simulated_launch(*, prepare, **options):
-            def prepared():
-                argv, cwd, environment = prepare()
-                control = argv[argv.index("--control") + 1]
-                return [sys.executable, str(SELF), "controller", "--control", control], cwd, environment
-            return launcher(prepare=prepared, **options)
-
-        with patch.object(run_execution, "launch_controller", simulated_launch):
-            handle = super().start(context)
-        self.handles.append(handle)
-        return handle
 
     def collect(self, handle, context):
-        # This is explicitly a failed simulated harness run, never fake delivery.
-        # Positive native evidence and real group observation gate the receipt.
         root = Path(handle.role_run_control["privateRoot"])
-        deadline = time.monotonic() + 3
-        while not (root / "native-stopped.json").exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
         native_stop = json.loads((root / "native-stopped.json").read_text())
         stopped = native_stop["eofObserved"] is True and handle.shutdown_confirmed() is True
         report = AdapterOutcome(status="failed", result={"modelStarted": False,
             "simulatedNativeStop": native_stop,
             "processState": {"shutdownConfirmed": stopped}}, error="model-free fixture",
-            exit_code=handle.process.poll(), shutdown_confirmed=stopped)
-        self.reports.append(report.to_report())
+            exit_code=handle.exit_code, shutdown_confirmed=stopped)
+        write_fact(context.directory / "fixture-report.json", report.to_report())
         return report
+
+
+def execution(startup: Path):
+    from hey_my_buddy.buddy.runtime import execution as runtime
+    sys.argv = [str(SELF), "--startup", str(startup)]
+    executor = SimulatedExecutor()
+    with patch.object(role_seam, "worker_executor", lambda name: executor), \
+            patch.object(inline_run, "run_harness", simulated_run), \
+            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint):
+        return runtime.main()
 
 
 class RecordingBoardClient(BoardClient):
@@ -235,7 +215,7 @@ class RecordingBoardClient(BoardClient):
 
 def worker(root):
     client = RecordingBoardClient(root / "state")
-    executor = SimulatedExecutor()
+    handles = []
     instance = Worker("integration-worker", root / "state", client=client,
                       adapters=("dsh",), log=lambda text: print(text, file=sys.stderr, flush=True))
     descriptor = instance.live.start()
@@ -247,27 +227,42 @@ def worker(root):
         except BaseException as error:
             errors.append(repr(error))
 
+    from hey_my_buddy.buddy.harnesses import controller as launcher
+    original_launch = launcher.launch_controller
+
+    def launch_fixture(*, prepare, **options):
+        def prepared():
+            argv, cwd, environment = prepare()
+            startup = argv[argv.index("--startup") + 1]
+            return [sys.executable, str(SELF), "execution", "--startup", startup], cwd, environment
+        handle = original_launch(prepare=prepared, **options)
+        handles.append(handle)
+        return handle
+
     thread = threading.Thread(target=run)
-    with patch.object(role_seam, "worker_executor", lambda name: executor):
+    with patch.object(launcher, "launch_controller", launch_fixture):
         thread.start()
         try:
             for line in sys.stdin:
                 command = json.loads(line)
                 if command["op"] == "status":
-                    handle = executor.handles[0] if executor.handles else None
+                    handle = handles[0] if handles else None
                     cleanup = getattr(handle, "role_endpoint_cleanup", None)
                     emit({"ok": True, "worker": descriptor.to_payload(),
-                        "controller": (getattr(handle, "role_live_descriptor", None).to_payload()
+                        "execution": (getattr(handle, "role_live_descriptor", None).to_payload()
                             if getattr(handle, "role_live_descriptor", None) else None),
+                        "executionPid": handle.pid if handle else None,
                         "bound": bool(client.attachments), "running": thread.is_alive(),
-                        "reports": executor.reports, "errors": errors,
+                        "reports": ([json.loads((handle.execution_directory / "fixture-report.json").read_text())]
+                            if handle and (handle.execution_directory / "fixture-report.json").exists() else []), "errors": errors,
                         "cleanup": cleanup.to_payload() if cleanup else None})
-                elif command["op"] in ("finish", "kill-controller"):
-                    handle = executor.handles[0]
-                    if command["op"] == "kill-controller":
+                elif command["op"] in ("finish", "kill-execution"):
+                    handle = handles[0]
+                    if command["op"] == "kill-execution":
                         handle.process.kill()  # This saved Popen, never a discovered PID.
                     else:
-                        Path(handle.role_run_control["privateRoot"], "finish.request").touch(mode=0o600)
+                        for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
+                            request.with_name("finish.request").touch(mode=0o600)
                     emit({"ok": True})
                 elif command["op"] == "stop":
                     break
@@ -276,8 +271,8 @@ def worker(root):
         finally:
             try:
                 try:
-                    for handle in executor.handles:
-                        Path(handle.role_run_control["privateRoot"], "finish.request").touch(mode=0o600, exist_ok=True)
+                    for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
+                        request.with_name("finish.request").touch(mode=0o600, exist_ok=True)
                 finally:
                     instance.stop.set()
                     thread.join(15)
@@ -322,17 +317,13 @@ def service(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("service", "worker", "controller", "native"))
+    parser.add_argument("mode", choices=("service", "worker", "execution", "native"))
     parser.add_argument("--root", type=Path)
-    parser.add_argument("--control", type=Path)
+    parser.add_argument("--startup", type=Path)
     args = parser.parse_args()
-    if args.mode == "controller":
-        state_dir = os.environ.get("HMB_STATE_DIR")
-        if not state_dir:
-            parser.error("HMB_STATE_DIR is required for the controller process")
-        controller(args.control, Path(state_dir))
-    else:
-        globals()[args.mode](args.root)
+    if args.mode == "execution":
+        raise SystemExit(execution(args.startup))
+    globals()[args.mode](args.root)
 
 
 if __name__ == "__main__":

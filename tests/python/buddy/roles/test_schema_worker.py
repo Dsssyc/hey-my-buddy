@@ -8,15 +8,16 @@ import json
 import threading
 import tempfile
 import uuid
+from contextlib import nullcontext
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format, worker_permission
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
-from hey_my_buddy.buddy.roles import run_controller, run_execution
+from hey_my_buddy.buddy.roles import inline_run, run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
@@ -153,16 +154,17 @@ class SchemaWorkerTests(NativeRunCase):
                    "cwd": str(self.cwd), "timeoutSeconds": 10,
                    "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                    "outputFile": str(root / "output.json"),
-                   "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json")}
-        # 3-B2 owns the harness's path-only service binding; this test exercises
-        # the shared role, the existing real fixture process and its actual
-        # frames without editing that microtask's native files.
+                   "executionLiveFile": str(root / "execution-live.json"),
+                   "live": {"instanceId": "a" * 64, "token": "b" * 64}}
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                               invocation_id=control["invocationId"], turn_id="turn",
+                               input_sha256=run_execution.input_hash(turn))
+        handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
-                mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True):
-            frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        result = decode_run_result(frame)
-        request = decode_run_request((root / "request.json").read_bytes())
-        verdict = json.loads((root / "verdict.json").read_bytes())
+                mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True), \
+                mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
+            result, request, verdict, code = inline_run.execute(
+                control, handle, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         return root, turn, control, result, request, verdict, code
 
     def test_native_schema_delivery_keeps_the_shared_worker_record_and_original_read_scope(self):

@@ -36,14 +36,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, run_claim_in_process, wait_for
 
 from hey_my_buddy.blackboard.service import daemon as daemon_module
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.buddy.runtime import supervisor as supervisor_module
-from hey_my_buddy.buddy.runtime import worker as worker_module
-from hey_my_buddy.buddy.runtime.worker import ReceiptSpool, Worker
+from hey_my_buddy.buddy.runtime.worker import WorkerState, Worker
+from hey_my_buddy.buddy.runtime.receipts import write_receipt
 
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
@@ -295,7 +295,8 @@ class RetireStartupTests(CapacityTestCase):
         # intent, a completion receipt, and a retire intent already on disk. The old
         # supervisor skipped Worker creation here, which lost the receipt forever.
         self._startup_intent(worker, attempt, "retire-replay-claim")
-        worker.spool.write(attempt["attemptId"], self._receipt(attempt, "w-retire"))
+        write_receipt(worker.attempt_directory(attempt["taskId"], attempt["attemptId"]),
+                      self._receipt(attempt, "w-retire"))
         worker.retire_request_path.write_text(json.dumps({"workerId": "w-retire", "requestedBy": "test"}))
         self.assertEqual(len(worker.recovery_pending()), 2)
 
@@ -501,7 +502,8 @@ class ModelServiceFairnessTests(CapacityTestCase):
         board.client().release("w1", held["selectedAttemptId"], held["attemptGeneration"], NONCE, "test release")
         worker = Worker("w-decision", self.directory, client=board.client(), adapters=("decision",))
         worker.register()
-        self.assertEqual(worker.run_once(), "ran")
+        with run_claim_in_process():
+            self.assertEqual(worker.run_once(), "ran")
         decision = board.call("selection_get", {"decisionId": selection["decisionId"], "includeAudit": True})["decision"]
         self.assertEqual(decision["status"], "completed", decision.get("reason"))
         self.assertEqual(decision["buddyId"], BUDDY_ID)
@@ -625,12 +627,8 @@ class RetireRaceTests(CapacityTestCase):
         def run() -> None:
             outcome["result"] = worker.run()
 
-        # The only in-process observer that could translate a retire intent into a
-        # cancel while an attempt executes is the renewal thread's cancel poll. A
-        # shorter test-only poll keeps more observation cycles inside a shorter
-        # window; the production default is untouched.
         thread = threading.Thread(target=run, daemon=True)
-        with patch.object(worker_module._Renewal, "CANCEL_POLL_SECONDS", 0.25):
+        with run_claim_in_process():
             thread.start()
             self.assertTrue(wait_for(lambda: self.status(board, task) == "running", timeout=40), "the attempt never ran")
 
@@ -720,9 +718,11 @@ class SurplusRetentionTests(CapacityTestCase):
     def test_missing_surplus_with_pending_receipt_is_retained_and_replayed_in_retirement_mode(self):
         board = self.board()
         self.write_pool_manifest(["local", "local-2", "local-3"])
-        spool = ReceiptSpool(self.directory, "local-3")
-        spool.write(
-            "attempt-crash",
+        spool = WorkerState(self.directory, "local-3")
+        spool.write_startup({"workerId": "local-3", "nonce": NONCE,
+                             "attemptId": "attempt-crash", "taskId": "task-crash"})
+        write_receipt(
+            self.directory / "attempts" / "task-crash" / "attempt-crash",
             {
                 "attemptId": "attempt-crash",
                 "taskId": "task-crash",
@@ -761,7 +761,7 @@ class SurplusRetentionTests(CapacityTestCase):
         self.assertIn("local-3", retained)
         self.assertFalse(retained["local-3"]["running"])
         self.assertEqual(retained["local-3"]["pendingReceipts"], 1)
-        self.assertEqual(retained["local-3"]["startupIntents"], 0)
+        self.assertEqual(retained["local-3"]["startupIntents"], 1)
         self.assertTrue(retained["local-3"]["replayable"])
         self.assertEqual(report["surplusWorkerIds"], [], "a missing supervisor is not reported as running")
         self.assertIn(("local-3", True), starts, "the retained evidence was never replayed in retirement mode")

@@ -1,22 +1,22 @@
 """Two explicitly approved DSH Worker turns over a private real board.
 
 Preparation uses native health/catalog discovery only. Execution deliberately
-injects a capable DshAdapter instance at the two existing selection seams;
-the registered product declaration remains unchanged until this proof passes.
-Board transport is local, while both Worker/controller/native processes,
-session tools, inquiry forwarding and C-Two live endpoints are real.
+injects a capable DshAdapter at the workflow selection and the child execution
+selection seams; the registered product declaration remains unchanged until
+this proof passes. The private board serves real C-Two requests from each
+isolated execution. Native sessions, inquiry forwarding and live endpoints are real.
 No helper removes files, installs a runtime or reads user credential files.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
 import hashlib
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -25,11 +25,15 @@ from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 import c_two as cc
 from hey_my_buddy.buddy.harnesses.registry import run_seam
-from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import encode_run_request
+from hey_my_buddy.buddy.harnesses import controller as launcher
 from hey_my_buddy.buddy.roles import controller as role_seam
 from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
 from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.private_dirs import ensure_private_dir
+from hey_my_buddy.protocol import rpc_config
+from hey_my_buddy.protocol.contracts import BuddyControl, BuddyWait, CONTROL_NAME, WAIT_NAME
+from hey_my_buddy.blackboard.service.daemon import atomic_json
 from support import InProcessBoard
 
 
@@ -56,7 +60,8 @@ def require(value, message):
 
 
 def write_new(path: Path, value) -> None:
-    with path.open("x") as stream:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
         json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
         stream.write("\n")
 
@@ -80,32 +85,30 @@ class CapturingExecutor(WorkerRunExecutor):
     def __init__(self, candidate, root: Path, key: str):
         super().__init__(candidate, run_seam("dsh"))
         self.root, self.key = root, key
-        self.previous: str | None = None
-        self.completed: list[dict] = []
+        self.number = 2 if (root / "round-1.json").exists() else 1
+        self.previous = (json.loads((root / "round-1.json").read_bytes())["report"]["result"]["sessionId"]
+                         if self.number == 2 else None)
         self.starts = 0
-        self.handles = []
 
     def start(self, context):
-        require(self.starts < 2, "the probe permits at most two Worker starts")
-        if self.completed:
+        require(self.starts == 0, "the probe permits one start per execution")
+        if self.number == 2:
             require(self.previous is not None, "the first turn established no session")
             input_guard(context, self.key, self.previous)
-        write_new(self.root / f"input-{len(self.completed) + 1}.json",
+        write_new(self.root / f"input-{self.number}.json",
                   {"spec": context.spec, "turn": context.turn_input})
         self.starts += 1
-        handle = super().start(context)
-        self.handles.append(handle)
-        return handle
+        return super().start(context)
 
     def collect(self, handle, context):
         outcome = super().collect(handle, context)
-        number = len(self.completed) + 1
+        number = self.number
         entry = {"report": outcome.to_report(),
-                 "controllerStopped": handle.shutdown_confirmed()}
+                 "nativeStopped": handle.shutdown_confirmed()}
         try:
-            request = Path(handle.role_run_control["requestFile"]).read_bytes()
+            request = encode_run_request(handle.request)
             write_new(self.root / f"run-request-{number}.json", json.loads(request))
-            native = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
+            native = handle.result
             record_ref = next(ref for ref in native.evidence_refs if ref.kind == "dsh-session-record")
             record_path = Path(record_ref.location)
             require(record_path.is_relative_to(self.root), "session facts are outside the private probe root")
@@ -116,23 +119,48 @@ class CapturingExecutor(WorkerRunExecutor):
                          activity=native.activity.value if native.activity else None,
                          toolEvidence=native.tool_evidence.value if native.tool_evidence else None,
                          recordFacts=record,
-                         inputReplaysKey=self.key.encode() in request,
-                         requestSha256=hashlib.sha256(request).hexdigest())
+                         inputReplaysKey=self.key.encode() in request.encode(),
+                         requestSha256=hashlib.sha256(request.encode()).hexdigest())
         except Exception as error:
             # Recording must not replace the role's real report or prevent
             # its durable receipt; the Host checks this after Worker delivery.
             entry["captureError"] = f"{type(error).__name__}: {error}"
         write_new(self.root / f"round-{number}.json", entry)
-        self.completed.append(entry)
-        if number == 1:
-            self.previous = outcome.result.get("sessionId")
         return outcome
 
 
-def open_board(root: Path) -> InProcessBoard:
+def child_execution(startup: Path) -> int:
+    """Inject the capable executor only in the execution that owns the native run."""
+    from hey_my_buddy.buddy.runtime import execution as runtime
+    material = json.loads(startup.read_bytes())
+    root = Path(material["stateDir"]).parent
+    context = json.loads((root / "probe-context.json").read_bytes())
+    require(context["stateDir"] == material["stateDir"], "foreign probe context")
+    candidate = DshAdapter()
+    candidate.native_resume = True
+    executor = CapturingExecutor(candidate, root, context["memoryKey"])
+    sys.argv = [str(Path(__file__).resolve()), "--startup", str(startup)]
+    original_executor = role_seam.worker_executor
+    with patch.object(role_seam, "worker_executor",
+                      lambda name: executor if name == "dsh" else original_executor(name)):
+        return runtime.main()
+
+
+def publish_board(board: InProcessBoard) -> None:
+    """Give the isolated execution a real C-Two route to this same private board."""
+    rpc_config.configure_server(board.directory)
+    cc.register(BuddyControl, board.service, name=CONTROL_NAME,
+                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+    cc.register(BuddyWait, board.wait_service, name=WAIT_NAME,
+                concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
+    atomic_json(board.directory / "control.json", {"address": cc.server_address(), "token": "test-token"})
+
+
+def open_board(root: Path, *, discover: bool = False) -> InProcessBoard:
     board = InProcessBoard(ensure_private_dir(root / "state"), lease_seconds=120)
-    # Undo this fixture's synthetic refresh stub: use actual source discovery.
-    board.service.harnesses.__dict__.pop("refresh", None)
+    if discover:
+        # Preparation alone performs actual native health/catalog discovery.
+        board.service.harnesses.__dict__.pop("refresh", None)
     return board
 
 
@@ -144,7 +172,7 @@ def prepare(root: Path) -> dict:
                       ("-c", "user.name=Probe", "-c", "user.email=probe@example.invalid",
                        "commit", "--allow-empty", "-qm", "private native memory probe")):
         subprocess.run(["git", *arguments], cwd=repo, env=git_env, check=True, capture_output=True)
-    board = open_board(root)
+    board = open_board(root, discover=True)
     try:
         health = board.service.harnesses.refresh("dsh", force=True)
         require(health.get("available") is True, "installed DSH is unavailable")
@@ -160,10 +188,11 @@ def prepare(root: Path) -> dict:
         board.service.harnesses.close()
 
 
-def run_round(board, executor, run_id: str, question: str, number: int, root: Path):
+def run_round(board, run_id: str, question: str, number: int, root: Path):
+    publish_board(board)
     errors: list[str] = []
     worker = Worker(f"native-smoke-{number}", board.directory, client=board.client(),
-                    adapters=("dsh",), retry_seconds=1)
+                    adapters=("dsh",))
     descriptor = worker.live.start()
     context = cc.local_endpoint_context(root=str(board.directory / "ipc"))
     require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "present",
@@ -175,27 +204,40 @@ def run_round(board, executor, run_id: str, question: str, number: int, root: Pa
         except Exception as error:
             errors.append(f"{type(error).__name__}: {error}")
 
+    handles = []
+    original_launch = launcher.launch_controller
+
+    def launch_probe(*, prepare, **options):
+        def prepared():
+            argv, cwd, environment = prepare()
+            startup = argv[argv.index("--startup") + 1]
+            return [sys.executable, str(Path(__file__).resolve()), "execution",
+                    "--startup", startup], cwd, environment
+        handle = original_launch(prepare=prepared, **options)
+        handles.append(handle)
+        return handle
+
     thread = threading.Thread(target=run, name=f"native-smoke-{number}")
-    thread.start()
     inquiry_id = f"memory-question-{number}"
     deadline = time.monotonic() + 240
-    controller_endpoints: dict[str, bool] = {}
+    execution_endpoints: dict[str, bool] = {}
     question_posted = False
+    launch_patch = patch.object(launcher, "launch_controller", launch_probe)
+    launch_patch.start()
     try:
+        thread.start()
         while thread.is_alive():
             require(time.monotonic() < deadline, "probe deadline expired")
-            for handle in executor.handles[number - 1:]:
+            for handle in handles:
                 ready = getattr(handle, "role_live_descriptor", None)
                 if ready is not None and ready.endpoint_credential is not None:
                     address = ready.address
-                    controller_endpoints[address] = controller_endpoints.get(address, False) or (
+                    execution_endpoints[address] = execution_endpoints.get(address, False) or (
                         cc.inspect_endpoint(address, context=context)["status"] == "present")
-            # Posting while the task is still queued permanently marks this
-            # inquiry unavailable. Observe without posting until the actual
-            # holder is attached and reports its native session ready.
+            # Posting while the task is queued makes the inquiry unavailable.
+            observed = board.call("inquiry_observe", {"runId": run_id})
+            live = observed.get("live") or {}
             if not question_posted:
-                observed = board.call("inquiry_observe", {"runId": run_id})
-                live = observed.get("live") or {}
                 question_posted = live.get("available") is True and bool(live.get("sessionId"))
             if question_posted:
                 board.call("inquiry_observe", {"runId": run_id,
@@ -205,27 +247,34 @@ def run_round(board, executor, run_id: str, question: str, number: int, root: Pa
         if thread.is_alive():
             worker.stop.set()
             thread.join(25)
-        require(not thread.is_alive(), "owning Worker has not stopped; preserve its directory")
-        worker.live.stop()
-        write_new(root / f"worker-{number}.json",
-                  {"errors": errors, "address": descriptor.address,
-                   "endpointStatusBefore": "present",
-                   "endpointStatusAfter": cc.inspect_endpoint(descriptor.address, context=context)["status"],
-                   "controllerEndpoints": [{"address": address, "existedBefore": existed,
-                       "statusAfter": cc.inspect_endpoint(address, context=context)["status"]}
-                       for address, existed in controller_endpoints.items()]})
+        try:
+            require(not thread.is_alive(), "owning Worker has not stopped; preserve its directory")
+            worker.live.stop()
+            write_new(root / f"worker-{number}.json",
+                      {"errors": errors, "address": descriptor.address,
+                       "endpointStatusBefore": "present",
+                       "endpointStatusAfter": cc.inspect_endpoint(descriptor.address, context=context)["status"],
+                       "executionStopped": handles[0].shutdown_confirmed() if len(handles) == 1 else None,
+                       "executionEndpoints": [{"address": address, "existedBefore": existed,
+                           "statusAfter": cc.inspect_endpoint(address, context=context)["status"]}
+                           for address, existed in execution_endpoints.items()]})
+        finally:
+            launch_patch.stop()
     require(not errors, "the Worker raised an error")
     require(cc.inspect_endpoint(descriptor.address, context=context)["status"] == "absent", "Worker endpoint file survived stop")
-    require(controller_endpoints and all(controller_endpoints.values()), "the live controller socket was not observed")
+    require(execution_endpoints and all(execution_endpoints.values()), "the live execution socket was not observed")
     require(all(cc.inspect_endpoint(address, context=context)["status"] == "absent"
-                for address in controller_endpoints), "controller endpoint file survived stop")
-    require(len(executor.completed) == number, "the role did not collect a complete result")
-    entry = executor.completed[-1]
+                for address in execution_endpoints), "execution endpoint file survived stop")
+    require(len(handles) == 1, "the Worker did not own exactly one execution")
+    require((root / f"round-{number}.json").exists(), "the role did not collect a complete result")
+    entry = json.loads((root / f"round-{number}.json").read_bytes())
     report = entry["report"]
     require(report["status"] == "ok", "native Worker round failed")
     require("captureError" not in entry, "the probe could not capture the actual request and facts")
-    require(report["shutdownConfirmed"] is True and entry["controllerStopped"] is True,
-            "outer controller stop is unconfirmed")
+    require(report["shutdownConfirmed"] is True and entry["nativeStopped"] is True,
+            "native run stop is unconfirmed")
+    require(handles[0].shutdown_confirmed() is True,
+            "outer execution process stop is unconfirmed")
     require(report["result"]["processState"]["shutdownConfirmed"] is True,
             "native group stop is unconfirmed")
     usage_guard(report["result"].get("tokenUsage"))
@@ -264,21 +313,17 @@ def execute(root: Path) -> dict:
     original_capability = DshAdapter.native_resume
     candidate.native_resume = True
     key = "memory-" + secrets.token_hex(12)
-    executor = CapturingExecutor(candidate, root, key)
+    write_new(root / "probe-context.json", {"stateDir": str(board.directory), "memoryKey": key})
     try:
-        with ExitStack() as stack:
-            original_selection = WorkflowCoordinator._execution_adapter
-            stack.enter_context(patch.object(WorkflowCoordinator, "_execution_adapter",
-                staticmethod(lambda name: candidate if name == "dsh" else original_selection(name))))
-            original_executor = role_seam.worker_executor
-            stack.enter_context(patch.object(role_seam, "worker_executor",
-                lambda name: executor if name == "dsh" else original_executor(name)))
+        original_selection = WorkflowCoordinator._execution_adapter
+        with patch.object(WorkflowCoordinator, "_execution_adapter",
+                          staticmethod(lambda name: candidate if name == "dsh" else original_selection(name))):
             submitted = board.call("workflow_submit", {**prepared["buddy"],
                 "requestId": "native-memory-probe", "hostId": "codex-adr025",
                 "task": TASK, "cwd": str(root / "repo"), "expectedSeconds": 180,
                 "executionWorkspace": {"kind": "existing", "access": "write"}})
             run_id = submitted["runId"]
-            first, view = run_round(board, executor, run_id,
+            first, view = run_round(board, run_id,
                 f"Remember the memory key {key}. Never echo it this turn. Answer memorized.", 1, root)
             first_text = json.dumps(first["report"]["result"].get("turn"), ensure_ascii=False)
             require(key not in first_text, "the first outcome echoed the memory key")
@@ -289,27 +334,33 @@ def execute(root: Path) -> dict:
                 "input": "Continue the memory probe using the native conversation; await the new Host question.",
                 "helperPolicy": "keep", **submitted["control"]})
             write_new(root / "continued.json", continued)
-            second, _ = run_round(board, executor, run_id,
+            second, _ = run_round(board, run_id,
                 "Confirm this restored turn is active. Answer active, then finish with the remembered key.", 2, root)
             first_result, second_result = first["report"]["result"], second["report"]["result"]
             require(first_result["sessionId"] == second_result["sessionId"], "session identity changed")
             require(second_result["turn"]["outcome"]["summary"].strip() == key, "native history did not retain the key")
             require(DshAdapter.native_resume == original_capability, "probe changed the product capability")
-            result = {"confirmed": True, "runId": run_id, "sessionId": executor.previous,
-                      "completedWorkerTurns": len(executor.completed), "memoryKey": key,
+            result = {"confirmed": True, "runId": run_id, "sessionId": first_result["sessionId"],
+                      "completedWorkerTurns": 2, "memoryKey": key,
                       "tokenUsage": [first_result.get("tokenUsage"), second_result.get("tokenUsage")],
                       "productCapabilityUnchanged": True}
             write_new(root / "confirmed.json", result)
             return result
     finally:
         board.service.harnesses.close()
+        cc.shutdown()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "execute"))
-    parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("mode", choices=("prepare", "execute", "execution"))
+    parser.add_argument("--root", type=Path)
+    parser.add_argument("--startup", type=Path)
     args = parser.parse_args()
+    if args.mode == "execution":
+        require(args.startup is not None, "execution startup path required")
+        return child_execution(args.startup)
+    require(args.root is not None, "private probe root required")
     root = args.root.absolute()
     require(root.is_dir(), "Host must create and register the exact root first")
     require(os.environ.get("HMB_STATE_DIR") == str(root / "state"), "private state root required")

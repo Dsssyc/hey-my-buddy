@@ -415,7 +415,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                             capture_evidence=True)
         handle = start_router_preparation(ReviewPreparation("codex", self.adapter, request, context,
                                                             (None, self.cwd, "fixture-digest")))
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "Codex fixture controller did not exit")
         return collect(handle), context
 

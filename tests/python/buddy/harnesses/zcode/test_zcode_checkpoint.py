@@ -192,7 +192,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         # the race must end unavailable without any new native work.
         self.wait_file(context, "finish-accepted")
         self.ask(handle, "q-late", "Too late?", channel)
-        (context_root(context, "zcode") / "native-logs" / "late-asked").touch()
+        next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("late-asked").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
@@ -276,6 +276,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         channel, _ = self.ask(handle, "q-1", "Will be cancelled.")
         time.sleep(0.2)
         self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
