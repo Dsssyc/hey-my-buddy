@@ -96,7 +96,7 @@ ANSWER_SCHEMA = {
     "required": ["inquiryId", "answer"],
     "properties": {
         "inquiryId": {"type": "string", "minLength": 1, "maxLength": 128,
-                      "description": "The inquiryId exactly as delivered in this turn or exposed by hey_my_buddy_checkpoint."},
+                      "description": "The inquiryId exactly as delivered in this turn."},
         "answer": {"type": "string", "minLength": 1, "maxLength": 10000,
                    "description": "The bounded answer text for that inquiry; at most 4000 UTF-8 bytes are accepted."},
     },

@@ -1,4 +1,4 @@
-"""Session-private inquiry tools for native schema-delivered Worker turns."""
+"""Session-private MCP inquiry tools for Claude Code CLI Worker turns."""
 from __future__ import annotations
 
 import hashlib
@@ -28,6 +28,10 @@ class InquiryServices:
     config_path: str
 
     @property
+    def answer_tool(self) -> str:
+        return f"mcp__{self.server_name}__hey_my_buddy_answer_inquiry"
+
+    @property
     def mcp_server(self) -> dict:
         return {"command": sys.executable,
                 "args": ["-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", self.config_path],
@@ -51,7 +55,7 @@ class InquiryServices:
 
 
 def prepare_inquiry_services(*, invocation_root: Path, identity: dict, input_sha256: str,
-                             attention_path: Path, inquiry: dict) -> InquiryServices:
+                             attention_path: Path, inquiry: dict, answer_schema: dict | None = None) -> InquiryServices:
     root = ensure_private_dir(invocation_root)
     server_name = "hey_my_buddy_" + hashlib.sha256(identity["attemptId"].encode()).hexdigest()[:16]
     configuration = {"identity": dict(identity), "inputSha256": input_sha256,

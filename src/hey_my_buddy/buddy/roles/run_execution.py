@@ -405,12 +405,11 @@ def worker_request(control: dict, module):
         prompt, schema, scope = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema, permission.tool_scope
         inquiry_services = None
         if inquiry is not None:
-            from ..harnesses.in_turn_inquiry import prepare_inquiry_services
-            inquiry_services = prepare_inquiry_services(
+            inquiry_services = module.prepare_inquiry_services(
                 invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
-                attention_path=attention_path, inquiry=inquiry)
+                attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA)
             prompt += ("\nHost questions may arrive as inputs during this running turn. Answer each with "
-                       f"mcp__{inquiry_services.server_name}__hey_my_buddy_answer_inquiry, using its exact "
+                       f"{inquiry_services.answer_tool}, using its exact "
                        "inquiryId and answer text. Assistant prose does not count as an answer. "
                        "Questions never open a new turn or extend this turn's deadline.\n")
         services = _native_services(control, module, scope, inquiry=inquiry_services)

@@ -55,7 +55,7 @@ from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
-from ..in_turn_inquiry import INQUIRY_TOOLS, IN_TURN_NOTE, InquiryServices
+from ..in_turn_inquiry import INQUIRY_TOOLS, IN_TURN_NOTE, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import ReceiptError, refusal_shaped
 from ....protocol.usage import identifier as _usage_identifier

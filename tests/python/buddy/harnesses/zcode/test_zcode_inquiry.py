@@ -226,7 +226,7 @@ class BridgeQueueTests(unittest.TestCase):
         closed.close()
         late = closed.owner_call("ask", inquiryId="q-late", question="status?")
         self.assertFalse(late["ok"])
-        self.assertEqual(late["code"], "not-ready")
+        self.assertEqual(late["code"], "agent-not-running")
 
     def test_bounds_are_enforced_before_any_state_change(self):
         for payload, code in (({"inquiryId": "q-big", "question": "x" * 4001}, "bad-request"),
@@ -410,7 +410,7 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(self.harness.bridge.entries["q-answered"]["state"], "answered")
         # A closed local owner refuses admission before any journal append.
         self.assertEqual(self.harness.owner_call("ask", inquiryId="q-after", question="late?")["code"],
-                         "not-ready")
+                         "agent-not-running")
 
     def test_observation_is_bounded_and_reports_the_cooperative_channel(self):
         self.ask()

@@ -668,6 +668,16 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["runId"],)).fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM workflow_turns WHERE run_id=?", (task["runId"],)).fetchone()[0], 1)
 
+    def test_question_refused_after_root_end_cannot_remain_queued(self):
+        board = self.board()
+        task, _attempt, owner = self._attempt_directory(board, board.client())
+        owner.refusal = "agent-not-running"
+        result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-ended",
+                                               "question": "Did the root end?"})
+        self.assertEqual(result["inquiry"]["state"], "unavailable")
+        self.assertEqual(owner.entries, {})
+        self.assertEqual(board.client().get(runId=task["runId"])["state"], "running")
+
     def test_unreadable_and_oversized_live_journals_publish_only_their_availability(self):
         board = self.board()
         task, _attempt, owner = self._attempt_directory(board, board.client())

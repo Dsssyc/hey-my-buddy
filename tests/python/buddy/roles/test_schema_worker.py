@@ -66,7 +66,11 @@ class CodexSchemaTests(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertEqual(services.inquiry.configuration["identity"]["turnId"], "turn")
                 self.assertEqual(services.inquiry.configuration["inquiryJournalPath"], control["inquiry"]["resultsPath"])
-                self.assertIn(f"mcp__{services.inquiry.server_name}__hey_my_buddy_answer_inquiry", request.input_text)
+                self.assertIn(services.inquiry.answer_tool, request.input_text)
+                if harness == "codex":
+                    self.assertEqual(services.inquiry.answer_tool, "hey_my_buddy_answer_inquiry")
+                    self.assertFalse((root / "inquiry-bridge.json").exists())
+                    self.assertNotIn("key", services.inquiry.configuration)
                 self.assertEqual(request.session_services, ())
 
     def test_native_result_schema_offers_waiting_only_for_lead(self):

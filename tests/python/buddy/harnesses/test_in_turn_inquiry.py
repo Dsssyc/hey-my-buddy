@@ -50,7 +50,7 @@ class InTurnInquiryTests(unittest.TestCase):
         self.assertEqual(self.bridge.pending_inquiries(), [])
         self.assertTrue(self.ask()["value"]["duplicate"])
         self.bridge.deactivate()
-        self.assertEqual(self.ask("late")["error"], "not-ready")
+        self.assertEqual(self.ask("late")["error"], "agent-not-running")
         self.bridge.close()
         self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)
         self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
@@ -88,6 +88,19 @@ class InTurnInquiryTests(unittest.TestCase):
         self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
         self.assertEqual(self.bridge.entries["q"]["reason"], reason)
         self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)
+
+    def test_client_answer_requires_delivered_question_and_never_overwrites(self):
+        self.bridge.checkpoint_tool = None
+        self.bridge.activate("native-session")
+        self.ask()
+        self.assertIsNotNone(self.bridge.answer_native("unknown", "42", "call"))
+        self.assertIsNotNone(self.bridge.answer_native("q", "42", "call"))
+        self.bridge.deliver_native("q", {"turnId": "native-turn"})
+        self.assertIsNone(self.bridge.answer_native("q", "42", "call"))
+        self.assertIsNotNone(self.bridge.answer_native("q", "43", "next-call"))
+        self.assertEqual(self.bridge.entries["q"]["answer"]["text"], "42")
+        self.assertEqual(self.bridge.entries["q"]["answer"]["toolCallId"], "call")
+        self.assertNotIn("checkpointTool", self.bridge.snapshot()["replyTool"])
 
     def test_native_schema_service_exposes_only_inquiry_tools(self):
         response = respond({"id": 1, "method": "tools/list"}, self.services.configuration)

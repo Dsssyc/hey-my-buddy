@@ -193,7 +193,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(report["unansweredDelivered"], 1)
         late = self.bridge._ask({"inquiryId": "q2", "question": "Too late?"}, _owner_response)
-        self.assertEqual(late["error"], "not-ready")
+        self.assertEqual(late["error"], "agent-not-running")
 
     def test_ordinary_tool_error_keeps_turn_alive_and_retains_native_error(self):
         for case, answered in (("inquiry-tool-error", 0), ("inquiry-tool-error-retry", 1)):

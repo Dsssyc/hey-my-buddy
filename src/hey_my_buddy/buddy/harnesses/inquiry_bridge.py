@@ -2,8 +2,8 @@
 
 C-Two RPCs enqueue requests; this owner alone commits questions under the
 journal lock and fsync barrier before settling them. A native input acceptance
-or verified checkpoint receipt proves delivery; only a verified native answer
-tool receipt proves an answer. Local runs retain the same journal and MCP tools.
+or verified checkpoint receipt proves delivery; a verified MCP answer receipt or
+a bound root client-tool request proves an answer. Local runs retain the same journal.
 """
 from __future__ import annotations
 
@@ -60,11 +60,13 @@ class InquiryBridge:
     def __init__(self, *, identity: dict, journal_path: str,
                  error_factory, event_metadata, limitation: str, attention_path: str | None = None,
                  live: CTwoLiveEndpoint | None = None,
-                 delivery_mode: str = "cooperative-checkpoint"):
+                 delivery_mode: str = "cooperative-checkpoint",
+                 checkpoint_tool: str | None = "hey_my_buddy_checkpoint"):
         self.error_factory = error_factory
         self.event_metadata = event_metadata
         self.limitation = limitation
         self.delivery_mode = delivery_mode
+        self.checkpoint_tool = checkpoint_tool
         self.identity = identity
         self.journal_path = Path(journal_path)
         self.attention_path = Path(attention_path) if attention_path else None
@@ -346,6 +348,24 @@ class InquiryBridge:
                                       "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": tool_call_id,
                                       "at": _now()}})
 
+    def answer_native(self, inquiry_id: str, answer: str, tool_call_id: str) -> str | None:
+        """Apply an already validated root client-tool call under the state lock."""
+        with self.lock:
+            if not self.active or self.closed:
+                return "the root turn is no longer running"
+            entry = self.entries.get(inquiry_id)
+            if entry is None:
+                return "unknown inquiryId"
+            if entry.get("state") != "delivered":
+                return "the inquiry must be delivered and still unanswered"
+            if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
+                                  "answeredAt": _now(),
+                                  "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
+                                             "via": "tool:hey_my_buddy_answer_inquiry",
+                                             "toolCallId": tool_call_id, "at": _now()}}):
+                return "the answer could not be recorded durably"
+            return None
+
     # -- observation ---------------------------------------------------------
     def note_event(self, message: dict, phase: str) -> None:
         """Keep a bounded, metadata-only live view of the native turn."""
@@ -383,7 +403,8 @@ class InquiryBridge:
             "lastEvent": last_event,
             "activity": activity,
             "activityDropped": self.activity_dropped,
-            "replyTool": {"name": "hey_my_buddy_answer_inquiry", "checkpointTool": "hey_my_buddy_checkpoint",
+            "replyTool": {"name": "hey_my_buddy_answer_inquiry",
+                          **({"checkpointTool": self.checkpoint_tool} if self.checkpoint_tool is not None else {}),
                           "delivery": self.delivery_mode},
             "attention": attention,
             "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
@@ -494,7 +515,9 @@ class InquiryBridge:
                 or not isinstance(question, str) or not question.strip() or len(question.encode()) > MAX_QUESTION_BYTES):
             return response(False, error="bad-request")
         with self.lock:
-            if not self.active or self.closed:
+            if self.closed or (not self.active and self.agent_status == "finishing"):
+                return response(False, error="agent-not-running")
+            if not self.active:
                 return response(False, error="not-ready")
             digest = hashlib.sha256(question.encode()).hexdigest()
             existing = self.entries.get(inquiry_id)

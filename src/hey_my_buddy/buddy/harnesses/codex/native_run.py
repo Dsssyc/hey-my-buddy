@@ -47,8 +47,7 @@ from ....errors import BoardError
 from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
-from ..in_turn_inquiry import INQUIRY_TOOLS, IN_TURN_NOTE, InquiryServices
-from ..session_receipts import ReceiptError, refusal_shaped
+from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ....protocol.owned_process import owned_popen
@@ -285,6 +284,34 @@ class _Classifier:
 # -- the role-held narrow service binding ----------------------------------------
 
 
+IN_TURN_NOTE = ("Questions enter the running native turn and are read at its next decision. "
+                "They never start a turn or extend its deadline. Only a root client-tool call "
+                "to hey_my_buddy_answer_inquiry records an answer.")
+
+
+@dataclasses.dataclass(frozen=True)
+class ClientInquiryServices:
+    configuration: dict
+    answer_schema: dict
+    answer_tool: str = "hey_my_buddy_answer_inquiry"
+
+    @property
+    def dynamic_tools(self) -> list[dict]:
+        return [{"type": "function", "name": self.answer_tool,
+                 "description": "Answer a Host inquiry delivered in the current root turn, then continue the assigned work.",
+                 "inputSchema": self.answer_schema}]
+
+
+def prepare_inquiry_services(*, invocation_root: Path, identity: dict, input_sha256: str,
+                             attention_path: Path, inquiry: dict,
+                             answer_schema: dict) -> ClientInquiryServices:
+    """Bind the root client tool without files, keys or an auxiliary server."""
+    return ClientInquiryServices(
+        configuration={"identity": dict(identity), "attentionPath": str(attention_path),
+                       "inquiryJournalPath": inquiry["resultsPath"]},
+        answer_schema=answer_schema)
+
+
 @dataclasses.dataclass(frozen=True)
 class RunServices:
     """The controller-owned live endpoint and attempt-private inquiry tools.
@@ -294,7 +321,7 @@ class RunServices:
     """
 
     live: CTwoLiveEndpoint | None = None
-    inquiry: InquiryServices | None = None
+    inquiry: ClientInquiryServices | None = None
 
 
 # -- the run state ----------------------------------------------------------------
@@ -357,7 +384,6 @@ class _RunState:
     fast_config: dict | None = None
     fast_receipt: dict | None = None
     inquiry_report: dict | None = None
-    inquiry_tool_failures: dict = dataclasses.field(default_factory=lambda: {"records": [], "dropped": 0})
 
 
 @dataclasses.dataclass
@@ -579,7 +605,7 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     handed to the native turn as usual, the caller records the absence as
     this run's public fact, and the real native error decides the failure.
     """
-    experimental = {"capabilities": {"experimentalApi": True}} if mode in ("fast", "review") else {}
+    experimental = {"capabilities": {"experimentalApi": True}}
     connection.call("initialize", {**_INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
     connection.call("account/read", {"refreshToken": False})
@@ -640,21 +666,14 @@ def _check_thread_receipt(response: dict, cwd: str, *, mode: str, previous: str 
     return thread_id
 
 
-def _inquiry_mcp_server(inquiry: InquiryServices) -> dict:
-    """Only our receipt tools bypass interactive approval in this thread."""
-    return {**inquiry.mcp_server,
-            "tools": {name: {"approval_mode": "approve"} for name in INQUIRY_TOOLS}}
-
-
 def _configure_worker(connection: Connection, request: RunRequest, prep: _Preparation,
-                      state: _RunState, inquiry: InquiryServices | None = None) -> str:
+                      state: _RunState, inquiry: ClientInquiryServices | None = None) -> str:
     """Worker buddy selection: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
     requested = buddy_spec(request)
     sandbox, _policy = _worker_sandbox(request)
     state.requested = requested
-    inquiry_config = ({"config": {"mcp_servers": {inquiry.server_name: _inquiry_mcp_server(inquiry)}}}
-                      if inquiry is not None else {})
+    inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
@@ -684,8 +703,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                                          "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
-                                                         "approvalPolicy": "never", "sandbox": sandbox,
-                                                         **inquiry_config})
+                                                         "approvalPolicy": "never", "sandbox": sandbox})
             state.binding_path = _binding_path(prep.native_root, previous)
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":
@@ -889,17 +907,14 @@ class _EventChain:
 
 
 class _NativeInquiry:
-    """Codex's active root turn owns native delivery and signed tool evidence."""
+    """The current root turn owns inquiry delivery and client-tool answers."""
 
     def __init__(self, connection: Connection, evidence: TurnEvidence, thread_id: str,
-                 turn_id: str, services: InquiryServices, bridge: InquiryBridge,
-                 failures: dict | None = None):
+                 turn_id: str, services: ClientInquiryServices, bridge: InquiryBridge):
         self.connection, self.evidence = connection, evidence
         self.thread_id, self.turn_id = thread_id, turn_id
         self.services, self.bridge = services, bridge
         self._polling = False
-        self._started: dict[str, str] = {}
-        self.failures = failures if failures is not None else {"records": [], "dropped": 0}
 
     def poll(self) -> None:
         if self._polling or self.evidence.completed is not None:
@@ -913,7 +928,7 @@ class _NativeInquiry:
                     break
                 inquiry_id = entry["inquiryId"]
                 prompt = ("Host inquiry for this active Buddy turn. Answer with "
-                          f"mcp__{self.services.server_name}__hey_my_buddy_answer_inquiry, "
+                          f"{self.services.answer_tool}, "
                           "using the exact inquiryId in this JSON. Continue the assigned work after answering.\n"
                           + canonical_json({"inquiryId": inquiry_id, "question": entry["question"]}))
                 try:
@@ -935,70 +950,37 @@ class _NativeInquiry:
         finally:
             self._polling = False
 
-    def observe(self, message: dict) -> None:
-        if message.get("method") not in ("item/started", "item/completed"):
-            return
-        params = message.get("params")
-        if not isinstance(params, dict) or params.get("threadId") != self.thread_id \
-                or _event_turn(params) != self.turn_id:
-            return
-        item = params.get("item")
-        if not isinstance(item, dict) or item.get("type") != "mcpToolCall" \
-                or item.get("server") != self.services.server_name \
-                or item.get("tool") not in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"):
-            return
-        call_id = item.get("id")
-        if not isinstance(call_id, str) or not call_id:
-            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool has no native call identity")
-        if message["method"] == "item/started":
-            prior = self._started.setdefault(call_id, item["tool"])
-            if prior != item["tool"]:
-                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry call changed native tool identity")
-            return
-        if self._started.get(call_id) != item["tool"]:
-            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result has no root call start")
-        if item.get("status") == "completed":
-            result = item.get("result")
-            content = result.get("content") if isinstance(result, dict) else None
-            if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict) \
-                    or content[0].get("type") != "text" or not isinstance(content[0].get("text"), str):
-                if isinstance(result, dict) and result.get("isError") is True:
-                    self._note_failure(item, canonical_json(content))
-                    return
-                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result has no signed text")
-            raw_text = content[0]["text"]
-            if result.get("isError") is True and not refusal_shaped(raw_text):
-                self._note_failure(item, raw_text)
-                return
-            if result.get("truncated") is True:
-                raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
-        elif item.get("status") == "failed":
-            error = item.get("error")
-            raw_text = error.get("message") if isinstance(error, dict) else None
-            if not refusal_shaped(raw_text):
-                self._note_failure(item, raw_text)
-                return
-        else:
-            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool has no terminal native status")
-        if item.get("truncated") is True:
-            raise CodexProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
-        tool_name = f"mcp__{self.services.server_name}__{item['tool']}"
-        try:
-            self.services.accept_tool_result(self.bridge, tool_name, raw_text, call_id)
-        except ReceiptError as error:
-            raise CodexProtocolError(error.code, str(error)) from None
+    def answer(self, params: object) -> dict:
+        """Validate one external call; expected caller mistakes leave the turn alive."""
+        def result(success: bool, text: str) -> dict:
+            return {"success": success, "contentItems": [{"type": "inputText", "text": text}]}
 
-    def _note_failure(self, item: dict, raw_text: object) -> None:
-        # Retain transport/tool errors for the Host without treating prose as a
-        # signed receipt. Count and byte bounds also cover repeated retries.
-        if len(self.failures["records"]) < 8:
-            self.failures["records"].append({"threadId": self.thread_id, "turnId": self.turn_id,
-                                  "toolCallId": item["id"], "toolName": item["tool"],
-                                  "status": item.get("status"),
-                                  "message": _truncate_utf8(raw_text if isinstance(raw_text, str)
-                                                            else canonical_json(item.get("error")), 4000)})
-        else:
-            self.failures["dropped"] += 1
+        def bounded_text(value: object, maximum: int) -> bool:
+            if not isinstance(value, str) or not value:
+                return False
+            try:
+                return len(value.encode("utf-8")) <= maximum
+            except UnicodeEncodeError:
+                return False
+
+        if not isinstance(params, dict) or params.get("threadId") != self.thread_id \
+                or params.get("turnId") != self.turn_id or self.evidence.completed is not None:
+            return result(False, "the inquiry tool belongs to the current running root turn")
+        if params.get("tool") != self.services.answer_tool or params.get("namespace") is not None:
+            return result(False, "unknown inquiry client tool")
+        call_id = params.get("callId")
+        if not bounded_text(call_id, 256):
+            return result(False, "the inquiry tool requires a bounded callId")
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict) or set(arguments) != {"inquiryId", "answer"}:
+            return result(False, "the inquiry tool requires exactly inquiryId and answer")
+        inquiry_id, answer = arguments["inquiryId"], arguments["answer"]
+        if not bounded_text(inquiry_id, MAX_INQUIRY_ID_BYTES):
+            return result(False, "the inquiryId must be nonempty and at most 128 UTF-8 bytes")
+        if not bounded_text(answer, MAX_ANSWER_BYTES) or not answer.strip():
+            return result(False, "the answer must be nonblank and at most 4000 UTF-8 bytes")
+        reason = self.bridge.answer_native(inquiry_id, answer, call_id)
+        return result(reason is None, reason or "The answer was recorded. Continue the assigned work.")
 
 
 class _FastProtocol:
@@ -1195,7 +1177,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                     "toolName": (message.get("params") or {}).get("item", {}).get("tool")
                     if isinstance((message.get("params") or {}).get("item"), dict) else None},
                 limitation=IN_TURN_NOTE, attention_path=configuration.get("attentionPath"),
-                live=services.live, delivery_mode="realtime")
+                live=services.live, delivery_mode="realtime", checkpoint_tool=None)
             inquiry_bridge.start()
         prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
                                      deadline=prep.deadline, owned=owned_spawn)
@@ -1251,6 +1233,13 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
     def on_request(message: dict) -> None:
         method = message.get("method")
         params = message.get("params")
+        if method == "item/tool/call" and mode == "worker" and isinstance(params, dict) \
+                and params.get("tool") == "hey_my_buddy_answer_inquiry":
+            result = (inquiry_poller[0].answer(params) if inquiry_poller else
+                      {"success": False, "contentItems": [{"type": "inputText",
+                       "text": "the root inquiry client tool is not active"}]})
+            connection.send({"id": message["id"], "result": result})
+            return
         record = {"method": method if isinstance(method, str) and len(method) <= 80 else "unknown",
                   "threadId": params.get("threadId") if isinstance(params, dict) else None,
                   "turnId": params.get("turnId") if isinstance(params, dict) else None}
@@ -1299,7 +1288,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  state: _RunState, thread_id: str,
                  observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter,
                  inquiry_bridge: InquiryBridge | None = None,
-                 inquiry_services: InquiryServices | None = None,
+                 inquiry_services: ClientInquiryServices | None = None,
                  inquiry_poller: list[_NativeInquiry] | None = None) -> None:
     """The micro task turn: one admission, settlement, usage, quota, checkpoint."""
     state.model_started = True
@@ -1317,14 +1306,13 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     native_inquiry = None
     if inquiry_bridge is not None and inquiry_services is not None:
         native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
-                                        inquiry_services, inquiry_bridge, state.inquiry_tool_failures)
+                                        inquiry_services, inquiry_bridge)
         inquiry_bridge.activate(thread_id)
         if inquiry_poller is not None:
             inquiry_poller.append(native_inquiry)
 
     def carrier(message: dict) -> None:
         if native_inquiry is not None:
-            native_inquiry.observe(message)
             inquiry_bridge.note_event(message, "finishing" if evidence.completed is not None else "running")
         _capture_native_error(state, message, thread_id, turn_id)
         observed = evidence.observe(message)
@@ -1789,9 +1777,6 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
                              "effort": request.buddy.effort}})
     if state.native_turn_facts is not None:
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
-    if state.inquiry_tool_failures["records"]:
-        retain("inquiry-tool-failures", invocation_root / "inquiry-tool-failures.json",
-               state.inquiry_tool_failures)
     if state.inquiry_report is not None:
         retain("inquiry-report", invocation_root / "inquiry-report.json", state.inquiry_report)
     if state.review_config is not None:
@@ -1986,7 +1971,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
 
 
 def prepare_run_services(*, tool_scope: str = "write",
-                         inquiry: InquiryServices | None = None) -> RunServices:
+                         inquiry: ClientInquiryServices | None = None) -> RunServices:
     """Bind the harness's native services without selecting credentials."""
     return RunServices(inquiry=inquiry)
 
