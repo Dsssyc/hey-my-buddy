@@ -133,6 +133,24 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], len(package["events"])), (1, 2))
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
+    def test_calls_past_the_old_correlation_limit_keep_their_end_identity(self):
+        collector = ReadOnlyToolEvidence(dict(BINDING))
+        collector.observe_frame(init_frame())
+        for index in range(513):
+            collector.observe_frame(assistant_tool("Read", f"toolu_{index}"))
+        collector.observe_frame(tool_result("toolu_512"))
+        late_call = collector._evidence._calls[('{"sessionId":"session-root"}', "toolu_512")]
+        self.assertIn((("Read", "read"), "end"), late_call["pairs"])
+        self.assertEqual(collector.tool_calls, 513)
+
+    def test_incomplete_calls_past_the_old_limit_remain_recorded(self):
+        collector = ReadOnlyToolEvidence(dict(BINDING))
+        collector.observe_frame(init_frame())
+        for index in range(513):
+            collector.observe_frame(assistant_tool("", f"toolu_{index}", with_name=False))
+        self.assertEqual(len(collector._delivery_incomplete), 513)
+        self.assertIn(('{"sessionId":"session-root"}', "toolu_512"), collector._delivery_incomplete)
+
     def test_conflicting_facts_for_one_call_are_kept(self):
         _, package = project([init_frame(),
                               assistant_tool("Read", "toolu_1"), tool_result("toolu_1"),

@@ -306,7 +306,7 @@ class NativeMessageShapeTests(unittest.TestCase):
         self.assertEqual(received[2]["method"], "future/event")
         self.assertNotIn("private-value", repr(facts.unknown_counts))
 
-    def test_unreadable_rpc_result_is_a_bounded_fact_and_call_continues(self):
+    def test_unreadable_rpc_result_is_reported_and_call_continues(self):
         connection = self.connection({"id": 1, "result": "private-value"})
         facts = _RunFacts()
         received = []
@@ -325,7 +325,7 @@ class NativeMessageShapeTests(unittest.TestCase):
         unsafe = self.connection({"id": 1, "result": None})
         unsafe.on_notification = received.append
         self.assertEqual(unsafe.call("unsafe\nprivate-value", {}), {})
-        self.assertEqual(received[-1], {"method": "rpc/result-unreadable"})
+        self.assertEqual(received[-1], {"method": "rpc/result-unreadable/unsafe\nprivate-value"})
 
     def test_response_identity_is_checked_independently_of_backlog(self):
         for identity in (True, "1"):
@@ -387,7 +387,7 @@ class NativeRpcErrorTests(unittest.TestCase):
         # plus four-byte characters, far past the public UTF-8 byte budget.
         # The refusal arrives cut but readable — prefix intact, valid text,
         # never erased — and error.data stays unexpanded.
-        from hey_my_buddy.buddy.harnesses.codex.protocol import MAX_NATIVE_REFUSAL_BYTES
+        from hey_my_buddy.buddy.harnesses.native_support import NATIVE_SUMMARY_BYTES
         error = self.call_with_error({"code": -32000,
                                       "message": "模型不可用" * 80 + "\U0001D11E" * 10,
                                       "data": {"accountPlan": "must never appear"}})
@@ -395,14 +395,14 @@ class NativeRpcErrorTests(unittest.TestCase):
         self.assertTrue(error.args[0].startswith("Codex rejected turn/start: 模型不可用"))
         self.assertNotIn("accountPlan", error.args[0])
         self.assertEqual(error.native_error, {"code": -32000, "message": "模型不可用" * 80 + "\U0001D11E" * 10})
-        self.assertLessEqual(len(error.args[0].encode("utf-8")), MAX_NATIVE_REFUSAL_BYTES)
+        self.assertLessEqual(len(error.args[0].encode("utf-8")), NATIVE_SUMMARY_BYTES)
         self.assertNotIn("\N{REPLACEMENT CHARACTER}", error.args[0])
 
     def test_a_four_byte_error_within_the_budget_arrives_complete(self):
-        from hey_my_buddy.buddy.harnesses.codex.protocol import MAX_NATIVE_REFUSAL_BYTES
+        from hey_my_buddy.buddy.harnesses.native_support import NATIVE_SUMMARY_BYTES
         reason = "\U0001D11E" * 100
         self.assertLess(len(("Codex rejected turn/start: " + reason).encode("utf-8")),
-                        MAX_NATIVE_REFUSAL_BYTES)
+                        NATIVE_SUMMARY_BYTES)
         error = self.call_with_error({"code": -32000, "message": reason})
         self.assertEqual(error.args[0], "Codex rejected turn/start: " + reason)
 

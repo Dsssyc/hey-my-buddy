@@ -1,10 +1,10 @@
 """Codex executable selection without changing its account or global settings."""
 from __future__ import annotations
 
-import os
-
+from ....protocol.contracts import CONTRACT_VERSION
 
 DEFAULT_MODEL_PROVIDER = "openai"
+INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": CONTRACT_VERSION}}
 
 
 class CodexUnavailable(Exception):
@@ -18,23 +18,9 @@ def native_provider(configured: dict) -> str:
 
 def launch(environment: dict | None = None) -> tuple[list[str], dict]:
     """Resolve the native argv and its environment from one selected entry."""
-    from ..runtime_selection import launch_with_environment
-    from ..discovery import EntryUnavailable
-    from ....errors import BoardError
+    from ..runtime_selection import launch as native_launch
 
-    try:
-        command, result = launch_with_environment("codex", environment)
-    except BoardError as error:
-        raise CodexUnavailable(error.message) from None
-    except EntryUnavailable as error:
-        failure = CodexUnavailable(str(error))
-        failure.reason = error.reason
-        raise failure from None
-    if environment is not None and os.environ.get("HMB_DEV_SOURCE") == "1":
-        for key in ("HMB_CODEX_FIXTURE_CASE", "HMB_CODEX_FIXTURE_STATE"):
-            if key in environment:
-                result[key] = environment[key]
-    return command, result
+    return native_launch("codex", CodexUnavailable, environment)
 
 
 def cli_command(environment: dict | None = None) -> list[str]:

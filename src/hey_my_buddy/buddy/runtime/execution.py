@@ -102,6 +102,24 @@ def private_adapter(claim: dict) -> str:
     return adapter
 
 
+def validate_claim_turn(claim: dict) -> None:
+    """Check the service-owned turn shape once as it enters this process."""
+    if not isinstance(claim, dict):
+        raise BoardError("INVALID_ARGUMENT", "Execution claim must be an object")
+    if "turn" not in claim:
+        return
+    turn = claim.get("turn")
+    if not isinstance(turn, dict) or not isinstance(turn.get("turnId"), str) or not turn["turnId"]:
+        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn identity")
+    turn_input = turn.get("input")
+    if not isinstance(turn_input, dict):
+        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn input")
+    workspace = turn_input.get("executionWorkspace")
+    if (not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str)
+            or not workspace["path"]):
+        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid workspace")
+
+
 class _ExecutionLive:
     """The single C-Two resource owned for the full execution lifetime."""
 
@@ -524,7 +542,7 @@ class Execution:
             # The service-owned turn identity and bounded context; the adapter stages
             # them for the runner. The scoped credential is written to a private file
             # and exported by path, never into the model-visible turn input.
-            turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
+            turn=claim.get("turn"),
             agent_credential=claim.get("agentCredential") or None,
             session_record_path=self.session_record_path,
         )
@@ -810,6 +828,7 @@ def main():
     from ...private_dirs import open_regular_fd
     with os.fdopen(open_regular_fd(Path(args.startup), os.O_RDONLY), 'rb') as stream:
         material = decode_strict_json(stream.read())
+    validate_claim_turn(material["claim"])
     execution = Execution(material["claim"], Path(material["stateDir"]), material["nonce"],
                           session_record_path=material["sessionRecordPath"],
                           log=lambda message: print(message, flush=True))

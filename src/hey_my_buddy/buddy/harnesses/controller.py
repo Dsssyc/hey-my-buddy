@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import stat
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -14,8 +14,7 @@ from ...errors import BoardError
 from ...protocol.process_controller import launch_controller
 from ...protocol.process_handle import ProcessHandle
 from ...json_codec import decode_strict_json
-from ...private_files import open_read
-from ..roles.turn_io import guard_private_path
+from ...private_dirs import open_regular_fd
 
 #: The strict discovery result and retained native evidence bound.
 STRICT_RESULT_BYTES = 512 * 1024
@@ -46,17 +45,13 @@ def read_strict_result(path: Path) -> dict | None:
 def read_plain_evidence(path: Path) -> object:
     """The Router channel's ordinary evidence read, raising like its baseline.
 
-    The path must be a guarded private path and an ordinary file of at most
-    256 KiB, read as one plain ``json.loads`` value (duplicates and non-finite
+    The path must be a guarded private path, read up to 256 KiB as one plain
+    ``json.loads`` value (duplicates and non-finite
     numbers are the Router's own ordinary semantics, not refused here). The
     same read serves the frozen request/result retention; violations raise
     ``BoardError`` and I/O or decoding failures raise ``OSError``/``ValueError``.
     """
-    path = guard_private_path(path)
-    metadata = path.lstat()
-    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > ROUTER_EVIDENCE_BYTES:
-        raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence must be bounded ordinary JSON", path=str(path))
-    with open_read(path) as stream:
+    with os.fdopen(open_regular_fd(path, os.O_RDONLY), "rb") as stream:
         raw = stream.read(ROUTER_EVIDENCE_BYTES + 1)
     if len(raw) > ROUTER_EVIDENCE_BYTES:
         raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence exceeds its byte bound", path=str(path))

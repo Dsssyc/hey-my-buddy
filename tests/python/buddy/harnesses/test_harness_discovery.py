@@ -419,6 +419,39 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 generic = discovery.candidate_snapshot("codex", environment={"PATH": ""})
             self.assertIn(str(locations[1]), [item["path"] for item in generic["candidates"]])
 
+    @unittest.skipIf(os.name == "nt", "Symlink creation needs extra Windows privileges")
+    def test_nvm_alias_can_follow_user_configured_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            alias = home / ".nvm/alias"
+            alias.mkdir(parents=True)
+            (alias / "default").write_text("current", encoding="utf-8")
+            target = home / "node-alias"
+            target.write_text("24.2", encoding="utf-8")
+            (alias / "current").symlink_to(target)
+            installed = home / ".nvm/versions/node/v24.2.1/bin"
+            installed.mkdir(parents=True)
+            records, roots = discovery._manager_records(home)
+        self.assertIn(str(alias / "current"), [item["path"] for item in records])
+        self.assertIn(("nvm", installed), roots)
+
+    def test_discovery_reports_diagnostics_omitted_after_bounded_scan(self):
+        candidates = [{"path": f"/fixture/{index}", "source": "path", "exists": True,
+                       "fingerprint": None} for index in range(100)]
+        snapshot = {"harness": "codex", "candidates": candidates, "managerRecords": []}
+
+        def handshake(_harness, item, _environment, _deadline):
+            return {**item, "status": "unhealthy", "reason": discovery._probe_reason("probe-failed"),
+                    "command": [], "version": None}
+
+        with patch.object(discovery, "candidate_snapshot", return_value=snapshot), \
+             patch.object(discovery, "_candidate_handshake", side_effect=handshake) as probe:
+            result = discovery.discover("codex", environment={"PATH": ""})
+        self.assertEqual(probe.call_count, discovery._MAX_CANDIDATES)
+        self.assertEqual(len(result["candidates"]), discovery._MAX_DIAGNOSTICS)
+        self.assertEqual(result["omittedDiagnostics"],
+                         discovery._MAX_CANDIDATES - discovery._MAX_DIAGNOSTICS)
+
     def test_manual_ready_skips_lower_priority_and_unknown_version_is_allowed(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

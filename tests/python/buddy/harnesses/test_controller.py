@@ -508,6 +508,14 @@ class PlainEvidenceReadTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             controller.read_plain_evidence(linked / "request.json")
 
+    def test_router_read_enforces_bound_on_open_file(self):
+        from hey_my_buddy.errors import BoardError
+
+        self.path.write_bytes(b" " * (controller.ROUTER_EVIDENCE_BYTES + 1))
+        with self.assertRaises(BoardError) as caught:
+            controller.read_plain_evidence(self.path)
+        self.assertEqual(caught.exception.code, "PRIVATE_PATH_UNSAFE")
+
 
 class StopConfirmedTests(unittest.TestCase):
     def test_both_layers_confirm_in_order(self):

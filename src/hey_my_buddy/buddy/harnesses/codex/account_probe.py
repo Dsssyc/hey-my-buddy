@@ -7,6 +7,7 @@ import time
 
 from ..base import ProcessHandle
 from .protocol import Connection
+from .config import INIT_CLIENT
 from ....protocol.owned_process import owned_popen
 from ....protocol.billing import codex_account, fact
 from ....blackboard.store.db import utc_now
@@ -27,7 +28,7 @@ def read(command: list[str], environment: dict, *, entry: str | None = None) -> 
         connection = Connection(child, time.monotonic() + 8, threading.Event())
         connection.on_request = lambda message: connection.send({"id": message["id"], "error": {
             "code": -32601, "message": "Account readback does not grant interactive access"}})
-        connection.call("initialize", {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}})
+        connection.call("initialize", INIT_CLIENT)
         connection.send({"method": "initialized", "params": {}})
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         configured = connection.call("config/read", {"includeLayers": False}).get("config") or {}

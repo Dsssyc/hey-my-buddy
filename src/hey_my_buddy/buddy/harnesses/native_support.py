@@ -34,6 +34,7 @@ from .run_contract import NativeIdentity, RunRequest
 __all__ = [
     "CancelFlag", "ObserverInterrupt", "buddy_spec", "execution_deadline",
     "halt_owned_group", "identity_or_none", "shape_guard", "utc_now",
+    "bounded_utf8", "truncate_utf8", "truncate_text",
 ]
 
 
@@ -135,3 +136,25 @@ def halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline:
         signalled = True
     shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
     return shutdown, signalled
+
+
+# Native facts retain the existing byte/character budgets at their input boundary.
+NATIVE_TOOL_NAME_CHARS = 80
+NATIVE_ID_CHARS = 256
+NATIVE_SUMMARY_BYTES = 512
+NATIVE_METHOD_BYTES = 96
+NATIVE_ERROR_DETAIL_BYTES = 4096
+INQUIRY_TOOL_NAME_CHARS = 160
+INQUIRY_FAILURE_BYTES = 4000
+
+
+def bounded_utf8(value: str | None, limit: int) -> str | None:
+    return value if isinstance(value, str) and len(value.encode()) <= limit else None
+
+
+def truncate_utf8(value: str, limit: int, *, errors: str = "strict") -> str:
+    return value.encode("utf-8", errors=errors)[:limit].decode("utf-8", errors="ignore")
+
+
+def truncate_text(value: str, limit: int) -> str:
+    return value[:limit]

@@ -1,8 +1,6 @@
 """Claude Code executable selection and native permission arguments."""
 from __future__ import annotations
 
-import os
-
 from ...roles.turn_io import canonical_json
 
 #: The effort spelling used for models without native effort levels. Execution
@@ -50,23 +48,9 @@ def provider_from_account(account: object) -> str:
 
 def launch(environment: dict | None = None) -> tuple[list[str], dict]:
     """Resolve the native argv and its environment from one selected entry."""
-    from ..runtime_selection import launch_with_environment
-    from ..discovery import EntryUnavailable
-    from ....errors import BoardError
+    from ..runtime_selection import launch as native_launch
 
-    try:
-        command, result = launch_with_environment("claude", environment)
-    except BoardError as error:
-        raise ClaudeUnavailable(error.message) from None
-    except EntryUnavailable as error:
-        failure = ClaudeUnavailable(str(error))
-        failure.reason = error.reason
-        raise failure from None
-    if environment is not None and os.environ.get("HMB_DEV_SOURCE") == "1":
-        for key in ("HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"):
-            if key in environment:
-                result[key] = environment[key]
-    return command, result
+    return native_launch("claude", ClaudeUnavailable, environment)
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
