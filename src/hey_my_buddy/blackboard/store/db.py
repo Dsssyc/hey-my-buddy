@@ -1050,7 +1050,7 @@ CREATE TABLE IF NOT EXISTS catalog_pending (
 """
 FIX_SCHEMA = """
 CREATE TABLE IF NOT EXISTS workflow_fixes (
-    run_id TEXT PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    run_id TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     fixed_run_id TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     created_at TEXT NOT NULL,
     CHECK (run_id <> fixed_run_id)

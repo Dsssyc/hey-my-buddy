@@ -195,6 +195,22 @@ class UpgradeFixtureTests(unittest.TestCase):
             fix_columns = {row['name']: row for row in upgraded.execute('PRAGMA table_info(workflow_fixes)')}
             self.assertEqual(set(fix_columns), {'run_id', 'fixed_run_id', 'created_at'})
             self.assertEqual(fix_columns['run_id']['pk'], 1)
+            for label, connection in (('migrated', upgraded), ('fresh', baseline)):
+                with self.subTest(schema=label):
+                    columns = {row['name']: row for row in connection.execute('PRAGMA table_info(workflow_fixes)')}
+                    self.assertEqual(columns['run_id']['notnull'], 1)
+                    for run_id, fixed_run_id, column in (
+                        (None, fixture['stableIds']['accepted'], 'run_id'),
+                        (None, fixture['stableIds']['accepted'], 'run_id'),
+                        ('missing-run', None, 'fixed_run_id'),
+                    ):
+                        with self.subTest(run_id=run_id, fixed_run_id=fixed_run_id):
+                            with self.assertRaisesRegex(sqlite3.IntegrityError,
+                                                        rf'NOT NULL constraint failed: workflow_fixes\.{column}'):
+                                connection.execute(
+                                    'INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)',
+                                    (run_id, fixed_run_id, '2026-01-01T00:00:00Z'))
+                            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_fixes').fetchone()[0], 0)
             fix_fks = {(row['from'], row['table'], row['to']) for row in upgraded.execute(
                 'PRAGMA foreign_key_list(workflow_fixes)')}
             self.assertEqual(fix_fks, {('run_id', 'workflow_runs', 'run_id'),

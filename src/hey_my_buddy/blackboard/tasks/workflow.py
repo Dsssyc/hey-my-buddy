@@ -1591,14 +1591,16 @@ class WorkflowCoordinator:
             self._require_enabled_buddy(connection, buddy)
         if lead is not None:
             self._active_credential(connection, lead)
-        if fixes is not None:
-            macro_task_id = task_fixes.submission_macro_task(
-                connection, fixes, host_id=hostId, lead_run_id=lead["runId"] if lead else None,
-                presentation=presentation,
-            )
-        else:
-            macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
-                             attach_macro_task(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now))
+        fixed_run = self._run_row(connection, fixes) if fixes is not None else None
+        if fixed_run is not None:
+            actor = {"role": "lead", "id": lead["runId"]} if lead else {"role": "host", "id": hostId}
+            if self._owner_actor(connection, fixed_run) != actor:
+                raise BoardError("FORBIDDEN", "fixes must name a micro task currently owned by the submitting Host or Lead")
+            if fixed_run["state"] != "accepted":
+                raise BoardError("INVALID_STATE", "fixes must name an accepted micro task", fixes=fixes)
+        macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
+                         attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
+                                           manifest=manifest, now=now, fixed_run=fixed_run))
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
             " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"

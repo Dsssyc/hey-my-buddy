@@ -957,7 +957,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
                       {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
                       <span className="lbl-name">{title.text}</span>
-                      {fixedByText && <span className="fix-target-mark" aria-hidden="true" title={fixedByText}><span className="fix-diamond">◇</span>{row.fixedBy!.length}</span>}
+                      {fixedByText && <span className="fix-target-mark" aria-hidden="true" title={fixedByText}><span className="fix-backlink">↩</span>{row.fixedBy!.length}</span>}
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
                     <span className="lbl-sub" title={fixesText ? `${fixesText} · ${namer(row.buddy).title}` : namer(row.buddy).title}>

@@ -53,8 +53,8 @@ describe("macroTask timeline rendering", () => {
     Object.assign(timeline.rows.find(row => row.runId === "r2")!, { fixes: "r1", fixedBy: ["r6"] });
     timeline.rows.find(row => row.runId === "r6")!.fixes = "r2";
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    expect(item("row:r1")!.querySelector(".fix-target-mark")?.textContent).toBe("◇1");
-    expect(item("row:r2")!.querySelector(".fix-target-mark")?.textContent).toBe("◇1");
+    expect(item("row:r1")!.querySelector(".fix-target-mark")?.textContent).toBe("↩1");
+    expect(item("row:r2")!.querySelector(".fix-target-mark")?.textContent).toBe("↩1");
     expect(item("row:r2")!.querySelector(".fix-source-text")?.textContent).toContain("设计宏任务时间轴");
     expect(item("row:r6")!.getAttribute("data-fixes")).toBe("r2");
     expect(item("row:r6")!.getAttribute("aria-label")).toContain("修正 实现 macro_tasks");

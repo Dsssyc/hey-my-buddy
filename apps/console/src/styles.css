@@ -237,7 +237,7 @@ button.tl-label:hover { background: var(--subtle); }
 .fix-arrow { flex: 0 0 auto; font-size: 13px; line-height: 1; }
 .fix-source-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fix-target-mark { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 1px; color: var(--ink); font-size: 10px; font-weight: 600; }
-.fix-diamond { font-size: 15px; line-height: 0.8; }
+.fix-backlink { font-size: 15px; line-height: 0.8; }
 .tl-label.helper { padding-left: calc(10px + var(--depth) * 16px); }
 .tl-label.helper::before { content: ""; position: absolute; left: calc(var(--depth) * 16px - 2px); top: 0; height: 50%; width: 8px; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
 .tl-label.selected-run { box-shadow: inset 3px 0 var(--accent); }

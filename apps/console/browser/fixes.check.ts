@@ -32,7 +32,7 @@ for (const { locale, language, fixes } of [
     const first = row(page, "preview-run-a1");
     const second = row(page, "preview-run-a2");
     const third = row(page, "preview-run-a3");
-    await expect(first.locator(".fix-target-mark")).toHaveText("◇2");
+    await expect(first.locator(".fix-target-mark")).toHaveText("↩2");
     await expect(second.locator(".fix-target-mark")).toHaveCount(0);
     await expect(second.locator(".fix-source-text")).toContainText(fixes);
     await expect(third.locator(".fix-source-text")).toContainText(fixes);
