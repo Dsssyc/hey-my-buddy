@@ -38,7 +38,7 @@ DAEMON_FIXTURE = ROOT / "tests/python/blackboard/service/fixtures/daemon_with_ca
 
 
 class HostCutoverTests(RealWorkspaceTestCase):
-    def private_runtime(self, generation):
+    def private_runtime(self, generation, *, record_environment=False):
         root = self.directory / "runtime"
         source = root / ("fixture-" + generation)
         source.mkdir(parents=True)
@@ -54,6 +54,15 @@ class HostCutoverTests(RealWorkspaceTestCase):
             "WorkerPool.start = lambda pool: []\n"
             "WorkerPool.reconcile = lambda pool, store: pool.report()",
         )
+        if record_environment:
+            entry = "    raise SystemExit(main())"
+            self.assertEqual(bootstrap.count(entry), 1, "Offline daemon fixture entry changed")
+            bootstrap = bootstrap.replace(
+                entry,
+                "    (Path(os.environ['BUDDY_STATE_DIR']) / 'daemon-environment.json').write_text(\n"
+                "        json.dumps({'PATH': os.environ.get('PATH'), 'VIRTUAL_ENV': os.environ.get('VIRTUAL_ENV')}))\n"
+                + entry,
+            )
         (source / "src/hey_my_buddy/_upgrade_fixture_daemon.py").write_text(
             bootstrap + "\n# Fixture generation: " + generation + "\n"
         )
@@ -89,6 +98,46 @@ class HostCutoverTests(RealWorkspaceTestCase):
         (target / "READY.json").write_text(json.dumps(ready))
         self.assertTrue(runtime.is_ready(target))
         return target
+
+    def test_upgrade_started_service_excludes_installer_venv_bin_from_path(self):
+        installer = self.private_runtime("installer")
+        target = self.private_runtime("service", record_environment=True)
+        installer_bin = str(runtime.runtime_python(installer).parent)
+        markers = [str(self.directory / name) for name in ("before", "middle", "after")]
+        original_entries = os.environ.get("PATH", "").split(os.pathsep)
+        inherited_entries = [markers[0], installer_bin, markers[1], *original_entries,
+                             installer_bin, markers[2]]
+        environment = self.child_environment({"BUDDY_RUNTIME_ROOT": str(installer.parent),
+                                              "PATH": os.pathsep.join(inherited_entries)})
+        # The package launcher has execed into the installer interpreter by
+        # this point, so VIRTUAL_ENV is absent even though sys.prefix is a venv.
+        for key in ("PYTHONPATH", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"):
+            environment.pop(key, None)
+        coordinator = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "from unittest import mock\n"
+            "from hey_my_buddy.install import launcher, upgrade\n"
+            "state, target = map(Path, sys.argv[1:])\n"
+            "assert sys.prefix != sys.base_prefix\n"
+            "original = launcher.entry_modules\n"
+            "fixture = lambda path: {**original(path), 'daemon': 'hey_my_buddy._upgrade_fixture_daemon'}\n"
+            "with mock.patch.object(launcher, 'entry_modules', side_effect=fixture):\n"
+            "    print(json.dumps(upgrade.start(state, target)))"
+        )
+        result = subprocess.run([str(runtime.runtime_python(installer)), "-c", coordinator,
+                                 str(self.directory), str(target)], cwd=installer, env=environment,
+                                capture_output=True, text=True, timeout=65)
+        log = self.directory / "upgrade-start.log"
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout +
+                         (log.read_text()[-5000:] if log.exists() else ""))
+        self.assertTrue(json.loads(result.stdout)["runtimeStable"])
+        recorded = json.loads((self.directory / "daemon-environment.json").read_text())
+        self.assertIsNone(recorded["VIRTUAL_ENV"])
+        service_entries = recorded["PATH"].split(os.pathsep)
+        self.assertNotIn(installer_bin, service_entries)
+        self.assertEqual(service_entries,
+                         [entry for entry in inherited_entries if entry != installer_bin])
 
     def snapshot(self):
         with closing(sqlite3.connect(self.directory / "board.sqlite3")) as connection:

@@ -1,6 +1,6 @@
 """Guarded storage inventory and confirmed reclamation; no process termination."""
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 from ... import locking
 import hashlib
@@ -17,9 +17,12 @@ from ... import private_dirs
 from ...protocol import schemas
 from ..store.db import utc_now
 from ...errors import BoardError
-from ...install.runtime import DEFAULT_RUNTIME_ROOT, is_ready
+from ...install.runtime import DEFAULT_RUNTIME_ROOT, is_ready, installation_lock
 
 GRACE_SECONDS = 3 * 86400
+_RUNTIME_ID = r'[0-9a-f]{32}'
+_INSTALL_LOCK = re.compile(r'\.(' + _RUNTIME_ID + r')\.install\.lock')
+_BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 LABELS = {'harnesses':'Harness 私有会话', 'zcode':'ZCode 旧私有主目录', 'workspaces':'受管检出',
           'runtimes':'运行时', 'backup':'备份', 'durable':'看板与记录'}
 
@@ -52,13 +55,7 @@ def tree_info(path: Path) -> tuple[int, str, bool]:
 
 
 def _service_process_patterns() -> list[tuple[re.Pattern[str], str]]:
-    """Exact ``-m`` patterns for every generation's long-lived service modules.
-
-    The names come from the one shared entry table, so this inventory and the
-    launcher can never disagree about a generation's process names. The kind is
-    the role of the pattern that actually matched; the command text is never
-    searched a second time.
-    """
+    """Exact ``-m`` patterns for the current runtime's service modules."""
     from ...install.entrypoints import ENTRY_MODULES, SERVICE_ROLES
     return [(re.compile(rf' -m {re.escape(modules[role])}(?: |$)'), role)
             for modules in ENTRY_MODULES.values() for role in SERVICE_ROLES]
@@ -125,6 +122,61 @@ def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str
     if any(line.startswith('n' + str(directory) + '/') or line == 'n' + str(directory) for line in result.stdout.splitlines()):
         return ['runtime-in-use']
     return []
+
+
+def _runtime_lock_paths(path: Path) -> list[Path]:
+    if _INSTALL_LOCK.fullmatch(path.name):
+        return [path]
+    build = _BUILD_DIRECTORY.fullmatch(path.name)
+    if path.name.startswith('.build-'):
+        # The earlier unbound build names can belong to any old installer.
+        return sorted(set([path.parent / '.install.lock', path.parent / 'install.lock',
+                           *path.parent.glob('.*.install.lock')]))
+    identity = build[1] if build else path.name
+    return [path.parent / f'.{identity}.install.lock']
+
+
+@contextmanager
+def _runtime_removal_locks(path: Path, *, create: bool):
+    with ExitStack() as stack:
+        created = []
+        try:
+            for lock_path in _runtime_lock_paths(path):
+                existed = lock_path.exists() or lock_path.is_symlink()
+                if not create and not existed:
+                    continue
+                stack.enter_context(installation_lock(lock_path, blocking=False, create=create))
+                if not existed:
+                    created.append(lock_path)
+            yield
+        finally:
+            for lock_path in created:
+                lock_path.unlink()
+
+
+def _runtime_lock_reasons(path: Path) -> list[str]:
+    try:
+        with _runtime_removal_locks(path, create=False):
+            return []
+    except BlockingIOError:
+        return ['runtime-installation-active']
+    except (BoardError, OSError):
+        return ['runtime-lock-unproven']
+
+
+def _runtime_leftover_recent(path: Path, now: float) -> bool:
+    if now - path.lstat().st_mtime < GRACE_SECONDS:
+        return True
+    if path.is_dir():
+        with os.scandir(path) as entries:
+            for entry in entries:
+                child = Path(entry.path)
+                if private_dirs.linked(child):
+                    if now - child.lstat().st_mtime < GRACE_SECONDS:
+                        return True
+                elif _runtime_leftover_recent(child, now):
+                    return True
+    return False
 
 
 def _legacy_runtime_identity(directory: Path, ready: Path) -> bool:
@@ -510,6 +562,27 @@ def inspect(store) -> dict:
             except OSError:
                 add('runtimes', path, ['runtime-identity-unproven'])
                 continue
+            lock = _INSTALL_LOCK.fullmatch(path.name)
+            build = _BUILD_DIRECTORY.fullmatch(path.name)
+            incomplete = (stat.S_ISDIR(path_stat.st_mode) and
+                          re.fullmatch(_RUNTIME_ID, path.name) is not None and
+                          not (path / 'READY.json').exists() and not (path / 'READY.json').is_symlink())
+            leftover = ((lock is not None and stat.S_ISREG(path_stat.st_mode)) or
+                        (stat.S_ISDIR(path_stat.st_mode) and
+                         (build is not None or path.name.startswith('.build-') or incomplete)))
+            if leftover:
+                identity = lock[1] if lock else build[1] if build else path.name
+                reasons = (['retention-history-unproven'] if retained_ids is None else
+                           ['retained-runtime'] if identity in retained_ids else [])
+                if foreign_default_root:
+                    reasons.append('runtime-owned-by-default-state')
+                if _runtime_leftover_recent(path, now):
+                    reasons.append('retention-grace')
+                reasons.extend(_runtime_lock_reasons(path))
+                if stat.S_ISDIR(path_stat.st_mode) and not reasons:
+                    reasons.extend(runtime_usage(path, commands, known))
+                add('runtimes', path, reasons)
+                continue
             if not stat.S_ISDIR(path_stat.st_mode):
                 add('runtimes', path, ['runtime-format-unsupported'])
                 continue
@@ -537,6 +610,7 @@ def inspect(store) -> dict:
                 reasons.append('runtime-identity-unproven')
             if not reasons:
                 reasons.extend(runtime_usage(path, commands, known))
+                reasons.extend(_runtime_lock_reasons(path))
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
@@ -705,7 +779,22 @@ def apply(store, params: dict) -> dict:
         if saved is not None:
             result = saved
         if result.get('pending'):
-            _finish_pending(result, receipt)
+            pending = result['pending']
+            runtime_pending = next(row for row in planned['candidates']
+                                   if row['id'] == pending['id'])['category'] == 'runtimes'
+            with ExitStack() as removal:
+                if runtime_pending:
+                    original, tomb = Path(pending['path']), Path(pending['tomb'])
+                    if _INSTALL_LOCK.fullmatch(original.name) and not original.exists():
+                        removal.enter_context(installation_lock(tomb, blocking=False, create=False))
+                    else:
+                        removal.enter_context(_runtime_removal_locks(original, create=True))
+                    remaining = original if original.exists() else tomb
+                    if remaining.is_dir():
+                        _, commands, known = process_inventory(store.directory.resolve())
+                        if runtime_usage(remaining, commands, known):
+                            raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                _finish_pending(result, receipt)
         current = {row['id']: row for row in inspect(store)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
@@ -738,19 +827,22 @@ def apply(store, params: dict) -> dict:
                 elif candidate['category'] in ('harnesses', 'zcode', 'runtimes'):
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
-                    if tree_info(original)[1:] != (fresh['fingerprint'], True):
-                        raise BoardError('STORAGE_CHANGED', 'Candidate changed')
-                    if candidate['category'] == 'runtimes':
-                        _, commands, known = process_inventory(store.directory.resolve())
-                        if runtime_usage(original, commands, known):
-                            raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
-                    tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
-                    identity = original.lstat()
-                    result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb),
-                                         'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint'],
-                                         'device':identity.st_dev, 'inode':identity.st_ino}
-                    _save_receipt(receipt, result)
-                    _finish_pending(result, receipt)
+                    with ExitStack() as removal:
+                        if candidate['category'] == 'runtimes':
+                            removal.enter_context(_runtime_removal_locks(original, create=True))
+                            if original.is_dir():
+                                _, commands, known = process_inventory(store.directory.resolve())
+                                if runtime_usage(original, commands, known):
+                                    raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                        if tree_info(original)[1:] != (fresh['fingerprint'], True):
+                            raise BoardError('STORAGE_CHANGED', 'Candidate changed')
+                        tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
+                        identity = original.lstat()
+                        result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb),
+                                             'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint'],
+                                             'device':identity.st_dev, 'inode':identity.st_ino}
+                        _save_receipt(receipt, result)
+                        _finish_pending(result, receipt)
                     continue
                 else:
                     raise BoardError('STORAGE_PROTECTED', 'Durable storage cannot be reclaimed')
@@ -788,7 +880,10 @@ def _finish_pending(result: dict, receipt: Path) -> None:
         identity = tomb.lstat()
         if 'device' in pending and (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']):
             raise BoardError('STORAGE_CHANGED', 'Pending tomb no longer matches its candidate')
-        private_dirs.remove_tree(tomb)
+        if tomb.is_dir():
+            private_dirs.remove_tree(tomb)
+        else:
+            tomb.unlink()
         from ..store.backup import sync_dir
         sync_dir(tomb.parent)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})

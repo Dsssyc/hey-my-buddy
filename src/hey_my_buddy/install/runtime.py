@@ -21,7 +21,8 @@ node_modules and any existing virtual environment are never copied.
 """
 from __future__ import annotations
 
-from .. import home, locking
+from .. import home, locking, private_dirs
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -299,6 +300,30 @@ def is_ready(directory: Path) -> bool:
         return False
 
 
+@contextmanager
+def installation_lock(path: Path, *, blocking: bool = True, create: bool = True):
+    """Lock the current inode, retrying waiters whose completed owner unlinked it."""
+    while True:
+        fd = private_dirs.open_regular_fd(path, os.O_RDWR | (os.O_CREAT if create else 0))
+        try:
+            locking.lock(fd, blocking=blocking)
+            try:
+                current = path.lstat()
+            except FileNotFoundError:
+                current = None
+            opened = os.fstat(fd)
+            if current is not None and (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino):
+                break
+        except BaseException:
+            os.close(fd)
+            raise
+        os.close(fd)
+    try:
+        yield fd
+    finally:
+        os.close(fd)
+
+
 def materialize(
     root: Path | None = None,
     destination: Path | None = None,
@@ -324,12 +349,17 @@ def materialize(
     # Install into a temporary sibling first only because the final name must be a
     # complete directory atomically; every path recorded inside is rewritten to the
     # final location before installation starts.
-    working: Path | None = None
     lock_path = target.parent / f".{target.name}.install.lock"
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    with installation_lock(lock_path):
+        return _materialize_locked(root, target, lock_path, uv_bin, timeout_seconds, log_path)
+
+
+def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str | None,
+                        timeout_seconds: int, log_path: Path | None) -> dict:
+    working = None
     try:
-        locking.lock(lock_fd)
         if is_ready(target):
+            lock_path.unlink()
             return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
         working = Path(tempfile.mkdtemp(prefix=f".{target.name}.build-", dir=target.parent))
         _copy_assets(root, working)
@@ -406,14 +436,12 @@ def materialize(
         }
         _rewrite_environment_paths(environment, target)
         (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n")
-        return {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
+        result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
+        lock_path.unlink()
+        return result
     finally:
         if working is not None and working.exists():
             shutil.rmtree(working, ignore_errors=True)
-        locking.unlock(lock_fd)
-        os.close(lock_fd)
-        # Keep the lock inode. Unlinking it could let a later installer lock a
-        # new inode while an existing waiter still holds this one open.
 
 
 def _rewrite_environment_paths(environment: Path, target: Path) -> None:

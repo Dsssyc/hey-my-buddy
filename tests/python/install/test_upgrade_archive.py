@@ -29,8 +29,10 @@ class ArchiveCutoverTests(BoardTestCase):
         self.endpoint = {"runtimeIdentity": "runtime:" + self.previous.name,
                          "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
         (self.state / "control.json").write_text(json.dumps(self.endpoint))
+        self.started_runtimes = []
 
-    def cutover(self, previous, target, *, fail_archive=False, corrupt_archive=False, fail_target=False):
+    def cutover(self, previous, target, *, fail_archive=False, corrupt_archive=False,
+                fail_target=False, mutate_after_archive=None):
         target.mkdir(parents=True, exist_ok=True)
         endpoint = {"runtimeIdentity": "runtime:" + previous.name,
                     "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
@@ -39,6 +41,7 @@ class ArchiveCutoverTests(BoardTestCase):
                   "maxConcurrent": 2, "waitCapacity": 4}
 
         def start(_state, path):
+            self.started_runtimes.append(path)
             if fail_target and path == target:
                 raise BoardError("INJECTED_START", "new runtime did not start")
             return {**health, "runtimeContentId": path.name,
@@ -71,6 +74,23 @@ class ArchiveCutoverTests(BoardTestCase):
                     return original(state, path)
 
                 stack.enter_context(mock.patch.object(upgrade, "archive_history_paths", side_effect=corrupt))
+            if mutate_after_archive is not None:
+                original = upgrade.archive_history_paths
+
+                def mutate(state, path):
+                    self.assertEqual(path.parent, state / "archives")
+                    manifest = backup.verify(path)
+                    self.original_history = {
+                        state.joinpath(*Path(relative).parts[1:]):
+                            state.joinpath(*Path(relative).parts[1:]).read_bytes()
+                        for relative in manifest['files']
+                        if Path(relative).parts[0] == 'state' and
+                           Path(relative).parts[1] not in backup.STATE_FILES}
+                    self.assertTrue(self.original_history)
+                    mutate_after_archive(state, path)
+                    return original(state, path)
+
+                stack.enter_context(mock.patch.object(upgrade, "archive_history_paths", side_effect=mutate))
             return upgrade.upgrade({})
 
     def test_archive_failure_keeps_the_old_board_and_starts_old_runtime(self):
@@ -91,6 +111,43 @@ class ArchiveCutoverTests(BoardTestCase):
         self.assertEqual(self.board_path.read_bytes(), self.original_board)
         self.assertTrue(all(path.exists() for path in historical_files))
         self.assertEqual(upgrade.idle_snapshot(self.state)["schema"], 18)
+
+    def test_changed_history_after_archive_publication_keeps_the_old_board_and_history(self):
+        target = self.runtime_root / ("b" * 32)
+        changed = {}
+
+        def mutate_history(state, archive):
+            manifest = backup.verify(archive)
+            relative = next(relative for relative in manifest["files"]
+                            if relative.startswith("state/workspaces/") and relative.endswith(".json"))
+            path = state.joinpath(*Path(relative).parts[1:])
+            changed[path] = path.read_bytes() + b"\n"
+            path.write_bytes(changed[path])
+
+        result = self.cutover(self.previous, target, mutate_after_archive=mutate_history)
+        self.assertFalse(result["upgraded"], result)
+        self.assertEqual(result["error"]["details"]["reason"]["code"], "UPGRADE_ARCHIVE_CHANGED")
+        self.assertEqual(self.board_path.read_bytes(), self.original_board)
+        self.assertEqual({path: path.read_bytes() for path in self.original_history},
+                         {**self.original_history, **changed})
+        self.assertEqual(self.started_runtimes, [self.previous])
+        self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
+
+    def test_changed_board_bytes_after_archive_publication_keeps_the_old_board_and_history(self):
+        target = self.runtime_root / ("b" * 32)
+        changed_board = self.original_board + b"\x00"
+
+        def mutate_board(state, archive):
+            self.assertTrue((archive / "manifest.json").is_file())
+            (state / "board.sqlite3").write_bytes(changed_board)
+
+        result = self.cutover(self.previous, target, mutate_after_archive=mutate_board)
+        self.assertFalse(result["upgraded"], result)
+        self.assertEqual(result["error"]["details"]["reason"]["code"], "UPGRADE_ARCHIVE_CHANGED")
+        self.assertEqual(self.board_path.read_bytes(), changed_board)
+        self.assertEqual({path: path.read_bytes() for path in self.original_history}, self.original_history)
+        self.assertEqual(self.started_runtimes, [self.previous])
+        self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
 
     def test_failed_new_runtime_restores_exact_schema_18_board_from_archive(self):
         target = self.runtime_root / ("b" * 32)

@@ -7,11 +7,136 @@ import stat
 from types import SimpleNamespace
 from unittest import mock
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import private_dirs
+from hey_my_buddy import private_dirs, locking
 from hey_my_buddy.blackboard.tasks import storage
 from support import BoardTestCase
 
 class StorageTests(BoardTestCase):
+    def _age_runtime_entry(self, path):
+        expired = storage.time.time() - storage.GRACE_SECONDS - 60
+        if path.is_dir() and not path.is_symlink():
+            for child in path.rglob('*'):
+                os.utime(child, (expired, expired), follow_symlinks=False)
+        os.utime(path, (expired, expired), follow_symlinks=False)
+
+    def test_runtime_leftovers_require_age_free_locks_and_unretained_real_paths(self):
+        board = self.board()
+        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        root.mkdir()
+        current, previous = 'a' * 32, 'b' * 32
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': current, 'previous': previous}))
+        names = [current, previous, 'c' * 32, 'd' * 32, '0' * 32, '6' * 32,
+                 '.' + 'e' * 32 + '.build-abandoned', '.' + 'f' * 32 + '.build-recent',
+                 '.' + current + '.build-retained']
+        entries = {name: root / name for name in names}
+        for path in entries.values():
+            path.mkdir()
+            (path / 'payload').write_bytes(b'incomplete installation')
+            self._age_runtime_entry(path)
+        # A fresh file also protects a directory whose own timestamp is old.
+        (entries['d' * 32] / 'payload').touch()
+        (entries['.' + 'f' * 32 + '.build-recent'] / 'payload').touch()
+        orphan = root / ('.' + '1' * 32 + '.install.lock')
+        recent_lock = root / ('.' + '2' * 32 + '.install.lock')
+        held_lock = root / ('.' + '3' * 32 + '.install.lock')
+        directory_lock = root / ('.' + '0' * 32 + '.install.lock')
+        retained_lock = root / ('.' + current + '.install.lock')
+        for path in (orphan, recent_lock, held_lock, directory_lock, retained_lock):
+            path.touch(mode=0o600)
+            self._age_runtime_entry(path)
+        recent_lock.touch()
+        outside = self.directory / 'outside-runtime'
+        outside.mkdir()
+        sentinel = outside / 'payload'
+        sentinel.write_bytes(b'outside')
+        linked = root / ('9' * 32)
+        linked.symlink_to(outside, target_is_directory=True)
+        linked_lock = root / ('.' + '8' * 32 + '.install.lock')
+        linked_lock.symlink_to(sentinel)
+        owners = [os.open(path, os.O_RDWR) for path in (held_lock, directory_lock)]
+        try:
+            for fd in owners:
+                locking.lock(fd, blocking=False)
+            with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+                 mock.patch.object(storage, 'runtime_usage', side_effect=lambda path, *_: (
+                     ['runtime-in-use'] if path.name == '6' * 32 else [])):
+                result = storage.prune_old_runtimes(board.store)
+        finally:
+            for fd in owners:
+                os.close(fd)
+        self.assertTrue(result['complete'])
+        expected_removed = {str(entries['c' * 32]), str(entries['.' + 'e' * 32 + '.build-abandoned']), str(orphan)}
+        self.assertEqual({row['path'] for row in result['removed']}, expected_removed)
+        for path in [*entries.values(), orphan, recent_lock, held_lock, directory_lock, retained_lock, linked, linked_lock]:
+            self.assertEqual(path.exists(), str(path) not in expected_removed, path)
+        reasons = {Path(row['path']).name: row['reasons'] for row in result['skipped']}
+        self.assertIn('retention-grace', reasons['d' * 32])
+        self.assertIn('retention-grace', reasons[recent_lock.name])
+        self.assertIn('runtime-installation-active', reasons[held_lock.name])
+        self.assertIn('runtime-installation-active', reasons['0' * 32])
+        self.assertIn('runtime-in-use', reasons['6' * 32])
+        self.assertIn('linked-path', reasons[linked.name])
+        self.assertIn('linked-path', reasons[linked_lock.name])
+        self.assertEqual(sentinel.read_bytes(), b'outside')
+
+    def test_runtime_cleanup_holds_the_installation_lock_until_directory_removal(self):
+        board = self.board()
+        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        candidate = root / ('c' * 32)
+        candidate.mkdir(parents=True)
+        (candidate / 'payload').write_text('incomplete installation')
+        self._age_runtime_entry(candidate)
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'a' * 32, 'previous': 'b' * 32}))
+        real_remove = private_dirs.remove_tree
+        observed = []
+        def remove(tomb):
+            lock_path = root / f'.{candidate.name}.install.lock'
+            fd = os.open(lock_path, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    locking.lock(fd, blocking=False)
+                observed.append(tomb)
+                return real_remove(tomb)
+            finally:
+                os.close(fd)
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+             mock.patch.object(storage, 'runtime_usage', return_value=[]), \
+             mock.patch.object(private_dirs, 'remove_tree', side_effect=remove):
+            result = storage.prune_old_runtimes(board.store)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual([row['path'] for row in result['removed']], [str(candidate)])
+        self.assertFalse(candidate.exists())
+        self.assertEqual(list(root.iterdir()), [])
+
+    def test_unbound_build_leftover_waits_for_every_existing_installation_lock(self):
+        board = self.board()
+        root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
+        build = root / '.build-abandoned'
+        build.mkdir(parents=True)
+        (build / 'payload').write_text('unfinished build')
+        self._age_runtime_entry(build)
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'a' * 32, 'previous': 'b' * 32}))
+        lock_path = root / ('.' + 'a' * 32 + '.install.lock')
+        lock_path.touch(mode=0o600)
+        self._age_runtime_entry(lock_path)
+        fd = os.open(lock_path, os.O_RDWR)
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+             mock.patch.object(storage, 'runtime_usage', return_value=[]):
+            try:
+                locking.lock(fd, blocking=False)
+                result = storage.prune_old_runtimes(board.store)
+                self.assertTrue(build.is_dir())
+                row = next(row for row in result['skipped'] if row['path'] == str(build))
+                self.assertIn('runtime-installation-active', row['reasons'])
+            finally:
+                os.close(fd)
+            result = storage.prune_old_runtimes(board.store)
+        self.assertEqual([row['path'] for row in result['removed']], [str(build)])
+        self.assertEqual(list(root.iterdir()), [lock_path])
+
     def _runtime_plan(self, board):
         root = Path(os.environ['BUDDY_RUNTIME_ROOT'])
         root.mkdir()
@@ -500,7 +625,7 @@ class StorageTests(BoardTestCase):
 
 
 class ProcessInventoryServiceTests(BoardTestCase):
-    """The real inventory recognizes both package generations' service modules.
+    """The real inventory recognizes current package service modules.
 
     Only the ``ps`` data source is replaced: the simulated listing is literal
     text spelled independently of the shared entry table, so a misspelling in
@@ -509,7 +634,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
     ``control.json``, so open-file inspection is never reached.
     """
 
-    def test_real_inventory_recognizes_both_generations_by_their_matched_module(self):
+    def test_real_inventory_recognizes_current_service_modules(self):
         state = self.directory / 'state'
         state.mkdir()
         foreign = self.directory / 'another-board'
@@ -522,7 +647,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
             f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.supervisor --worker-id new-1 --state-dir {foreign}',
             f' 201 /usr/bin/python3 -m buddy.daemonization --state-dir {foreign}',
             f' 202 /usr/bin/python3 -m xbuddy.daemon --state-dir {foreign}',
-            f' 203 /usr/bin/python3 -m buddy.worker.supervisord --state-dir {foreign}',
+            f' 203 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisord --state-dir {foreign}',
             f' 204 /usr/bin/python3 -m hey_my_buddy.blackboard.service.daemonware --state-dir {foreign}',
             f' 205 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisorish --state-dir {foreign}',
             f' 206 /usr/bin/python3 -m buddy.client --state-dir {foreign}',
@@ -534,8 +659,6 @@ class ProcessInventoryServiceTests(BoardTestCase):
         ps.assert_called_once()
         self.assertTrue(known)
         self.assertEqual({row['pid']: row for row in orphans}, {
-            101: {'pid': 101, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': None},
-            102: {'pid': 102, 'kind': 'supervisor', 'stateDir': str(foreign), 'runtimeDir': None},
             103: {'pid': 103, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
             104: {'pid': 104, 'kind': 'supervisor', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
         })
