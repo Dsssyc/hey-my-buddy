@@ -237,7 +237,7 @@ class MarkerWriteFailureTests(unittest.TestCase):
 
     def test_empty_claim_does_not_skip_events_since_last_wait(self):
         self.worker._idle_cursor = 8
-        with mock.patch.object(self.worker.client, "claim", return_value={"claim": None, "cursor": 12}):
+        with mock.patch.object(self.worker.client, "claim", return_value={"claim": None}):
             self.assertEqual(self.worker.run_once(), "idle")
         self.assertEqual(self.worker._idle_cursor, 8)
 

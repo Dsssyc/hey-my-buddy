@@ -47,3 +47,11 @@ Worker 在启动时找一次孤儿；空闲期间只有等待响应确认出现�
 空闲占用用指定检查运行器中的临时测量文件执行：私有空主目录、相同离线目录夹具、6 个空闲 Worker，预热 10 秒后读取服务及其所有后代的 user 加 system CPU 时间，等待 60 秒再读一次；核对进程号与原始创建值均未改变，进程集合也未改变。两次均测量 7 个产品进程，不计测量进程本身；占用为 CPU 秒差除以实际经过时间再乘 100，表示一个核的百分比。改动前为 60.005 秒中 2.444881 CPU 秒，即 4.07446%；改动后为 60.006 秒中 0.215163 CPU 秒，即 0.35857%，比改前下降约 91.2%；与 Host 提供的整合分支 0.37% 同一水平。原始指标与测量脚本保存在忽略的 `tmp/`，临时测量文件不作为日常检查的一部分。
 
 本回合使用指定解释器与检查运行器，默认进程数，不跑完整检查。`tests/python/buddy/runtime/test_worker_invariants.py`、`test_repair_recovery.py`、`tests/python/blackboard/store/test_interruption_recovery.py`、`test_worker_orphan_settlement.py`、`tests/python/protocol/test_process_identity.py` 及新增 `tests/python/blackboard/service/test_worker_event_recovery.py` 首轮共 86 项通过；补充单个替代 Worker 故障注入和事件失败重试后，仅复核两份发生变化的 Worker 文件，44 项全部通过。前后两次临时测量文件也通过，所有私有根均已由运行器确认清理，最终 `git diff --check` 通过。临时测量文件和依赖加载文件已移除；本回合没有失败后重跑或完整检查。与本回合要求不一致的情形：没有。
+
+## 第四回合：整合检查回归修复
+
+七个中断续接用例的共用夹具改为先认证上报完整进程身份、建立绑定该执行的空原生启动日志，再用可控的进程观测经服务启动对账与恢复结算；不再通过 `worker_result` 伪造中断结果。Codex CLI 与 DSH CLI 的原生会话事实由恢复过程读取其私有 checkpoint、会话日志及绑定，并断言这些事实已经保存在恢复结果中；Claude Code CLI 与 ZCode app 没有恢复出的原生会话事实时明确验证重建输入，不再注入虚构会话。
+
+事件恢复测试改为导入辅助模块，避免将带测试方法的 TestCase 类直接放入另一个模块，消除 11 项重复收集。空闲等待测试先处理启动注册事件，再观察连续三个空窗口，要求认领次数、启动意图写入次数与游标均保持不变；认领与等待之间入队的用例仍验证工作不会丢失。空认领回复删除无读者的 `cursor`，同时删除对应断言与测试替身里的旧字段。
+
+本回合按要求只运行九个指定或修改到的文件：`tests/python/blackboard/tasks/test_interrupted_continuation.py`、`tests/python/cli/test_checks_parallel.py`、`tests/python/buddy/runtime/test_worker_idle.py`、`tests/python/blackboard/tasks/test_empty_claims.py`、`tests/python/buddy/runtime/test_worker_invariants.py`、`tests/python/buddy/runtime/test_worker_runtime.py`、`tests/python/blackboard/tasks/test_parallel_dispatch.py`、`tests/python/blackboard/store/test_interruption_recovery.py` 与 `tests/python/blackboard/service/test_worker_event_recovery.py`。指定解释器与检查运行器使用默认 4 个进程，111 项全部通过，跳过 0 项，退出码为 0，运行器确认私有根已清理；没有运行完整检查或失败后重跑。临时依赖加载文件已移除，最终 `git diff --check` 通过；原始检查日志保留在忽略的 `tmp/`。与本回合要求不一致的情形：没有。

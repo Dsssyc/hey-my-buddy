@@ -2,12 +2,12 @@
 from unittest.mock import patch
 
 from support import BoardTestCase
-from blackboard.store.test_interruption_recovery import InterruptionRecoveryTests
+from blackboard.store import test_interruption_recovery as recovery_helpers
 from hey_my_buddy.blackboard.tasks import interruption
 
 
 class WorkerRecoveryEventTests(BoardTestCase):
-    claimed = InterruptionRecoveryTests.claimed
+    claimed = recovery_helpers.InterruptionRecoveryTests.claimed
 
     def test_unknown_event_after_first_page_entry_triggers_recovery(self):
         for startup in (False, True):

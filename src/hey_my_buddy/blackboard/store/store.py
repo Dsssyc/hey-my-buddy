@@ -1755,7 +1755,7 @@ class BoardStore:
                     else:
                         blocker = "no-queued-work"
                 head = self._head_of(connection)
-                response = {"claim": None, "reason": blocker, "cursor": head}
+                response = {"claim": None, "reason": blocker}
                 # An empty claim is a transient observation, never an allocation
                 # receipt: no commands row exists to replay, so a retried
                 # claimRequestId scans the board again and can observe newly
