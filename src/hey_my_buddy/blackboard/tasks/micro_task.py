@@ -172,6 +172,9 @@ SELECT
     r.state AS run_state,
     r.buddy_json AS run_buddy_json,
     r.delegation_authority AS run_delegation_authority,
+    lead.lead_run_id AS lead_run_id,
+    lead.lead_turn_id AS lead_turn_id,
+    lead.created_at AS lead_owned_at,
     c.parent_run_id AS child_parent_run_id,
     COALESCE(c.parent_run_id, wr.run_id) AS delegated_parent_run_id,
     dr.decision_id AS decision_id,
@@ -225,6 +228,7 @@ SELECT
 FROM tasks t
 LEFT JOIN workflow_runs r ON r.run_id = t.task_id
 LEFT JOIN workflow_children c ON c.child_task_id = t.task_id
+LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id
 LEFT JOIN roots rt ON rt.task_id = t.task_id
 LEFT JOIN (
     SELECT task_id, MIN(decision_id) AS decision_id FROM decision_requests
@@ -299,6 +303,8 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         },
         "buddy": buddy,
         "delegationAuthority": bool(row["run_delegation_authority"]),
+        "leadOwnership": ({"leadRunId": row["lead_run_id"], "leadTurnId": row["lead_turn_id"],
+                           "createdAt": row["lead_owned_at"]} if row["lead_run_id"] is not None else None),
     }
     return result
 

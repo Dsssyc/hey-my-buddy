@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
-    stop_initiator      TEXT CHECK (stop_initiator IN ('host','console','service','unknown')),
+    stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
     grace_deadline      TEXT,
     exit_code           INTEGER,
     signal              TEXT,
@@ -612,6 +612,19 @@ CREATE TABLE IF NOT EXISTS workflow_children (
 """,
     """
 CREATE INDEX IF NOT EXISTS workflow_children_parent_idx ON workflow_children(parent_run_id, state);
+""",
+    # Lead ownership is independent of assistance approval and survives turns.
+    """
+CREATE TABLE IF NOT EXISTS workflow_lead_tasks (
+    owned_run_id        TEXT PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    lead_run_id         TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    lead_turn_id        TEXT NOT NULL REFERENCES workflow_turns(turn_id) ON DELETE RESTRICT,
+    created_at          TEXT NOT NULL,
+    CHECK (owned_run_id <> lead_run_id)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_lead_tasks_lead_idx ON workflow_lead_tasks(lead_run_id);
 """,
     # Durable continuation inputs. An automatic continuation is one-use authority
     # tied to the request and prepared workspace; a manual continuation invalidates

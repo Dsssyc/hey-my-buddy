@@ -741,10 +741,10 @@ class WorkerRunExecutor:
 
     def stop(self, handle: ProcessHandle, *, stop_initiator: str,
              grace_deadline: float | None) -> None:
-        if (stop_initiator == "host" and grace_deadline is not None
+        if (stop_initiator in ("host", "lead") and grace_deadline is not None
                 and self.description.interrupted_resume):
             from .controller import start_wrap_up
-            start_wrap_up(handle, grace_deadline)
+            start_wrap_up(handle, grace_deadline, stop_initiator=stop_initiator)
         else:
             handle.force_stop_requested = True
             self.cancel(handle)

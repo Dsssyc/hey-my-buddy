@@ -56,6 +56,15 @@ def native_environment(environment, *, harness):
     return clean(environment, command=command_for(harness, environment))
 
 
+def worker_launcher_environment(environment):
+    """Give an admitted Worker turn's launcher its board and file credential."""
+    if 'HMB_AGENT_CREDENTIAL_FILE' not in environment:
+        return {}
+    keys = ('HMB_STATE_DIR', 'HMB_AGENT_CREDENTIAL_FILE', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME',
+            'HMB_RUNTIME_IDENTITY', 'HMB_DEV_SOURCE')
+    return {key: environment[key] for key in keys if key in environment}
+
+
 def controller_environment(directory, environment=None, *, read_only=False):
     """Only trusted Python controllers receive the private command selection."""
     source = (_environment.get() or os.environ) if environment is None else environment

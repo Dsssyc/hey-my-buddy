@@ -12,9 +12,23 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import discovery
+from hey_my_buddy.buddy.harnesses.runtime_selection import worker_launcher_environment
 
 
 class HarnessDiscoveryTests(unittest.TestCase):
+    def test_worker_launcher_binding_is_absent_from_non_worker_calls(self):
+        source = {"HMB_STATE_DIR": "/private/board", "HMB_AGENT_CREDENTIAL": "secret"}
+        self.assertEqual(worker_launcher_environment(source), {})
+        source.update(HMB_AGENT_CREDENTIAL_FILE="/private/attempt/credential.json",
+                      HMB_RUNTIME_ROOT="/private/runtime", HMB_DEV_SOURCE="1")
+        self.assertEqual(worker_launcher_environment(source), {
+            "HMB_STATE_DIR": "/private/board",
+            "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt/credential.json",
+            "HMB_RUNTIME_ROOT": "/private/runtime",
+            "HMB_DEV_SOURCE": "1",
+        })
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", discovery.native_environment(source))
+
     def test_claude_reports_native_provider_and_unknown_billing_without_refusal(self):
         for account, provider in (({"loggedIn": True, "apiProvider": "bedrock", "authMethod": "api_key"}, "bedrock"),
                                   ({"loggedIn": True, "apiProvider": "firstParty"}, "anthropic"),

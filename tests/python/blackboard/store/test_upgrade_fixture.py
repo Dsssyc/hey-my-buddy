@@ -216,6 +216,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
             self.assertEqual({row[0] for row in upgraded.execute(
                 'SELECT delegation_authority FROM workflow_runs')}, {0})
             migrated_columns = {row[1] for row in upgraded.execute('PRAGMA table_info(attempts)')}

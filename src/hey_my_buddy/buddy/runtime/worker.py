@@ -978,7 +978,7 @@ class _Renewal(threading.Thread):
         current = self.handle.stop_initiator
         if not self.handle.cancel_requested or current != initiator:
             deadline = None
-            if initiator == "host" and view.get("graceDeadline") is not None:
+            if initiator in ("host", "lead") and view.get("graceDeadline") is not None:
                 remaining = (datetime.fromisoformat(view["graceDeadline"].replace("Z", "+00:00"))
                              - datetime.now(timezone.utc)).total_seconds()
                 deadline = time.monotonic() + max(0, remaining)

@@ -13,6 +13,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -220,7 +221,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
-            # A scoped caller can never use a Host control file.
+            # A control file cannot make an invalid execution credential valid.
             code, refused = self.cli(
                 "decide",
                 json.dumps(
@@ -236,7 +237,30 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 env=env,
             )
             self.assertEqual(code, 1)
-            self.assertEqual(refused["error"]["code"], "FORBIDDEN")
+            self.assertEqual(refused["error"]["code"], "UNAUTHORIZED")
+
+
+    def test_harness_environment_launcher_reaches_the_private_issuing_board(self):
+        from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
+        with self.daemon(env=self.env()):
+            code, submitted = self.submit("launcher-private")
+            self.assertEqual(code, 0, submitted)
+            code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh"]}), env=self.env())
+            self.assertEqual(code, 0, registered)
+            code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
+                                                                  "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
+            self.assertEqual(code, 0, response)
+            credential = self.directory / "launcher-credential.json"
+            credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
+            credential.chmod(0o600)
+            incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
+            environment = child_environment(source=incoming)
+            self.assertEqual(environment["HMB_STATE_DIR"], str(self.directory))
+            launcher = Path(__file__).resolve().parents[4] / "src/hey_my_buddy/install/launcher.py"
+            result = subprocess.run([sys.executable, str(launcher), "get", json.dumps({"runId": submitted["runId"], "output": "full"})],
+                                    env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(json.loads(result.stdout)["runId"], submitted["runId"])
 
 
 class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):

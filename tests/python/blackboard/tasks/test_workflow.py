@@ -1162,7 +1162,7 @@ class BoundedViewTests(WorkflowTestCase):
         submitted = self.submit(board)
         self.finish_turn(board, self.claim(board), disposition="assistance")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.assertEqual(set(view["truncated"]), {"turns", "requests", "children", "artifacts", "pendingRequests"})
+        self.assertEqual(set(view["truncated"]), {"turns", "requests", "children", "ownedMicroTasks", "artifacts", "pendingRequests"})
         self.assertEqual(view["counts"]["turns"], 1)
         # The submitted input, the sealed output and the turn's frozen
         # shared-stash fact record are each one fixed artifact.

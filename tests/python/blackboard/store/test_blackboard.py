@@ -1495,7 +1495,7 @@ class TestPackaging(BoardTestCase):
         self.assertTrue(actual["executable"].startswith(str(runtime_dir)), actual)
         self.assertTrue(os.path.realpath(actual["prefix"]).startswith(root), actual)
         self.assertTrue(os.path.realpath(actual["package"]).startswith(root), actual)
-        self.assertEqual(set(actual["resources"]), {"console.assets", "roles.worker", "roles.router", "roles.lead"})
+        self.assertEqual(set(actual["resources"]), {"console.assets", "roles.worker", "roles.router", "roles.lead", "roles.wrap_up"})
         for name, value in actual["resources"].items():
             self.assertTrue(os.path.realpath(value).startswith(root), actual)
             self.assertTrue(Path(value).exists(), name)
@@ -1568,6 +1568,7 @@ class TestTaskHistory(BoardTestCase):
         "project",
         "buddy",
         "delegationAuthority",
+        "leadOwnership",
     )
 
     def submit_one(self, board, request_id: str, *, name: str = "work"):
@@ -1597,6 +1598,7 @@ class TestTaskHistory(BoardTestCase):
         self.assertIsNone(metadata["rootRunId"])
         self.assertIsNone(metadata["buddy"])
         self.assertFalse(metadata["delegationAuthority"])
+        self.assertIsNone(metadata["leadOwnership"])
         self.assertEqual(sorted(metadata["project"]), sorted(["id", "path", "label"]))
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
         self.assertEqual(board.call("task_get", {"runId": created["runId"]})["task"]["lineage"], metadata)

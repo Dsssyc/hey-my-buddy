@@ -83,6 +83,20 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(value["graceDeadline"], deadline)
         self.assertEqual(value["kind"], "host-wrap-up")
 
+    def test_lead_stop_uses_the_same_bounded_wrap_up(self):
+        handle = self._stop_handle()
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+            name="zcode", interrupted_resume=True), SimpleNamespace())
+        deadline = time.monotonic() + 300
+        controller.worker_stop(executor, handle, stop_initiator="lead", grace_deadline=deadline)
+        self.assertEqual(handle.stop_initiator, "lead")
+        self.assertTrue(handle.wrap_up_started)
+        self.assertEqual(handle.grace_deadline, deadline)
+        self.assertEqual(handle.signal_group.call_count, 1)
+        self.assertEqual(run_controller._host_stop(self.control, request_for(self.control)), deadline)
+        self.assertEqual(controller.stop_termination_reason(shutdown_confirmed=True,
+                         stop_initiator="lead"), "forced-stop")
+
     def test_console_and_unsupported_harness_force_immediate_cancel(self):
         for initiator, resume in (("console", True), ("host", False)):
             with self.subTest(initiator=initiator, resume=resume):
