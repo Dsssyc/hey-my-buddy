@@ -24,16 +24,16 @@ def _state(state: Path) -> Path:
     return Path(state).resolve()
 
 
-def _entry_paths(path: Path) -> set[str]:
-    """Enumerate names, including links, without following them."""
-    result = {str(path)}
-    if private_dirs.linked(path) or not path.is_dir():
-        return result
-    with os.scandir(path) as entries:
-        children = [Path(entry.path) for entry in entries]
-    for child in children:
-        result.update(_entry_paths(child))
-    return result
+def _covered(relative: str, roots: set[str]) -> bool:
+    """A skipped entry is covered exactly, or by one relocated tree root above it."""
+    if relative in roots:
+        return True
+    parts = relative.split('/')
+    while parts:
+        parts.pop()
+        if '/'.join(parts) in roots:
+            return True
+    return False
 
 
 def _guard(state: Path, path: Path, *, leaf: bool = True) -> None:
@@ -101,14 +101,15 @@ def _validate_action(state: Path, item: dict, *, deletion: bool) -> tuple[Path, 
             if call:
                 valid = valid and adapter == 'dsh'
         else:
-            valid = (len(parts) == 1 and parts[0] in ('native', 'claude-private', 'sessions', 'frozen-input') or
+            valid = (len(parts) == 1 and parts[0] in ('native', 'claude-private', 'sessions', 'frozen-input',
+                                                      'native-logs') or
                      no_tool and len(parts) == 2 and parts[1] in ('native', 'dsh-home') or
                      call and parts[2] in ('sessions', 'preflight', 'native') or
                      old_dsh and _safe_segment(parts[1]) and
                      not attempt_evidence.is_evidence(relative.as_posix()))
-            if len(parts) == 1 and parts[0] in ('claude-private', 'sessions', 'frozen-input'):
+            if len(parts) == 1 and parts[0] in ('claude-private', 'sessions', 'frozen-input', 'native-logs'):
                 valid = valid and adapter == {'claude-private':'claude', 'sessions':'dsh',
-                                               'frozen-input':'codex'}[parts[0]]
+                                               'frozen-input':'codex', 'native-logs':'zcode'}[parts[0]]
             if no_tool and len(parts) == 2 and parts[1] == 'dsh-home':
                 valid = valid and adapter == 'dsh'
             if call or old_dsh:
@@ -179,18 +180,36 @@ def _no_tool_private_entries(source: Path, old: Path) -> bool:
     return False
 
 
-def preview(state: Path) -> dict:
-    """Read-only exact relocation plan; unknown ownership never authorizes a move."""
-    state = _state(state)
-    moves, deletes, blocked, covered = [], [], [], set()
+def _board_facts(state: Path) -> tuple[list, dict[str, str]]:
+    """Attempt and task facts, read without creating SQLite sidecars.
+
+    A WAL-mode reader normally creates ``board.sqlite3-shm``/``-wal`` beside the
+    database. A read-only report must not touch the state root: when the live
+    service owns a shared-memory index the reader joins it with ``mode=ro``,
+    and a quiescent database (no WAL frames left) is read ``immutable=1``,
+    which is exact and sidecar-free. WAL frames without a shared-memory index
+    (a crashed writer) are refused instead of recovered by a reader.
+    """
     database = state / 'board.sqlite3'
-    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
+    shared, wal = state / 'board.sqlite3-shm', state / 'board.sqlite3-wal'
+    if not shared.exists() and wal.exists() and wal.stat().st_size:
+        raise sqlite3.OperationalError('Board WAL content has no shared-memory index')
+    suffix = '?mode=ro' if shared.exists() else '?mode=ro&immutable=1'
+    with closing(sqlite3.connect(database.as_uri() + suffix, uri=True)) as connection:
         connection.row_factory = sqlite3.Row
         attempts = connection.execute(
             'SELECT a.task_id,a.attempt_id,a.execution_state,a.shutdown_confirmed,t.adapter '
             'FROM attempts a JOIN tasks t ON t.task_id=a.task_id'
         ).fetchall()
         tasks = {row['task_id']: row['adapter'] for row in connection.execute('SELECT task_id,adapter FROM tasks')}
+    return attempts, tasks
+
+
+def preview(state: Path) -> dict:
+    """Read-only exact relocation plan; unknown ownership never authorizes a move."""
+    state = _state(state)
+    moves, deletes, blocked, covered = [], [], [], set()
+    attempts, tasks = _board_facts(state)
 
     def add_move(source: Path, target: Path, *, task_id: str, adapter: str, attempt_id: str | None = None):
         _guard(state, source, leaf=False)
@@ -201,7 +220,9 @@ def preview(state: Path) -> dict:
         if target.exists() or private_dirs.linked(target):
             blocked.append({'path': str(source.relative_to(state)), 'reason': 'private-destination-exists'})
             return
-        covered.update(str(Path(p).relative_to(state)) for p in _entry_paths(source))
+        # A moved tree relocates every entry below its root, so the root alone
+        # describes coverage; walking the tree would price preflight by its size.
+        covered.add(str(source.relative_to(state)))
         moves.append({'source': str(source), 'target': str(target), 'taskId': task_id,
                       'adapter': adapter, 'attemptId': attempt_id})
 
@@ -222,7 +243,7 @@ def preview(state: Path) -> dict:
         if not old.exists() and not private_dirs.linked(old):
             continue
         legacy = [child for child in old.iterdir() if (child.name in _CREDENTIALS
-                   or child.name in ('native', 'claude-private', 'sessions', 'frozen-input')
+                   or child.name in ('native', 'claude-private', 'sessions', 'frozen-input', 'native-logs')
                    or _NO_TOOL.fullmatch(child.name) or _RUN_DIR.fullmatch(child.name))]
         if not legacy:
             continue
@@ -283,6 +304,13 @@ def preview(state: Path) -> dict:
                 else:
                     add_delete(source, task_id=task_id, adapter=adapter, attempt_id=attempt_id)
                 continue
+            if source.name == 'native-logs':
+                # ZCode's ZCODE_LOG_DIR tree: logs are relocated, never deleted,
+                # and always to this attempt's ZCode private area regardless of
+                # the declared adapter that once owned the attempt.
+                add_move(source, private_dirs.attempt_root(state, 'zcode', task_id, attempt_id) / 'native-logs',
+                         task_id=task_id, adapter='zcode', attempt_id=attempt_id)
+                continue
             adapter = ('claude' if source.name == 'claude-private' else 'dsh' if source.name == 'sessions'
                        else 'codex' if source.name == 'frozen-input'
                        else 'codex' if (not private_dirs.linked(source / 'codex-home')
@@ -340,7 +368,8 @@ def require_readiness(state: Path, preflight_report: dict) -> dict:
     allowed = set(plan['coveredPaths'])
     all_entries = [(kind, path.relative_to(Path(state)).as_posix(), reason)
                    for kind, path, reason in backup.preflight_entries(state)]
-    unexpected = [path for kind, path, _reason in all_entries if kind == 'skipped' and path not in allowed]
+    unexpected = [path for kind, path, _reason in all_entries
+                  if kind == 'skipped' and not _covered(path, allowed)]
     rejected_paths = [path for kind, path, _reason in all_entries if kind == 'rejected']
     if (plan['blocked'] or rejected.get('count', 0) or rejected_paths or skipped.get('count', 0)
             != sum(kind == 'skipped' for kind, _path, _reason in all_entries) or unexpected):
@@ -348,6 +377,53 @@ def require_readiness(state: Path, preflight_report: dict) -> dict:
                  rejected_paths + unexpected)[:20]
         raise BoardError('BACKUP_PREFLIGHT_FAILED', 'Upgrade has unknown, unsafe or unconfirmed private files', paths=paths)
     return {'ready': True, 'legacy': {'count': plan['count'], 'paths': plan['paths']}, 'plan': plan}
+
+
+def _bounded_section(rows: list[dict]) -> dict:
+    shown = rows[:20]
+    return {'count': len(rows), 'paths': [row['path'] for row in shown],
+            'entries': [{'path': row['path'], 'reason': row['reason']} for row in shown]}
+
+
+def _plan_error_path(state: Path, error: BoardError) -> str:
+    detail = error.details.get('path')
+    if isinstance(detail, str):
+        try:
+            return str(Path(detail).relative_to(state))
+        except ValueError:
+            return detail
+    return '.'
+
+
+def legacy_readiness(state: Path, skipped: list[str]) -> dict:
+    """The installer's admission view of the relocation plan; never raises.
+
+    ``skipped`` carries every state-relative path the backup would skip. The
+    result mirrors :func:`require_readiness`: ready only when an exact, stopped
+    plan covers each skipped entry and nothing is blocked.
+    """
+    state = Path(state)
+    uncovered_all = [{'path': path, 'reason': 'not-in-relocation-plan'} for path in skipped]
+
+    def report(plan_count: int, uncovered: list[dict], blocked: list[dict]) -> dict:
+        return {'ready': not uncovered and not blocked, 'planCount': plan_count,
+                'uncovered': _bounded_section(uncovered), 'blocked': _bounded_section(blocked)}
+
+    if not (state / 'board.sqlite3').exists():
+        # Without a board no owner can be proven, so only an empty plan is exact.
+        return report(0, uncovered_all, [])
+    try:
+        plan = preview(state)
+    except BoardError as error:
+        return report(0, uncovered_all,
+                      [{'path': _plan_error_path(state, error), 'reason': error.code}])
+    except (sqlite3.Error, OSError):
+        return report(0, uncovered_all, [{'path': '.', 'reason': 'relocation-plan-unavailable'}])
+    allowed = set(plan['coveredPaths'])
+    blocked_paths = {row['path'] for row in plan['blocked']}
+    uncovered = [{'path': path, 'reason': 'not-in-relocation-plan'}
+                 for path in skipped if path not in blocked_paths and not _covered(path, allowed)]
+    return report(plan['count'], uncovered, plan['blocked'])
 
 
 def apply(state: Path, journal: dict, save) -> dict:

@@ -30,9 +30,20 @@ class BackupPreflightTests(BoardTestCase):
                                 'no-tool-' + 'a' * 32 + '/call-1/request.json',
                                 'no-tool-' + 'a' * 32 + '/call-1/patch.json')
         report = backup.preflight(board.directory)
-        self.assertTrue(report['ok'])
+        # Skipped entries without an owning stopped attempt have no relocation
+        # plan, so the report is not ok even though nothing is refused.
+        self.assertFalse(report['ok'])
         self.assertTrue(report['needsAttention'])
         self.assertEqual(report['skipped']['count'], 5)
+        self.assertEqual(report['legacyPlan']['ready'], False)
+        self.assertEqual(report['legacyPlan']['uncovered']['count'], 5)
+        self.assertEqual(len(report['legacyPlan']['uncovered']['entries']), 5)
+        self.assertEqual({row['path'] for row in report['legacyPlan']['uncovered']['entries']},
+                         {'attempts/run/attempt/plain.json', 'attempts/run/attempt/agent-credential.json',
+                          'attempts/run/attempt/claude-private', 'attempts/run/attempt/sessions',
+                          'attempts/run/attempt/no-tool-' + 'a' * 32 + '/call-1/patch.json'})
+        self.assertEqual({row['reason'] for row in report['legacyPlan']['uncovered']['entries']},
+                         {'not-in-relocation-plan'})
         result = backup.create(board.store)
         manifest = backup.verify(Path(result['path']))
         copied = set(manifest['files'])

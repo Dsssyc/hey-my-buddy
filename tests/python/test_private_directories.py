@@ -206,6 +206,126 @@ class PrivateMigrationTests(BoardTestCase):
         self.assertEqual((call / 'request.json').read_text(), '{"prompt":"evidence"}')
         self.assertEqual(outside.read_text(), 'account')
 
+    def test_full_legacy_layout_including_native_logs_reports_installer_consistency(self):
+        board, task_id, attempt_id = self._stopped_attempt()
+        state = board.directory.resolve()
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET adapter='zcode' WHERE task_id=?", (task_id,))
+        old = state / 'attempts' / task_id / attempt_id
+        old.mkdir(parents=True, exist_ok=True)
+        (old / 'task.txt').write_text('retained input')
+        for name in ('agent-credential.json', 'inquiry.json', 'finish-bridge.json', 'zcode-control.json',
+                     'builtin-provider.json', 'personal-provider.json'):
+            (old / name).write_text('{"secret":"credential"}')
+        (old / 'native-logs').mkdir()
+        (old / 'native-logs/zcode-2026-09-30.log').write_text('native zcode log')
+        (old / 'native-logs/deeper').mkdir()
+        (old / 'native-logs/deeper/turn.log').write_text('nested native log')
+        (old / 'claude-private').mkdir()
+        (old / 'claude-private/settings.json').write_text('{"private":"settings"}')
+        (old / 'sessions').mkdir()
+        (old / 'sessions/rollout.jsonl').write_text('session')
+        old_dsh = old / 'deepseek-delegate-run-fixture'
+        old_dsh.mkdir()
+        (old_dsh / 'stdout.log').write_text('retained delegate log')
+        (old_dsh / 'session-temp').mkdir()
+        (old_dsh / 'session-temp/native.json').write_text('private')
+        native = old / 'native/codex-home'
+        native.mkdir(parents=True)
+        outside = self.directory.resolve() / 'auth'
+        outside.write_text('account')
+        (native / 'auth.json').symlink_to(outside)
+        invocation = old / ('no-tool-' + 'a' * 32)
+        modules = invocation / 'dsh-home/profiles/headless/node_modules'
+        modules.mkdir(parents=True)
+        (modules / 'link').symlink_to(outside)
+        call = invocation / 'call-1'
+        call.mkdir()
+        (call / 'request.json').write_text('{"prompt":"evidence"}')
+        (call / 'patch.json').write_text('{"credentialPath":"private"}')
+        zcode_call = old / ('no-tool-' + 'b' * 32)
+        (zcode_call / 'native/storage').mkdir(parents=True)
+        (zcode_call / 'native/sessions.sqlite').write_text('zcode session')
+
+        report = backup.preflight(state)
+        self.assertTrue(report['ok'], report['legacyPlan'])
+        self.assertTrue(report['needsAttention'])
+        self.assertGreater(report['skipped']['count'], 0)
+        self.assertEqual(report['legacyPlan']['ready'], True)
+        self.assertEqual(report['legacyPlan']['uncovered'], {'count': 0, 'paths': [], 'entries': []})
+        self.assertEqual(report['legacyPlan']['blocked'], {'count': 0, 'paths': [], 'entries': []})
+        readiness = private_migration.require_readiness(state, report)
+        self.assertEqual(readiness['ready'], True)
+        zcode_root = private_dirs.attempt_root(state, 'zcode', task_id, attempt_id)
+        self.assertIn({'source': str(old / 'native-logs'), 'target': str(zcode_root / 'native-logs'),
+                       'taskId': task_id, 'adapter': 'zcode', 'attemptId': attempt_id},
+                      readiness['plan']['moves'])
+
+        journal = {'privateMigration': {**readiness['plan'], 'applied': False}}
+        try:
+            private_migration.apply(state, journal, lambda _value: None)
+            private_migration.apply(state, journal, lambda _value: None)
+        except BoardError as error:
+            self.fail(f'{error.code}: {error.details}')
+        self.assertFalse((old / 'native-logs').exists())
+        self.assertEqual((zcode_root / 'native-logs/zcode-2026-09-30.log').read_text(), 'native zcode log')
+        self.assertEqual((zcode_root / 'native-logs/deeper/turn.log').read_text(), 'nested native log')
+        for name in ('agent-credential.json', 'inquiry.json', 'finish-bridge.json', 'zcode-control.json',
+                     'builtin-provider.json', 'personal-provider.json'):
+            self.assertFalse((old / name).exists(), name)
+        self.assertEqual((old / 'task.txt').read_text(), 'retained input')
+        self.assertEqual((call / 'request.json').read_text(), '{"prompt":"evidence"}')
+        self.assertEqual((old_dsh / 'stdout.log').read_text(), 'retained delegate log')
+        after = backup.preflight(state)
+        self.assertEqual(after['skipped']['count'], 0)
+        self.assertTrue(after['ok'], after['legacyPlan'])
+        private_migration.rollback(state, journal, lambda _value: None)
+        self.assertEqual((old / 'native-logs/zcode-2026-09-30.log').read_text(), 'native zcode log')
+
+    def test_uncovered_category_fails_preflight_like_the_installer(self):
+        board, task_id, attempt_id = self._stopped_attempt()
+        state = board.directory.resolve()
+        old = state / 'attempts' / task_id / attempt_id
+        old.mkdir(parents=True, exist_ok=True)
+        (old / 'task.txt').write_text('retained input')
+        (old / 'mystery-private').mkdir()
+        (old / 'mystery-private/native.json').write_text('unknown category')
+        report = backup.preflight(state)
+        self.assertFalse(report['ok'])
+        self.assertEqual(report['legacyPlan']['ready'], False)
+        self.assertEqual(report['legacyPlan']['uncovered']['count'], 1)
+        self.assertEqual(report['legacyPlan']['uncovered']['entries'],
+                         [{'path': f'attempts/{task_id}/{attempt_id}/mystery-private',
+                           'reason': 'not-in-relocation-plan'}])
+        self.assertEqual(report['legacyPlan']['blocked']['count'], 0)
+        with self.assertRaises(BoardError) as caught:
+            private_migration.require_readiness(state, report)
+        self.assertEqual(caught.exception.code, 'BACKUP_PREFLIGHT_FAILED')
+        self.assertIn(f'attempts/{task_id}/{attempt_id}/mystery-private', caught.exception.details['paths'])
+        self.assertEqual((old / 'mystery-private/native.json').read_text(), 'unknown category')
+
+    def test_unconfirmed_native_logs_stay_in_place_and_block_preflight_like_the_installer(self):
+        board, task_id, attempt_id = self._stopped_attempt()
+        state = board.directory.resolve()
+        old = state / 'attempts' / task_id / attempt_id
+        old.mkdir(parents=True, exist_ok=True)
+        (old / 'native-logs').mkdir()
+        (old / 'native-logs/zcode.log').write_text('native log')
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET shutdown_confirmed=0,execution_state='uncertain' WHERE attempt_id=?",
+                               (attempt_id,))
+        report = backup.preflight(state)
+        self.assertFalse(report['ok'])
+        self.assertEqual(report['legacyPlan']['ready'], False)
+        self.assertEqual(report['legacyPlan']['blocked']['entries'],
+                         [{'path': f'attempts/{task_id}/{attempt_id}/native-logs',
+                           'reason': 'shutdown-unconfirmed'}])
+        self.assertEqual(report['legacyPlan']['uncovered']['count'], 0)
+        with self.assertRaises(BoardError) as caught:
+            upgrade.layout_readiness(state)
+        self.assertEqual(caught.exception.code, 'BACKUP_PREFLIGHT_FAILED')
+        self.assertEqual((old / 'native-logs/zcode.log').read_text(), 'native log')
+
     def test_interrupted_move_resumes_and_tampered_journal_cannot_escape_state(self):
         board, task_id, attempt_id = self._stopped_attempt()
         state = board.directory.resolve()

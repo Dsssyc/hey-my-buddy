@@ -249,18 +249,26 @@ def preflight_entries(state: Path):
 
 def preflight(state: Path) -> dict:
     """Report copying/skipping/refusal without locks, writes, hashing or startup."""
+    from . import private_migration
     result = {kind: {'count': 0, 'paths': [], 'entries': []}
               for kind in ('copied', 'skipped', 'rejected')}
+    # Full skipped inventory (the samples below are bounded): the relocation
+    # cross-check must judge every skipped entry, not the first twenty.
+    skipped: list[str] = []
     for kind, path, reason in preflight_entries(state):
         row = result[kind]
         row['count'] += 1
+        if kind == 'skipped':
+            skipped.append(path.relative_to(state).as_posix())
         if len(row['entries']) < 20:
             relative = _shown_path(path.relative_to(state).as_posix())
             row['paths'].append(relative)
             row['entries'].append({'path': relative, 'reason': reason})
-    return {'policy': attempt_evidence.POLICY, 'ok': result['rejected']['count'] == 0,
+    legacy = private_migration.legacy_readiness(state, skipped)
+    return {'policy': attempt_evidence.POLICY,
+            'ok': result['rejected']['count'] == 0 and legacy['ready'],
             'needsAttention': result['skipped']['count'] > 0 or result['rejected']['count'] > 0,
-            **result}
+            'legacyPlan': legacy, **result}
 
 
 def preflight_command(params: dict) -> dict:
