@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import plistlib
 import signal
 import sys
 import tempfile
@@ -34,6 +35,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             discovery, "_native_command",
             side_effect=lambda path: [sys.executable, str(path)]))
         self.enterContext(patch.object(discovery, "_registry_paths", return_value=[]))
+        self.enterContext(patch.object(discovery, "_app_paths", return_value=[]))
 
     def test_controller_keeps_credential_private_from_native_harness(self):
         source = {"HMB_STATE_DIR": "/private/board",
@@ -791,6 +793,143 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             self.assertEqual(rejected['command'], [])
             probe.assert_not_called()
             node_for.assert_not_called()
+
+
+class RegisteredAppDiscoveryTests(unittest.TestCase):
+    def test_every_registered_harness_declares_cli_and_all_platforms(self):
+        from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
+        from hey_my_buddy.buddy.harnesses.discovery_spec import AppEntry
+
+        self.assertEqual(set(RUN_SEAMS), set(discovery.HARNESS_NAMES))
+        for name in RUN_SEAMS:
+            with self.subTest(harness=name):
+                spec = discovery._discovery_spec(name)
+                self.assertTrue(spec.command)
+                self.assertEqual(set(spec.apps), {"darwin", "win32", "linux"})
+                for platform, entry in spec.apps.items():
+                    if entry is not None:
+                        self.assertIsInstance(entry, AppEntry)
+                        self.assertIn(entry.kind, {"bundle"} if platform == "darwin" else {"uninstall", "msix"})
+                        self.assertTrue(entry.identity)
+                        self.assertTrue(entry.cli_path)
+
+    def test_macos_recognizes_bundle_id_at_top_level_in_both_roots(self):
+        entry = discovery._discovery_spec("codex").apps["darwin"]
+        with tempfile.TemporaryDirectory() as directory:
+            roots = (Path(directory) / "system", Path(directory) / "user")
+            expected = []
+            for root in roots:
+                for name, identity in (("Renamed.app", entry.identity), ("Codex.app", "another.bundle"),
+                                       ("nested/Hidden.app", entry.identity)):
+                    bundle = root / name
+                    (bundle / "Contents").mkdir(parents=True)
+                    with (bundle / "Contents/Info.plist").open("wb") as stream:
+                        plistlib.dump({"CFBundleIdentifier": identity}, stream)
+                    if name == "Renamed.app":
+                        expected.append(bundle / entry.cli_path)
+                broken = root / "Broken.app/Contents"
+                broken.mkdir(parents=True)
+                (broken / "Info.plist").write_bytes(b"<plist><broken>")
+                (root / "Missing.app").mkdir()
+            self.assertEqual(discovery._mac_app_paths(entry, roots), expected)
+            self.assertEqual(discovery._mac_app_paths(entry, (Path(directory) / "absent",)), [])
+            with patch.object(discovery.sys, "platform", "darwin"), \
+                 patch.object(discovery, "_mac_app_paths", return_value=expected) as scan, \
+                 patch.object(discovery, "_home", return_value=roots[1].parent):
+                self.assertEqual(discovery._app_paths("codex"), expected)
+            scan.assert_called_once_with(entry, (Path("/Applications"), roots[1].parent / "Applications"))
+
+    @staticmethod
+    def registry(values, children=()):
+        class Handle:
+            def __init__(self, key):
+                self.key = key
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                pass
+
+        calls = []
+        def open_key(hive, key, reserved=0, access=1):
+            identity = (hive, key, access)
+            calls.append(identity)
+            if identity not in values:
+                raise FileNotFoundError(key)
+            return Handle(identity)
+        return SimpleNamespace(
+            HKEY_CURRENT_USER="user", HKEY_LOCAL_MACHINE="machine", KEY_READ=1,
+            KEY_WOW64_64KEY=256, KEY_WOW64_32KEY=512, OpenKey=open_key,
+            QueryValueEx=lambda handle, name: (values[handle.key][name], 1),
+            QueryInfoKey=lambda _handle: (len(children), 0, 0),
+            EnumKey=lambda _handle, index: children[index], calls=calls)
+
+    def test_windows_uninstall_reads_both_hives_and_registry_views(self):
+        entry = discovery._discovery_spec("dsh").apps["win32"]
+        key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{entry.identity}"
+        with tempfile.TemporaryDirectory() as directory:
+            locations = [Path(directory) / str(index) for index in range(4)]
+            identities = [(hive, key, 1 | view) for hive in ("user", "machine") for view in (256, 512)]
+            registry = self.registry({identity: {"InstallLocation": str(path)}
+                                      for identity, path in zip(identities, locations)})
+            self.assertEqual(discovery._windows_app_paths(entry, registry),
+                             [path / entry.cli_path for path in locations])
+            self.assertEqual(registry.calls, identities)
+        self.assertEqual(discovery._windows_app_paths(entry, self.registry({})), [])
+        registry = self.registry({identities[0]: {"InstallLocation": ""},
+                                  identities[1]: {"InstallLocation": 42}})
+        self.assertEqual(discovery._windows_app_paths(entry, registry), [])
+
+    def test_windows_msix_matches_exact_family_in_current_user_repository(self):
+        entry = discovery._discovery_spec("codex").apps["win32"]
+        key = (r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+               r"\CurrentVersion\AppModel\Repository\Packages")
+        name = "OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0"
+        children = ("OpenAI.Codex_1.0_x64__other", name,
+                    "Other.App_1.0_x64__2p2nqsd0c76g0", "malformed")
+        with tempfile.TemporaryDirectory() as directory:
+            location = Path(directory) / "Package"
+            registry = self.registry({("user", key, 1): {},
+                                      ("user", key + "\\" + name, 1): {"PackageRootFolder": str(location)}},
+                                     children)
+            expected = [location / entry.cli_path]
+            self.assertEqual(discovery._windows_app_paths(entry, registry), expected)
+            self.assertEqual(registry.calls, [("user", key, 1), ("user", key + "\\" + name, 1)])
+            with patch.object(discovery.sys, "platform", "win32"), \
+                 patch.dict(sys.modules, {"winreg": registry}):
+                self.assertEqual(discovery._app_paths("codex"), expected)
+        self.assertEqual(discovery._windows_app_paths(entry, self.registry({})), [])
+        registry = self.registry({("user", key, 1): {}}, (name,))
+        self.assertEqual(discovery._windows_app_paths(entry, registry), [])
+
+    def test_explicit_absence_and_node_do_not_query_the_system(self):
+        with patch.object(discovery, "_mac_app_paths") as mac, \
+             patch.object(discovery, "_windows_app_paths") as windows:
+            for platform in ("darwin", "win32", "linux"):
+                with patch.object(discovery.sys, "platform", platform):
+                    self.assertEqual(discovery._app_paths("claude"), [])
+                    self.assertEqual(discovery._app_paths("node"), [])
+            mac.assert_not_called()
+            windows.assert_not_called()
+
+    def test_cli_candidates_precede_apps_and_first_source_keeps_duplicates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manual, manager, common, registry, caller, app = [root / part for part in
+                                                            ("manual", "manager", "common", "registry", "caller", "app")]
+            filename = HarnessDiscoveryTests.candidate_name("codex")
+            with patch.object(discovery, "_home", return_value=root), \
+                 patch.object(discovery, "_manager_records", return_value=([], [("nvm", manager)])), \
+                 patch.object(discovery, "_common_dirs", return_value=[common]), \
+                 patch.object(discovery, "_registry_paths", return_value=[str(registry)]), \
+                 patch.object(discovery, "_app_paths", side_effect=lambda name:
+                              [caller / filename, app / filename] if name == "codex" else []):
+                snapshot = discovery.candidate_snapshot("codex", manual_path=str(manual / filename),
+                                                        environment={"PATH": str(caller)})
+            candidates = snapshot["candidates"]
+            sources = list(dict.fromkeys(item["source"] for item in candidates))
+            self.assertEqual(sources, ["manual", "nvm", "common", "registry", "path", "app"])
+            self.assertEqual([item["source"] for item in candidates if item["path"] == str(caller / filename)], ["path"])
+            self.assertEqual(sorted(sources, key=discovery._priority), sources)
 
 
 class ProbeStopEvidenceTests(unittest.TestCase):

@@ -6,10 +6,12 @@ never consults shell startup files or inherited provider credentials.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 import hashlib
 import json
 import logging
 import os
+import plistlib
 from pathlib import Path
 import re
 import signal
@@ -19,13 +21,14 @@ import sys
 import tempfile
 import time
 import selectors
+from xml.parsers.expat import ExpatError
 
 from ...paths import is_absolute_path
+from ...protocol.harness_names import HARNESS_NAMES
+from .discovery_spec import AppEntry, DiscoverySpec
 from ...protocol.reasons import reason as make_reason
 
 
-HARNESSES = ("dsh", "zcode", "codex", "claude")
-_NAMES = {"dsh": "dsh", "zcode": "zcode", "codex": "codex", "claude": "claude", "node": "node"}
 _MAX_CANDIDATES = 96
 _MAX_DIAGNOSTICS = 12
 _MAX_OUTPUT = 16_384
@@ -206,14 +209,77 @@ def _common_dirs(home: Path, environment: dict | None = None) -> list[Path]:
             home / ".npm-global/bin", home / ".volta/bin"]
 
 
+def _discovery_spec(harness: str) -> DiscoverySpec:
+    return import_module(f".{harness}", __package__).DISCOVERY
+
+
+def _mac_app_paths(entry: AppEntry, roots: tuple[Path, ...]) -> list[Path]:
+    paths = []
+    for root in roots:
+        try:
+            bundles = sorted(root.glob("*.app"))
+        except OSError:
+            continue
+        for bundle in bundles:
+            try:
+                with (bundle / "Contents/Info.plist").open("rb") as stream:
+                    info = plistlib.load(stream)
+            except (OSError, ValueError, plistlib.InvalidFileException, ExpatError):
+                continue
+            if isinstance(info, dict) and info.get("CFBundleIdentifier") == entry.identity:
+                paths.append(bundle / entry.cli_path)
+    return paths
+
+
+def _windows_app_paths(entry: AppEntry, winreg) -> list[Path]:
+    paths = []
+    if entry.kind == "uninstall":
+        key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{entry.identity}"
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                try:
+                    with winreg.OpenKey(hive, key, 0, winreg.KEY_READ | view) as handle:
+                        location, _ = winreg.QueryValueEx(handle, "InstallLocation")
+                except OSError:
+                    continue
+                if isinstance(location, str) and location:
+                    paths.append(Path(location) / entry.cli_path)
+    else:
+        key = (r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+               r"\CurrentVersion\AppModel\Repository\Packages")
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as packages:
+                names = [winreg.EnumKey(packages, index)
+                         for index in range(winreg.QueryInfoKey(packages)[0])]
+        except OSError:
+            return []
+        for name in sorted(names):
+            parts = name.rsplit("_", 4)
+            if len(parts) != 5 or f"{parts[0]}_{parts[4]}" != entry.identity:
+                continue
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key + "\\" + name) as handle:
+                    location, _ = winreg.QueryValueEx(handle, "PackageRootFolder")
+            except OSError:
+                continue
+            if isinstance(location, str) and location:
+                paths.append(Path(location) / entry.cli_path)
+    return paths
+
+
 def _app_paths(harness: str) -> list[Path]:
-    if sys.platform != "darwin":
+    if harness == "node":
         return []
-    return {
-        "codex": [Path("/Applications/ChatGPT.app/Contents/Resources/codex")],
-        "zcode": [Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs")],
-        "claude": [Path("/Applications/Claude.app/Contents/Resources/claude")],
-    }.get(harness, [])
+    entry = _discovery_spec(harness).apps[sys.platform]
+    if entry is None:
+        return []
+    if sys.platform == "darwin":
+        return _mac_app_paths(entry, (Path("/Applications"), _home() / "Applications"))
+    if sys.platform == "win32":
+        import winreg
+
+        return _windows_app_paths(entry, winreg)
+    return []
 
 
 def _variants(directory: Path, name: str) -> list[Path]:
@@ -224,30 +290,31 @@ def _variants(directory: Path, name: str) -> list[Path]:
 
 def has_candidate(directory: Path) -> bool:
     """Whether this PATH directory currently holds a harness or Node candidate."""
-    return any(file_fingerprint(path) is not None for name in _NAMES.values()
+    names = [_discovery_spec(harness).command for harness in HARNESS_NAMES] + ["node"]
+    return any(file_fingerprint(path) is not None for name in names
                for path in _variants(directory, name))
 
 
 def candidate_snapshot(harness: str, *, manual_path: str | None = None,
                        environment: dict | None = None) -> dict:
     """Full candidate diagnostics and file identities, with PATH as a clue."""
-    if harness not in _NAMES:
+    if harness not in (*HARNESS_NAMES, "node"):
         raise ValueError("unknown harness")
     home = _home()
     records, manager_dirs = _manager_records(home)
-    name = _NAMES[harness]
+    name = "node" if harness == "node" else _discovery_spec(harness).command
     places: list[tuple[str, Path]] = []
     if manual_path:
         places.append(("manual", Path(manual_path).expanduser()))
     for source, directory in manager_dirs:
         places.extend((source, path) for path in _variants(directory, name))
     places.extend(("common", path) for directory in _common_dirs(home, environment) for path in _variants(directory, name))
-    places.extend(("app", path) for path in _app_paths(harness))
     places.extend(("registry", path) for directory in _registry_paths() for path in _variants(Path(directory), name))
     caller_path = (os.environ if environment is None else environment).get("PATH", "")
     caller_path = caller_path if isinstance(caller_path, str) else ""
     places.extend(("path", path) for directory in caller_path.split(os.pathsep) if directory and is_absolute_path(directory)
                   for path in _variants(Path(directory), name))
+    places.extend(("app", path) for path in _app_paths(harness))
     candidates = []
     seen = set()
     for source, path in places:
@@ -590,7 +657,7 @@ def _version_key(version: str | None) -> tuple[int, int, int]:
 
 def _priority(source: str) -> int:
     return {"manual": 0, "nvm": 1, "fnm": 1, "volta": 1, "asdf": 1, "mise": 1,
-            "common": 2, "app": 2, "registry": 3, "path": 4}[source]
+            "common": 2, "registry": 3, "path": 4, "app": 5}[source]
 
 
 class EntryUnavailable(ValueError):
