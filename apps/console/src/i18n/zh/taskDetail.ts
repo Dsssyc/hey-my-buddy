@@ -1,4 +1,4 @@
-/** The detail of a micro task, organised by turn: its steps on the left, the chosen step on the right. */
+/** The detail of a micro task, organised by turn: its step strip above the chosen content. */
 export default {
   back: "收起详情",
   label: "微任务详情",
@@ -112,6 +112,7 @@ export default {
   },
   event: { value: {"approve": "批准", "decline": "拒绝", "approved": "已批准", "declined": "已拒绝", "accepted": "验收通过", "rejected": "验收问题", "concluded": "已作结论", "completed": "已完成", "failed": "失败", "cancelled": "已取消", "queued": "排队", "running": "执行中", "executing": "执行中", "delivered": "待验收", "awaiting-host": "等待 Host", "superseded": "已被取代", "merge": "合并", "cherry-pick": "摘取提交", "patch": "应用补丁", "not-required": "无需整合", "verified": "已验证"}, facts: "记录", from: "原 buddy", to: "新 buddy", stoppedBy: "停止发起", details: "详情" },
   acceptance: {
+    recordedAt: "记录于",
     artifact: "产物", integration: "整合", verified: "已验证", notRequired: "无需整合",
     strategy: "方式", target: "目标", commits: "提交", recordedBy: "记录人", noIntegration: "整合证明未记录",
     hostPaths: "Host 补充的改动 {{n}}", rejection: "打回", rejected: "已打回", note: "说明",

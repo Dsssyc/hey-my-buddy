@@ -1,4 +1,3 @@
-import { Hint } from "../components/hint";
 import { useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode, Ref } from "react";

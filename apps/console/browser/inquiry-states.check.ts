@@ -45,7 +45,7 @@ async function expectInquiryWhole(page: Page, inquiryId: string, text: string) {
       "an inquiry state beside the time stays on one line; a wrapping state starts below it").toBe(true);
   }
   const clipped = await label.evaluate(element => {
-    const quote = element.closest(".bg-sunk")!.getBoundingClientRect();
+    const quote = element.closest("[data-slot=request-quote]")!.getBoundingClientRect();
     const viewport = element.closest("[data-slot=scroll-area-viewport]")!.getBoundingClientRect();
     const range = document.createRange();
     range.selectNodeContents(element);

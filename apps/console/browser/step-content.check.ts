@@ -63,8 +63,9 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
 
   test("orders every step consistently and captures each step, including waits and inquiries", async ({ page }) => {
     await open(page, `#tasks/${macro}/${run}/1`);
-    const steps = ["委派", "路由", "回合 1", "决定", "继续", "换手", "回合 2", "接管", "停止", "验收"];
-    const names = ["delegation", "routing", "turn-inquiries", "decision", "continue", "handoff", "turn-wait", "takeover", "cancel", "acceptance"];
+    if (width === 1280) await expect(page.getByText("dsh-harness", { exact: true }).first()).toBeVisible();
+    const steps = ["委派", "路由", "回合 1", "决定", "继续", "换手", "回合 2", "接管", "Host 停止", "验收"];
+    const names = ["delegation", "routing", "turn-inquiries", "decision", "continue", "handoff", "turn-result", "takeover", "cancel", "acceptance"];
     await mkdir(shots, { recursive: true });
     for (let index = 0; index < steps.length; index++) {
       await page.evaluate(hash => { location.hash = hash; }, `#tasks/${macro}/${run}/${index + 1}`);
@@ -93,13 +94,7 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
         await expect(pane(page)).not.toContainText("任务书的 Markdown");
         await expect(pane(page).locator('[data-slot=request-quote]').first()).toHaveCSS("border-left-width", "2px");
       }
-      if (index === 6) {
-        await expect(pane(page).locator('[data-item-key^="span:queue:"]')).toContainText("排队");
-        await tabs.getByRole("tab", { name: "会话", exact: true }).click();
-        await expect(title).toBeVisible();
-        await expect(pane(page).locator('[data-item-key^="span:queue:"]')).toBeVisible();
-        await tabs.getByRole("tab", { name: "概述", exact: true }).click();
-      }
+      if (index === 5) await expect(pane(page).locator('[data-item-key^="span:queue:"]')).toContainText("排队");
       if (index === 9) {
         await expect(pane(page).getByRole("heading", { name: "Host 验收说明" })).toBeVisible();
         await expect(pane(page).locator("li code")).toHaveText("layout.tsx");
@@ -115,8 +110,33 @@ for (const width of [1280, 390]) test.describe(`common step content dark zh ${wi
     }
   });
 
+  test("keeps a turn's queue below its title and above its tabs, including the session tab", async ({ page }) => {
+    // With the same buddy on both turns there is no handoff between the queue and turn 2.
+    await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
+      const response = await route.fetch();
+      const timeline = await response.json();
+      const turns = timeline.spans.filter((span: { runId: string; kind: string }) => span.runId === run && span.kind === "execution");
+      turns[0].buddy = turns[1].buddy;
+      await route.fulfill({ response, json: timeline });
+    });
+    await open(page, `#tasks/${macro}/${run}/6`);
+    const title = pane(page).locator('[data-slot=pane-title]');
+    await expect(title.locator("h3")).toHaveText("回合 2");
+    const wait = pane(page).locator('[data-item-key^="span:queue:"]');
+    const tabs = pane(page).getByRole("tablist");
+    await expect(wait).toContainText("排队");
+    expect((await title.boundingBox())!.y).toBeLessThan((await wait.boundingBox())!.y);
+    expect((await wait.boundingBox())!.y).toBeLessThan((await tabs.boundingBox())!.y);
+    await tabs.getByRole("tab", { name: "会话", exact: true }).click();
+    await expect(title).toBeVisible();
+    await expect(wait).toBeVisible();
+    await tabs.getByRole("tab", { name: "概述", exact: true }).click();
+    if (width === 1280) await page.screenshot({ path: `${shots}/turn-wait-zh-dark-1280.png` });
+  });
+
   test("folds rendered height at eight lines without cutting Markdown and expands in place", async ({ page }) => {
     await open(page, `#tasks/${macro}/${run}/1`);
+    if (width === 1280) await expect(page.getByText("dsh-harness", { exact: true }).first()).toBeVisible();
     const fold = pane(page).locator('[data-slot=fold]').first();
     const body = fold.locator('[data-slot=fold-body]');
     await expect(body).toHaveAttribute("data-folded", "true");

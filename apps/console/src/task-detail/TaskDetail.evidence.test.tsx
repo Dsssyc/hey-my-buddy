@@ -63,6 +63,7 @@ describe("the integration and the acceptance", () => {
     await ready();
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: /已验证.*main/ }));
     expect(pane().textContent).toContain("new-integration.ts");
     expect(strip().querySelector('[data-key="settle:m1"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
@@ -75,6 +76,7 @@ describe("the integration and the acceptance", () => {
     open({ step: 8, timeline: integrated(), replies: { workflow: workflow({ artifacts: [partial, resolved, output], finalArtifactId: "art-resolved",
       integrations: [{ ...verified, artifactId: "art-resolved" }, { ...older, artifactId: "art-resolved" }] }) } });
     await ready();
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: /已验证.*main/ }));
     expect(pane().textContent).toContain("new-integration.ts");
     expect(pane().textContent).not.toContain("old-integration.ts");
     cleanup();
@@ -393,11 +395,11 @@ describe("the title of a turn that runs", () => {
     expect(within(turnTitle()).getByText("进行中").className).toContain("state-breathe");
   });
 
-  it("says what backs the report of a running turn in a hint on its phase", async () => {
+  it("shows the running phase without an explanatory hover", async () => {
     const f = running({ overdue: false, possiblyStuck: false });
     await ready();
     await f.user.hover(within(pane().querySelector("[data-slot=detail-live]") as HTMLElement).getByText("工具执行中"));
-    expect((await screen.findAllByText(/收到工具活动/))[0]).toBeTruthy();
+    expect(screen.queryByText(/收到工具活动/)).toBeNull();
   });
 });
 
@@ -534,7 +536,8 @@ describe("the delegation", () => {
   it("says the delegator is not recorded when it is not, and shows the title, not the result, in the head", async () => {
     open({ step: 1, replies: { task: task({ lineage: { ...task().lineage, sourceHostId: null, currentHostId: null } }) } });
     await ready();
-    expect(pane().textContent).toContain("未记录委派方");
+    expect(pane().textContent).not.toContain("原始委派方");
+    expect(pane().querySelector("[data-slot=pane-title]")?.textContent).toContain("codex-desktop");
     expect(head().querySelector("h2")!.textContent).toBe("微任务详情");
     expect(head().textContent).not.toContain("第二轮：详情页已经按回合重做。");
   });

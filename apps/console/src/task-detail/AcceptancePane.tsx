@@ -1,5 +1,6 @@
 import { reasonText } from "../i18n/reason";
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { useContext } from "react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
@@ -42,7 +43,7 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
       ? event.integrationId === integration?.integrationId : when && Date.parse(event.at) === Date.parse(when)));
     return event ? `event:${event.seq}` : undefined;
   };
-  const actor = step.events.find(event => event.kind === (accepted ? "accept" : rejectedAt ? "reject" : "conclude"))?.actor ?? conclusion?.actor;
+  const actor = !accepted && !rejectedAt ? conclusion?.actor : step.events.find(event => event.kind === (accepted ? "accept" : "reject"))?.actor;
   const acceptanceKey = keyFor("accept", row?.acceptedAt ?? task.acceptedAt);
   const integrationKey = keyFor("integrate", integration?.createdAt);
   const rejectionKey = keyFor("reject", rejectedAt);
@@ -101,6 +102,7 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
     {accepted && view.acceptanceNote && <Section name={t("acceptance.note")}><Fold text={view.acceptanceNote} /></Section>}
     {rejectedAt && <DetailItem itemKey={rejectionKey} label={t("acceptance.rejection")} className="border-b last:border-b-0"><Section name={t("acceptance.rejection")}>
       <Facts items={[
+        ...(rejectedAt !== settledAt ? [[t("acceptance.recordedAt"), <Moment key="at" at={rejectedAt} itemKey={rejectionKey} label={t("acceptance.rejection")} />] as [string, ReactNode]] : []),
         [t("acceptance.note"), rejection ? <Fold key="note" text={rejection} /> : unrecorded],
       ]} />
     </Section></DetailItem>}

@@ -132,6 +132,6 @@ it("renders the kind summary as Markdown and leaves domain disclosure without a 
   await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
   expect(screen.getByRole("heading", { name: "类别总结" })).toBeTruthy();
   expect(view.container.querySelector("li code")?.textContent).toBe("parser.ts");
-  await user.hover(screen.getByRole("button", { name: "后端", exact: true }));
+  await user.hover(screen.getByRole("button", { name: "后端" }));
   expect(screen.queryByRole("tooltip")).toBeNull();
 });

@@ -38,18 +38,21 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
   const sender = step.events[0]?.actor;
   const owner = workflowOwnerText(task, workflow.hostId);
   const original = taskHost(task);
-  const transferred = original !== owner;
+  const leadId = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId ?? null;
+  const originalId = task.lineage?.sourceHostId ?? leadId;
+  const ownerId = task.lineage?.currentHostId ?? workflow.hostId ?? task.workflow?.hostId ?? leadId;
+  const transferred = originalId !== null && ownerId !== null && originalId !== ownerId;
   const asked = ctx.asked.delegation ?? [];
   return <Pane title={
     <PaneTitle title={t("step.delegation")}>
-      <span>{sender ? actorText(sender) : null}</span>
+      <span>{sender ? actorText(sender) : original}</span>
       <Moment at={step.at ?? task.createdAt} />
     </PaneTitle>}>
     <Section name={t("delegation.task")}><Fold text={task.task} /></Section>
     {transferred && <Section name={t("delegation.source")}>
       <Facts items={[
-        ...(original !== sender?.id ? [[t("delegation.originalDelegator"), original] as [string, string]] : []),
-        ...(owner !== sender?.id ? [[t("delegation.currentOwner"), owner] as [string, string]] : []),
+        ...(originalId !== sender?.id ? [[t("delegation.originalDelegator"), original] as [string, string]] : []),
+        ...(ownerId !== sender?.id ? [[t("delegation.currentOwner"), owner] as [string, string]] : []),
       ]} />
     </Section>}
     <Section name={t("delegation.project")}>{project?.label ?? t("delegation.unknownProject")}</Section>

@@ -328,25 +328,18 @@ describe("the route", () => {
     expect(pane().textContent).toContain(OPUS.model);
   });
 
-  it("folds a long reason, unfolds it in the same paragraph, and starts folded again on another route", async () => {
-    const reason = "具体的选择依据。".repeat(60);
+  it("renders every route's complete reason as Markdown; the browser checks height folding", async () => {
+    const reason = "## 选择依据\n\n- 核对 `contract.ts`\n\n" + "具体的选择依据。".repeat(60);
     const two = timeline();
     two.spans.find(item => item.spanId === "r1")!.routing!.note = reason;
     two.spans.push(span("r2", "routing", at("10:40"), at("10:41"), { attemptId: "att-r2", decisionId: "decision-2", routing: { routingMode: "fast", selectedBuddy: CODEX, reason: null, note: reason + "二" } }));
-    const f = open({ step: 2, timeline: two, replies: { routing: [routing(), routing({ decisionId: "decision-2" })] } });
+    open({ step: 2, timeline: two, replies: { routing: [routing(), routing({ decisionId: "decision-2" })] } });
     await ready();
-    const paragraphs = () => [...pane().querySelectorAll("p")].filter(node => node.textContent!.includes("具体的选择依据"));
-    expect(paragraphs()).toHaveLength(1);
-    expect(paragraphs()[0]!.textContent).not.toBe(reason);
-    await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
-    await waitFor(() => expect(paragraphs()[0]!.textContent).toBe(reason));
-    expect(paragraphs()).toHaveLength(1);
-    expect(within(pane()).getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
-    await f.user.click(within(pane()).getByRole("button", { name: "收起" }));
-    await waitFor(() => expect(within(pane()).getByRole("button", { name: "展开" })).toBeTruthy());
-    await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
+    expect(within(pane()).getByRole("heading", { name: "选择依据" })).toBeTruthy();
+    expect(pane().querySelector("li code")?.textContent).toBe("contract.ts");
+    expect(pane().textContent).toContain("具体的选择依据。".repeat(60));
     fireEvent.click(stripSlice("span:r2")!);
-    await waitFor(() => expect(within(pane()).getByRole("button", { name: "展开" }).getAttribute("aria-expanded")).toBe("false"));
+    expect(pane().textContent).toContain("具体的选择依据。".repeat(60) + "二");
   });
 });
 
@@ -364,7 +357,7 @@ describe("a turn", () => {
     await ready();
     const text = () => pane().textContent!;
     expect(text()).toContain("回合 1");
-    expect(text()).toContain("实现微任务详情，左边是步骤");
+    expect(text()).not.toContain("实现微任务详情，左边是步骤");
     expect(text()).toContain("读到哪里了？");
     expect(text()).toContain("已答复");
     expect(text()).toContain("读到第二个文件。");
@@ -525,7 +518,7 @@ describe("a turn", () => {
     open({ step: 3 });
     await ready();
     expect(pane().textContent).not.toMatch(/推理|读取了|工具调用|会话内容/);
-    expect(pane().querySelectorAll("[data-slot=detail-thread] > div")).toHaveLength(2);
+    expect(within(pane()).getByRole("group", { name: "结果" })).toBeTruthy();
   });
 });
 
@@ -564,7 +557,7 @@ describe("a Host's decision", () => {
   it("is named for the request it answers, with what was asked and what was decided, by whom and when", async () => {
     open({ step: 4 });
     await ready();
-    expect(within(pane()).getByRole("heading", { name: "协助请求" })).toBeTruthy();
+    expect(within(pane()).getByRole("heading", { name: "决定" })).toBeTruthy();
     const text = pane().textContent!;
     expect(text).toContain("需要读取样例目录");
     expect(text).toContain("已读完工作树");
@@ -608,7 +601,7 @@ describe("a Host's decision", () => {
     live.events = live.events.filter(item => item.kind === "dispatch");
     open({ timeline: live, replies: { workflow: workflow({ state: "awaiting-host", activeRequest: boundary as never, counts: { turns: 2, openRequests: 1 } }) } });
     await ready();
-    expect(within(pane()).getByRole("heading", { name: "路由边界" })).toBeTruthy();
+    expect(within(pane()).getByRole("heading", { name: "决定" })).toBeTruthy();
     expect(pane().textContent).toContain("路由需要 Host 指定 buddy");
     expect(within(pane()).queryByRole("button", { name: /重试|填入|使用此 buddy|接续/ })).toBeNull();
     expect(within(pane()).queryByLabelText(/buddy/)).toBeNull();

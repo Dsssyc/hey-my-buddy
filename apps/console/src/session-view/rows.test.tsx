@@ -230,5 +230,5 @@ it("renders Router note and evidence as Markdown while preserving literal produc
   expect(screen.getByRole("heading", { name: "Router 说明" })).toBeTruthy();
   expect(screen.getByText("**literal-domain**")).toBeTruthy();
   expect([...container.querySelectorAll("code")].map(node => node.textContent)).toEqual(["contracts.ts", "types.ts"]);
-  expect(container.querySelector("strong")?.textContent).toBe("已核对");
+  expect(container.querySelector("[data-streamdown=strong]")?.textContent).toBe("已核对");
 });

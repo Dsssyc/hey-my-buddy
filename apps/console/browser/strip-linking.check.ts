@@ -40,7 +40,9 @@ async function longTurn(page: Page) {
 
 async function inPane(target: Locator) {
   await expect.poll(() => target.evaluate(node => {
-    const view = node.closest('[data-slot=scroll-area-viewport]')!.getBoundingClientRect();
+    // Content scrolls; step titles and waits stay in the pane's fixed header.
+    const frame = node.closest('[data-slot=scroll-area-viewport]') ?? node.closest('[data-slot=detail-pane]');
+    const view = frame!.getBoundingClientRect();
     const box = node.getBoundingClientRect();
     return box.top >= view.top - 1 && box.bottom <= view.bottom + 1;
   })).toBe(true);

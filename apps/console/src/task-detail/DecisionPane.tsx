@@ -38,14 +38,15 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const open = step.pending || request?.state === "open";
   const wait = t(ctx.view.lead ? "wait.lead" : "wait.host");
   const decided = request && request.state !== "open" ? request : null;
-  const who: Actor | null = (full && "decision" in full ? full.decision?.actor : null) ?? event?.actor ?? null;
-  const when = decided?.decidedAt ?? event?.at ?? null;
+  const who: Actor | null = step.kind === "continue" ? event?.actor ?? null
+    : (full && "decision" in full ? full.decision?.actor : null) ?? event?.actor ?? null;
+  const when = step.kind === "continue" ? event?.at ?? null : decided?.decidedAt ?? event?.at ?? null;
   const more = step.pending ? workflow.counts.openRequests - 1 : 0;
   const entry = full && "decisionId" in full && full.decisionId ? ctx.routing.find(item => item.decisionId === full.decisionId) ?? null : null;
   const currentBoundary = full?.routing && full.requestId === workflow.activeRequest?.requestId ? workflow.routing : null;
   const basis = currentBoundary?.basis ?? (entry ? ctx.bases[entry.decisionId] : null);
   const title = t(step.kind === "continue" ? "step.continue" : "step.decision");
-  const decisionNote = full && "decision" in full ? full.decision?.note : null;
+  const decisionNote = step.kind === "decision" && full && "decision" in full ? full.decision?.note : null;
   return <Pane title={
     <PaneTitle title={title} state={open ? wait : decided && step.kind !== "continue" ? t(`decision.state.${decided.state}`, { defaultValue: decided.state }) : undefined} tone={open ? "hand" : "past"}>
       {who && <span>{actorText(who)}</span>}

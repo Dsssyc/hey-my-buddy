@@ -426,7 +426,8 @@ test.describe("the quiet reading line", () => {
   });
 });
 
-for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) test.describe(`a running session without earlier pages grows past a short viewport (${opening} rows at open)`, () => {
+// Leave room for the common step title and waits above the session tabs.
+for (const [opening, growth, height] of [[1, 40, 700], [6, 31, 580]] as const) test.describe(`a running session without earlier pages grows past a short viewport (${opening} rows at open)`, () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height }, reducedMotion: "reduce", colorScheme: "dark" });
 
   test("keeps following additions without any scrolling", async ({ page }) => {

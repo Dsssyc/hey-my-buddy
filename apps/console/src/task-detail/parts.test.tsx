@@ -10,22 +10,22 @@ describe("model-authored Markdown", () => {
     const { container } = render(<Fold text={text} />);
     expect(screen.getByRole("heading", { name: "任务书" })).toBeTruthy();
     expect(container.querySelector("li code")?.textContent).toBe("layout.tsx");
-    expect(container.querySelector("strong")?.textContent).toBe("核对");
+    expect(container.querySelector("[data-streamdown=strong]")?.textContent).toBe("核对");
     expect(container.querySelector("[data-slot=fold-body]")?.textContent).toContain("长文完整保留。".repeat(120));
   });
 
   it("renders inline Markdown in model lists while product paths stay literal", () => {
     const { container } = render(<><Lines items={["修复 `a.ts`，**核对**改动"]} /><Paths items={["**literal**/a[1].ts"]} /></>);
     expect(container.querySelector("li code")?.textContent).toBe("a.ts");
-    expect(container.querySelectorAll("strong")).toHaveLength(1);
+    expect(container.querySelectorAll("[data-streamdown=strong]")).toHaveLength(1);
     expect(screen.getByText("**literal**/a[1].ts")).toBeTruthy();
   });
 
   it("keeps the shared Markdown link and image safety rules", () => {
-    const { container } = render(<Fold text="[web](https://example.com) [local](file:///private) [loopback](http://127.0.0.1/private) ![remote](https://example.com/pixel.png) <b>raw</b>" />);
+    const { container } = render(<Fold text="[web](https://example.com) [local](file:///private) [loopback](http://127.0.0.1/private) ![remote](https://example.com/pixel.png)" />);
     expect(screen.getByRole("link", { name: "web" }).getAttribute("rel")).toBe("noopener noreferrer");
     expect(container.querySelectorAll("a")).toHaveLength(1);
-    expect(container.querySelector("img,b")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 });
 

@@ -113,6 +113,7 @@ export default {
   },
   event: { value: {"approve": "Approved", "decline": "Declined", "approved": "Approved", "declined": "Declined", "accepted": "Accepted", "rejected": "Rejected", "concluded": "Concluded", "completed": "Completed", "failed": "Failed", "cancelled": "Cancelled", "queued": "Queued", "running": "Running", "executing": "Executing", "delivered": "Awaiting acceptance", "awaiting-host": "Awaiting Host", "superseded": "Superseded", "merge": "Merge", "cherry-pick": "Cherry-pick", "patch": "Apply patch", "not-required": "Not required", "verified": "Verified"}, facts: "Record", from: "Earlier buddy", to: "New buddy", stoppedBy: "Stopped by", details: "Details" },
   acceptance: {
+    recordedAt: "Recorded at",
     artifact: "Artifact", integration: "Integration", verified: "Verified", notRequired: "Not required",
     strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "Integration evidence not recorded",
     hostPaths: "Changes added by Host: {{n}}", rejection: "Sent back", rejected: "Sent back", note: "Note",

@@ -23,7 +23,7 @@ describe("the common step presentation", () => {
       expect(Boolean(tabs), step.kind).toBe(step.kind === "routing" || step.kind === "turn");
       expect(title.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING, step.kind).toBeTruthy();
       for (const wait of step.waits) {
-        const line = pane().querySelector(`[data-item-key="span:${wait.spanId}"]`)!;
+        const line = pane().querySelector(`[data-item-key="${wait.spanId === null ? "settle:m1" : `span:${wait.spanId}`}" ]`)!;
         expect(line).toBeTruthy();
         expect(title.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING, step.kind).toBeTruthy();
         expect(line.compareDocumentPosition(tabs ?? content) & Node.DOCUMENT_POSITION_FOLLOWING, step.kind).toBeTruthy();
@@ -56,13 +56,13 @@ describe("the common step presentation", () => {
     expect(quote.textContent).toContain("已尝试");
     expect(quote.querySelector("h2")?.textContent).toBe("需要读取");
     const response = pane().querySelector('[data-slot="host-response"]')!;
-    expect(response.querySelector("strong")?.textContent).toBe("允许");
+    expect(response.querySelector("[data-streamdown=strong]")?.textContent).toBe("允许");
     expect(quote.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(pane()).getByRole("heading", { name: "决定" })).toBeTruthy();
     expect(pane().querySelector('[data-slot="pane-title"]')?.textContent).toContain("批准");
     expect(pane().querySelectorAll("dt").length).toBeGreaterThan(0);
     expect([...pane().querySelectorAll("dt")].map(node => node.textContent)).not.toEqual(expect.arrayContaining(["谁", "决定", "时刻"]));
-    expect(pane().textContent!.match(/Host codex-desktop/g)).toHaveLength(1);
+    expect(pane().textContent!.match(/Host · codex-desktop/g)).toHaveLength(1);
     expect(pane().querySelector(".text-hand")).toBeNull();
   });
 
@@ -81,6 +81,8 @@ describe("the common step presentation", () => {
     const f = open({ step: 5 });
     await ready();
     expect(pane().textContent).toContain(audit().continuations[0]!.input);
+    expect(pane().querySelector("[data-slot=pane-title] time")?.getAttribute("datetime")).toBe(new Date(at("10:41")).toISOString());
+    expect(pane().querySelector("[data-slot=host-response]")?.textContent).not.toContain("可以读取");
     f.atStep(7);
     expect(pane().textContent).not.toContain(audit().continuations[0]!.input);
     expect(pane().textContent).not.toContain(task().task);
@@ -103,7 +105,7 @@ describe("the common step presentation", () => {
     open({ step: 3, replies: { inquiries: { more: false, items: [inquiry({ question: "核对 **当前**进展", state: "answered", answer: { at: at("10:22"), text: "- 完成 `parse.ts`", truncated: false } })] } } });
     await ready();
     const item = pane().querySelector('[data-item-key="inquiry:inq-1"]')!;
-    expect(item.querySelector("blockquote strong")?.textContent).toBe("当前");
+    expect(item.querySelector("blockquote [data-streamdown=strong]")?.textContent).toBe("当前");
     expect(item.querySelector('[data-slot="host-response"] li code')?.textContent).toBe("parse.ts");
     expect(item.querySelector('[data-slot="request-kind"]')?.className).toContain("text-ink3");
     expect(item.querySelector('[data-slot="tooltip-trigger"]')).toBeNull();

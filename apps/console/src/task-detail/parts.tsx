@@ -96,6 +96,7 @@ export function Fold({ text, className }: { text: string; className?: string }) 
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
   const [long, setLong] = useState(false);
+  const contentId = useId();
   const body = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { setOpen(false); }, [text]);
   useLayoutEffect(() => {
@@ -107,17 +108,17 @@ export function Fold({ text, className }: { text: string; className?: string }) 
     return () => observer.disconnect();
   }, [text]);
   return <Collapsible data-slot="fold" open={open} onOpenChange={setOpen} className={cn("min-w-0 text-sm leading-[1.7]", className)}>
-    <div data-slot="fold-body" data-folded={long && !open} ref={body}
+    <div id={contentId} data-slot="fold-body" data-folded={long && !open} ref={body}
       className={cn("min-w-0 wrap-anywhere", long && !open && "max-h-[13.6em] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]")}>
       <MessageResponse className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm">{text}</MessageResponse>
     </div>
-    {long && <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2">
+    {long && <CollapsibleTrigger aria-controls={contentId} className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2">
       <Disclosure open={open} />{open ? t("fold.less") : t("fold.more")}
     </CollapsibleTrigger>}
   </Collapsible>;
 }
 
-/** Keep only phrasing markup in a short list item; block syntax stays literal. */
+/** Keep only phrasing markup in a short list item; block containers are flattened. */
 function inlineMarkdown() {
   return (tree: Root) => {
     const phrasing = new Set(["text", "emphasis", "strong", "delete", "inlineCode", "link", "linkReference", "break", "image", "imageReference"]);

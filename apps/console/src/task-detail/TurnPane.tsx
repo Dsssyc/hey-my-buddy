@@ -26,7 +26,7 @@ function basisOf(ctx: Context, attemptId: string, decisionId: string | null): Ba
   return ctx.workflow.currentTurn?.attemptId === attemptId && ctx.workflow.routing?.decisionId === null ? ctx.workflow.routing.basis : null;
 }
 
-/** The turn's sealed output: a band; opened, the evidence it is sealed by. */
+/** The sealed output shares the step's label column; opening it reveals the evidence. */
 function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
@@ -35,18 +35,18 @@ function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
   const short = (commit: string | null) => (commit ? commit.slice(0, 7) : null);
   const files = artifact.changedPaths.length;
   const unknown = t("unrecorded");
-  return <Collapsible open={open} onOpenChange={setOpen} className="border-t">
-    <CollapsibleTrigger className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-2.5 gap-y-1 bg-sunk px-6 py-2.5 text-left text-xs">
-      <span className="flex items-center gap-1 text-ink2"><Disclosure open={open} />{t("seal.name")}</span>
+  return <Section name={t("seal.name")}><Collapsible open={open} onOpenChange={setOpen}>
+    <CollapsibleTrigger aria-label={`${t("seal.name")} · ${short(artifact.outputCommit) ?? unknown}`} className="flex w-full flex-wrap items-baseline gap-x-2.5 gap-y-1 text-left text-xs">
+      <Disclosure open={open} className="self-center text-ink2" />
       <span className="min-w-0 font-mono wrap-anywhere">{short(artifact.outputCommit) ?? unknown}</span>
       <span className="whitespace-nowrap font-mono text-ink2">{patch?.baseCommit && artifact.outputCommit ? `${short(patch.baseCommit)} → ${short(artifact.outputCommit)}` : null}</span>
-      <span className="col-start-2 col-span-2 text-ink2">
+      <span className="text-ink2">
         {artifact.partial ? `${t("seal.partial")} · ` : artifact.kind === "resolved-output" ? `${t("seal.resolved")} · ` : null}
         {t("seal.files", { n: files >= 32 ? "32+" : files })}
       </span>
     </CollapsibleTrigger>
     <CollapsibleContent>
-      <div className="space-y-3 px-6 py-3">
+      <div className="space-y-3 py-3">
         <Facts items={[
           [t("seal.id"), artifact.artifactId, true],
           [t("seal.sha"), artifact.manifestSha256, true],
@@ -68,15 +68,14 @@ function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
         </div>}
       </div>
     </CollapsibleContent>
-  </Collapsible>;
+  </Collapsible></Section>;
 }
 
 
 /**
  * One turn of the micro task: who ran it and what it cost, then what happened in
- * it, top to bottom, and the output it sealed. What the Worker did inside the
- * session (reasoning, tool calls) is read from the session itself, which the
- * console cannot read yet, so the process holds no such node.
+ * it and the output it sealed. Reasoning and tool calls belong to the session
+ * tab; this overview keeps the inquiries and returned result.
  */
 export function TurnPane({ step, ctx, tabs }: { step: Step; ctx: Context; tabs?: ContentTabs }) {
   const { t } = useTranslation("taskDetail");
