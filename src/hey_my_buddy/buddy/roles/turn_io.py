@@ -20,6 +20,8 @@ from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the s
 
 MAX_INPUT_BYTES = 262144
 MAX_RECORD_BYTES = 98304
+MAX_OUTCOME_ITEMS = 32
+MAX_OUTCOME_ITEM_BYTES = 4096
 
 
 def input_hash(value: dict) -> str:
@@ -155,6 +157,37 @@ def verify_workspace(context: ExecutionContext) -> None:
     context.effective_workspace = manifest
 
 
+def truncate_outcome_summaries(outcome: object) -> tuple[object, dict]:
+    """Bound final-message summaries without hiding other outcome violations.
+
+    Completion tools retain the strict validator and their in-turn retry.
+    The original document must still fit its overall byte budget, and an
+    invalid item must not disappear in a dropped suffix or shortened string.
+    """
+    if not isinstance(outcome, dict) or len(canonical_json(outcome).encode()) > MAX_OUTCOME_BYTES:
+        return outcome, {}
+    bounded = dict(outcome)
+    truncated = {}
+    for field in ("remaining", "decisions"):
+        items = outcome.get(field)
+        if not isinstance(items, list) or any(
+                not isinstance(item, str) or not item.strip() or "\0" in item for item in items):
+            continue
+        kept = []
+        shortened = 0
+        for item in items[:MAX_OUTCOME_ITEMS]:
+            raw = item.encode()
+            if len(raw) > MAX_OUTCOME_ITEM_BYTES:
+                item = raw[:MAX_OUTCOME_ITEM_BYTES].decode("utf-8", errors="ignore")
+                shortened += 1
+            kept.append(item)
+        dropped = max(0, len(items) - MAX_OUTCOME_ITEMS)
+        if dropped or shortened:
+            bounded[field] = kept
+            truncated[field] = {"droppedItems": dropped, "shortenedItems": shortened}
+    return bounded, truncated
+
+
 def validate_outcome(outcome: object) -> str | None:
     fields = {"disposition", "summary", "remaining", "decisions", "artifacts", "request"}
     if not isinstance(outcome, dict) or set(outcome) != fields:
@@ -162,7 +195,7 @@ def validate_outcome(outcome: object) -> str | None:
     def text(value: object, limit: int = 8000) -> bool:
         return isinstance(value, str) and bool(value.strip()) and "\0" not in value and len(value.encode()) <= limit
     def strings(value: object) -> bool:
-        return isinstance(value, list) and len(value) <= 32 and all(text(x, 4096) for x in value)
+        return isinstance(value, list) and len(value) <= MAX_OUTCOME_ITEMS and all(text(x, MAX_OUTCOME_ITEM_BYTES) for x in value)
     if outcome["disposition"] not in ("completed", "assistance", "attention"):
         return "the turn outcome requires a valid disposition and nonblank summary"
     # A report can occupy the bounded outcome. Request text and references keep

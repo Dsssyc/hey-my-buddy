@@ -235,7 +235,7 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
         completion = result.completion_evidence
         if completion is not None and result.native_identity is not None:
             payload["nativeTurnId"] = result.native_identity.turn_id
-        outcome, provenance = worker_delivery(result)
+        outcome, provenance, truncated = worker_delivery(result)
         if isinstance(outcome, dict) and isinstance(provenance, dict):
             # The governed turn record is this role's document: the attempt
             # identity, input hash and prompt hash are the role's own facts,
@@ -249,13 +249,15 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str, payload
                       "previousSessionId": turn_input.get("previousSessionId"),
                       "resumeMode": turn_input.get("resumeMode"),
                       "outcome": outcome, "provenance": provenance}
+            if truncated:
+                record["outcomeTruncated"] = truncated
             if not Path(control["outputFile"]).exists():
                 private_json(Path(control["outputFile"]), record, exclusive=True)
             payload["nativeTurnId"] = provenance.get("nativeTurnId")
     return payload
 
 
-def worker_delivery(result) -> tuple[dict, dict]:
+def worker_delivery(result) -> tuple[dict, dict, dict]:
     """Judge the role's delivery once through the selected completion policy."""
     from ..harnesses.registry import worker_format
 
@@ -270,7 +272,7 @@ def worker_delivery(result) -> tuple[dict, dict]:
     if (result.value is None or result.value.schema_status != "valid"
             or validate_outcome(outcome) is not None or not isinstance(provenance, dict)):
         raise BoardError("INVALID_ARGUMENT", "The Worker run did not deliver its valid outcome and provenance")
-    return outcome, provenance
+    return outcome, provenance, {}
 
 
 def worker_request(control: dict, module):
