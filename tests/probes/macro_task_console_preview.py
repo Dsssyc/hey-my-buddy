@@ -12,9 +12,9 @@ Safety boundary:
   to host ``127.0.0.1`` without a port, so emitting one here could clobber a
   real private console on another port; the fixed synthetic session and CSRF
   strings exist only inside the JSON snapshot.
-* All mutation POSTs are refused. ``POST /api/command`` serves four
+* All mutation POSTs are refused. ``POST /api/command`` serves five
   read-only operations the real console allows (``workflow_get``,
-  ``selection_get``, ``selection_list``, ``buddy_list``)
+  ``message_list``, ``selection_get``, ``selection_list``, ``buddy_list``)
   with fixed-shape fixture payloads, and answers a
   check of the harnesses (``capabilities``) with the same synthetic rows
   without probing anything. Operations the
@@ -73,6 +73,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -156,8 +157,10 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
 EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
 EMIT_LAYOUT = {
-    "normal": ("console.json", "macro-tasks.json", "runtime-version.json", "tasks.json",
+    "normal": ("console.json", "macro-tasks.json", "messages-preview-run-a1.json", "messages-preview-run-a3.json",
+               "runtime-version.json", "tasks.json",
                "timeline-macro-a.json", "timeline-macro-b.json", "timeline-standalone.json",
+               "workflow-audit-preview-run-a1.json", "workflow-audit-preview-run-a2.json",
                "workflow-preview-run-a1.json", "workflow-preview-run-a2.json",
                "workflow-preview-run-b1-h1.json", "workflow-preview-run-b1.json",
                "workflow-preview-run-b2.json", "workflow-preview-run-b3.json",
@@ -171,10 +174,11 @@ EMIT_LAYOUT = {
 }
 
 MARKER_LABELS = {"dispatch": "派发", "decide": "决定", "continue": "续接", "integrate": "整合",
-                 "accept": "验收", "reject": "验收问题", "cancel": "取消", "takeover": "接管"}
+                 "accept": "验收", "reject": "验收问题", "conclude": "结论", "cancel": "取消", "takeover": "接管"}
 MARKER_EVENTS = {"dispatch": "task.submitted", "decide": "workflow.request_approved",
                  "continue": "workflow.continued", "integrate": "workflow.integration_recorded",
                  "accept": "workflow.acknowledged", "reject": "workflow.acknowledged",
+                 "conclude": "workflow.host_concluded",
                  "cancel": "workflow.cancelled", "takeover": "workflow.takeover"}
 MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
                   "decide": "approve · synthetic Host decision for preview only",
@@ -182,13 +186,14 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
                   "integrate": "merge · synthetic verified integration",
                   "accept": "accepted · synthetic preview acknowledgement",
                   "reject": "rejected · synthetic preview review problem",
+                  "conclude": "concluded · synthetic Host conclusion without acceptance",
                   "cancel": "cancelled · synthetic Host cancellation",
                   "takeover": "takeover · synthetic host handover"}
 
-#: The preview's browser command allowlist: four reads plus settings operations
+#: The preview's browser command allowlist: five reads plus settings operations
 #: and macro_task_stop (console.md). Everything else is METHOD_NOT_FOUND.
 ALLOWED_OPERATIONS = (
-    "selection_get", "selection_list", "buddy_list", "workflow_get", "user_policy_publish",
+    "selection_get", "selection_list", "buddy_list", "workflow_get", "message_list", "user_policy_publish",
     "model_catalog_refresh", "macro_task_stop", "capabilities", "reminder_settings_set",
 )
 #: Operations the 0.15.1 read-only repair removed from the browser surface.
@@ -201,7 +206,7 @@ REMOVED_OPERATIONS = (
 #: The exact read-only operation set of the real console (console_sessions.py).
 #: A 403 CONSOLE_READ_ONLY would latch the browser session as read-only, so every
 #: one of them must be answered instead of refused.
-READ_OPERATIONS = ("workflow_get", "selection_get", "selection_list", "buddy_list")
+READ_OPERATIONS = ("workflow_get", "message_list", "selection_get", "selection_list", "buddy_list")
 
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
                   "CONSOLE_READ_ONLY": 403, "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
@@ -335,14 +340,17 @@ def span(span_id: str, kind: str, start: str, end: str | None, state: str, *, at
 
 def marker(at: str, kind: str, *, actor: dict[str, str] | None = None, summary: str | None = None,
            **extra: Any) -> dict:
+    names = {"request_id": "requestId", "artifact_id": "artifactId", "integration_id": "integrationId",
+             "continuation_id": "continuationId", "attempt_id": "attemptId"}
     return {"seq": 0, "runId": None, "kind": kind, "at": at, "label": MARKER_LABELS[kind],
             "summary": summary or MARKER_SUMMARY[kind], "actor": actor, "attemptId": None,
             "requestId": None, "artifactId": None, "integrationId": None, "continuationId": None,
-            "eventKind": MARKER_EVENTS[kind], **extra}
+            "eventKind": MARKER_EVENTS[kind], **{names.get(key, key): value for key, value in extra.items()}}
 
 
 ACTIVE_REQUEST = {
     "requestId": "req-a2-2", "kind": "assistance", "routing": False, "state": "open",
+    "createdAt": instant(9, 20), "decidedAt": None,
     "summary": "需要 Host 决定是否允许在合成预览中访问外部样例仓库（等待中）",
     "attempted": "合成预览请求已执行到需要 Host 决定的位置",
     "neededWork": ["由 Host 确认合成预览范围"], "expectedArtifacts": [],
@@ -350,6 +358,7 @@ ACTIVE_REQUEST = {
 }
 LEAD_REQUEST = {
     "requestId": "req-b4-1", "kind": "assistance", "routing": False, "state": "open",
+    "createdAt": instant(7, 25), "decidedAt": None,
     "summary": "需要 Lead 决定路径样例的核对范围",
     "attempted": "已核对合成路径样例，等待 Lead 处理差异",
     "neededWork": ["由 Lead 确定后续核对范围"], "expectedArtifacts": [],
@@ -404,7 +413,8 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
         continuation_count: int = 0, expected_seconds: int = 1800,
         router_budget_seconds: int | None = None, revision: int = 3,
         buddy_locked: bool = False, delegation_authority: bool = False,
-        conclusion: dict | None = None) -> dict:
+        conclusion: dict | None = None, messages: list[dict] | None = None,
+        continuations: list[dict] | None = None, activity: dict | None = None) -> dict:
     return {
         "runId": run_id, "parentRunId": parent, "group": group, "project": project, "title": title,
         "titleSource": title_source, "task": task_text, "createdAt": created, "updatedAt": updated,
@@ -420,7 +430,8 @@ def run(run_id: str, *, project: str, title: str, title_source: str, task_text: 
            else {"expectedSeconds": expected_seconds}),
         "revision": revision, "buddyLocked": buddy_locked,
         "delegationAuthority": delegation_authority,
-        "hostConclusion": conclusion,
+        "hostConclusion": conclusion, "messages": messages or [], "continuations": continuations or [],
+        "activity": activity,
         "kind": "decision" if not micro_task else ("helper" if parent is not None else "micro-task"),
     }
 
@@ -455,6 +466,29 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
                              "hostPaths": list(host_paths or [])},
             "notRequired": False, "reason": "synthetic preview integration record", "actor": host_actor(host),
             "createdAt": None}
+
+
+def message(message_id: str, attempt_id: str, question: str, *, author: str, created: str, state: str,
+            reason: str | None = None, delivered: str | None = None, answer: str | None = None,
+            answered: str | None = None) -> dict:
+    """One inquiry as ``message_list`` returns it; ``taskId`` is set when the run is assembled."""
+    return {"messageId": message_id, "taskId": None, "attemptId": attempt_id, "inquiryId": message_id,
+            "direction": "question", "author": author, "recipient": "worker", "correlationId": None,
+            "question": question, "questionBytes": len(question.encode()),
+            "questionSha256": digest(f"question-{message_id}"), "state": state, "reason": reason,
+            "delivery": {"deliveredAt": delivered} if delivered else None,
+            "answer": ({"text": answer, "bytes": len(answer.encode()), "via": "tool", "toolCallId": None,
+                        "at": answered, "truncated": False, "source": "native"} if answer else None),
+            "attempts": 1, "createdAt": created, "updatedAt": answered or delivered or created, "revision": 2}
+
+
+def continuation(continuation_id: str, attempt_id: str, text: str, *, request_id: str | None,
+                 created: str, reason: str | None = None) -> dict:
+    """One Host continuation as the audit lists it: the input the next turn was given."""
+    return {"continuationId": continuation_id, "kind": "manual", "state": "consumed", "requestId": request_id,
+            "reason": reason, "helperPolicy": "none", "helperOutcomes": [], "input": text,
+            "expectedRevision": 3, "attemptId": attempt_id, "turnId": f"turn-{attempt_id}",
+            "createdAt": created, "consumedAt": created}
 
 
 def build_runs() -> dict[str, dict]:
@@ -509,7 +543,16 @@ def build_runs() -> dict[str, dict]:
             integrations=[integration("int-a1", "art-a1", "att-a1-2", HOST_A,
                                       host_paths=["docs/reference/console.md"])],
             buddy_locked=True,
-            routing=ROUTING_A1),
+            routing=ROUTING_A1,
+            messages=[
+                message("inq-a1-1", "att-a1-1", "目前读到哪个文件了？", author=HOST_A, created=instant(6, 20),
+                        state="answered", delivered=instant(6, 20, 4), answered=instant(6, 21),
+                        answer="正在核对 tests/probes/macro_task_console_preview.py 的夹具；还剩路径与合成数据两处。"),
+                message("inq-a1-2", "att-a1-1", "收到请回复。", author=HOST_A, created=instant(6, 41),
+                        state="unavailable", reason="no live agent to receive this question"),
+            ],
+            continuations=[continuation("cont-a1-1", "att-a1-2", "继续。读取合成样例目录已获批准；把路径边界也核对一遍。",
+                                        request_id="req-a1-1", created=instant(6, 45), reason="批准读取后继续")]),
         run("preview-run-a1-h1", project="alpha", group=MACRO_A, parent="preview-run-a1",
             title="补充 schema 升级离线副本的验证测试", title_source="title",
             task_text="为 board_prepare 的离线副本补充验证测试，覆盖行数不变与来源文件哈希不变。",
@@ -602,7 +645,9 @@ def build_runs() -> dict[str, dict]:
                 marker(instant(8, 30), "dispatch", actor=host_actor(HOST_A)),
                 marker(instant(9, 0), "decide", actor=host_actor(HOST_A), request_id="req-a2-1", summary="decline"),
                 marker(instant(9, 1), "continue", actor=host_actor(HOST_A), continuation_id="cont-a2-1"),
-            ]),
+            ],
+            continuations=[continuation("cont-a2-1", "att-a2-2", "路由放弃了选择；改用 Claude 继续，保留第一轮的结论。",
+                                        request_id="req-a2-1", created=instant(9, 1))]),
         run("preview-run-a3", project="alpha", group=MACRO_A,
             title="修正折叠区间的键盘焦点顺序", title_source="title",
             task_text="修正第一轮时间轴中折叠空闲区间的键盘焦点顺序，并补充可访问性检查。",
@@ -620,7 +665,12 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-a3-1", 1, "executing", False, instant(9, 39), None, CFG_CLAUDE,
                               usage=None)],
-            markers=[marker(instant(9, 35), "dispatch", actor=host_actor(HOST_A))]),
+            markers=[marker(instant(9, 35), "dispatch", actor=host_actor(HOST_A))],
+            activity={"phase": "tool-running", "observedAt": instant(9, 41), "eventSeq": 12,
+                      "lastToolActivityAt": instant(9, 41), "toolName": "Bash",
+                      "counts": {"modelTurns": 7, "toolCalls": 23}},
+            messages=[message("inq-a3-1", "att-a3-1", "测试跑了很久还没有结束，卡在哪一步？", author=HOST_A,
+                              created=instant(9, 55), state="delivered", delivered=instant(9, 55, 3))]),
         run("preview-run-b1", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B2),
             title=long_title("DSH 插件在 Windows 路径下的沙箱回归排查与修复记录，包含长标题截断检查："),
             title_source="title",
@@ -693,7 +743,8 @@ def build_runs() -> dict[str, dict]:
                                        artifact_id="art-b1h-partial", integration_id=None,
                                        actor=host_actor(HOST_B), created_at=instant(3, 25), run_revision=3),
             markers=[marker(instant(3, 10), "dispatch", actor=host_actor(HOST_B)),
-                     marker(instant(3, 25), "cancel", actor=host_actor(HOST_B), summary="cancelled")]),
+                     marker(instant(3, 25), "cancel", actor=host_actor(HOST_B), summary="cancelled"),
+                     marker(instant(3, 26), "conclude", actor=host_actor(HOST_B), summary="cancelled")]),
         run("preview-run-b2", project="beta", group=MACRO_B, hosts=(None, None),
             lead_owner=("preview-run-b1", "turn-att-b1-2"),
             title="封存配额耗尽时的部分输出", title_source="title",
@@ -711,7 +762,8 @@ def build_runs() -> dict[str, dict]:
             attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
                               error=QUOTA_ERROR, result=QUOTA_ERROR,
                               usage=usage("zcode-native", None, None, 4200))],
-            markers=[marker(instant(6, 5), "dispatch", actor={"role": "lead", "id": "preview-run-b1"})],
+            markers=[marker(instant(6, 5), "dispatch", actor={"role": "lead", "id": "preview-run-b1"}),
+                     marker(instant(6, 26), "conclude", actor={"role": "lead", "id": "preview-run-b1"}, summary="failed")],
             artifacts=[artifact("art-b2-partial", "att-b2-1", digest("b2-partial-output")[:40],
                                 "/synthetic-preview/diffs/b2.partial.diff",
                                 ["harnesses/dsh/plugins/quota.js"],
@@ -865,6 +917,8 @@ def build_runs() -> dict[str, dict]:
             item["createdAt"] = entry["updatedAt"]
         for item in entry["spans"]:
             item["runId"] = entry["runId"]
+        for item in entry["messages"]:
+            item["taskId"] = entry["runId"]
     order = [entry["runId"] for entry in runs]
     sequence = sorted(((entry["runId"], item) for entry in runs for item in entry["markers"]),
                       key=lambda pair: (pair[1]["at"], pair[0], pair[1]["kind"]))
@@ -967,7 +1021,7 @@ def task_view(entry: dict) -> dict:
         "createdAt": entry["createdAt"], "updatedAt": entry["updatedAt"], "acceptedAt": entry["acceptedAt"],
         "acceptanceNote": None, "acceptanceVerdict": entry["acceptanceVerdict"],
         "resultAvailable": receipt is not None, "shutdownConfirmed": entry["shutdownConfirmed"],
-        "activity": None, "lineage": entry["lineage"], "artifacts": entry["artifacts"],
+        "activity": entry["activity"], "lineage": entry["lineage"], "artifacts": entry["artifacts"],
         "artifactCount": len(entry["artifacts"]), "inquiries": {},
         # ADR-018: the selected attempt's per-attempt usage, also inside
         # `selectedAttempt`; null when no usage was recorded (never 0).
@@ -1025,7 +1079,7 @@ def wait_reason(entry: dict) -> str:
 
 
 def turn_views(entry: dict) -> list[dict]:
-    """Turn index, newest first, like ``workflow.compact``."""
+    """Turn index, newest first, like ``workflow.compact``: no turn carries its result here."""
     views = []
     for item in reversed(entry["attempts"]):
         views.append({
@@ -1039,13 +1093,31 @@ def turn_views(entry: dict) -> list[dict]:
             "routing": ({"decisionId": entry["routing"]["decisionId"], "buddyRevision": 2}
                         if entry["routing"] and entry["routing"]["decisionId"] and item["turnIndex"] == 1
                         else None),
-            "summary": ((item["result"] or {}).get("result") or {}).get("finalText", ""),
-            "summaryTruncated": False, "remaining": [],
             # Each turn keeps its own per-attempt usage record; never a
             # session-cumulative number.
             "tokenUsage": item["usage"],
         })
     return views
+
+
+def turn_summary(item: dict) -> str:
+    return ((item["result"] or {}).get("result") or {}).get("finalText", "")
+
+
+def request_records(entry: dict) -> list[dict]:
+    """Every request of the run as the audit lists it, oldest first; the open one is the active request."""
+    records = []
+    for span_item in entry["spans"]:
+        if span_item["kind"] != "host":
+            continue
+        active = entry["activeRequest"] if entry["activeRequest"] and entry["activeRequest"]["requestId"] == span_item["requestId"] else None
+        records.append(active or {
+            "requestId": span_item["requestId"], "kind": span_item["requestKind"], "routing": span_item["requestKind"] == "routing",
+            "state": span_item["state"], "summary": span_item.get("summary") or "", "attempted": "合成预览：已尝试的步骤",
+            "neededWork": ["合成预览：需要完成的事"], "expectedArtifacts": [], "acceptance": "合成预览：验收条件",
+            "childTaskId": None, "createdAt": span_item["startAt"], "decidedAt": span_item["endAt"],
+        })
+    return records
 
 
 def workflow_view(entry: dict) -> dict:
@@ -1076,8 +1148,15 @@ def workflow_view(entry: dict) -> dict:
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-micro-task")},
         "buddy": entry["buddy"],
         "buddyRevision": 2 if entry["buddy"] else None,
-        "routing": routing, "turns": turns, "currentTurn": turns[0] if turns else None,
-        "activeRequest": entry["activeRequest"], "counts": {"turns": len(turns),
+        "routing": routing, "turns": turns,
+        "currentTurn": ({**turns[0], "summary": turn_summary(entry["attempts"][-1]), "summaryTruncated": False,
+                         "remaining": []} if turns else None),
+        "activeRequest": entry["activeRequest"],
+        "requests": [{key: record[key] for key in ("requestId", "kind", "state", "createdAt", "decidedAt",
+                                                       "childTaskId", "routing")}
+                     for record in request_records(entry)],
+        "delegationAuthority": entry["delegationAuthority"],
+        "counts": {"turns": len(turns),
                                                             "openRequests": 1 if entry["activeRequest"] else 0,
                                                             "children": len(children),
                                                             "artifacts": len(entry["artifacts"])},
@@ -1564,6 +1643,46 @@ def selection_get(params: dict) -> dict:
     return {"decision": view}
 
 
+#: The buddy that answered every synthetic route.
+ROUTER_BUDDY = {"harness": "codex", "provider": "openai", "model": "gpt-6-luna", "effort": "high"}
+
+
+def audit_view(entry: dict) -> dict:
+    """What only the audit read carries: each turn's full result, the Host's continuation inputs, every request."""
+    return {
+        "hostConclusions": [entry["hostConclusion"]] if entry["hostConclusion"] else [],
+        "hostConclusionsTruncated": False,
+        "turns": [{"turnId": item["turnId"], "turnIndex": item["turnIndex"], "summary": turn_summary(item),
+                   "remaining": []} for item in entry["attempts"]],
+        "requests": [{**record, "attempted": record.get("attempted"), "turnId": None, "attemptId": None,
+                      "decision": ({"decision": {"approved": "approve", "declined": "decline"}.get(record["state"]),
+                                    "reason": "合成预览：Host 的决定理由", "actor": host_actor(entry["currentHostId"] or HOST_A)}
+                                   if record["state"] in ("approved", "declined") else None),
+                      "payload": {"source": "routing", "decisionId": entry["routing"]["decisionId"]}
+                      if record["routing"] and entry["routing"] else {}}
+                     for record in request_records(entry)],
+        "continuations": entry["continuations"],
+        "reservations": [], "suggestions": [],
+        "ownerGeneration": 1, "microTaskFingerprint": digest(f"{entry['runId']}-micro-task"),
+    }
+
+
+def message_list(params: dict) -> dict:
+    """The inquiries of one run, newest first, as ``message_list`` returns them."""
+    unknown = sorted(set(params) - {"runId", "taskId", "state", "limit"})
+    if unknown:
+        raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
+    run_id = params.get("runId") or params.get("taskId")
+    limit = params.get("limit", 50)
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
+        raise PreviewError("INVALID_ARGUMENT", "limit must be an integer from 1 to 200")
+    entry = FIXTURES["runs"].get(run_id) if isinstance(run_id, str) else None
+    if entry is None:
+        raise PreviewError("NOT_FOUND", "Unknown runId or requestId")
+    messages = sorted(entry["messages"], key=lambda item: item["createdAt"], reverse=True)
+    return {"messages": messages[:limit], "cursor": FIXTURES["head"]}
+
+
 def workflow_get(params: dict) -> dict:
     unknown = sorted(set(params) - {"runId", "includeAudit", "routingHistory"})
     if unknown:
@@ -1571,8 +1690,8 @@ def workflow_get(params: dict) -> dict:
     run_id = params.get("runId")
     if not isinstance(run_id, str) or not run_id:
         raise PreviewError("INVALID_ARGUMENT", "runId is required")
-    if params.get("includeAudit"):
-        raise PreviewError("UNSUPPORTED", "The synthetic preview serves the compact view only")
+    if "includeAudit" in params and not isinstance(params["includeAudit"], bool):
+        raise PreviewError("INVALID_ARGUMENT", "includeAudit must be a boolean")
     entry = FIXTURES["runs"].get(run_id)
     if entry is None:
         raise PreviewError("NOT_FOUND", "Unknown runId")
@@ -1582,6 +1701,8 @@ def workflow_get(params: dict) -> dict:
             view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
         return view
     view = workflow_view(entry)
+    if params.get("includeAudit"):
+        view["audit"] = audit_view(entry)
     history = params.get("routingHistory")
     if history is not None:
         if not isinstance(history, dict):
@@ -1599,6 +1720,7 @@ def workflow_get(params: dict) -> dict:
                      "routingMode": routing["routingMode"], "requestedRoutingMode": routing["requestedRoutingMode"],
                      "fallback": routing["fallback"], "policyCheck": routing["policyCheck"],
                      "budget": routing["budget"], "usage": routing["usage"],
+                     "source": "model-selection", "routerBuddy": ROUTER_BUDDY,
                      "ownerGeneration": 1, "current": routing["decisionId"] == entry["routing"]["decisionId"]})
         view["routingHistory"] = {"entries": entries, "nextCursor": None, "total": len(entries)}
     return view
@@ -1638,6 +1760,8 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
                            "This synthetic preview never performs mutations; only read-only operations are served")
     if operation == "workflow_get":
         result = workflow_get(params)
+    elif operation == "message_list":
+        result = message_list(params)
     elif operation == "selection_get":
         result = selection_get(params)
     elif operation == "selection_list":
@@ -1673,7 +1797,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"GET  {base}/api/runtime-version",
-        f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
+        f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
         f"buddy_list   (removed ops: 404; writes incl. macro_task_stop: 403)",
     )
 
@@ -1694,6 +1818,11 @@ class PreviewHTTPServer(ThreadingHTTPServer):
 class PreviewHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = 30
+
+    def date_time_string(self, timestamp=None):  # noqa: D401 - BaseHTTPRequestHandler API
+        """The ``Date`` of every response is the instant the fixtures were observed, so that what waits is
+        measured against the fixture clock and the preview reads the same on any day."""
+        return format_datetime(datetime.fromisoformat(OBSERVED_AT.replace("Z", "+00:00")), usegmt=True)
 
     def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
         if self.server.verbose:
@@ -2353,6 +2482,10 @@ def validate_fixtures() -> list[str]:
                     problems.append(f"{entry['path']}: the mutated workflow view is preview-run-a1")
             elif f"workflow-{request['runId']}.json" != entry["path"].split("/", 1)[1]:
                 problems.append(f"{entry['path']}: request runId differs from the file name")
+        elif entry["kind"] in ("workflow-audit", "message-list"):
+            prefix = "workflow-audit" if entry["kind"] == "workflow-audit" else "messages"
+            if set(request) != {"runId"} or f"{prefix}-{request.get('runId')}.json" != entry["path"].split("/", 1)[1]:
+                problems.append(f"{entry['path']}: a {entry['kind']} request must name the runId of its file")
         elif request != {}:
             problems.append(f"{entry['path']}: {entry['kind']} takes no request parameters")
     if not json.loads(payloads["truncated/timeline-macro-a.json"])["truncated"]["rows"]:
@@ -2434,6 +2567,16 @@ def emit_fixture_files() -> list[dict]:
             add(scenario, "timeline-standalone.json", "macro-task-timeline", timeline_endpoint, 200,
                 "accepted", macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, scenario),
                 request={"macroTaskId": STANDALONE_GROUP})
+        if scenario == "normal":
+            # The audit read and the inquiries are read separately from the compact record.
+            for run_id in ("preview-run-a1", "preview-run-a2"):
+                add(scenario, f"workflow-audit-{run_id}.json", "workflow-audit",
+                    "POST /api/command workflow_get includeAudit", 200, "accepted",
+                    workflow_get({"runId": run_id, "includeAudit": True, "routingHistory": {"limit": 100}}),
+                    request={"runId": run_id})
+            for run_id in ("preview-run-a1", "preview-run-a3"):
+                add(scenario, f"messages-{run_id}.json", "message-list", "POST /api/command message_list",
+                    200, "accepted", message_list({"runId": run_id, "limit": 200}), request={"runId": run_id})
         for run_id in workflows[scenario]:
             name = f"workflow-{run_id}.json"
             if scenario == "error":

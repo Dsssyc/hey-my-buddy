@@ -12,28 +12,6 @@ import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metr
 import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
 /**
- * The detail overview's two rows (0.16 T4): 微任务摘要 and the Worker's own
- * result line. The intent title is the detail heading's job and never repeats
- * here.
- */
-export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
-  taskSummary: string | null | undefined;
-  resultSummary: string | null | undefined;
-}) {
-  return <div className="card-rows detail-rows">
-    <span className="card-row">
-      <span className="card-row-label">微任务摘要</span>
-      <span className="card-row-text" title={taskSummary ?? undefined}>{taskSummary ?? "未记录任务原文"}</span>
-    </span>
-    <span className="card-row">
-      <span className="card-row-label">结果</span>
-      <span className="card-row-text" title={resultSummary ?? undefined}>{resultSummary ? `结果：${resultSummary}` : "结果未知"}</span>
-      {resultSummary && <span className="worker-note">Worker 自述</span>}
-    </span>
-  </div>;
-}
-
-/**
  * The micro task card (0.16 T3): a bold two-line intent title, the status at
  * the top right, one single-line result with a small Worker 自述 label, and a
  * weak meta row only when it has content. The card's minimum height covers two

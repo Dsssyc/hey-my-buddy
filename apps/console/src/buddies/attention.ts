@@ -1,5 +1,5 @@
 import { snapshotHarnesses } from "../api";
-import { quotaView } from "../host-workflow";
+import { quotaView } from "../quota";
 import { isDecisionCandidate, isFastRouterCandidate } from "../policy";
 import { healthSummary } from "./roles";
 import type { ConsoleView, Snapshot } from "../types";

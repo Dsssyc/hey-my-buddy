@@ -3,8 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
 import { ReminderSettings } from "./ReminderSettings";
-import { TaskDetails } from "./TaskDetails";
-import type { Snapshot, Task } from "./types";
 import "./i18n";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -53,21 +51,4 @@ it("shows a stored second-level threshold without rounding it into an editable m
   await user.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(command).toHaveBeenCalledWith("reminder_settings_set", { silenceSeconds: 120 }, "csrf"));
   expect(input.value).toBe("2");
-});
-
-it("shows reminders only for the active selected attempt beside the task status", () => {
-  const attempt = { attemptId: "attempt-a", reminders: { overdue: true, possiblyStuck: true,
-    lastNativeEventAt: "2026-10-15T00:00:00Z", toolInProgress: false } };
-  const task = { runId: "run-a", task: "检查任务", status: "running", owner: "worker", cwd: "/fixture", revision: 1,
-    createdAt: "2026-10-15T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null,
-    reviewRejectionNote: null, activeAttemptId: "attempt-a", selectedAttemptId: "attempt-a", selectedAttempt: attempt } as Task;
-  const api = { task: vi.fn(async () => task) } as unknown as ConsoleApi;
-  const props = { snapshot: { csrfToken: "csrf" } as Snapshot, api, refresh: vi.fn(async () => null),
-    selectTask: vi.fn(), active: false, onTaskUpdate: vi.fn() };
-  const view = render(<TaskDetails task={task} {...props} />);
-  expect(screen.getByText("已超过预期")).toBeTruthy();
-  expect(screen.getByText("可能卡住")).toBeTruthy();
-  view.rerender(<TaskDetails task={{ ...task, activeAttemptId: "attempt-b" }} {...props} />);
-  expect(screen.queryByText("已超过预期")).toBeNull();
-  expect(screen.queryByText("可能卡住")).toBeNull();
 });

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 /**
- * The rebuilt views and the top bar take every word and every mark of
+ * The rebuilt views (the Buddy page and the detail of a micro task) and the top bar take every word and every mark of
  * punctuation from the language files: a sentence joined in code with a Chinese
  * full stop reaches the English page too. This reads the sources of those views,
  * of the page that frames them and of the shared components, and finds no
  * character of the Chinese scripts and no full-width punctuation outside comments.
  */
-const sources = import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true });
+const sources = import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true });
 const chinese = /[　-〿一-鿿＀-￯]/;
 const support = /\.(test|testing|fixtures)\.tsx?$/;
 

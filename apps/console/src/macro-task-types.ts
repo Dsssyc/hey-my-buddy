@@ -98,6 +98,8 @@ export type TimelineSpan = {
   /** Own durable attempt receipt; a model turn disposition is not the execution result. */
   resultStatus?: "ok" | "failed" | "cancelled";
   requestKind?: string; summary?: string; decisionTaskId?: string;
+  /** Native usage of the span's own execution; a shape the console does not read is unknown. */
+  tokenUsage?: unknown;
   /** Exact recorded decision; never infer it from the run's current route. */
   decisionId?: string | null;
   /** Optional projection for historic spans without routing facts. */

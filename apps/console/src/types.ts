@@ -200,6 +200,9 @@ export type Task = {
   delegationAuthority?: boolean;
   task: string;
   status: string;
+  /** The execution the task view's per-attempt facts are about: the one running, and the last one chosen. */
+  activeAttemptId?: string | null;
+  selectedAttemptId?: string | null;
   owner: string | null;
   cwd: string;
   revision: number;
@@ -232,8 +235,10 @@ export type Task = {
     requestSummary?: string;
     /** Host-authored explicit micro task title; null or absent means fallback. */
     title?: string | null;
+    /** The macro task the micro task belongs to; absent for a standalone one, which is its own group. */
+    macroTaskId?: string | null;
     /**
-     * Read-only newest concluded own turn outcome summary (ADR-012 X title
+     * Read-only newest returned own turn outcome summary (ADR-012 X title
      * fallback); null or absent means no usable result yet, never a guess.
      * Never a title under the 0.16 presentation contract.
      */
@@ -247,6 +252,8 @@ export type AttemptReceipt = {
   attemptId?: string;
   generation?: number;
   executionState?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
   resultAvailable?: boolean;
   shutdownConfirmed?: boolean;
   result?: Record<string, unknown> | null;

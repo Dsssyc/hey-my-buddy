@@ -98,13 +98,14 @@ for (const { locale, language, tasks } of [
       await expectReadableStart(card.locator(".inspector-field").filter({ hasText: "结果" }).locator("dd"), "等待名下的微任务");
       await row(page, WAITING).focus();
       await row(page, WAITING).press("Enter");
-      const request = page.locator(".attention-bar");
-      await expect(request).toContainText("等待 Lead 决定：需要 Lead 决定路径样例的核对范围");
-      await expectWholeAndApart(request, request.locator(":scope > span, :scope > button"));
-      await expectTextUncut(request.locator("span, button"));
-      await request.getByRole("button", { name: "查看请求", exact: true }).click();
-      const assistance = page.getByRole("tabpanel", { name: "协作与待办", exact: true });
-      await expect(assistance.getByText("等待 Lead 决定", { exact: true })).toBeVisible();
+      // Enter opens the micro task on the decision it waits for: the Lead's, with the request as recorded.
+      const detail = page.locator("[data-slot=task-detail]");
+      await expect(detail).toBeVisible();
+      await expect(detail.locator("[data-slot=detail-rail] [aria-current=step]")).toContainText("Lead");
+      const request = detail.locator("[data-slot=detail-pane]");
+      await expect(request).toContainText("需要 Lead 决定路径样例的核对范围");
+      await expect(request).toContainText("由 Lead 确定后续核对范围");
+      await expectTextUncut(request.locator("h3, dt, dd, p"));
       await expectNoSidewaysScroll(page);
       expect(errors).toEqual({ page: [], console: [] });
       expect(waitHeading, "the inspector heading must identify the same Lead wait as its type field").toBe("等待 Lead");

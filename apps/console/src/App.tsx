@@ -99,6 +99,8 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const [tab, setTab] = useState<Tab>(currentTab);
   const [visited, setVisited] = useState(() => new Set<Tab>([currentTab()]));
   const theme = useTheme();
+  // Where the tasks page is: the link back to it leads there, not to its first screen.
+  const [tasksAddress, setTasksAddress] = useState("#tasks");
   // One latch for the mounted page: the polling snapshot's own descriptor
   // decides write authority, and a definite board refusal (an expired or
   // invalid login) latches the loss for this session. This is the security
@@ -139,14 +141,14 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
     <header className="flex h-11 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
       <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-live/60"
-        href="#tasks" aria-label="Hey my buddy" onClick={() => select("tasks")}>
+        href={tasksAddress} aria-label="Hey my buddy" onClick={() => select("tasks")}>
         <BrandMark />
         <span className="font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
       </a>
       <nav className="flex h-full" aria-label={t("nav.label")}>
         {tabs.map(key => {
           const hint = tabHints[key];
-          const link = <a key={key} href={"#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
+          const link = <a key={key} href={key === "tasks" ? tasksAddress : "#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
             className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
             {t(`nav.${key}`)}
             {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
@@ -193,7 +195,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {tabs.map(key => visited.has(key) && <section key={key} hidden={tab !== key}
         className={"min-h-0 min-w-0 flex-1 overflow-hidden" + (key === "buddies" ? "" : " p-2 sm:p-4")} aria-label={t(`nav.${key}`)}>
         {key === "tasks" ? <MacroTasks snapshot={snapshot} api={api} refresh={refresh} active={tab === key}
-          authority={authority} writesAvailable={writesAvailable} /> :
+          authority={authority} writesAvailable={writesAvailable} onAddress={setTasksAddress} /> :
           key === "buddies" ? <BuddyConfig snapshot={snapshot} editor={editor} api={api} refresh={refresh} active={tab === key} mutationsAvailable={mutationsAvailable} /> :
             <Settings api={api} csrfToken={snapshot.csrfToken} connectionError={connectionError}
               access={snapshot.consoleAccess} reminders={snapshot.reminderSettings} refresh={refresh} writesAvailable={writesAvailable}

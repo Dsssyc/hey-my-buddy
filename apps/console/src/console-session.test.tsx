@@ -9,7 +9,7 @@ import { FILTER_DEBOUNCE_MS } from "./use-buddy-history";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import type { ConsoleSession, Buddy, Snapshot, Task, TaskQuery } from "./types";
 import { listed, note, selectModel } from "./buddies/page.testing";
-import type { Workflow } from "./workflow-types";
+import { timelineOfRecords } from "./task-detail/task-detail.fixtures";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
 const actionRefusal = /登录已失效/;
@@ -45,15 +45,14 @@ function retryable(runId: string, task: string): Task {
     selectedAttemptId: null, activeAttemptId: null, shutdownConfirmed: false });
 }
 
-function workflow(task: Task, overrides: Partial<Workflow> = {}): Workflow {
-  return { runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,
-    state: "awaiting-host", awaitingHost: true, waitReason: "assistance", continuationCount: 0,
-    shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
-    workspace: { path: task.cwd, kind: "worktree", access: "write", inputCommit: "input", manifestSha256: "hash" },
-    currentTurn: null,
-    activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open",
+/** The compact collaboration record of a micro task, as `workflow_get` sends it. */
+type Workflow = Record<string, unknown>;
+function workflow(task: Task, overrides: Workflow = {}): Workflow {
+  return { runId: task.runId, hostId: "current-host", revision: 1, state: "awaiting-host", buddy: null, buddyLocked: false, delegationAuthority: false,
+    routing: null, turns: [], currentTurn: null, requests: [], counts: { openRequests: 1 }, children: [], artifacts: [], integrations: [],
+    finalArtifactId: null, hostConclusion: null, shutdown: null, workspace: { path: task.cwd },
+    activeRequest: { requestId: `request-${task.runId}`, kind: "assistance", state: "open", createdAt: "2026-09-25T10:00:00Z", decidedAt: null, childTaskId: null, routing: false,
       summary: `协助 ${task.runId}`, attempted: "已有检查", neededWork: ["补充测试"], expectedArtifacts: [], acceptance: "检查通过" },
-    children: [], artifacts: [], integrations: [], finalArtifactId: null, finalAttemptId: null,
     task: { runId: task.runId, revision: task.revision, status: task.status, lineage: task.lineage },
     ...overrides };
 }
@@ -104,8 +103,11 @@ function fixture(options: {
     if (operation === "workflow_get") {
       const value = workflows.get(String(params.runId));
       if (!value) throw new Error(`Unknown run: ${String(params.runId)}`);
-      return structuredClone(value);
+      return params.includeAudit
+        ? { ...structuredClone(value), audit: { turns: [], continuations: [], requests: [], hostConclusions: [] }, routingHistory: { entries: [], nextCursor: null, total: 0 } }
+        : structuredClone(value);
     }
+    if (operation === "message_list") return { messages: [], cursor: 0 };
     if (operation === "buddy_list") {
       return { buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
@@ -133,7 +135,8 @@ function fixture(options: {
   });
   const api = { runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
     snapshot, tasks, command, task: vi.fn(async (runId: string) => records.find(t => t.runId === runId)),
-    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
+    macroTasks: vi.fn(async () => ({ macroTasks: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
+    macroTaskTimeline: vi.fn(async (macroTaskId: string) => ({ timeline: timelineOfRecords(macroTaskId, records), verifiedAtMs: null })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
     expireSession: () => { loginExpired = true; } };
@@ -462,7 +465,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(1);
   });
 
-      it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
+  it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
     const plain = microTask("plain-task", "普通待执行任务", { workflow: undefined });
     const failed = retryable("failed-task", "可重试任务");
     const awaiting = microTask("micro-task-awaiting", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
@@ -471,42 +474,50 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
       workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false } });
     const workflows = new Map<string, Workflow>([
       ["micro-task-awaiting", workflow(awaiting)],
-      ["delivered-task", workflow(delivered, { state: "delivered", awaitingHost: false, activeRequest: null, revision: 3,
+      ["delivered-task", workflow(delivered, { state: "delivered", activeRequest: null, counts: { openRequests: 0 }, revision: 3,
         finalArtifactId: "artifact-1",
         artifacts: [{ artifactId: "artifact-1", attemptId: "attempt-1", sourceTaskId: "delivered-task", kind: "output",
           manifestSha256: "manifest", outputCommit: "commit" }],
         integrations: [{ integrationId: "integration-1", runId: "delivered-task", artifactId: "artifact-1", attemptId: "attempt-1",
-          state: "verified", strategy: "merge", target: null, sourceCommit: null, sourceTree: null, beforeCommit: null,
-          afterCommit: null, beforeTree: null, afterTree: null, verification: {}, notRequired: false, reason: null,
-          actor: { role: "host", id: "Host" }, createdAt: "2026-09-25T10:00:00Z" }],
-        task: { runId: "delivered-task", revision: 3, status: "completed", shutdownConfirmed: true } })],
+          state: "verified", strategy: "merge", target: null, beforeCommit: null, afterCommit: null, verification: {}, reason: null,
+          actor: { role: "host", id: "Host" }, createdAt: "2026-09-25T10:00:00Z" }] })],
     ]);
     const records = [plain, failed, awaiting, delivered];
+    const noControls = (scope: HTMLElement) => {
+      expect(within(scope).queryByRole("group", { name: "用户决定" })).toBeNull();
+      expect(within(scope).queryByRole("group", { name: "手工接续" })).toBeNull();
+      expect(within(scope).queryByRole("group", { name: "最终验收" })).toBeNull();
+      expect(scope.querySelectorAll("input, textarea, select, form, fieldset.workflow-controls")).toHaveLength(0);
+    };
 
     const first = fixture({ records, workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={first.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await screen.findByRole("button", { name: /普通待执行任务/ });
-    const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
     await screen.findByRole("heading", { name: /普通待执行任务/ });
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
     await screen.findByRole("heading", { name: /可重试任务/ });
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
+    // A micro task with a collaboration record opens in its macro task, at its own address.
     await user.click(screen.getByRole("button", { name: /待协助目标/ }));
-    await screen.findByRole("tab", { name: "协作与待办" });
-    await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
-    expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
-    expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
-    expect(detail.querySelectorAll("fieldset.workflow-controls").length).toBe(0);
-    await user.click(screen.getByRole("button", { name: /已交付目标/ }));
-    await user.click(await screen.findByRole("tab", { name: "产物与验收" }));
-    expect(within(detail).queryByRole("group", { name: "最终验收" })).toBeNull();
+    const detail = await screen.findByRole("region", { name: "微任务详情" });
+    expect(window.location.hash).toMatch(/^#tasks\/run%3Amicro-task-awaiting\/micro-task-awaiting/);
+    await within(detail).findByRole("navigation", { name: "步骤" });
+    noControls(detail);
+    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
+    await user.click(await screen.findByRole("button", { name: /已交付目标/ }));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#tasks\/run%3Adelivered-task\/delivered-task/));
+    const delivery = await screen.findByRole("region", { name: "微任务详情" });
+    await user.click(await within(delivery).findByRole("button", { name: /^验收/ }));
+    await waitFor(() => expect(within(delivery).getByText("已验证")).toBeTruthy());
+    noControls(delivery);
     // Reading the micro task record is allowed; no mutation reached the board.
-    expect(first.operations.every(operation => operation === "workflow_get")).toBe(true);
+    expect(first.operations.every(operation => ["workflow_get", "message_list"].includes(operation))).toBe(true);
     cleanup();
+    window.location.hash = "";
 
     // A second session renders the same read-only detail: no browser control
     // writes to a micro task (0.15.1 U4).
@@ -514,42 +525,40 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     render(<App suppliedApi={writer.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /待协助目标/ }));
-    await screen.findByRole("tab", { name: "协作与待办" });
-    const writerDetail = screen.getByRole("complementary", { name: "任务详情" });
-    await waitFor(() => expect(within(writerDetail).getByText("V1")).toBeTruthy());
-    expect(within(writerDetail).queryByRole("group", { name: "用户决定" })).toBeNull();
-    expect(within(writerDetail).queryByRole("group", { name: "手工接续" })).toBeNull();
+    const writerDetail = await screen.findByRole("region", { name: "微任务详情" });
+    await within(writerDetail).findByRole("navigation", { name: "步骤" });
+    noControls(writerDetail);
+    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
     await screen.findByRole("heading", { name: /可重试任务/ });
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
-    expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
+    expect(writer.operations.every(operation => ["workflow_get", "message_list"].includes(operation))).toBe(true);
   });
 
   it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
     const awaiting = microTask("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
-      buddyRevision: 2,
-      routing: { status: "selected", decisionId: "decision-1", reason: "记录的路由原因" },
+      routing: { status: "completed", decisionId: "decision-1", source: "model-selection" },
     })]]);
     const f = fixture({ records: [awaiting], workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
-    const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /可浏览任务/ }));
-    await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
-    await user.click(await within(detail).findByRole("tab", { name: "路由依据" }));
-    expect(await within(detail).findByText("记录的选择依据")).toBeTruthy();
+    const detail = await screen.findByRole("region", { name: "微任务详情" });
+    await within(detail).findByRole("navigation", { name: "步骤" });
+    expect(await within(detail).findByText("协助 browse-task")).toBeTruthy();
     // Filters and searches stay usable without any write attempt.
+    await user.click(screen.getAllByRole("button", { name: "切换到全部执行记录" })[0]!);
     await user.type(screen.getByLabelText("搜索微任务"), "可浏览");
     await waitFor(() => expect(f.tasks).toHaveBeenLastCalledWith(expect.objectContaining({ query: "可浏览" }), expect.any(AbortSignal)));
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     await user.click(await screen.findByRole("checkbox", { name: "显示不可用 1" }));
     await waitFor(() => expect(f.operations).toContain("buddy_list"));
-    expect(f.operations).toContain("selection_get");
+    expect(f.operations).toContain("workflow_get");
     // Only read operations were dispatched.
-    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get"].includes(operation))).toBe(true);
+    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get", "message_list"].includes(operation))).toBe(true);
   });
 
   it("excludes a Lead tree's helper from the Host wait filter", async () => {
@@ -594,14 +603,13 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
 
     await user.click(screen.getByRole("link", { name: /任务/ }));
     await user.click(await screen.findByRole("button", { name: "切换到全部执行记录" }));
-    const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
     await screen.findByRole("heading", { name: /断线可取消任务/ });
     // The browser never offered task control in the first place (0.15.1 U4).
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /断线待协助目标/ }));
-    await screen.findByRole("tab", { name: "协作与待办" });
-    await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
+    const detail = await screen.findByRole("region", { name: "微任务详情" });
+    await within(detail).findByRole("navigation", { name: "步骤" });
 
     // The authenticated poll now fails; the detail stays readable and empty of
     // write controls, and no mutation is dispatched from either session state.
@@ -611,7 +619,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get"].includes(operation))).toBe(true);
+    expect(f.operations.every(operation => ["selection_get", "selection_list", "buddy_list", "workflow_get", "message_list"].includes(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
     await user.click(screen.getByRole("link", { name: /Buddy/ }));
     expect(note()).toHaveProperty("value", "原人工意见断线草稿");

@@ -17,7 +17,8 @@ const languages = [
 for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, checked, stale, unavailable } of languages)
   for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const) {
     test.describe(`the catalogue in ${locale} at ${width}px in ${theme}`, () => {
-      test.use({ locale, viewport: { width, height: 900 } });
+      // The contrast is measured at rest: under reduced motion the page makes no transitions.
+      test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
       test.beforeEach(async ({ page }) => {
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       });
@@ -165,6 +166,8 @@ for (const { locale, catalog, quotaAlert, unsaved, settings, account, check, che
       });
 
       test("expands accounts independently and keeps checks and hints inside the window", async ({ page }) => {
+        // The hint opens with its motion, as a user without the setting sees it.
+        await page.emulateMedia({ reducedMotion: "no-preference" });
         await open(page, "#buddies/catalog");
         await page.getByRole("button", { name: `Codex ${account}`, exact: true }).click();
         await page.getByRole("button", { name: `DSH ${account}`, exact: true }).click();

@@ -41,7 +41,7 @@ function harness(paged = false) {
   return { ...view, api, refresh, user, timeline };
 }
 
-afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "#"); });
 
 
 const preference = VIEW_PREFERENCE_PREFIX + "micro-task-list-collapsed";
@@ -59,7 +59,7 @@ async function openDetail(f: ReturnType<typeof harness>) {
   }
   await waitFor(() => expect(document.querySelector('[data-key="span:s-r1-e"]')).toBeTruthy());
   await f.user.dblClick(document.querySelector('[data-key="span:s-r1-e"]') as HTMLElement);
-  await waitFor(() => expect(document.querySelector(".run-view")).toBeTruthy());
+  await screen.findByRole("navigation", { name: "步骤" });
 }
 
 describe("U08 microTask navigation", () => {
@@ -119,36 +119,24 @@ describe("U08 microTask navigation", () => {
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
-  it("auto detail collapse never writes a habit and manual collapse survives closing the detail", async () => {
+  it("never collapses the list by itself when a detail opens, and a manual collapse outlasts the detail", async () => {
     narrow(false);
     const f = harness();
     await openDetail(f);
-    expect(macroTaskRail()).toBeTruthy();
+    // The detail takes the timeline's place; the list stays as the reader left it, and nothing is written.
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).toBeNull();
     expect(localStorage.getItem(preference)).toBeNull();
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
-    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
     await f.user.click(within(screen.getByRole("region", { name: "宏任务列表" })).getByRole("button", { name: "收起宏任务列表" }));
+    expect(localStorage.getItem(preference)).toBe("true");
+    await f.user.click(within(screen.getByRole("region", { name: "微任务详情" })).getByRole("button", { name: "时间轴" }));
     await openDetail(f);
-    await f.user.click(within(document.querySelector(".locator") as HTMLElement).getByRole("button", { name: "关闭详情" }));
+    await f.user.click(within(screen.getByRole("region", { name: "微任务详情" })).getByRole("button", { name: "时间轴" }));
     expect(macroTaskRail()).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("true");
     await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
     expect(localStorage.getItem(preference)).toBe("false");
-  });
-
-  it("manual expansion while a detail is docked opens the existing drawer and clears only the manual habit", async () => {
-    narrow(false);
-    const f = harness();
-    await openDetail(f);
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
-    const drawer = await screen.findByRole("dialog", { name: "宏任务列表（抽屉）" });
-    await f.user.click(within(drawer).getByRole("button", { name: "收起宏任务列表" }));
-    expect(localStorage.getItem(preference)).toBe("true");
-    await f.user.click(within(macroTaskRail()).getByRole("button", { name: "展开宏任务列表" }));
-    expect(await screen.findByRole("dialog", { name: "宏任务列表（抽屉）" })).toBeTruthy();
-    expect(localStorage.getItem(preference)).toBe("false");
-    expect(document.querySelector(".right-dock.side")).toBeTruthy();
   });
 
   it("uses the standard safe preference behavior when browser storage is blocked", async () => {
