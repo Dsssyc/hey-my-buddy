@@ -155,7 +155,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""})
             self.assertEqual(result["status"], "ready")
-            self.assertEqual(result["command"], [str(node), str(script.resolve())])
+            self.assertEqual(result["command"], [str(node), str(launcher)])
             self.assertTrue(any(call.args[0][:1] == [str(node)] for call in probe.call_args_list))
 
     def test_failed_login_and_overflow_keep_output_private(self):
@@ -722,6 +722,27 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             self.assertEqual(selected['PATHEXT'], source['PATHEXT'])
             self.assertEqual(discovery.native_environment(source, command=[str(sys.executable), str(js)])['PATH'],
                              os.pathsep.join([str(Path(sys.executable).parent), '/user/bin']))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX Node entry paths')
+    def test_posix_node_argv_preserves_the_selected_entry_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / 'package/cli.js'
+            script.parent.mkdir()
+            script.write_text('fixture JS')
+            node_script = root / 'package/node-tool'
+            node_script.write_text('#!/usr/bin/env node\n')
+            bin_dir = root / 'bin'
+            bin_dir.mkdir()
+            js_link = bin_dir / 'linked-js'
+            js_link.symlink_to(script)
+            node_link = bin_dir / 'linked-node'
+            node_link.symlink_to(node_script)
+            with patch.object(discovery, '_node_for', return_value=('/fixture/node', '24.1.0')):
+                for entry in (script, js_link, node_link):
+                    with self.subTest(entry=entry):
+                        command = discovery._launch_command(entry, {})
+                        self.assertEqual(command, ['/fixture/node', str(entry)])
 
     def test_npm_shim_extracts_only_one_existing_quoted_node_target(self):
         with tempfile.TemporaryDirectory() as directory:

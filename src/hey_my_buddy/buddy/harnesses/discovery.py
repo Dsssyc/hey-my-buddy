@@ -633,12 +633,12 @@ def _script_uses_node(path: Path) -> Path | None:
         return None
     try:
         if path.resolve().suffix.lower() in (".js", ".cjs", ".mjs"):
-            return path.resolve()
+            return path
         if path.suffix.lower() in (".ps1", ".bat", ".com", ".exe") or os.name == "nt":
             return None
         with path.open("rb") as stream:
             first_line = stream.readline(128).lower()
-            return path.resolve() if first_line.startswith(b"#!") and b"node" in first_line else None
+            return path if first_line.startswith(b"#!") and b"node" in first_line else None
     except (OSError, RuntimeError):
         return None
 

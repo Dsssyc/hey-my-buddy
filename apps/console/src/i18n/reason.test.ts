@@ -13,7 +13,7 @@ const samples: Record<string, unknown> = {
   errorCode: "SAMPLE", harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
   missingCapabilities: ["decision"], operation: "probe", paths: ["src/first.ts", "src/second.ts"], recordId: "record-1",
   requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
-  unfinished: [{ runId: "micro-1", state: "executing" }],
+  unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768,
 };
 
 afterEach(() => setLanguageChoice("browser"));
