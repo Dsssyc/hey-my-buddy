@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.reasons import reason_from_json
 from . import user_policy
 from ...errors import BoardError
 
@@ -164,8 +165,7 @@ class EvaluationStore:
             "source": row["source"],
         }
         if row["unavailable_code"]:
-            view["unavailableReason"] = {"code": row["unavailable_code"],
-                                         "params": json.loads(row["unavailable_params_json"])}
+            view["unavailableReason"] = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
             if row["unavailable_content"] is not None:
                 view["unavailableContent"] = row["unavailable_content"]
         if "catalog_state" in row.keys():
@@ -188,14 +188,13 @@ class EvaluationStore:
 
     @staticmethod
     def _decision_view(row: sqlite3.Row) -> dict:
-        from ..routing.decision import DecisionCoordinator
         keys = row.keys()
         view = {
             "decisionId": row["decision_id"],
             "status": row["status"],
             "task": row["task"],
             "buddyId": row["buddy_id"],
-            "reason": DecisionCoordinator._reason(row),
+            "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "note": row["note"],
             "createdAt": row["created_at"],
         }

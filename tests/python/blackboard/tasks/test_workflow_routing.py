@@ -213,6 +213,9 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(view["counts"]["turns"], 0)
         self.assertEqual(view["activeRequest"]["reason"],
                          {"code": "dispatch.buddy-rejected", "params": {"errorCode": "CATALOG_UNAVAILABLE"}})
+        timeline = board.call("macro_task_timeline", {"macroTaskId": f"run:{submitted['runId']}"})
+        host = next(span for span in timeline["spans"] if span.get("requestId") == view["activeRequest"]["requestId"])
+        self.assertEqual(host["reason"], view["activeRequest"]["reason"])
         with board.store.db.read() as connection:
             request = connection.execute(
                 "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
