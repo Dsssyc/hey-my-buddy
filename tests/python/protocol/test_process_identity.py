@@ -16,6 +16,7 @@ from process_observation import wait_for_unreaped_child
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as identity
+from hey_my_buddy.protocol.process_members import ProcessMember
 
 
 RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301,
@@ -40,14 +41,16 @@ class Source:
     def started_at(self, pid):
         return self.start
 
-    def group_id(self, pid):
-        return 301
+    def creation_time(self, pid):
+        return self.start
 
-    def group_alive(self, pgid):
-        return self.group
+    def snapshot(self):
+        if not self.group:
+            return {}
+        return {301: ProcessMember(301, self.start or 105, 1, 301, True)}
 
-    def signal_group(self, pgid, sig):
-        self.signals.append((pgid, sig))
+    def signal_process(self, pid, sig):
+        self.signals.append((pid, sig))
         self.start = None
         self.group = False
 
@@ -93,6 +96,13 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
+    def test_reaped_root_with_newly_seen_session_members_is_unknown(self):
+        source = Source(started_at=None)
+        self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
+        self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
+        identity.kill_verified_process_group(RECORD, source=source)
+        self.assertEqual(source.signals, [])
+
     def test_caller_proven_orphan_is_reverified_and_stopped(self):
         source = Source()
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "alive")
@@ -101,12 +111,12 @@ class ProcessIdentityTests(unittest.TestCase):
 
     def test_unknown_observation_does_not_authorize_signal(self):
         source = Source()
-        with mock.patch.object(source, "group_alive", side_effect=PermissionError):
+        with mock.patch.object(source, "snapshot", side_effect=PermissionError):
             self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
     def test_denied_process_group_and_job_observations_remain_unknown(self):
-        for record, method in ((RECORD, 'group_id'), (RECORD, 'group_alive'), (WINDOWS_RECORD, 'open_job')):
+        for record, method in ((RECORD, 'creation_time'), (RECORD, 'snapshot'), (WINDOWS_RECORD, 'open_job')):
             for failure in (PermissionError('kernel denied'), OSError('query failed')):
                 with self.subTest(method=method, error=type(failure).__name__):
                     source = Source(started_at=record['startedAt'])
@@ -121,7 +131,7 @@ class ProcessIdentityTests(unittest.TestCase):
             if failure == "reused":
                 source.start += 1
             elif failure == "group-unreadable":
-                source.group_alive = mock.Mock(side_effect=PermissionError)
+                source.snapshot = mock.Mock(side_effect=PermissionError)
             elif failure == "boot-changed":
                 source.boot = "linux:00000000-0000-4000-8000-000000000002"
             else:

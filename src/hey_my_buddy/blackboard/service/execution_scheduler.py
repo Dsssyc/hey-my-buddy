@@ -339,8 +339,8 @@ class ExecutionScheduler:
                 self._observe(claim, handle, identity)
                 return
             try:
-                exit_code = handle.process.poll()
-                if exit_code is not None and not handle.group_alive():
+                exit_code = handle.poll()
+                if exit_code is not None and handle.shutdown_confirmed(settle_seconds=0):
                     self.store.recover_executions(attempt_id, stopped_evidence={
                         "kind": "creator-reaped", "exitCode": exit_code})
                     if self.store.execution_finished(attempt_id):
@@ -444,7 +444,7 @@ class ExecutionScheduler:
                 next_deadline = None
                 try:
                     if handle.process is not None:
-                        handle.process.poll()  # Reap the creator's child only.
+                        handle.poll()  # Retain the PID until its admitted members are empty.
                     if observer.watch is not None and observer.watch.error is not None:
                         self._unknown(attempt_id, observer.watch.error)
                         self.live_registry.unbind(attempt_id, client)

@@ -4699,6 +4699,15 @@ class WorkflowCoordinator:
             if run_row is None:
                 return {"removed": False, "reasons": ["run-not-found"]}
             revision = self._run_row(connection, owner_run_id)["revision"]
+            manifest = json.loads(run_row["workspace_manifest_json"])
+            allocation = workspace_module().resolve_allocation(
+                self.board.directory, manifest, self._allocation_provenance(connection, run_row))
+        if allocation is not None and Path(allocation["path"]).exists():
+            from .checkout_processes import require_idle_checkout
+            try:
+                require_idle_checkout(Path(allocation["path"]))
+            except BoardError as error:
+                return {"removed": False, "path": allocation["path"], **error.details}
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
         control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if key in control}
         params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
@@ -4740,6 +4749,8 @@ class WorkflowCoordinator:
                 if error.details.get("unsealedPaths"):
                     blocked.update({key: value for key, value in error.details.items()
                                     if key.startswith("unsealedPaths")})
+                if "reason" in error.details:
+                    blocked["reason"] = error.details["reason"]
                 return blocked
             return {"removed": False, "reasons": [error.code], "detail": error.message,
                     "planId": plan["planId"], "path": plan["path"]}

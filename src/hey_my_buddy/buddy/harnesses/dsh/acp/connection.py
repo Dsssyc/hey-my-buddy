@@ -621,30 +621,8 @@ class AcpConnection:
 
 
 def group_observation(handle) -> str:
-    """One direct observation of the owned process group: gone/alive/unknown.
-
-    Unknown is conservative: an unavailable observation is never termination
-    evidence. A positive "gone" is only trustworthy beside the leader's exit;
-    stop facts combine both.
-    """
-    if handle.job is not None:
-        try:
-            return "gone" if handle.job.active() == 0 else "alive"
-        except OSError:
-            return "unknown"
-    if os.name == "nt":
-        return "alive" if handle.group_alive() else "gone"
-    if handle.pgid is None:
-        return "unknown"
-    try:
-        os.killpg(handle.pgid, 0)
-    except ProcessLookupError:
-        return "gone"
-    except PermissionError:
-        return "alive"
-    except OSError:
-        return "unknown"
-    return "alive"
+    """Use the same session/tree or Job observation as every owned stop."""
+    return handle.group_observation()
 
 
 def stop_evidence(handle) -> dict:
@@ -654,11 +632,11 @@ def stop_evidence(handle) -> dict:
     owned group is observed gone. EOF, a session close, a cancel acknowledgement
     or an unreachable channel never appears here as a stop proof.
     """
-    code = handle.process.poll()
+    code = handle.poll()
     observation = group_observation(handle)
     return {
         "leaderExited": code is not None,
         "leaderExitCode": code,
         "groupObserved": observation,
-        "shutdownConfirmed": bool(code is not None and observation == "gone"),
+        "shutdownConfirmed": handle.shutdown_confirmed(settle_seconds=0),
     }

@@ -1,11 +1,11 @@
 """Durable OS identity and conservative recovery evidence for one execution.
 
-A POSIX root records its boot session, PID, creation time and owned process
-group; a Windows root records the PID and raw-FILETIME creation time of the
+A POSIX root records its boot session, PID, creation time and initial process
+group; its PID is also its session ID. A Windows root records the PID and raw-FILETIME creation time of the
 process the service created plus the exclusively created root Job, and reads no
 boot identifier. Only the complete recorded identity authorizes the service to
 stop an orphan after its execution has ended. An uninspectable identity remains
-unknown; a numeric PID or process-group ID alone is never authority.
+unknown; a numeric PID or session ID alone is never authority.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import open_regular_fd
 from .process_start import process_start
+from .process_members import SessionProcesses, process_snapshot
 
 
 COMMAND_STOP_GRACE_SECONDS = 3.0
@@ -157,22 +158,11 @@ def _started_at(pid: int) -> int | None:
     return process_start(pid, include_exited=False)
 
 
-def _group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 class _SystemSource:
     boot_id = staticmethod(boot_id)
     started_at = staticmethod(_started_at)
-    group_alive = staticmethod(_group_alive)
-
-    @staticmethod
-    def group_id(pid: int) -> int:
-        return os.getpgid(pid)
+    creation_time = staticmethod(_creation_time)
+    snapshot = staticmethod(process_snapshot)
 
     @staticmethod
     @contextmanager
@@ -192,8 +182,8 @@ class _SystemSource:
             job.close()
 
     @staticmethod
-    def signal_group(pgid: int, sig: int) -> None:
-        os.killpg(pgid, sig)
+    def signal_process(pid: int, sig: int) -> None:
+        os.kill(pid, sig)
 
 
 def validate_process_identity(record: object) -> dict:
@@ -283,29 +273,23 @@ def inspect_process_identity(record: dict, *, source=None) -> str:
         if record["jobName"] is not None:
             with source.open_job(record["jobName"]) as job:
                 return _inspect_job_identity(record, source, job)
-        if source.boot_id() != record["bootId"]:
-            return "boot-changed"
-        root_start = source.started_at(record["pid"])
-        group_alive = source.group_alive(record["processGroupId"])
-        if root_start is None and not group_alive:
-            return "identity-absent"
-        if root_start is not None and root_start != record["startedAt"]:
-            # A recycled root PID is not the old leader. With group members
-            # still present, its provenance cannot be proven from the PGID.
-            return "unknown" if group_alive else "identity-absent"
-        if root_start is None:
-            # A bare PGID cannot prove these are the original descendants.
-            return "unknown"
-        if not group_alive:
-            return "unknown"
-        if source.group_id(record["pid"]) != record["processGroupId"]:
-            return "unknown"
-        # The root may exit and its PID be reused during observation.
-        return "alive" if source.started_at(record["pid"]) == root_start else "unknown"
+        return _inspect_posix(record, source, _posix_members(record, source))
     except Exception as error:
         if not _observation_failure(error):
             raise
         return "unknown"
+
+
+def _posix_members(record, source):
+    return SessionProcesses(record["pid"], record["startedAt"], session=record["pid"],
+                            snapshot=source.snapshot, creation=source.creation_time,
+                            alive=source.started_at, send=source.signal_process)
+
+
+def _inspect_posix(record, source, members):
+    if source.boot_id() != record["bootId"]:
+        return "boot-changed"
+    return members.observe()
 
 
 def kill_verified_process_group(record: dict, *, source=None) -> None:
@@ -317,9 +301,12 @@ def kill_verified_process_group(record: dict, *, source=None) -> None:
     if record["jobName"] is not None:
         _stop_windows_job(record, source, settle_seconds=2.0)
         return
-    if inspect_process_identity(record, source=source) != "alive":
+    members = _posix_members(record, source)
+    try:
+        if _inspect_posix(record, source, members) == "alive":
+            members.signal(signal.SIGKILL)
+    except OSError:
         return
-    source.signal_group(record["processGroupId"], signal.SIGKILL)
 
 
 def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
@@ -363,11 +350,12 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     source = source or _SystemSource()
     if record["jobName"] is not None:
         return _stop_windows_job(record, source, settle_seconds=settle_seconds)
-    observation = inspect_process_identity(record, source=source)
-    if observation != "alive":
-        return observation
+    members = _posix_members(record, source)
     try:
-        source.signal_group(record["processGroupId"], signal.SIGTERM)
+        observation = _inspect_posix(record, source, members)
+        if observation != "alive":
+            return observation
+        members.signal(signal.SIGTERM)
     except Exception as error:
         if not _observation_failure(error):
             raise
@@ -375,16 +363,23 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     escalated = False
     deadline = time.monotonic() + COMMAND_STOP_GRACE_SECONDS
     while True:
-        observation = inspect_process_identity(record, source=source)
+        try:
+            observation = _inspect_posix(record, source, members)
+        except OSError:
+            observation = "unknown"
         if observation in ("boot-changed", "identity-absent"):
             return "orphan-stopped"
+        if escalated and observation == "alive":
+            try:
+                members.signal(signal.SIGKILL)
+            except OSError:
+                observation = "unknown"
         if time.monotonic() >= deadline:
             if escalated or observation != "alive":
                 return "unknown"
             try:
-                # Recheck the complete root/group identity directly before escalation.
-                if inspect_process_identity(record, source=source) == "alive":
-                    source.signal_group(record["processGroupId"], signal.SIGKILL)
+                if _inspect_posix(record, source, members) == "alive":
+                    members.signal(signal.SIGKILL)
                     escalated = True
                     deadline = time.monotonic() + settle_seconds
                     continue

@@ -1,4 +1,6 @@
 export default {
+  "checkout.live-processes": "活进程正在以此检出为工作目录：{{processes}}。",
+  "checkout.process-scan-failed": "未能完整检查进程的工作目录；观察恢复后可重试删除。",
   "ANCESTOR_TERMINAL": "上级微任务已结束。",
   "CONFLICT": "当前状态与本次操作冲突。",
   "ILLEGAL_TRANSITION": "当前状态不允许这次转换。",

@@ -87,4 +87,18 @@ describe("macro task deletion boundary", () => {
       { ...receipt, skipped: [{}] },
     ]) expect(() => parseMacroTaskDeletionResult(confirmed, value)).toThrow();
   });
+
+  it("keeps a process blocker resumable and rejects command lines or malformed identities", () => {
+    const process = { pid: 321, startedAt: 456, executable: "python" };
+    const partial = { ...receipt, state: "deleting", deletedAt: null, objectKind: "workspace",
+      reason: { code: "checkout.live-processes", params: { processes: [process] } } };
+    expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
+    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
+      reason: { code: "checkout.process-scan-failed", params: {} } }).state).toBe("deleting");
+    for (const identity of [{ ...process, pid: 0 }, { ...process, startedAt: -1 },
+      { ...process, executable: "" }, { ...process, commandLine: "private" }, { ...process, environment: {} }]) {
+      expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial,
+        reason: { code: "checkout.live-processes", params: { processes: [identity] } } })).toThrow();
+    }
+  });
 });

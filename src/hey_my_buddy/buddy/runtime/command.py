@@ -75,8 +75,8 @@ class CommandAdapter(Adapter):
         return handle
 
     def collect(self, handle: ProcessHandle, context: ExecutionContext) -> AdapterOutcome:
-        exit_code = handle.process.returncode
         shutdown_confirmed = handle.shutdown_confirmed()
+        exit_code = handle.poll()
         if handle.cancel_requested:
             status = "cancelled" if shutdown_confirmed else "failed"
         elif exit_code == 0 and shutdown_confirmed:

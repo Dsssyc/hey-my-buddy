@@ -555,8 +555,10 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:
                 return {**_summary(deletion,scope,duplicate=duplicate),
-                        'reason':reason('macro-task-deletion.physical-failed',
-                                        errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR'),
+                        'reason':(error.details['reason'] if isinstance(error, BoardError)
+                                  and error.code == 'NOT_READY' and 'reason' in error.details
+                                  else reason('macro-task-deletion.physical-failed',
+                                              errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR')),
                         'objectKind':phase}
         with store.db.write() as connection:
             current = _record(connection,target)

@@ -2472,6 +2472,8 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
         if not _path_present(checkout_root):
             return removal
+        from .checkout_processes import require_idle_checkout
+        require_idle_checkout(checkout_root)
         restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])

@@ -1,6 +1,8 @@
 import type zh from "../zh/reasons";
 
 export default {
+  "checkout.live-processes": "Live processes use this checkout as their working directory: {{processes}}.",
+  "checkout.process-scan-failed": "Process working directories could not be fully checked. Retry deletion after the observation is available.",
   "ANCESTOR_TERMINAL": "An ancestor micro task has ended.",
   "CONFLICT": "This operation conflicts with the current state.",
   "ILLEGAL_TRANSITION": "The current state does not allow this transition.",

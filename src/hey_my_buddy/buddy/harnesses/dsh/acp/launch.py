@@ -53,8 +53,8 @@ def stop_after_spawn_failure(process, handle, error: BaseException) -> LaunchOwn
         evidence = stop_evidence(handle)
     except BaseException as observation_error:
         error.add_note(f"stop observation raised {type(observation_error).__name__}: {observation_error}")
-        evidence = {"leaderExited": process.poll() is not None,
-                    "leaderExitCode": process.poll(), "groupObserved": "unknown",
+        evidence = {"leaderExited": handle.poll() is not None,
+                    "leaderExitCode": handle.poll(), "groupObserved": "unknown",
                     "shutdownConfirmed": False}
     return LaunchOwnershipError(f"ACP startup failed after spawn: {error}",
                                 process=process, handle=handle, evidence=evidence)

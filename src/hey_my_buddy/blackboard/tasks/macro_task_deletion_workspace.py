@@ -240,6 +240,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                     skipped.append(_skip("checkout", str(checkout), "OWNER_UNPROVEN", identifier))
                     checkout_retained = True
                 else:
+                    from .checkout_processes import require_idle_checkout
+                    require_idle_checkout(checkout)
                     # A complete checkout uses the established Git/seal proof;
                     # interrupted removal is checked without restoring files.
                     proof = workspace.deletion_inspect(state, manifest, artifacts, retained=manifests)
