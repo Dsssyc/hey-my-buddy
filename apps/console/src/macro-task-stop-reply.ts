@@ -22,7 +22,7 @@ export function errorOfStopReply(expectedMacroTaskId: string, value: unknown): M
       && (result.stopped ? result.state === "cancelled" : preserved.has(result.state)))
     && new Set(results.map(result => result.runId)).size === results.length;
   if (!valid) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("shell:macroStop.invalidResponse"));
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("shell:macroStop.invalidResponse"));
   }
   return {
     macroTaskId: reply.macroTaskId!,

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
@@ -13,6 +15,7 @@ export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCanc
   title: string; children: ReactNode; confirmLabel: string;
   onConfirm: () => void; onCancel: () => void;
 }) {
+  useTranslation("console");
   const id = useId();
   const backdrop = useRef<HTMLDivElement>(null);
   const initialFocus = useRef<HTMLButtonElement>(null);
@@ -49,7 +52,7 @@ export function ConfirmDialog({ title, children, confirmLabel, onConfirm, onCanc
       <h2 id={`${id}-title`}>{title}</h2>
       <p id={`${id}-body`}>{children}</p>
       <div className="actions">
-        <button ref={initialFocus} type="button" className="button" onClick={onCancel}>取消</button>
+        <button ref={initialFocus} type="button" className="button" onClick={onCancel}>{i18n.t("console:cancel")}</button>
         <button type="button" className="button primary" onClick={onConfirm}>{confirmLabel}</button>
       </div>
     </div>

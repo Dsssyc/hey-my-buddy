@@ -9,9 +9,10 @@ import type {
 export class ApiError extends Error {
   constructor(
     public code: string,
-    message: string,
+    message: string | (() => string),
   ) {
-    super(message);
+    super(typeof message === "function" ? message() : message);
+    if (typeof message === "function") Object.defineProperty(this, "message", { get: message, configurable: true });
     this.name = "ApiError";
   }
 }
@@ -44,7 +45,7 @@ export function parseConsoleSession(value: unknown): ConsoleSession {
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      i18n.t("common:error.session"),
+      () => i18n.t("common:error.session"),
     );
   }
   return session as ConsoleSession;
@@ -56,7 +57,7 @@ export function parseConsoleAccess(value: unknown): ConsoleAccess {
     || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
     || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
       || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.access"));
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.access"));
   }
   return access;
 }
@@ -66,7 +67,7 @@ export function parseReminderSettings(value: unknown): ReminderSettings {
   if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
     || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
     || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.reminders"));
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.reminders"));
   }
   return settings;
 }
@@ -228,37 +229,43 @@ export type StorageApplyResult = {
   complete: boolean;
 };
 
-/** Strict shape checks for the storage plan reply; anything malformed is refused. */
+/** The storage read boundary rejects malformed candidates and process evidence too. */
+function storageObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+const storageCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const storageReasons = (value: unknown): value is string[] => Array.isArray(value) && value.every(code => typeof code === "string");
+const storageString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
 function validStoragePlan(value: unknown): value is StoragePlan {
-  const plan = value as StoragePlan | null;
-  if (!plan || typeof plan !== "object") return false;
-  if (typeof plan.planId !== "string" || !plan.planId) return false;
-  if (typeof plan.createdAt !== "string" || typeof plan.expiresAt !== "string") return false;
-  if (!Array.isArray(plan.categories) || !Array.isArray(plan.candidates) || !Array.isArray(plan.orphanProcesses)) return false;
-  return plan.categories.every(category =>
-    !!category && typeof category === "object" && typeof category.id === "string"
-    && Number.isFinite(category.bytes) && Number.isFinite(category.reclaimableBytes)
-    && Number.isFinite(category.count) && Number.isFinite(category.eligibleCount)
-    && Array.isArray(category.reasons));
+  if (!storageObject(value) || !storageString(value.planId)) return false;
+  if (typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))
+    || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))) return false;
+  if (!Array.isArray(value.categories) || !Array.isArray(value.candidates) || !Array.isArray(value.orphanProcesses)) return false;
+  return value.categories.every(category => storageObject(category) && storageString(category.id)
+    && typeof category.label === "string" && storageCount(category.bytes) && storageCount(category.reclaimableBytes)
+    && storageCount(category.count) && storageCount(category.eligibleCount) && storageReasons(category.reasons))
+    && new Set(value.categories.map(category => category.id)).size === value.categories.length
+    && value.candidates.every(row => storageObject(row) && storageString(row.id) && storageString(row.category)
+      && typeof row.path === "string" && storageCount(row.bytes) && typeof row.eligible === "boolean" && storageReasons(row.reasons))
+    && value.orphanProcesses.every(row => storageObject(row) && storageCount(row.pid) && row.pid > 0
+      && typeof row.kind === "string" && (row.stateDir === null || typeof row.stateDir === "string")
+      && (row.runtimeDir === null || typeof row.runtimeDir === "string"));
 }
 
 export function parseStoragePlan(value: unknown): StoragePlan {
   if (!validStoragePlan(value)) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.storagePlan"));
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.storagePlan"));
   }
-  return value as StoragePlan;
+  return value;
 }
 
 export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
-  const result = value as StorageApplyResult | null;
-  return !!result && typeof result === "object" && typeof result.planId === "string"
-    && Number.isFinite(result.removedBytes)
-    && Array.isArray(result.removed) && result.removed.every(row =>
-      !!row && typeof row === "object" && typeof row.id === "string"
-      && typeof row.path === "string" && Number.isFinite(row.bytes))
-    && Array.isArray(result.skipped) && result.skipped.every(row =>
-      !!row && typeof row === "object" && typeof row.id === "string"
-      && typeof row.path === "string" && Array.isArray(row.reasons));
+  return storageObject(value) && storageString(value.planId) && storageCount(value.removedBytes) && value.complete === true
+    && Array.isArray(value.removed) && value.removed.every(row => storageObject(row) && storageString(row.id)
+      && typeof row.path === "string" && storageCount(row.bytes))
+    && Array.isArray(value.skipped) && value.skipped.every(row => storageObject(row) && storageString(row.id)
+      && typeof row.path === "string" && storageReasons(row.reasons));
 }
 
 /**
@@ -429,10 +436,11 @@ export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
   const facts = (record: VersionFacts | null) => !!record && typeof record === "object" && !Array.isArray(record)
     && (["softwareVersion", "contractVersion", "sourceCommit", "installedAt"] as const).every(key =>
       record[key] === null || typeof record[key] === "string" && !!record[key].trim())
+    && (record.installedAt === null || Number.isFinite(Date.parse(record.installedAt)))
     && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
   if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
     || !(info.installed === null || facts(info.installed))) {
-    throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.version"));
+    throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.version"));
   }
   return info;
 }
@@ -462,13 +470,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      throw new ApiError("NETWORK", i18n.t("common:error.network"));
+      throw new ApiError("NETWORK", () => i18n.t("common:error.network"));
     }
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
+      throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
     }
     const body = data as {
       ok?: boolean;
@@ -477,7 +485,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     if (!response.ok || body?.ok === false) {
       throw new ApiError(
         body?.error?.code || `HTTP_${response.status}`,
-        body?.error?.message || i18n.t("common:error.refused"),
+        body?.error?.message || (() => i18n.t("common:error.refused")),
       );
     }
     return verifiedRead(data, responseVerifiedAtMs(response));
@@ -577,7 +585,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         response = await fetcher(url, { credentials: "same-origin", cache: "no-store", headers, signal });
       } catch (error) {
         if (isAbortError(error)) throw error;
-        throw new ApiError("NETWORK", i18n.t("common:error.network"));
+        throw new ApiError("NETWORK", () => i18n.t("common:error.network"));
       }
       if (response.status === 304) {
         if (cached && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -586,13 +594,13 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         // A 304 is only meaningful against a representation this instance still
         // holds under this session; without one the body cannot be reconstructed
         // and the read stays failed instead of guessing.
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
       }
       let data: unknown;
       try {
         data = await response.json();
       } catch {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.unparsable"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.unparsable"));
       }
       // The body has arrived: only now is the publication verdict decided. The
       // ticket was held through the body read, so this fresh check outranks any
@@ -606,7 +614,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (body?.ok === false && body?.error?.code === SESSION_EXPIRED_CODE) clearConditionalCache();
         throw new ApiError(
           body?.error?.code || `HTTP_${response.status}`,
-          body?.error?.message || i18n.t("common:error.refused"),
+          body?.error?.message || (() => i18n.t("common:error.refused")),
         );
       }
       if (stillCurrent && cacheGeneration === atGeneration && !signal?.aborted) {
@@ -639,7 +647,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) {
         throw new ApiError(
           "INVALID_RESPONSE",
-          i18n.t("common:error.snapshot"),
+          () => i18n.t("common:error.snapshot"),
         );
       }
       // A valid session descriptor is required; a missing or malformed one is
@@ -666,7 +674,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         body: JSON.stringify({ operation, params }),
       })) as { ok: boolean; result: T };
       if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.submit"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.submit"));
       }
       return verifiedRead(data.result, readVerifiedAt(data));
     },
@@ -682,7 +690,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks?${query}`, signal) as { data: TaskPage; verifiedAtMs: number | null };
       if (!data || !Array.isArray(data.runs) || !data.runs.every(recordSummary) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.history"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.history"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -699,7 +707,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
         || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
         || !data.macroTasks.every(validMacroTaskSummary)) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.macroTasks"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.macroTasks"));
       }
       return verifiedRead(data, verifiedAtMs);
     },
@@ -736,7 +744,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
         || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
         || typeof data.filtered !== "boolean") {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.timeline"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
     },
@@ -763,7 +771,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
       const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
       if (mismatch) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.cleanup"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.cleanup"));
       }
       return result;
     },
@@ -782,7 +790,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const rows = commandHarnesses(reply);
       if (!rows.length) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.recheck"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.recheck"));
       }
       return rows;
     },
@@ -802,7 +810,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
       if (!row || row.harness.toLowerCase() !== harness.trim().toLowerCase()) {
-        throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.pathSaved"));
+        throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.pathSaved"));
       }
       return row;
     },
@@ -817,7 +825,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       body: JSON.stringify({ operation, params }),
     }) as { ok: boolean; result: T };
     if (!data || data.ok !== true || !Object.hasOwn(data, "result")) {
-      throw new ApiError("INVALID_RESPONSE", i18n.t("common:error.submit"));
+      throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.submit"));
     }
     return data.result;
   }

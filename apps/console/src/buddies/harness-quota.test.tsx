@@ -282,10 +282,10 @@ describe("an exhausted quota", () => {
     const f = fixture({ harnesses: withRecords(exhausted()), readOnly: true });
     await openHarness(f);
     expect(open().getAttribute("aria-disabled")).toBe("true");
-    expect(open().getAttribute("aria-description")).toContain(LOGIN_EXPIRED_ACTION_REFUSAL);
+    expect(open().getAttribute("aria-description")).toContain(LOGIN_EXPIRED_ACTION_REFUSAL());
     expect(open().getAttribute("aria-description")).toContain("不代表额度已恢复");
     await user.click(open());
-    expect(await screen.findByText(LOGIN_EXPIRED_ACTION_REFUSAL)).toBeTruthy();
+    expect(await screen.findByText(LOGIN_EXPIRED_ACTION_REFUSAL())).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 

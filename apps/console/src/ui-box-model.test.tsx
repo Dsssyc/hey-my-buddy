@@ -151,21 +151,19 @@ describe("U5: audited controls retain the shared global box model and normal siz
     expect(scroll.querySelectorAll("[data-slot=macro-entry]").length).toBeGreaterThan(0);
   });
 
-  it("uses the existing global border-box reset for badges, segments, filters, titles and floating layers", () => {
+  it("uses the existing global border-box reset for badges, filters, titles and floating layers", () => {
     const { container } = render(<>
       <Status status="waiting-host" />
-      <div className="segmented"><button>推理强度</button></div>
       <input type="checkbox" />
       <div className="inspector-card-head">标题</div>
       <div className="marker-popover">详情</div>
     </>);
-    for (const element of container.querySelectorAll<HTMLElement>(".badge, .segmented button, input, .inspector-card-head, .marker-popover")) {
+    for (const element of container.querySelectorAll<HTMLElement>(".badge, input, .inspector-card-head, .marker-popover")) {
       expect(getComputedStyle(element).boxSizing, element.className).toBe("border-box");
     }
     const badge = getComputedStyle(container.querySelector(".badge")!);
     expect(badge.padding).toBe("2px 6px");
     expect(badge.lineHeight).not.toBe("1");
-    expect(getComputedStyle(container.querySelector(".segmented button")!).padding).toBe("5px 9px");
     expect(getComputedStyle(container.querySelector("input")!).width).toBe("16px");
     expect(rule("*").boxSizing).toBe("border-box");
   });

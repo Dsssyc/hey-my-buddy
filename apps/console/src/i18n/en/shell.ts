@@ -41,16 +41,6 @@ export default {
     retry: "Retry",
   },
   reminders: {
-    title: "Execution reminders",
-    silenceMinutes: "Silence threshold (minutes)",
-    range: "Enter a whole number from 1 to 1440 minutes; default 15 minutes.",
-    currentSeconds: "Current saved threshold: {{count}} seconds. Enter whole minutes to change it.",
-    currentSeconds_one: "Current saved threshold: {{count}} second. Enter whole minutes to change it.",
-    currentSeconds_other: "Current saved threshold: {{count}} seconds. Enter whole minutes to change it.",
-    unavailable: "Reminder settings are unavailable. Refresh the console.",
-    save: "Save",
-    saving: "Saving…",
-    saved: "Reminder settings saved.",
     overdue: "Overdue",
     possiblyStuck: "Possibly stuck",
   },
@@ -87,7 +77,7 @@ export default {
     unresolvedNote: "The result of the save is unknown and it may have taken effect; check before retrying.",
     unavailable: {
       connection: "The connection is lost; retry the connection. The draft is kept.",
-      login: "The login has expired; run hey-my-buddy console to log in again. The draft is kept.",
+      login: "Browser authorization has expired; run hey-my-buddy console to authorize this browser again. The draft is kept.",
     },
     reload: "Reread settings",
   },
@@ -97,4 +87,4 @@ export default {
     failed: "Cannot reach the blackboard right now",
     reconnect: "Reconnect",
   },
-} satisfies typeof zh & { reminders: Record<string, string>; macroStop: Record<string, string> };
+} satisfies typeof zh & { macroStop: Record<string, string> };

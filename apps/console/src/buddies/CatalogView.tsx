@@ -1,3 +1,5 @@
+import i18n from "i18next";
+import { useCopyState } from "../i18n/use-copy-state";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
@@ -27,6 +29,8 @@ import { buddyHash } from "./navigation";
 import type { BuddyLocation } from "./navigation";
 import { useHarnessActions } from "./use-harness-actions";
 
+const liveT = i18n.getFixedT(null, "buddies");
+
 /**
  * One directory, grouped by harness, with independent account expansions and one model drawer.
  */
@@ -51,7 +55,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
   const [focusRequest, setFocusRequest] = useState<{ id: string; n: number } | null>(null);
   const handledLocation = useRef<string | null>(null);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false), [error, setError] = useCopyState(), [note, setNote] = useCopyState();
   const [refused, setRefused] = useState(false);
   const sourceKey = historySourceKey(snapshot);
   const history = useBuddyHistory(api, snapshot.csrfToken, sourceKey,
@@ -161,9 +165,9 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
         const added = next.buddies.filter(buddy => !snapshot.buddies.some(known => known.buddyId === buddy.buddyId));
         editor.rebase(next);
         setFresh(previous => new Set([...previous, ...added.map(modelServiceKey)]));
-        setNote(added.length ? t("models.discovered", { n: added.length }) : t("models.discoveredNone"));
+        setNote(() => added.length ? liveT("models.discovered", { n: added.length }) : liveT("models.discoveredNone"));
       }
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) { setError(() => errorText(failure)); }
     finally { setBusy(false); editor.setAuxiliaryBusy(false); }
   }
 

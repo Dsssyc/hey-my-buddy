@@ -206,11 +206,11 @@ describe("console interactions", () => {
     second.unmount();
     window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
-    await screen.findByRole("heading", { name: "显示" });
+    await screen.findByRole("heading", { name: "主题" });
     await user.click(screen.getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     await user.click(screen.getByRole("link", { name: "设置" }));
-    await screen.findByRole("heading", { name: "显示" });
+    await screen.findByRole("heading", { name: "主题" });
     expect(window.location.hash).toBe("#settings");
     expect(api.command).not.toHaveBeenCalled();
   });

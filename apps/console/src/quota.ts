@@ -1,3 +1,4 @@
+import i18n from "i18next";
 /**
  * Recorded harness quota (ADR-018 §23): the newest observation of one harness,
  * validated at the boundary. An unknown window stays unknown and never reads as
@@ -87,7 +88,7 @@ export function quotaView(quota: HarnessQuota | null | undefined): QuotaView | n
     const nearLimit = !quota.stale && !window.stale && window.usedPercent !== null && window.usedPercent >= QUOTA_NEAR_LIMIT_PERCENT;
     return {
       ...window,
-      usedText: window.usedPercent === null ? "未知" : `${formatPercent(window.usedPercent)}%`,
+      usedText: window.usedPercent === null ? i18n.t("console:unknown") : `${formatPercent(window.usedPercent)}%`,
       nearLimit,
       atLimit: !quota.stale && !window.stale && window.usedPercent !== null && window.usedPercent >= 100,
     };
@@ -95,8 +96,8 @@ export function quotaView(quota: HarnessQuota | null | undefined): QuotaView | n
   const limitReported = !quota.stale && Boolean(quota.reachedType || quota.ordinaryUsageAllowed === false);
   const alert = limitReported || windows.some(window => window.nearLimit);
   const note = quota.stale
-    ? "额度观测已过期"
-    : "最近额度观测 · 非实时";
+    ? i18n.t("console:quotaObservationExpired")
+    : i18n.t("console:latestQuotaObservationNotLive");
   return {
     stale: quota.stale === true,
     limitReported,
@@ -105,7 +106,7 @@ export function quotaView(quota: HarnessQuota | null | undefined): QuotaView | n
     ...(quota.provider ? { provider: quota.provider } : {}),
     observedAt: quota.observedAt,
     windows,
-    note: limitReported ? `${note} 原生记录报告额度限制，当前重置状态可能未知。` : note,
+    note: limitReported ? i18n.t("console:theNativeRecordReportsAQuotaLimit", { v0: note }) : note,
   };
 }
 

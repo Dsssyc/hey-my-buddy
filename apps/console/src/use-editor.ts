@@ -1,3 +1,6 @@
+import i18n from "i18next";
+import { useCopyState } from "./i18n/use-copy-state";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { ConsoleApi } from "./api";
@@ -20,17 +23,19 @@ export function useEditor(
   snapshot: Snapshot,
   refresh: () => Promise<Snapshot | null>,
   mutationsAvailable: boolean,
-  unavailableReason: string,
+  unavailableReason: string | (() => string),
   authority?: AuthorityLatch,
 ) {
+  const unavailable = () => typeof unavailableReason === "function" ? unavailableReason() : unavailableReason;
+  const { i18n: { language } } = useTranslation("console");
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
   const [historyEntries, setHistoryEntries] = useState<{ key: string; entries: HistoryEntries | null } | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [blocked, setBlocked] = useState("");
-  const [notice, setNotice] = useState("");
+  const [error, setError] = useCopyState();
+  const [blocked, setBlocked] = useCopyState();
+  const [notice, setNotice] = useCopyState();
   const [confirming, setConfirming] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const csrf = useRef(snapshot.csrfToken);
@@ -82,12 +87,12 @@ export function useEditor(
       modelServiceConcurrency: draft.modelServiceConcurrency };
     return edited;
   }, [snapshot, draft, currentHistory]);
-  const blocking = useMemo(() => baseline && draft ? blockingIssues(baseline, draft) : [], [baseline, draft]);
-  const attention = useMemo(() => attentionIssues(view), [view]);
+  const blocking = useMemo(() => baseline && draft ? blockingIssues(baseline, draft) : [], [baseline, draft, language]);
+  const attention = useMemo(() => attentionIssues(view), [view, language]);
   const busy = saving || auxiliaryBusy;
   const editing = !busy && !confirming && sessionWritable;
   const saveBlockedReason = !mutationsAvailable && draft
-    ? unavailableReason || "当前无法提交保存，草稿会保留在本页。" : "";
+    ? unavailable() || i18n.t("console:cannotSaveRightNowYourDraftStays") : "";
   const mayWrite = () => writable.current && latch.writable(snapshot);
   const loseAuthority = () => { latch.lose(sessionId.current); writable.current = false; };
 
@@ -106,9 +111,9 @@ export function useEditor(
 
   function update(change: (draft: Draft) => Draft) {
     setBlocked("");
-    if (busy) { setBlocked("正在保存或读取目录；请稍后修改。"); return; }
-    if (confirming) { setBlocked("保存结果未知；请核对或重试同一保存。"); return; }
-    if (!mayWrite()) { setBlocked(LOGIN_EXPIRED_ACTION_REFUSAL); return; }
+    if (busy) { setBlocked(() => i18n.t("console:savingOrReadingTheCatalogWaitBefore")); return; }
+    if (confirming) { setBlocked(() => i18n.t("console:theSaveResultIsUnknownCheckIt")); return; }
+    if (!mayWrite()) { setBlocked(() => LOGIN_EXPIRED_ACTION_REFUSAL()); return; }
     if (!draftRef.current) {
       setNotice("");
       const next = withHistory(makeDraft(snapshot), historyRef.current?.key === sourceKey ? historyRef.current.entries : null);
@@ -127,9 +132,9 @@ export function useEditor(
   async function publish(payload: UserPolicyPublication) {
     if (!mayWrite()) {
       if (saveDispatched.current) {
-        setUncertain(true); setConfirming(true); setError(UNRESOLVED_SAVE_NOTE);
+        setUncertain(true); setConfirming(true); setError(() => UNRESOLVED_SAVE_NOTE());
       } else {
-        pendingSave.current = null; setError(LOGIN_EXPIRED_SAVE_REFUSAL);
+        pendingSave.current = null; setError(() => LOGIN_EXPIRED_SAVE_REFUSAL());
       }
       return;
     }
@@ -142,40 +147,40 @@ export function useEditor(
       if (!reread) {
         saveAmbiguous.current = true;
         setUncertain(true); setConfirming(true);
-        setError("设置已保存，但重新读取失败；请重试同一保存确认。");
+        setError(() => i18n.t("console:settingsSavedButTheNewReadFailed"));
         return;
       }
       closeDraft();
-      setNotice("设置已保存");
+      setNotice(() => i18n.t("console:settingsSaved"));
     } catch (failure) {
       if (!alive.current) return;
       if (isSessionExpiredRefusal(failure)) {
         loseAuthority();
         if (saveAmbiguous.current) {
-          setUncertain(true); setConfirming(true); setError(UNRESOLVED_SAVE_NOTE);
+          setUncertain(true); setConfirming(true); setError(() => UNRESOLVED_SAVE_NOTE());
         } else {
           pendingSave.current = null; saveDispatched.current = false;
-          setUncertain(false); setConfirming(false); setError(errorText(failure));
+          setUncertain(false); setConfirming(false); setError(() => errorText(failure));
         }
         return;
       }
       if (saveAmbiguous.current && failure instanceof ApiError
         && ["FORBIDDEN", "UNAUTHORIZED"].includes(failure.code)) {
-        setUncertain(true); setConfirming(true); setError(UNRESOLVED_SAVE_NOTE);
+        setUncertain(true); setConfirming(true); setError(() => UNRESOLVED_SAVE_NOTE());
         await refresh();
         return;
       }
       if (uncertainResponse(failure)) {
         saveAmbiguous.current = true;
         setUncertain(true); setConfirming(true);
-        setError("保存结果未知，可能已生效；请重试同一保存。");
+        setError(() => i18n.t("console:theSaveResultIsUnknownAndMay2"));
         return;
       }
       pendingSave.current = null;
       saveDispatched.current = false;
       saveAmbiguous.current = false;
       setConfirming(false); setUncertain(false);
-      setError(errorText(failure));
+      setError(() => errorText(failure));
     }
   }
 
@@ -183,7 +188,7 @@ export function useEditor(
     const current = draftRef.current;
     const base = baselineRef.current;
     if (!current || !base || busy) {
-      if (busy) setBlocked("正在读取目录或保存；请稍后重试。");
+      if (busy) setBlocked(() => i18n.t("console:readingTheCatalogOrSavingTryAgain"));
       return;
     }
     if (!mayWrite()) {
@@ -191,13 +196,13 @@ export function useEditor(
       return;
     }
     if (!mutationsAvailable) {
-      setBlocked(unavailableReason || "暂无法保存；请稍后重试，草稿已保留。");
+      setBlocked(() => unavailable() || i18n.t("console:cannotSaveRightNowRetryShortlyYour"));
       return;
     }
     setBlocked(""); setError(""); setNotice("");
     const blockedIssues = blockingIssues(base, current);
     if (blockedIssues.length) {
-      setError(`${blockedIssues.length} 项无法保存：${blockedIssues.map(issue => issue.message).join(" ")}`);
+      setError(() => i18n.t("console:cannotSaveItems", { v0: blockedIssues.length, v1: blockingIssues(base, current).map(issue => issue.message).join(" ") }));
       return;
     }
     setSaving(true);
@@ -213,15 +218,15 @@ export function useEditor(
   }
 
   async function discard() {
-    if (busy) { setBlocked("正在保存；请等待结果。"); return; }
-    if (confirming) { setBlocked("保存结果未知；请核对或重试同一保存。"); return; }
+    if (busy) { setBlocked(() => i18n.t("console:savingWaitForTheResult")); return; }
+    if (confirming) { setBlocked(() => i18n.t("console:theSaveResultIsUnknownCheckIt")); return; }
     closeDraft();
-    setError(""); setNotice("草稿已放弃");
+    setError(""); setNotice(() => i18n.t("console:draftDiscarded"));
     await refresh();
   }
 
   async function reloadLatest() {
-    if (busy || confirming) { setBlocked("保存未确认；请核对后重新加载。"); return; }
+    if (busy || confirming) { setBlocked(() => i18n.t("console:saveUnconfirmedCheckItBeforeReloading")); return; }
     setError(""); setNotice("");
     const next = withHistory(makeDraft(snapshot), historyRef.current?.key === sourceKey ? historyRef.current.entries : null);
     draftRef.current = next;
@@ -232,7 +237,7 @@ export function useEditor(
     saveDispatched.current = false;
     saveAmbiguous.current = false;
     setUncertain(false);
-    setNotice("已重新读取设置；请核对后保存。");
+    setNotice(() => i18n.t("console:settingsReloadedCheckThemBeforeSaving"));
   }
 
   function adoptHistory(entries: HistoryEntries | null, key: string) {

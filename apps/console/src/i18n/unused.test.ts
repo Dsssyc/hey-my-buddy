@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import enTaskDetail from "./en/taskDetail";
 import zhBuddies from "./zh/buddies";
+import zhSettings from "./zh/settings";
+import zhStorage from "./zh/settings-storage";
 import zhTaskDetail from "./zh/taskDetail";
 
 /**
@@ -9,6 +10,7 @@ import zhTaskDetail from "./zh/taskDetail";
  * state (`preference.${mode}`). Replaced views take their words with them.
  */
 const pages = {
+  settings: import.meta.glob<string>(["../Settings.tsx", "../settings/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   buddies: import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   taskDetail: import.meta.glob<string>(["../task-detail/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
 };
@@ -31,6 +33,12 @@ function unused(copy: unknown, text: string): string[] {
 }
 
 describe("the copy of the pages", () => {
+  it("has no retired settings copy", () => {
+    const source = sourceOf(pages.settings).replaceAll("settingsStorage:", "");
+    expect(unused(zhSettings, source)).toEqual([]);
+    expect(unused(zhStorage, source)).toEqual([]);
+  });
+
   it("has no key of the Buddy page that no view uses", () => {
     expect(unused(zhBuddies, sourceOf(pages.buddies))).toEqual([]);
   });
@@ -39,9 +47,10 @@ describe("the copy of the pages", () => {
     expect(unused(zhTaskDetail, sourceOf(pages.taskDetail))).toEqual([]);
   });
 
-  it("is English, with no word of Chinese, in the English copy of the detail", () => {
+  it("has no Chinese text or full-width punctuation in any English namespace", () => {
     const chinese = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
     const words = (node: unknown): string[] => node !== null && typeof node === "object" ? Object.values(node).flatMap(words) : [String(node)];
-    expect(words(enTaskDetail).filter(word => chinese.test(word))).toEqual([]);
+    const english = import.meta.glob("./en/*.ts", { eager: true });
+    expect(words(english).filter(word => chinese.test(word))).toEqual([]);
   });
 });

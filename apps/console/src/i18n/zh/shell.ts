@@ -41,14 +41,6 @@ export default {
     retry: "重试连接",
   },
   reminders: {
-    title: "执行提醒",
-    silenceMinutes: "静默提醒阈值（分钟）",
-    range: "请输入 1 至 1440 的整数分钟；默认 15 分钟。",
-    currentSeconds: "当前保存值为 {{count}} 秒；请输入整数分钟才能修改。",
-    unavailable: "提醒设置暂不可用，请刷新工作台。",
-    save: "保存",
-    saving: "正在保存…",
-    saved: "提醒设置已保存。",
     overdue: "已超过预期",
     possiblyStuck: "可能卡住",
   },
@@ -84,7 +76,7 @@ export default {
     unresolvedNote: "保存结果未知，可能已生效；请核对后重试。",
     unavailable: {
       connection: "连接中断；请重试连接，草稿已保留。",
-      login: "登录已失效；请运行 hey-my-buddy console 重新登录，草稿已保留。",
+      login: "浏览器授权已失效；请运行 hey-my-buddy console 重新授权，草稿已保留。",
     },
     reload: "重新读取设置",
   },

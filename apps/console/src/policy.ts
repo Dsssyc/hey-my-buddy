@@ -1,3 +1,4 @@
+import i18n from "i18next";
 import type { Draft, Buddy } from "./types";
 import {
   routerFieldChanged,
@@ -72,10 +73,10 @@ export function executionCandidates(buddies: Buddy[]): Buddy[] {
  * user cannot fix here.
  */
 export function routerRefusal(buddy: Buddy, mode: "fast" | "review" = "review"): string | null {
-  if (mode === "fast" && !hasFastRoutingCapability(buddy)) return "所属 Harness 尚不支持无工具路由调用";
-  if (mode === "review" && !hasDecisionCapability(buddy)) return "所属 Harness 尚不具备本地只读路由资格";
-  if (!buddy.available) return "该推理强度当前不可用";
-  if (!buddy.enabled) return "该推理强度未启用：先打开它的开关";
+  if (mode === "fast" && !hasFastRoutingCapability(buddy)) return i18n.t("console:thisHarnessDoesNotSupportRoutingWithout");
+  if (mode === "review" && !hasDecisionCapability(buddy)) return i18n.t("console:thisHarnessDoesNotSupportLocalRead");
+  if (!buddy.available) return i18n.t("console:thisReasoningEffortIsCurrentlyUnavailable");
+  if (!buddy.enabled) return i18n.t("console:thisReasoningEffortIsDisabledEnableIt");
   return null;
 }
 
@@ -95,10 +96,10 @@ function labelOf(buddy: Buddy | undefined, buddyId: string): string {
 }
 
 function availabilityReason(buddy: Buddy | undefined): string {
-  if (!buddy) return "已不在当前目录中";
+  if (!buddy) return i18n.t("console:noLongerInTheCurrentCatalog");
   return buddy.unavailableReason?.trim()
-    ? `当前不可用（${buddy.unavailableReason.trim()}）`
-    : "当前不在目录中";
+    ? i18n.t("console:currentlyUnavailable", { v0: buddy.unavailableReason.trim() })
+    : i18n.t("console:notInTheCurrentCatalog");
 }
 
 /**
@@ -107,7 +108,7 @@ function availabilityReason(buddy: Buddy | undefined): string {
  */
 function pinRefusal(buddy: Buddy | undefined): string | null {
   if (!buddy || !buddy.available) return availabilityReason(buddy);
-  if (!buddy.enabled) return "处于停用状态";
+  if (!buddy.enabled) return i18n.t("console:disabled");
   return null;
 }
 
@@ -133,7 +134,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
       modelService: modelServiceKey(entry),
       label: subject,
-      message: `${subject} 并发上限须为 1–32 的整数；请修改。`,
+      message: i18n.t("console:concurrencyLimitMustBeAnIntegerFrom", { v0: subject }),
     });
   }
   for (const setting of buddySettings(baseline, draft)) {
@@ -143,7 +144,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         buddyId: setting.buddyId,
         label: labelOf(buddy, setting.buddyId),
-        message: `${labelOf(buddy, setting.buddyId)} ${availabilityReason(buddy)}；无法启用，请撤销修改。`,
+        message: i18n.t("console:cannotEnableItRevertThisChange", { v0: labelOf(buddy, setting.buddyId), v1: availabilityReason(buddy) }),
       });
     }
   }
@@ -158,7 +159,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       issues.push({
         buddyId: change.buddyId,
         label: labelOf(buddy, change.buddyId),
-        message: `${labelOf(buddy, change.buddyId)} ${refusal}；无法固定，请选择可用推理强度。`,
+        message: i18n.t("console:cannotPinItChooseAnAvailableReasoning", { v0: labelOf(buddy, change.buddyId), v1: refusal }),
       });
     }
   }
@@ -166,8 +167,8 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   // blocks saving so a save can never publish an earlier valid prefix.
   if (draft.configuration && retryIntervalSeconds(draft.configuration.routerRetryIntervalSeconds) === null) {
     issues.push({
-      buddyId: "", label: "重试间隔",
-      message: "重试间隔须为 1–2147483647 的整数秒；请修改。",
+      buddyId: "", label: i18n.t("console:retryInterval"),
+      message: i18n.t("console:retryIntervalMustBeAnIntegerFrom"),
     });
   }
   if (draft.configuration && routerFieldChanged(baseline, draft, "routerBuddyIds")) {
@@ -175,11 +176,11 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
     // temporary availability belong to the shared current Router resolver.
     for (const target of draft.configuration.routerBuddyIds) {
       const buddy = buddies.get(target);
-      const refusal = !buddy ? "已不在当前目录中"
+      const refusal = !buddy ? i18n.t("console:noLongerInTheCurrentCatalog")
         : [buddy.harness, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
-          ? "buddy 身份不完整" : null;
+          ? i18n.t("console:incompleteBuddyIdentity") : null;
       if (refusal) issues.push({ buddyId: target, label: labelOf(buddy, target),
-        message: `${labelOf(buddy, target)} ${refusal}；无法保存 Router 列表。` });
+        message: i18n.t("console:cannotSaveTheRouterList", { v0: labelOf(buddy, target), v1: refusal }) });
     }
   }
   return issues;
@@ -190,9 +191,9 @@ export function routerAttention(source: Pick<Draft, "configuration" | "buddies">
   const id = source.configuration?.routerBuddyIds[0] ?? null;
   if (!id || !mode) return null;
   const buddy = source.buddies.find(p => p.buddyId === id);
-  const refusal = buddy ? routerRefusal(buddy, mode) : "已不在目录中";
+  const refusal = buddy ? routerRefusal(buddy, mode) : i18n.t("console:noLongerInTheCatalog");
   return refusal ? { buddyId: id, router: true, label: labelOf(buddy, id),
-    message: `当前 Router ${labelOf(buddy, id)} ${refusal}：请在合格的推理强度菜单中选择“设为 Router”，或更改模式。` } : null;
+    message: i18n.t("console:currentRouterChooseSetAsRouterFrom", { v0: labelOf(buddy, id), v1: refusal }) } : null;
 }
 
 export function decisionAttention(source: Pick<Draft, "configuration" | "buddies">): PolicyIssue | null {
@@ -219,7 +220,7 @@ export function attentionIssues(
       issues.push({
         buddyId: preference.buddyId,
         label: labelOf(buddy, preference.buddyId),
-        message: `固定选择指向 ${labelOf(buddy, preference.buddyId)}：${refusal}；请启用或改为“不设”。`,
+        message: i18n.t("console:thePinnedChoicePointsToEnableIt", { v0: labelOf(buddy, preference.buddyId), v1: refusal }),
       });
     }
   }

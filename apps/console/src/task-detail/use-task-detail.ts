@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText, isAbortError } from "../api";
 import { documentVisibleNow, useDocumentVisible } from "../page-visibility";
@@ -15,14 +16,14 @@ type Data = {
   inquiries: Inquiries | null;
   /** When the server checked the reply each part comes from; null when the reply says nothing of it. */
   verified: Record<Kind, number | null>;
-  errors: Record<Kind, string>;
+  errors: Record<Kind, (() => string) | null>;
 };
 
 const KINDS: Kind[] = ["task", "workflow", "audit", "inquiries", "basis"];
 const empty: Data = {
   view: null, workflow: null, audit: null, routing: [], bases: {}, inquiries: null,
   verified: Object.fromEntries(KINDS.map(kind => [kind, null])) as Record<Kind, number | null>,
-  errors: Object.fromEntries(KINDS.map(kind => [kind, ""])) as Record<Kind, string>,
+  errors: Object.fromEntries(KINDS.map(kind => [kind, null])) as Record<Kind, (() => string) | null>,
 };
 
 /** A micro task that is queued or executing changes under the reader's eyes. */
@@ -58,6 +59,7 @@ export type DetailRead = {
  * reads the task again. A failed read keeps what was read, and nothing here writes.
  */
 export function useTaskDetail(client: TaskDetailClient, runId: string, active: boolean, decisionIds: string[], listed: number | null): DetailRead {
+  useTranslation("common");
   const [data, setData] = useState<Data>(empty);
   const [busy, setBusy] = useState(false);
   const visible = useDocumentVisible();
@@ -79,11 +81,11 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
       if (signal.aborted || mine !== sequence.current[kind]) return;
       setData(previous => {
         const next = apply(previous, value);
-        return { ...next, verified: { ...next.verified, [kind]: verifiedAtMs }, errors: { ...next.errors, [kind]: "" } };
+        return { ...next, verified: { ...next.verified, [kind]: verifiedAtMs }, errors: { ...next.errors, [kind]: null } };
       });
     } catch (failure) {
       if (signal.aborted || mine !== sequence.current[kind] || isAbortError(failure)) return;
-      setData(previous => ({ ...previous, errors: { ...previous.errors, [kind]: errorText(failure) } }));
+      setData(previous => ({ ...previous, errors: { ...previous.errors, [kind]: () => errorText(failure) } }));
     }
   }, []);
 
@@ -161,6 +163,6 @@ export function useTaskDetail(client: TaskDetailClient, runId: string, active: b
   return {
     ...read, busy, refresh,
     verifiedAtMs: collaboration ? verified.workflow : verified.task,
-    error: Object.values(errors).find(Boolean) ?? "",
+    error: Object.values(errors).find(Boolean)?.() ?? "",
   };
 }

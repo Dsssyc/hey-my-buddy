@@ -52,8 +52,7 @@ function observeErrors(page: Page) {
   return errors;
 }
 
-// Task views still carry their existing Chinese copy. Both actual browser
-// languages must render the same Lead facts, alongside their translated shell.
+// The same Lead facts retain their meaning in both interface languages.
 for (const { locale, language, tasks } of [
   { locale: "zh-CN", language: "zh-CN", tasks: "任务" },
   { locale: "en-US", language: "en", tasks: "Tasks" },
@@ -64,12 +63,15 @@ for (const { locale, language, tasks } of [
     test("keeps both waiting states readable and opens their recorded facts with the keyboard", async ({ page }) => {
       const errors = observeErrors(page);
       const { timeline } = await openLeadMacro(page, language, tasks);
+      const zh = language === "zh-CN";
+      const ownedState = zh ? "等待名下的微任务" : "Waiting for owned micro tasks";
+      const leadState = zh ? "等待 Lead" : "Waiting for Lead";
       expect(timeline.rows.find(item => item.runId === LEAD)?.state).toBe("waiting-owned");
       expect(timeline.rows.find(item => item.runId === WAITING)?.leadOwnership).toMatchObject({
         leadRunId: LEAD, leadTurnId: "turn-att-b3-1",
       });
       expect(timeline.rows.find(item => item.runId === QUEUED)?.status).toBe("queued");
-      for (const [runId, state] of [[LEAD, "等待名下的微任务"], [WAITING, "等待 Lead"]]) {
+      for (const [runId, state] of [[LEAD, ownedState], [WAITING, leadState]]) {
         const label = row(page, runId);
         await expect(label).toHaveAccessibleName(new RegExp(state));
         await expectReadableStart(label.locator(".lbl-sub"), state);
@@ -77,17 +79,17 @@ for (const { locale, language, tasks } of [
       }
 
       const wait = row(page, WAITING).locator("..").locator(".sp.wait");
-      await expect(wait).toHaveAccessibleName(/等待 Lead/);
-      await expectReadableStart(wait.locator(".sp-text"), "等待 Lead");
+      await expect(wait).toHaveAccessibleName(new RegExp(leadState));
+      await expectReadableStart(wait.locator(".sp-text"), leadState);
       await wait.focus();
       await expect(wait).toBeFocused();
       await wait.press(" ");
-      const expand = page.getByRole("button", { name: "展开检查器", exact: true });
+      const expand = page.getByRole("button", { name: zh ? "展开检查器" : "Expand inspector", exact: true });
       await expand.focus();
       await expand.press("Enter");
       await expect(page.locator(".inspector-dock-toggle")).toHaveAttribute("aria-expanded", "true");
       const card = page.locator(".inspector-card");
-      await expect(card.locator(".inspector-field").filter({ hasText: "类型" }).locator("dd")).toHaveText("等待 Lead");
+      await expect(card.locator(".inspector-field").filter({ hasText: zh ? "类型" : "Type" }).locator("dd")).toHaveText(leadState);
       const waitHeading = await card.locator(".inspector-card-head > strong").textContent();
       await settle(page);
       await expectWholeAndApart(card, card.locator(":scope > div, :scope > dl"));
@@ -95,7 +97,7 @@ for (const { locale, language, tasks } of [
 
       await row(page, LEAD).focus();
       await row(page, LEAD).press(" ");
-      await expectReadableStart(card.locator(".inspector-field").filter({ hasText: "结果" }).locator("dd"), "等待名下的微任务");
+      await expectReadableStart(card.locator(".inspector-field").filter({ hasText: zh ? "结果" : "Result" }).locator("dd"), ownedState);
       await row(page, WAITING).focus();
       await row(page, WAITING).press("Enter");
       // Enter opens the micro task on the decision it waits for: the Lead's, with the request as recorded.
@@ -108,7 +110,7 @@ for (const { locale, language, tasks } of [
       await expectTextUncut(request.locator("h3, dt, dd, p"));
       await expectNoSidewaysScroll(page);
       expect(errors).toEqual({ page: [], console: [] });
-      expect(waitHeading, "the inspector heading must identify the same Lead wait as its type field").toBe("等待 Lead");
+      expect(waitHeading, "the inspector heading must identify the same Lead wait as its type field").toBe(leadState);
     });
 
     test("confirms the Lead's macro task stop scope and keeps the real read-only refusal honest", async ({ page }) => {
@@ -177,8 +179,8 @@ for (const { locale, language, tasks } of [
       expect(unchanged.status()).toBe(200);
       expect(unchanged.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
       expect(await unchanged.text()).toBe(body);
-      await expectReadableStart(row(page, LEAD).locator(".lbl-sub"), "等待名下的微任务");
-      await expectReadableStart(row(page, WAITING).locator(".lbl-sub"), "等待 Lead");
+      await expectReadableStart(row(page, LEAD).locator(".lbl-sub"), zh ? "等待名下的微任务" : "Waiting for owned micro tasks");
+      await expectReadableStart(row(page, WAITING).locator(".lbl-sub"), zh ? "等待 Lead" : "Waiting for Lead");
       await page.getByRole("button", { name: zh ? "知道了" : "Dismiss", exact: true }).click();
       await expect(status).toHaveCount(0);
       await more.click();

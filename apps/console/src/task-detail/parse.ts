@@ -18,7 +18,7 @@ import type {
 type Rec = Record<string, unknown>;
 
 function refuse(what: string): never {
-  throw new ApiError("INVALID_RESPONSE", i18n.t("error.incomplete", { ns: "taskDetail", what }));
+  throw new ApiError("INVALID_RESPONSE", () => i18n.t("error.incomplete", { ns: "taskDetail", what }));
 }
 function rec(value: unknown, what: string): Rec {
   if (!value || typeof value !== "object" || Array.isArray(value)) refuse(what);
