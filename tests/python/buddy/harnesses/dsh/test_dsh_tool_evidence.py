@@ -24,11 +24,11 @@ from hey_my_buddy.buddy.harnesses.dsh.protocol import (
     DshToolFacts,
     NativeError,
     refusal_shaped,
-    verify_finish_receipt,
+    verify_receipt,
     verify_inquiry_receipt,
     verify_tool_refusal,
 )
-from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
+from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 from hey_my_buddy.protocol.tool_evidence import (
@@ -176,10 +176,10 @@ class DshReceiptSeamTests(unittest.TestCase):
     def test_the_finish_receipt_verifies_and_binds_identity_through_the_dsh_name(self):
         raw = respond({"id": 1, "method": "tools/call", "params": {"name": "hey_my_buddy_finish_turn", "arguments": self.outcome}},
                       self.bridge)["result"]["content"][0]["text"]
-        self.assertEqual(verify_finish_receipt(raw, self.bridge, validate_outcome)["outcome"], self.outcome)
+        self.assertEqual(verify_receipt(raw, self.bridge, validate_outcome)["outcome"], self.outcome)
         other = {**self.bridge, "identity": {**self.bridge["identity"], "attemptId": "other"}}
-        with self.assertRaises(NativeError) as error:
-            verify_finish_receipt(raw, other, validate_outcome)
+        with self.assertRaises(ReceiptError) as error:
+            verify_receipt(raw, other, validate_outcome)
         self.assertEqual(error.exception.code, "invalid-finish")
 
     def test_a_tampered_refusal_envelope_fails_its_signature_through_the_dsh_name(self):
@@ -193,7 +193,7 @@ class DshReceiptSeamTests(unittest.TestCase):
         self.assertEqual(verify_tool_refusal(raw, self.bridge, self.native, ("hey_my_buddy_finish_turn",))["tool"],
                          "hey_my_buddy_finish_turn")
         tampered = json.dumps({**envelope, "detail": "changed after signing"})
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             verify_tool_refusal(tampered, self.bridge, self.native, ("hey_my_buddy_finish_turn",))
         self.assertEqual(error.exception.code, "invalid-tool-refusal")
         self.assertIn("signature", str(error.exception))
@@ -204,7 +204,7 @@ class DshReceiptSeamTests(unittest.TestCase):
         answer["signature"] = sign_receipt(answer, self.bridge["key"])
         self.assertEqual(verify_inquiry_receipt(json.dumps(answer), self.bridge, "inquiry-answer")["answer"], "this")
         other = {**self.bridge, "identity": {**self.bridge["identity"], "attemptId": "other"}}
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             verify_inquiry_receipt(json.dumps(answer), other, "inquiry-answer")
         self.assertEqual(error.exception.code, "invalid-inquiry-receipt")
 

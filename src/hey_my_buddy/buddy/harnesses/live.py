@@ -17,13 +17,9 @@ from ...protocol.internal_models import (
 )
 from ...protocol.inquiry import MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS
 from .run_contract import RunIdentity
+from .session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRIES as MAX_INQUIRIES_PER_RUN, MAX_QUESTION_BYTES
 from pydantic import Field, model_validator
 
-#: The existing inquiry limits, preserved verbatim: the same byte bounds, the
-#: same per-run count and the same transport windows the current bridges enforce.
-MAX_QUESTION_BYTES = 4000
-MAX_ANSWER_BYTES = 4000
-MAX_INQUIRIES_PER_RUN = 32
 #: The suggested whole-frame bound across runs; it holds every bounded
 #: observation of the existing backends and never widens their own smaller
 #: per-bridge frame limits.

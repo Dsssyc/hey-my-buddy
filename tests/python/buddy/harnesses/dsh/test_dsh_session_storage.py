@@ -62,7 +62,6 @@ class StorageSplitTests(NativeRunCase):
         self.assertTrue((self.root / "sessions" / f"{session}.fake-session.json").is_file())
         self.assertFalse((invocation / "dsh-home").exists())
         self.assertTrue((invocation / "dsh-launch-patch.json").is_file())
-        self.assertTrue((invocation / "logs" / "frames.jsonl").is_file())
         self.assertTrue(Path(mount.bridge_config_path).is_file())
         self.assertFalse((self.root / "dsh-home").exists())
 

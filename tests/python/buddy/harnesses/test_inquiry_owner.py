@@ -565,7 +565,7 @@ class InquiryOwnerPeerTests(unittest.TestCase):
         self.assertEqual(self.observe().inquiries[0].status, "queued")
         forged = self.command("tamperedCheckpoint")
         self.assertFalse(forged["ok"])
-        self.assertEqual(forged["error"], "NativeError")
+        self.assertEqual(forged["error"], "ReceiptError")
         self.assertEqual(self.observe().inquiries[0].status, "queued")
         self.assertEqual([item["state"] for item in records(self.directory / "inquiry.jsonl")], ["queued"])
         closed = self.command("close")

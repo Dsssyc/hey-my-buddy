@@ -214,7 +214,6 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         turn = outcome.result["turn"]
         self.assertEqual(turn["outcome"]["summary"], "fixture work completed")
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
-        self.assertNotIn("flush", turn["provenance"])
         self.assertEqual(outcome.result["requested"], {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
         self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
         self.assertIsNone(outcome.result["observed"])

@@ -22,7 +22,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
 from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
-    NativeError,
+    NativeRpcError,
     ZcodeAttemptUsage,
     optional_native_call,
     quota_failure,
@@ -57,7 +57,7 @@ class ScriptedConnection:
     def call(self, method: str, params: dict):
         self.calls.append((method, dict(params)))
         if not self.answers:
-            raise NativeError("native-rpc-error", "no scripted answer")
+            raise NativeRpcError("native-rpc-error", "no scripted answer")
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
@@ -326,7 +326,7 @@ class ZcodeNativeRecordTests(unittest.TestCase):
 
     def test_a_missing_baseline_or_lost_cursor_is_unprovable_not_everything(self):
         missing = self.usage(resumed=True)
-        connection = ScriptedConnection([NativeError("timeout", "stalled optional read")])
+        connection = ScriptedConnection([NativeRpcError("timeout", "stalled optional read")])
         missing.capture_baseline(connection)
         missing.capture_final(connection)
         self.assertIsNone(missing.message_usage())
@@ -390,7 +390,7 @@ class ZcodeNativeRecordTests(unittest.TestCase):
             def call(self, _method, _params):
                 while time.monotonic() < self.deadline:
                     time.sleep(0.02)
-                raise NativeError("timeout", "stalled")
+                raise NativeRpcError("timeout", "stalled")
 
         stalled = Stalled()
         original = stalled.deadline

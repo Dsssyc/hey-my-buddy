@@ -403,7 +403,9 @@ def worker_request(control: dict, module):
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
             credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
-        schema = worker_services.outcome_schema_for(delegation_authority=delegation_authority)
+        mount = services.mount
+        schema = next(tool["inputSchema"] for tool in mount.tool_contracts
+                      if f"mcp__{mount.server_name}__{tool['name']}" == binding.completion_tool)
     else:
         format = format.for_turn(turn_input)
         prompt, schema = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema

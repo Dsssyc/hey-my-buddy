@@ -1,53 +1,28 @@
-"""Owned ACP launch with inherited native configuration and private evidence.
-
-HOME and DSH_HOME pass through native_environment unchanged. Only permission
-controls may be added; neither home can be overridden through extra_env. The
-private root binds launch and frame logs, not the user's configuration. A
-post-spawn failure retains the child handle and actual stop evidence.
-"""
+"""Launch an owned ACP process with the user's native configuration."""
 from __future__ import annotations
 
-import datetime
-import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
-from ..... import private_dirs
 from .....errors import BoardError
+from .....protocol.owned_process import owned_popen
 from ... import discovery
 from ...base import ProcessHandle
-from .....protocol.owned_process import owned_popen
-from .connection import group_observation
-
-#: Extra controls may never replace the inherited native homes.
-RESERVED_ENV_KEYS = ("HOME", "DSH_HOME")
-
-
-def real_user_home() -> Path:
-    """The operating-system home of the current user."""
-    if os.name == "nt":
-        return Path.home()
-    import pwd
-
-    return Path(pwd.getpwuid(os.getuid()).pw_dir)
-
-
-def default_dsh_home() -> Path:
-    """The user's default DSH home; a launch may never write there."""
-    return real_user_home() / ".dsh"
+from ...native_support import halt_owned_group
+from .connection import stop_evidence
 
 
 class LaunchRejected(BoardError):
-    """A pre-spawn validation refused this launch; no process was started."""
+    """A launch was refused before any process was started."""
 
     def __init__(self, message: str, **details):
         super().__init__("ACP_LAUNCH_REJECTED", message, **details)
 
 
 class LaunchOwnershipError(BoardError):
-    """A post-spawn step failed; the child's ownership and stop evidence travel
-    with this error so the caller can adopt the process or keep waiting."""
+    """A failure after spawn retains the child and its observed stop evidence."""
 
     def __init__(self, message: str, *, process, handle, evidence: dict):
         super().__init__("ACP_LAUNCH_OWNERSHIP", message)
@@ -56,74 +31,9 @@ class LaunchOwnershipError(BoardError):
         self.evidence = evidence
 
 
-def _violations(directory: Path, root: Path, role: str) -> list[str]:
-    """Every reason ``directory`` is not an acceptable private ``role`` directory."""
-    problems: list[str] = []
-    import stat
-
-    try:
-        info = os.lstat(directory)
-    except OSError:
-        return [f"{role} does not exist: {directory}"]
-    if stat.S_ISLNK(info.st_mode):
-        problems.append(f"{role} is a symlink: {directory}")
-    elif not stat.S_ISDIR(info.st_mode):
-        problems.append(f"{role} is not a directory: {directory}")
-    absolute = Path(os.path.abspath(directory))
-    try:
-        resolved = Path(os.path.realpath(absolute))
-    except (OSError, RuntimeError):
-        return problems + [f"{role} cannot be resolved: {directory}"]
-    if str(absolute) != str(resolved):
-        problems.append(f"{role} resolves through a symlink: {directory}")
-    real_root = Path(os.path.realpath(root))
-    if resolved != real_root and real_root not in resolved.parents:
-        problems.append(f"{role} is outside the private root: {directory}")
-    daily = default_dsh_home()
-    try:
-        daily_resolved = daily.resolve()
-    except (OSError, RuntimeError):
-        daily_resolved = daily
-    if resolved == daily_resolved or daily_resolved in resolved.parents or resolved in daily_resolved.parents:
-        problems.append(f"{role} touches the user's default DSH home: {directory}")
-    return problems
-
-
-def ensure_private_log_path(path: Path, root: Path) -> Path:
-    """Bind one log path to this run's private root with the project's guards.
-
-    Every check - the root itself, absolute position, default-root and link
-    components, containment - runs before anything is created or chmod'd, so a
-    rejected path never touches the outside object. Only after validation does
-    the parent directory get created (0700), and only inside the validated
-    private root.
-    """
-    path = Path(path)
-    root_problems = _violations(Path(root), Path(root), "private root")
-    if root_problems:
-        raise LaunchRejected("; ".join(root_problems), root=str(root))
-    linked = private_dirs.linked_component(path)
-    if linked is not None:
-        raise LaunchRejected("log path contains a linked component", path=str(path), linked=str(linked))
-    resolved_root = Path(os.path.realpath(root))
-    parent = Path(os.path.abspath(path.parent))
-    try:
-        resolved_parent = Path(os.path.realpath(parent))
-    except (OSError, RuntimeError):
-        raise LaunchRejected("log path cannot be resolved", path=str(path)) from None
-    if resolved_parent != resolved_root and resolved_root not in resolved_parent.parents:
-        raise LaunchRejected("log path is outside the private root", path=str(path))
-    private_dirs.ensure_private_dir(parent)
-    return path
-
-
 def child_environment(extra_env: dict | None = None, *, source: dict | None = None,
                       launch_environment: dict | None = None) -> dict:
-    """Inherit native configuration and add the explicit permission controls."""
-    if extra_env:
-        overlap = sorted(set(extra_env) & set(RESERVED_ENV_KEYS))
-        if overlap:
-            raise LaunchRejected("extra environment may not override inherited home keys", keys=overlap)
+    """Inherit native configuration and add the caller's permission controls."""
     environment = discovery.native_environment(dict(os.environ if source is None else source))
     if launch_environment:
         environment.update(launch_environment)
@@ -132,114 +42,45 @@ def child_environment(extra_env: dict | None = None, *, source: dict | None = No
     return environment
 
 
-def record_launch(log_path: Path, argv: list[str], environment: dict, *, spawn_cwd: Path | None, rejected: list[str] | None,
-                  pid: int | None = None) -> None:
-    """Append one launch record through the guarded private-file open; environment
-    values are never logged."""
-    entry = {
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds"),
-        "argv": argv,
-        "envKeys": sorted(environment.keys()),
-        "spawnCwd": str(spawn_cwd) if spawn_cwd is not None else None,
-        "rejected": rejected,
-        "pid": pid,
-    }
-    log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = private_dirs.open_regular_fd(
-        Path(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+def stop_after_spawn_failure(process, handle, error: BaseException) -> LaunchOwnershipError:
+    """Use the shared owned-group stop, then record the actual observation."""
     try:
-        with os.fdopen(fd, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        raise
-
-
-def finalize_after_spawn_failure(process, handle, *, settle_seconds: float = 5.0) -> dict:
-    """Hold and close down a child whose launch bookkeeping failed.
-
-    The child already exists, so ownership is never dropped and this function
-    never raises: every step is guarded, each failure lands in the evidence as
-    a conservative error, and unknown stays unknown - never stopped. The
-    returned evidence states honestly whether the stop is confirmed.
-    """
-    evidence: dict = {"phase": "post-spawn-launch-failure", "finalizeErrors": []}
-
-    def guarded(step, note):
-        try:
-            step()
-        except Exception as error:  # noqa: BLE001 - finalize must never raise past the child
-            evidence["finalizeErrors"].append(f"{note}: {type(error).__name__}: {error}")
-
-    def close_stdin():
-        stdin = process.stdin
-        if stdin is not None and not stdin.closed:
-            stdin.close()
-
-    def await_exit(seconds):
-        if process.poll() is None:
-            try:
-                process.wait(timeout=seconds)
-            except subprocess.TimeoutExpired:
-                evidence["exitWaitTimeout"] = True
-
-    def observe_group():
-        evidence["groupObserved"] = group_observation(handle)
-        evidence["leaderExitCode"] = process.poll()
-
-    guarded(close_stdin, "stdin close")
-    guarded(lambda: await_exit(settle_seconds), "exit wait")
-    guarded(observe_group, "first observation")
-    if evidence.get("leaderExitCode") is None or evidence.get("groupObserved") != "gone":
-        guarded(lambda: handle.terminate(grace_seconds=2.0), "terminate")
-        guarded(lambda: await_exit(5), "terminate wait")
-        guarded(observe_group, "final observation")
-    evidence["shutdownConfirmed"] = bool(evidence.get("leaderExitCode") is not None
-                                         and evidence.get("groupObserved") == "gone")
-    return evidence
+        halt_owned_group(process, handle, time.monotonic() + 5.0)
+    except BaseException as stop_error:
+        error.add_note(f"owned-group stop raised {type(stop_error).__name__}: {stop_error}")
+    try:
+        evidence = stop_evidence(handle)
+    except BaseException as observation_error:
+        error.add_note(f"stop observation raised {type(observation_error).__name__}: {observation_error}")
+        evidence = {"leaderExited": process.poll() is not None,
+                    "leaderExitCode": process.poll(), "groupObserved": "unknown",
+                    "shutdownConfirmed": False}
+    return LaunchOwnershipError(f"ACP startup failed after spawn: {error}",
+                                process=process, handle=handle, evidence=evidence)
 
 
 def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None,
-           cwd: Path | None = None, launch_log: Path | None = None,
-           source_environment: dict | None = None, launch_environment: dict | None = None,
+           cwd: Path | None = None, source_environment: dict | None = None,
+           launch_environment: dict | None = None,
            merge_stderr: bool = False) -> tuple[subprocess.Popen, ProcessHandle]:
-    """Bind private evidence, then spawn with the inherited native homes.
-
-    A post-spawn failure carries ownership and stop evidence. The private root
-    never redirects configuration; unknown process state never means stopped.
-    """
+    """Spawn in the caller's private directory and retain ownership on failure."""
     if not argv:
         raise LaunchRejected("launch requires a non-empty argv")
     if private_root is None:
         raise LaunchRejected("launch requires an explicit private root for this run")
     root = Path(private_root)
-    root_problems = _violations(root, root, "private root")
-    if root_problems:
-        # The root itself is untrustworthy; nothing is created or written there.
-        raise LaunchRejected("; ".join(root_problems), argv=argv)
     spawn_cwd = Path(cwd) if cwd is not None else root
-    log_path = ensure_private_log_path(
-        Path(launch_log) if launch_log is not None else root / "logs" / "launches.jsonl", root)
-    environment = child_environment(extra_env, source=source_environment, launch_environment=launch_environment)
+    environment = child_environment(extra_env, source=source_environment,
+                                    launch_environment=launch_environment)
+    process = owned_popen([str(part) for part in argv], env=environment, cwd=str(spawn_cwd),
+                          stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
+                          start_new_session=True, close_fds=True)
     try:
-        process = owned_popen([str(part) for part in argv], env=environment, cwd=str(spawn_cwd),
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
-                              start_new_session=True, close_fds=True)
-    except OSError as error:
-        record_launch(log_path, argv, environment,
-                      spawn_cwd=spawn_cwd, rejected=[f"spawn failed: {error}"])
-        raise
-    try:
-        record_launch(log_path, argv, environment,
-                      spawn_cwd=spawn_cwd, rejected=None, pid=process.pid)
         handle = ProcessHandle(process, own_group=True, log_paths={})
     except BaseException as error:
-        handle = ProcessHandle(process, own_group=True, log_paths={})
-        evidence = finalize_after_spawn_failure(process, handle)
-        raise LaunchOwnershipError(f"launch bookkeeping failed after spawn: {error}",
-                                   process=process, handle=handle, evidence=evidence) from error
+        handle = getattr(error, "execution_handle", None)
+        if handle is None:
+            handle = ProcessHandle.adopt_unregistered(process, own_group=True, log_paths={})
+        raise stop_after_spawn_failure(process, handle, error) from error
     return process, handle

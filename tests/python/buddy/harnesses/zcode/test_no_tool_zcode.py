@@ -86,24 +86,24 @@ class NoToolPolicyTests(unittest.TestCase):
             "sessionId": "root", "turnId": "turn", "kind": "turn-completed", "sequenceNumber": 1}}, 1)
         self.assertFalse(evidence.completed)
         self.assertFalse(evidence.settled)
+        evidence.observe(self.event("turn.started", {"inputId": "input"}, turn="turn", seq=1), 2)
         with self.assertRaises(NativeError) as caught:
-            evidence.observe(self.event("turn.started", {"inputId": "input"}, turn="foreign", seq=1), 2)
+            evidence.observe(self.event("turn.completed", {"inputId": "input"}, turn="foreign", seq=2), 3)
         self.assertEqual(caught.exception.code, "wrong-native-turn")
 
-    def test_unknown_metadata_continues_with_fact_but_reordered_metadata_is_refused(self):
+    def test_metadata_does_not_decide_the_no_tool_turn(self):
         unknown = []
         evidence = NoToolProtocol("root", "input", on_unknown=unknown.append)
         evidence.observe({"method": "v4/telemetry/event", "params": {
             "sessionId": "root", "turnId": "turn", "kind": "compaction.terminal", "eventSeq": 1}}, 1)
-        self.assertEqual(unknown, ["metadata-kind-unrecognized"])
+        self.assertEqual(unknown, [])
         self.assertFalse(evidence.completed)
         for kinds in (("usage.delta", "usage.delta"),):
             evidence = NoToolProtocol("root", "input")
-            with self.assertRaises(NativeError) as caught:
-                for kind in kinds:
-                    evidence.observe({"method": "v4/telemetry/event", "params": {
-                        "sessionId": "root", "turnId": "turn", "kind": kind, "eventSeq": 1}}, 1)
-            self.assertEqual(caught.exception.code, "invalid-protocol")
+            for kind in kinds:
+                evidence.observe({"method": "v4/telemetry/event", "params": {
+                    "sessionId": "root", "turnId": "turn", "kind": kind, "eventSeq": 1}}, 1)
+            self.assertFalse(evidence.completed)
 
 
 class NoToolFakeProtocolTests(FakeAppServerTests):

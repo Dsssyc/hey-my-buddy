@@ -13,9 +13,7 @@ import time
 import unittest
 
 from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
-from hey_my_buddy.buddy.harnesses.dsh.acp.client import PermissionPolicy
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnectionClosed, AcpRequestError
-from hey_my_buddy.errors import BoardError
 
 from .support import AcpTestCase, MCP_STUB
 
@@ -29,18 +27,6 @@ class NewSessionTest(AcpTestCase):
         self.assertIsNone(session["modes"])
         self.assertEqual("model", session["configOptions"][0]["id"])
         client.close_session(session["sessionId"], timeout=15.0)
-
-    def test_stdio_env_must_be_an_array_of_name_value_objects(self):
-        with self.assertRaises(BoardError):
-            AcpClient._checked_mcp_servers(
-                [{"name": "broken", "command": "/bin/true", "env": {"A": "B"}}])
-        with self.assertRaises(BoardError):
-            AcpClient._checked_mcp_servers(
-                [{"name": "broken", "command": "/bin/true", "env": ["A=B"]}])
-        servers = AcpClient._checked_mcp_servers(
-            [{"name": "ok", "command": "/bin/true", "args": [], "env": []}])
-        self.assertEqual([], servers[0]["env"])
-        self.assertEqual([], AcpClient._checked_mcp_servers(None))
 
     def test_declared_mcp_server_is_mounted_over_the_wire(self):
         client = self.start_client()
@@ -90,7 +76,7 @@ class ListResumeCloseTest(AcpTestCase):
         first = client.new_session(str(self.root), timeout=15.0)
         second = client.new_session(str(self.root / "work"), timeout=15.0)
         client.set_config_option(first["sessionId"], "reasoning_effort", "off", timeout=15.0)
-        listed = client.list_sessions(timeout=15.0)
+        listed = client.connection.request("session/list", {}, 15.0)
         self.assertEqual({first["sessionId"], second["sessionId"]},
                          {entry["sessionId"] for entry in listed["sessions"]})
         resumed = client.resume_session(first["sessionId"], str(self.root), timeout=15.0)
@@ -100,7 +86,7 @@ class ListResumeCloseTest(AcpTestCase):
             client.resume_session("no-such-session", str(self.root), timeout=15.0)
         client.close_session(first["sessionId"], timeout=15.0)
         client.close_session(second["sessionId"], timeout=15.0)
-        listed = client.list_sessions(timeout=15.0)
+        listed = client.connection.request("session/list", {}, 15.0)
         self.assertEqual([], listed["sessions"])
 
 
@@ -130,32 +116,17 @@ class CancelTest(AcpTestCase):
         client.close_session(session["sessionId"], timeout=15.0)
 
 
-class ExactTitleTest(AcpTestCase):
-    def test_wire_allow_requires_the_exact_listed_title(self):
-        client = self.start_client("--allowed-title", "listed-title-extra",
-                                   permission_policy=PermissionPolicy(allowed_titles=("listed-title",)))
-        client.initialize(timeout=15.0)
-        session = client.new_session(str(self.root), timeout=15.0)
-        stop = client.prompt(session["sessionId"], "work", timeout=30.0)
-        self.assertEqual("end_turn", stop["stopReason"])
-        decisions = client.facts()["permissionDecisions"]
-        self.assertEqual("cancelled", decisions[1]["outcome"]["outcome"],
-                         "a title that merely starts with a listed one is not listed")
-        self.assertIn("not on the explicit allow list", decisions[1]["basis"])
-
-
 class StopStateTest(AcpTestCase):
     def test_leader_exits_while_its_group_survives(self):
         client = self.start_client("--orphan-on", "session/list")
         client.initialize(timeout=15.0)
         with self.assertRaises(AcpConnectionClosed):
-            client.list_sessions(timeout=15.0)
+            client.connection.request("session/list", {}, 15.0)
         evidence = client.shutdown(drain_seconds=10.0, settle_seconds=2.0)
         self.assertTrue(evidence["leaderExited"])
         self.assertEqual(0, evidence["leaderExitCode"])
         self.assertEqual("alive", evidence["groupObserved"],
                          "a surviving group member keeps the group alive")
-        self.assertTrue(evidence["groupAliveConservative"])
         self.assertFalse(evidence["shutdownConfirmed"])
         client.handle.terminate(grace_seconds=3.0)
         self.wait_for(lambda: not client.handle.group_alive())
@@ -180,7 +151,7 @@ class StopStateTest(AcpTestCase):
         self.assertTrue(evidence["shutdownConfirmed"])
         facts = client.facts()
         self.assertEqual(0, facts["protocolFaultCount"])
-        self.assertEqual(0, facts["unmatchedResponseCount"])
+        self.assertEqual(0, facts["unclaimedReplyCount"])
         self.assertTrue(facts["eof"])
 
     def test_unconfirmed_stop_fails_the_test_with_the_observed_evidence(self):

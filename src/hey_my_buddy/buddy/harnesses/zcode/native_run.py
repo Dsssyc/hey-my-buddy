@@ -44,6 +44,7 @@ from ....protocol.reasons import reason as make_reason
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
+from ...roles.attention import AttentionRecorder
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
@@ -92,10 +93,13 @@ from ..run_contract import (
 )
 from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
+from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher
 from .protocol import (
     ActivityProjection,
+    NATIVE_EVENT_TYPES,
+    NATIVE_NOTIFICATION_METHODS,
     NativeConnection,
     NativeError,
     RootTurnEvidence,
@@ -127,7 +131,7 @@ def selected(snapshot: dict) -> dict:
     result = {}
     for name, item in (("provider", value.get("providerId")), ("model", value.get("modelId")),
                        ("effort", options.get("reasoningLevel"))):
-        result[name] = item if isinstance(item, str) and item.strip() and len(item.encode()) <= 128 else None
+        result[name] = item if isinstance(item, str) and item.strip() else None
     return result
 
 
@@ -150,7 +154,7 @@ def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> 
     actual = setting.get("current") if isinstance(setting, dict) else None
     # Native mode.current reports the underlying permission mode. plan is a
     # separate tool restriction and is never confirmed by that readback.
-    if mode == "plan" or not isinstance(actual, str) or not actual.strip() or len(actual.encode()) > 128:
+    if mode == "plan" or not isinstance(actual, str) or not actual.strip():
         connection.on_unknown("permission-mode-readback-unconfirmed")
     elif actual != mode:
         raise NativeError("configuration-mismatch", "native ZCode did not retain the requested permission mode")
@@ -187,7 +191,7 @@ def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, 
     settings = snapshot.get("settings")
     thought = settings.get("thoughtLevel") if isinstance(settings, dict) else None
     thought = thought.get("current") if isinstance(thought, dict) else None
-    thought = thought if isinstance(thought, str) and thought.strip() and len(thought.encode()) <= 128 else None
+    thought = thought if isinstance(thought, str) and thought.strip() else None
     if (any(value is not None and value != expected[key] for key, value in actual.items())
             or thought is not None and thought != effort):
         raise NativeError("buddy-mismatch", "native ZCode did not retain the requested model and reasoning settings")
@@ -324,12 +328,12 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         raise BoardError("INVALID_ARGUMENT",
                          "the completion tool must be one of this run's mounted session tools")
     finish_tool = qualified[completion_tool]
-    inquiry_names = tuple(qualified[name] for name in inquiry_tools if name in qualified) \
+    inquiry_names = tuple(qualified[name] for name in inquiry_tools) \
         if inquiry is not None else ()
     has_inquiry = inquiry is not None
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
               "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
-    if has_inquiry and isinstance(inquiry.get("resultsPath"), str):
+    if has_inquiry:
         # The MCP tools only read this journal; every record in it is written
         # by the driver after root-turn evidence verified.
         bridge["inquiryJournalPath"] = inquiry["resultsPath"]
@@ -420,7 +424,7 @@ def validate_turn_provenance(record: dict) -> str | None:
     expected = {"harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed",
                 "rootSessionMatched": True, "receiptVerified": True, "toolResultSuccess": True,
                 "toolResultTruncated": False, "turnResultType": "success", "settlement": "session-closed"}
-    if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()) or "flush" in p:
+    if not isinstance(p, dict) or any(type(p.get(k)) is not type(v) or p.get(k) != v for k, v in expected.items()):
         return "the ZCode turn lacks its native tool and session-close evidence"
     if p.get("nativeSessionId") != record.get("sessionId"):
         return "the ZCode native root session does not match the turn record"
@@ -472,24 +476,15 @@ class _RunFacts:
 
 
 #: Native notification methods the protocol knows at every phase.
-_KNOWN_METHODS = frozenset({
-    "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
-    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event",
-})
 #: ``session/event`` kinds that are known before the root input is admitted.
-_PRE_ADMITTED_KINDS = frozenset({
+_PRE_ADMITTED_KINDS = NATIVE_EVENT_TYPES & {
     "session.created", "session.resumed", "session.updated", "session.titleUpdated", "session.closed",
-})
+}
 #: ``session/event`` kinds that are known inside an admitted turn: the model
 #: stream families, the turn lifecycle and the tool/permission envelopes. The
 #: kinds are facts of the native protocol; whether one is allowed is judged
 #: from the retained facts, never here.
-_ADMITTED_KINDS = _PRE_ADMITTED_KINDS | {
-    "turn.started", "turn.completed", "turn.failed",
-    "message.upserted", "message.removed", "part.started", "part.delta",
-    "part.upserted", "part.removed", "model.streaming",
-    "tool.updated", "permission.requested", "userInput.requested",
-}
+_ADMITTED_KINDS = NATIVE_EVENT_TYPES
 
 
 def _carries_tool_marker(value) -> bool:
@@ -526,7 +521,7 @@ class _Classifier:
             facts.markers += 1
             return True
         method = message.get("method")
-        if not isinstance(method, str) or method not in _KNOWN_METHODS:
+        if not isinstance(method, str) or method not in NATIVE_NOTIFICATION_METHODS:
             facts.note_unknown(method if isinstance(method, str) else "unknown-method")
             return True
         if method == "session/event":
@@ -542,18 +537,15 @@ class _Classifier:
 class NoToolProtocol:
     """The no-tool session's protocol checks, without the policy that moved to the role.
 
-    This keeps exactly the driver-owned guarantees of the old no-tool
-    observer: lifecycle metadata order and turn binding, canonical event
-    order, foreign-session refusal, the admitted turn's identity, a bounded
+    This keeps the driver-owned guarantees of the no-tool
+    observer: canonical event order, foreign-session refusal, the admitted turn's identity, a bounded
     successful completion and a settlement that follows it. What used to raise
     for tool markers and unknown events is now a retained fact for the role
     observer; the raw answer and the canonical event count are recorded facts
     of the run.
     """
 
-    SESSION_EVENTS = {"session.created", "session.resumed", "session.updated", "session.titleUpdated", "session.closed"}
-    OPERATION_EVENTS = {"turn-started", "turn-completed", "turn-failed", "session-closed"}
-    TELEMETRY_EVENTS = {"turn.started", "model.request.status", "stream.chunk", "usage.delta", "turn.terminal"}
+    SESSION_EVENTS = _PRE_ADMITTED_KINDS
 
     def __init__(self, session_id: str, input_id: str, tools: ZcodeToolFacts | None = None, *,
                  on_unknown: Callable[[str], None] = lambda _label: None):
@@ -566,44 +558,17 @@ class NoToolProtocol:
         self.settled = False
         self.raw_answer = None
         self.events = 0
-        self.metadata_sequences = {}
-        self.metadata_turn = None
-
-    def observe_metadata(self, method: str, params: dict) -> None:
-        """Native lifecycle projections precede canonical events; they prove no answer."""
-        operation = method == "computer-use/operation-event"
-        kinds = self.OPERATION_EVENTS if operation else self.TELEMETRY_EVENTS
-        sequence = params.get("sequenceNumber" if operation else "eventSeq")
-        if (params.get("sessionId") != self.session_id
-                or type(sequence) is not int or sequence <= self.metadata_sequences.get(method, -1)):
-            raise NativeError("invalid-protocol", "invalid no-tool native lifecycle metadata")
-        self.metadata_sequences[method] = sequence
-        if params.get("kind") not in kinds:
-            self.on_unknown("metadata-kind-unrecognized")
-            if params.get("turnId") is None:
-                return
-        if params.get("kind") == "session-closed":
-            return
-        turn = params.get("turnId")
-        if (not isinstance(turn, str) or not turn
-                or self.turn_id is not None and turn != self.turn_id
-                or self.metadata_turn is not None and turn != self.metadata_turn):
-            raise NativeError("wrong-native-turn", "no-tool lifecycle metadata differs from the admitted turn")
-        self.metadata_turn = turn
-        # Lifecycle projections precede the canonical turn.failed payload.
-        # Wait for that event to retain the same structured failure as the tool carrier.
 
     def observe(self, message: dict, _ordinal: int) -> None:
         method, params = message.get("method"), message.get("params")
+        if method in ("computer-use/operation-event", "v4/telemetry/event"):
+            return
         if not isinstance(params, dict):
             self.on_unknown("notification-parameters-unrecognized")
-            if method in ("session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event"):
+            if method in ("session/event", "state.updated"):
                 raise NativeError("invalid-protocol", "native lifecycle notification has no identity parameters")
             return
         if method in ('startup/storageState', 'process/mcpTelemetry', 'process/mcpResourceSamples', 'process/resourceSample'):
-            return
-        if method in ("computer-use/operation-event", "v4/telemetry/event"):
-            self.observe_metadata(method, params)
             return
         if method == "session/event":
             kind = params.get("type")
@@ -622,8 +587,7 @@ class NoToolProtocol:
                 return
             if kind == "turn.started":
                 if (self.turn_id is not None or data.get("inputId") != self.input_id
-                        or not isinstance(params.get("turnId"), str)
-                        or self.metadata_turn is not None and params.get("turnId") != self.metadata_turn):
+                        or not isinstance(params.get("turnId"), str)):
                     raise NativeError("wrong-native-turn", "no-tool turn identity differs")
                 self.turn_id = params["turnId"]
                 if self.tools is not None:
@@ -740,7 +704,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                         "ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0"})
     version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
-    fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     process = None
     try:
         try:
@@ -852,7 +816,7 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
                 continue
             if "id" in message:
                 raise NativeError("invalid-protocol", "unclaimed native response after settlement")
-        except NativeError as error:
+        except (NativeError, ReceiptError) as error:
             failed(error)
         except (TypeError, ValueError, KeyError, AttributeError, RecursionError, BoardError):
             tools.evidence.observe_incomplete("zcode", {})
@@ -1003,34 +967,6 @@ def _close_root_session(connection: NativeConnection, session_id: str,
             tools.close_pending = False
 
 
-def _check_service_descriptions(request: RunRequest, mount: SessionServiceMount) -> tuple[str, dict]:
-    """Verify the mount is exactly what this run describes, and name its parts.
-
-    Three sets must be one set: the qualified tool names the request describes,
-    the tools the mount actually carries (the same list the MCP carrier
-    publishes), and — through the mount's contracts — the verification set the
-    receipt checks use. The requested output schema must be the completion
-    tool's own contract, so a verified receipt can only ever stand for the
-    schema the request asked for. Returns the completion tool's bare name and
-    contract.
-    """
-    described = {name for service in request.session_services for name in service.tool_names}
-    mounted = {f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools}
-    if described and described != mounted:
-        raise BoardError("INVALID_ARGUMENT",
-                         "the described session services differ from this run's mounted binding")
-    completion = next((tool for tool in mount.tool_contracts
-                       if f"mcp__{mount.server_name}__{tool['name']}" == mount.finish_tool), None)
-    if completion is None:
-        raise BoardError("INVALID_ARGUMENT",
-                         "the mounted binding carries no contract for its completion tool")
-    if request.output_schema.value != completion["inputSchema"]:
-        raise BoardError("INVALID_ARGUMENT",
-                         "the requested output schema differs from the mounted completion contract; "
-                         "this run module takes its final value through that contract")
-    return completion["name"], completion
-
-
 # -- the one run -----------------------------------------------------------------
 
 
@@ -1056,6 +992,7 @@ class _CarrierOutcome:
     attempt_usage: ZcodeAttemptUsage | None = None
     usage_rounds: list[ZcodeAttemptUsage] = dataclasses.field(default_factory=list)
     inquiry_bridge: InquiryBridge | None = None
+    attention_recorder: AttentionRecorder | None = None
     binding_path: Path | None = None
     binding_save_failed: bool = False
     record: dict | None = None
@@ -1071,10 +1008,6 @@ def _session_mode(request: RunRequest) -> str:
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native ZCode execution: the single native path of this harness."""
-    if request.harness != "zcode":
-        raise BoardError("INVALID_ARGUMENT", "this run module drives zcode", harness=request.harness)
-    if services is not None and not isinstance(services, SessionServices):
-        raise BoardError("INVALID_ARGUMENT", "zcode accepts its own narrow session service binding")
     no_tool = request.permission == "none"
     # Permission decides the native tool settings; the value carrier
     # follows this run's service binding alone: a bound completion service
@@ -1082,12 +1015,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     # takes it from the final message — under any scope, with the role
     # observer deciding what tool and unknown facts mean for it.
     completion_carrier = services is not None
-    if services is not None and no_tool:
-        raise BoardError("INVALID_ARGUMENT",
-                         "a no-tool zcode run mounts no session service; the scope and the value carrier are separate choices")
-    if services is None and request.continuation is not None:
-        raise BoardError("INVALID_ARGUMENT",
-                         "a final-message zcode run opens fresh root sessions and continues no native one")
     return _run(request, services=services, no_tool=no_tool,
                 completion_carrier=completion_carrier, observer=observer, cancelled=cancelled)
 
@@ -1125,6 +1052,9 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         session = (session_record.project(ZcodeSessionProjector, session_record)
                    if session_record is not None else None)
         outcome = _CarrierOutcome()
+        outcome.attention_recorder = AttentionRecorder(
+            Path(services.mount.bridge["attentionPath"]) if services is not None else None,
+            identity=_bridge_identity(request))
         spawn: _Spawn | None = None
         owned_spawn: list = []
         drained: bool | None = None
@@ -1133,10 +1063,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             facts_snapshot = facts.mapping(tool_calls=tools.tool_calls if tools is not None else 0,
                                            settled=settled, raw_answer=raw)
             feedback = observer(facts_snapshot)
-            if not isinstance(feedback, RunFeedback):
-                raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
-            if feedback.action == "correct" and not settled:
-                raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
             if feedback.action == "stop":
                 raise ObserverInterrupt()
             return feedback
@@ -1150,8 +1076,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             # waiting — so a stop takes effect at once without bypassing the
             # recorder or the refusal I/O.
             facts.denied.append(record_item)
-            if outcome.inquiry_bridge is not None:
-                outcome.inquiry_bridge.note_attention(record_item)
+            outcome.attention_recorder.record(record_item)
             feedback_due[0] = True
 
         def dispatch_feedback() -> None:
@@ -1192,7 +1117,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             state.reason = "observer-interrupt"
             state.observer_stopped = True
             outcome.record = None
-        except (NativeError, VersionShutdownError) as error:
+        except (NativeError, ReceiptError, VersionShutdownError) as error:
             state.status = "cancelled" if error.code == "cancelled" else "error"
             launch_reason = getattr(error, "reason", None)
             state.reason = launch_reason["code"] if launch_reason is not None else error.code
@@ -1213,9 +1138,9 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                 if classified is not None:
                     state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
                                            "observedAt": utc_now()}
-            # A failed turn still retains its native observations: the bounded read is
-            # optional, so it can never turn this failure into another one.
-            if outcome.attempt_usage is not None and spawn is not None:
+            # Retain optional usage after a native failure while the connection
+            # still accepts RPCs; errors from observers continue to propagate.
+            if outcome.attempt_usage is not None and spawn is not None and error.code not in ("cancelled", "timeout", "native-disconnected"):
                 outcome.attempt_usage.capture_final(spawn.connection)
             outcome.record = None
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -1237,7 +1162,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             incomplete = (drained is not True or state.drain_error is not None
                           or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
                           or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
-                                                            or outcome.attempt_usage.message_truncated
                                                             or outcome.attempt_usage.delta_conflict)))
             state.quota_failure.update(
                 resetsAt=None,
@@ -1371,7 +1295,6 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     """The micro task completion-tool turn: the same lifecycle sites, with a
     mounted session service, a continuation and live observers."""
     mount = services.mount
-    _check_service_descriptions(request, mount)
     mode, previous = _continuation_of(request)
     create_params = {"mode": _session_mode(request), "mcpServers": list(mount.mcp_servers)}
     state.create_params = create_params
@@ -1400,17 +1323,15 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def publish_activity() -> None:
-        try:
-            publisher.publish(outcome.projection.payload())
-        except BoardError:
-            return  # optional metadata cannot fail the native turn
+        publisher.publish(outcome.projection.payload())
 
     if services.inquiry is not None:
         outcome.inquiry_bridge = make_inquiry_bridge(
                                                      identity=_bridge_identity(request),
-                                                     journal_path=str(services.inquiry.get("resultsPath") or ""),
+                                                     journal_path=services.inquiry["resultsPath"],
                                                      attention_path=mount.bridge.get("attentionPath"),
                                                      live=services.live)
+        outcome.inquiry_bridge.attention = outcome.attention_recorder.requests
         outcome.inquiry_bridge.start()
         state.inquiry = outcome.inquiry_bridge.report()
 
@@ -1460,9 +1381,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         connection.observe = observe
         outcome.projection.phase = "waiting-model"
         publish_activity()
-        # The pre-model cursor is a bounded, optional read: it can never
-        # fail or delay the turn, and without it no message is ever
-        # attributed.
+        # Read the pre-model cursor through every page. Without a complete
+        # baseline, no message is attributed to this turn.
         outcome.attempt_usage.capture_baseline(connection)
 
     def note_configured(opened_session: str, resolved_spec: dict) -> None:
@@ -1482,8 +1402,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
         classifier=classifier, state=state, session=session, on_configured=note_configured,
         before_send=bind_worker_session, after_admit=after_admit)
-    # The settlement read is also bounded and optional; the root turn is
-    # already settled, so nothing here may change its result.
+    # The settlement read is paged; RPC rejection or timeout leaves usage
+    # unknown, while errors from native observers continue to propagate.
     outcome.attempt_usage.capture_final(connection)
     if outcome.inquiry_bridge is not None:
         # Stop accepting observations the instant the root turn settled:
@@ -1531,6 +1451,9 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
         outcome.inquiry_bridge.close()
         state.inquiry = outcome.inquiry_bridge.report()
         state.attention = outcome.inquiry_bridge.attention_report()
+    elif outcome.attention_recorder is not None and outcome.attention_recorder.requests:
+        requests = outcome.attention_recorder.requests
+        state.attention = {"requests": len(requests), "last": requests[-1]}
     drained: bool | None = None
     if spawn is not None:
         state.runtime_preferences = spawn.connection.runtime_preferences_facts

@@ -61,10 +61,6 @@ class AcpTestCase(unittest.TestCase):
     def start_client(self, *extra: str, **kwargs):
         """Start the client against the fake agent with this test's private root."""
         from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
-        from hey_my_buddy.buddy.harnesses.dsh.acp.connection import FrameMetaLog
-
-        if "frame_log" not in kwargs:
-            kwargs["frame_log"] = FrameMetaLog(self.logs / "frames.jsonl")
         client = AcpClient.start(self.agent_argv(*extra), private_root=self.root, **kwargs)
         self.addCleanup(self._shutdown_client, client)
         return client

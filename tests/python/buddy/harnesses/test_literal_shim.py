@@ -167,7 +167,7 @@ class LiteralShimTests(unittest.TestCase):
         root.mkdir()
         with runtime_selection.bound([self.record()]),\
              mock.patch.object(native_run.AcpClient, 'start') as start:
-            native_run._launch_agent(cwd=str(root), launch_root=root, invocation_root=root,
+            native_run._launch_agent(cwd=str(root), invocation_root=root,
                                      sessions_root=root / 'sessions', scope_rows=[],
                                      extra_env={'DSH_PERMISSION_MODE': 'read-only'}, permission_policy=None)
         self.assertEqual(start.call_args.args[0][:3], self.record()['command'])

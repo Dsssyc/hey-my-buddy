@@ -133,7 +133,7 @@ class WindowsCommandLineTests(unittest.TestCase):
             with mock.patch.object(dsh_run, "launch_for", return_value=(["dsh.exe"], {})), \
                  mock.patch.object(dsh_run.AcpClient, "start", side_effect=overflow):
                 with self.assertRaises(DshNativeError) as caught:
-                    dsh_run._launch_agent(cwd=directory, launch_root=root, invocation_root=root,
+                    dsh_run._launch_agent(cwd=directory, invocation_root=root,
                                           sessions_root=root / "sessions", scope_rows=[], extra_env={},
                                           permission_policy=None)
         self.assertEqual(caught.exception.code, overflow.code)

@@ -240,19 +240,14 @@ class ResumeTurnTests(NativeResumeCase):
         request2, _bound2, _mount2, result2 = self.resumed_turn(previous)
         self.assertEqual(result2.end.status, "ok", result2.end.message)
         invocation = Path(request2.private_state.invocation_root)
-        # The launch bookkeeping — the launch log, the frame log and
-        # the patch — lives inside this invocation's private root, while the
+        # The launch patch lives inside this invocation's private root, while the
         # shared sessions directory the rollout was pinned to lives under the
         # task's native root and the record is really there.
-        launches = [json.loads(line) for line
-                    in (invocation / "logs" / "launches.jsonl").read_text(encoding="utf-8").splitlines() if line]
-        record2 = launches[-1]
         self.assertFalse((invocation / "dsh-home").exists())
         inherited = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertEqual(inherited["home"], str(self.home))
         self.assertEqual(inherited["dshHome"], os.environ["DSH_HOME"])
-        self.assertTrue((invocation / "logs" / "frames.jsonl").is_file())
-        patch_path = Path(record2["argv"][record2["argv"].index("--patch") + 1])
+        patch_path = invocation / "dsh-launch-patch.json"
         self.assertTrue(str(patch_path).startswith(str(invocation)))
         rows = json.loads(patch_path.read_text(encoding="utf-8"))
         self.assertEqual(rows[0]["id"], "session-persistence-jsonl")

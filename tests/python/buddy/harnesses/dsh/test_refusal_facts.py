@@ -48,9 +48,9 @@ class RefusalFactsTests(NativeRunCase):
         self.connection = mock.Mock()
         self.connection.observe.side_effect = self.callbacks.append
         self.connection.request.side_effect = self.request
-        self.connection.facts.return_value = {}
+        self.connection.facts.return_value = {"deniedInteractionCount": 0, "permissionDecisionCount": 0}
         self.connection.stderr_text.return_value = ""
-        self.connection.frame_log = None
+        self.connection.reader_error = None
         self.client = AcpClient(mock.Mock(returncode=0), mock.Mock(), self.connection)
         self.shutdown = {"shutdownConfirmed": True, "groupObserved": "gone",
                          "leaderExited": True, "leaderExitCode": 0}
