@@ -24,6 +24,9 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       const overflow = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.scrollWidth > node.clientWidth);
       expect(overflow).toBe(false);
       if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
+      // At the intermediate width the fitted marks can cover a short turn.
+      // Zoom once to expose its own pointer target, then exercise the readout.
+      if (width === 800) await page.getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true }).click();
       const segment = page.locator('[data-key="span:execution:att-a1-2"]');
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
@@ -127,7 +130,7 @@ for (const width of [1440, 390]) test.describe(`many breaks at ${width}px`, () =
 
 for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.describe(`timeline keyboard ${locale} ${width}`, () => {
   test.use({ locale, viewport: { width, height: 1000 }, reducedMotion: "reduce" });
-  test("uses one Tab stop, reads each focused fragment, and navigates open tasks and steps", async ({ page }, testInfo) => {
+  test("uses one Tab stop, reads each focused fragment, and navigates open tasks and steps", async ({ page }) => {
     await open(page, `#tasks/${macro}`);
     const allRows = page.locator('[data-slot=timeline-row-name]:visible');
     const first = allRows.first();
@@ -152,7 +155,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     const readout = await page.locator('[data-slot=timeline-status]').innerText();
     await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
     await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
-    await page.screenshot({ path: testInfo.outputPath("fragment-focus.png") });
+    await page.screenshot({ path: "../../tmp/f2-integration-shots/fragment-focus.png" });
     await page.keyboard.press("ArrowLeft");
     await expect(selected).toBeFocused();
     await page.keyboard.press("End"); await expect(fragment(keys.at(-1)!)).toBeFocused();
