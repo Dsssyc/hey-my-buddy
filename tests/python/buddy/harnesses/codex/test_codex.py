@@ -434,7 +434,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_absent_budget_still_honors_explicit_user_cancellation(self):
-        context = self.context("hang", timeout=None)
+        context = self.context("hang-unbounded", timeout=None)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
@@ -444,7 +444,9 @@ class CodexAdapterTests(unittest.TestCase):
         time.sleep(1.2)
         self.assertIsNone(handle.wait(0), "the micro task must outlive its one-second estimate")
         self.adapter.cancel(handle, grace_seconds=8)
-        self.assertIsNotNone(handle.wait(10))
+        # This waits for run collection after the native interrupt and group
+        # stop; it does not measure a service cancellation deadline.
+        self.assertIsNotNone(handle.wait(180), "Codex cancellation did not finish its run collection")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)

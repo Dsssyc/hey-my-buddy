@@ -175,7 +175,7 @@ def simulated_run(module, request, *, services, **options):
     try:
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
             agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))
-        while not (root / "finish.request").exists():
+        while not (root / "finish.request").exists() and not options["cancelled"]():
             incoming = endpoint.consume_request(0.02)
             if incoming is None:
                 continue
@@ -228,10 +228,47 @@ def execution(startup: Path):
     from hey_my_buddy.buddy.runtime import execution as runtime
     sys.argv = [str(SELF), "--startup", str(startup)]
     executor = SimulatedExecutor()
+    gate = Path(os.environ["HMB_C2_STARTUP_GATE_ROOT"]) if os.environ.get("HMB_C2_STARTUP_GATE_ROOT") else None
+    register = runtime.cc.register
+    inspect = runtime.cc.inspect_endpoint
+
+    def registered(*args, **kwargs):
+        result = register(*args, **kwargs)
+        if gate is not None and args[0] is runtime.ExecutionLive:
+            (gate / "execution-registered").touch()
+            while not (gate / "namespace-locked").exists():
+                time.sleep(.01)
+        return result
+
+    def inspected(*args, **kwargs):
+        result = inspect(*args, **kwargs)
+        if gate is not None and not (gate / "startup-inspection.json").exists():
+            runtime.fsync_json(gate / "startup-inspection.json", {
+                "address": args[0], **{key: result[key] for key in ("status", "reason", "io_kind", "retryable")}})
+        return result
+
     with patch.object(role_seam, "worker_executor", lambda name: executor), \
             patch.object(inline_run, "run_harness", simulated_run), \
-            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint):
+            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint), \
+            patch.object(runtime.cc, "register", side_effect=registered), \
+            patch.object(runtime.cc, "inspect_endpoint", side_effect=inspected):
         return runtime.main()
+
+
+def namespace_lock(root):
+    import fcntl
+    release = root / "namespace-release"
+    while not (root / "execution-registered").exists():
+        if release.exists():
+            return
+        time.sleep(.01)
+    gates = list((root / "state/ipc").rglob(".gate"))
+    assert len(gates) == 1, gates
+    with gates[0].open("rb") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        (root / "namespace-locked").touch()
+        while not release.exists():
+            time.sleep(.01)
 
 
 def service(root):
@@ -279,6 +316,14 @@ def service(root):
                     for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
                         request.with_name("finish.request").touch(mode=0o600)
                 emit({"ok": True})
+            elif command["op"] == "submit-command":
+                work = root / "command-work"
+                work.mkdir()
+                reply = daemon.store.task_submit({"requestId": "cancel-startup", "task": "cancel before native start",
+                    "cwd": str(work), "adapter": "command", "expectedSeconds": 30,
+                    "argv": [sys.executable, "-c",
+                             f"from pathlib import Path; Path({str(root / 'command-started')!r}).touch()"]})
+                emit({"runId": reply["task"]["runId"]})
             elif command["op"] == "stop":
                 emit({"ok": True})
                 return
@@ -319,12 +364,15 @@ def service(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("service", "execution", "native"))
+    parser.add_argument("mode", choices=("service", "execution", "native", "namespace-lock"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--startup", type=Path)
     args = parser.parse_args()
     if args.mode == "execution":
         raise SystemExit(execution(args.startup))
+    if args.mode == "namespace-lock":
+        namespace_lock(args.root)
+        return
     globals()[args.mode](args.root)
 
 

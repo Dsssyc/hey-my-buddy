@@ -14,7 +14,7 @@ from unittest import mock
 
 from process_observation import wait_for_unreaped_child
 
-from hey_my_buddy.buddy.runtime.execution import Execution, validate_claim_turn
+from hey_my_buddy.buddy.runtime.execution import Execution, _ExecutionLive, validate_claim_turn
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
@@ -39,6 +39,21 @@ def self_identity_for_endpoint() -> dict:
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    def test_nonretryable_endpoint_inspection_explains_the_start_failure(self):
+        live = _ExecutionLive(SimpleNamespace(claim={
+            "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt", "generation": 1}}))
+        result = {"status": "io-error", "reason": "fixture access refused", "io_kind": "PermissionDenied",
+                  "retryable": False, "credential": None, "raw_os_error": 13}
+        with mock.patch("hey_my_buddy.buddy.runtime.execution.cc.register"), \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_address", return_value="ipc://fixture"), \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.inspect_endpoint", return_value=result), \
+             self.assertRaises(BoardError) as caught:
+            live.start({"pid": 123})
+        self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
+        self.assertEqual(caught.exception.details, {key: result[key] for key in ("status", "reason", "io_kind")})
+        for value in caught.exception.details.values():
+            self.assertIn(value, str(caught.exception))
+
     def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
         base = {"task": {"taskId": "task", "spec": {"adapter": "command"}},
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
