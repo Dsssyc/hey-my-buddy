@@ -7,6 +7,8 @@ transition is one event and idempotent or unknown readings invent none.
 """
 import json
 import sqlite3
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
@@ -41,6 +43,29 @@ class CatalogTrustTests(BoardTestCase):
             read_at = catalog.catalog_read_at(db, adapter)
             profiles = db.execute('SELECT profile_id, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?', (adapter,)).fetchall()
         return row, pending, read_at, profiles
+
+    def test_unknown_discovery_retains_catalog_without_confirming_model_absence(self):
+        confirmed = self.record(reading(models=('alpha', 'beta')))
+        before = self.state()
+        payload = reading(models=('alpha', 'untrusted'), status='unknown', account_status='confirmed')
+        payload['discoveries'][0]['reason'] = 'native model shape unreadable'
+        instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
+                                   discover_models=lambda: payload)
+        for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
+            self.clock.advance(elapsed)
+            with patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'dsh': instance}), \
+                 patch.object(catalog, '_override', return_value=None):
+                discovered = catalog.discover(directory=self.board.directory)
+            result = catalog_store.record(self.evaluation, discovered)
+            row, pending, read_at, profiles = self.state()
+            self.assertEqual(row['status'], 'unknown')
+            self.assertEqual(row['reason'], payload['discoveries'][0]['reason'])
+            self.assertEqual(row['discovery_id'], confirmed['discoveryId'])
+            self.assertEqual(read_at, before[2])
+            self.assertEqual([tuple(profile) for profile in profiles], [tuple(profile) for profile in before[3]])
+            self.assertEqual(pending, {})
+            self.assertEqual(self.events(), [])
+            self.assertEqual(result['tableRevision'], confirmed['tableRevision'])
 
     def test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta(self):
         self.record(reading(efforts=('high', 'max')))

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -37,6 +38,41 @@ class CatalogTests(unittest.TestCase):
             result = catalog.discover(directory=self.directory)
         self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": "fixture executable missing"}])
+
+    def test_discovery_preserves_each_harness_status_and_reason(self):
+        observations = {
+            "codex": {"status": "unknown", "accountStatus": "confirmed", "reason": "native model shape unreadable"},
+            "claude": {"status": "complete", "accountStatus": "not-applicable"},
+            "dsh": {"status": "unknown", "accountStatus": "not-applicable"},
+            "zcode": {"status": "complete", "accountStatus": "confirmed", "reason": "native discovery note"},
+        }
+        instances = {}
+        for name, fact in observations.items():
+            payload = {"source": name + "-fixture", "providers": [{"adapter": name, "provider": "fixture",
+                       "models": [{"id": "alpha", "efforts": ["high"]}]}],
+                       "discoveries": [{"adapter": name, **fact}], "warnings": [name + " warning"],
+                       "harnessVersion": "fixture-1"}
+            instances[name] = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
+                                              discover_models=lambda payload=payload: payload)
+        with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value=instances), \
+             patch.object(catalog, "_override", return_value=None):
+            result = catalog.discover(directory=self.directory)
+        self.assertEqual(result["discoveries"], [{"adapter": name, **fact, "reason": fact.get("reason")}
+                                                 for name, fact in observations.items()])
+        self.assertEqual([entry["adapter"] for entry in result["providers"]], list(observations))
+        self.assertEqual(result["warnings"], [name + " warning" for name in observations])
+        self.assertEqual(result["source"], "; ".join(name + "-fixture" for name in observations))
+        self.assertEqual(result["harnessVersion"], "; ".join(name + ":fixture-1" for name in observations))
+
+    def test_discovery_without_own_observation_keeps_complete_and_unknown_account(self):
+        instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
+                                   discover_models=lambda: {"source": "fixture-native", "providers": [],
+                                                            "discoveries": []})
+        with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"dsh": instance}), \
+             patch.object(catalog, "_override", return_value=None):
+            result = catalog.discover(directory=self.directory)
+        self.assertEqual(result["discoveries"], [{"adapter": "dsh", "status": "complete",
+                                                 "accountStatus": "unknown", "reason": None}])
 
     def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
         from hey_my_buddy.buddy.harnesses.claude import adapter as claude
