@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -71,18 +72,58 @@ def exchange(left: Path, right: Path) -> None:
         raise OSError(ctypes.get_errno(), 'Atomic backup exchange failed')
 
 
+#: One no-tool invocation directory created by read_only.start_no_tool: uuid4().hex.
+_NO_TOOL_DIRECTORY = re.compile(r'no-tool-[0-9a-f]{32}')
+
+#: Bound for any state-relative path carried in an error or the manifest.
+_SHOWN_PATH_LIMIT = 200
+
+
+def _shown_path(relative: str) -> str:
+    text = relative if len(relative) <= _SHOWN_PATH_LIMIT else relative[:_SHOWN_PATH_LIMIT - 3] + '...'
+    return text
+
+
 def _excluded_attempt_path(relative: Path, *, directory: bool) -> bool:
+    """Harness-private homes below ``attempts/``, by exact structural position.
+
+    Read-only Router calls keep their private Codex home and ZCode provider
+    snapshots directly under ``attempts/<runId>/<attemptId>/``. A no-tool
+    invocation additionally owns ``dsh-home`` (DSH private profile, including
+    its node_modules links), the whole ``native`` private root (Codex
+    ``codex-home`` with its auth link, ZCode storage/session state) and its own
+    provider snapshots. Call evidence such as ``no-tool-<hex>/call-N/`` stays.
+    """
     parts = relative.parts
-    if directory:
-        return len(parts) == 4 and parts[2:] == ('native', 'codex-home')
-    return len(parts) == 3 and parts[2] in ('builtin-provider.json', 'personal-provider.json')
+    if len(parts) == 4 and parts[2] == 'native' and parts[3] == 'codex-home':
+        return True
+    if len(parts) == 4 and _NO_TOOL_DIRECTORY.fullmatch(parts[2]):
+        if directory:
+            return parts[3] in ('dsh-home', 'native')
+        return parts[3] in ('builtin-provider.json', 'personal-provider.json')
+    if not directory:
+        return len(parts) == 3 and parts[2] in ('builtin-provider.json', 'personal-provider.json')
+    return False
 
 
-def _regular_files(root: Path, *, exclude_attempt_private: bool = False):
+def _regular_files(root: Path, *, exclude_attempt_private: bool = False,
+                   skipped: list[str] | None = None, scope: str = ''):
+    """Yield regular files below ``root`` without following links.
+
+    A linked or nonregular entry is refused with ``BACKUP_UNSAFE_PATH`` naming
+    its path relative to the state directory (``scope`` prefixes the walk
+    root). With a ``skipped`` collector — the ``attempts`` fallback — such
+    entries are recorded there and never followed or copied instead.
+    """
     if _linked(root):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source cannot be a symlink')
     if not root.exists():
         return
+
+    def report(path: Path) -> str:
+        relative = str(path.relative_to(root))
+        return _shown_path(scope + '/' + relative if scope else relative)
+
     for directory, dirs, files in os.walk(root, followlinks=False):
         parent = Path(directory)
         if exclude_attempt_private:
@@ -90,12 +131,23 @@ def _regular_files(root: Path, *, exclude_attempt_private: bool = False):
                        if not _excluded_attempt_path((parent / name).relative_to(root), directory=True)]
             files = [name for name in files
                      if not _excluded_attempt_path((parent / name).relative_to(root), directory=False)]
-        if any(_linked(parent / d) for d in dirs):
-            raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source contains a linked directory')
+        linked = sorted(name for name in dirs if _linked(parent / name))
+        if linked:
+            if skipped is None:
+                shown = report(parent / linked[0])
+                raise BoardError('BACKUP_UNSAFE_PATH',
+                                 'Backup source contains a linked directory: ' + shown, path=shown)
+            dirs[:] = [name for name in dirs if name not in linked]
+            skipped.extend(report(parent / name) for name in linked)
         for name in files:
             path = parent / name
             if _linked(path) or not path.is_file():
-                raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source contains a nonregular file')
+                if skipped is None:
+                    shown = report(path)
+                    raise BoardError('BACKUP_UNSAFE_PATH',
+                                     'Backup source contains a nonregular file: ' + shown, path=shown)
+                skipped.append(report(path))
+                continue
             yield path
 
 
@@ -343,24 +395,30 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             shutil.copyfileobj(source, target)
         os.chmod(incoming / 'board.sqlite3.gz', 0o600)
         snapshot.unlink()
+        skipped_attempt_entries: list[str] = []
         for name in ('attempts', 'controls', 'submissions'):
-            for path in _regular_files(state / name, exclude_attempt_private=name == 'attempts'):
+            for path in _regular_files(state / name, exclude_attempt_private=name == 'attempts',
+                                       skipped=skipped_attempt_entries if name == 'attempts' else None, scope=name):
                 _private_copy(path, incoming / 'state' / path.relative_to(state))
         if _linked(state / 'workers'):
             raise BoardError('BACKUP_UNSAFE_PATH', 'Worker root cannot be linked')
         for path in sorted([*(state / 'workers').glob('*/receipts/*.json'), *(state / 'workers').glob('*/startup.json'), *(state / 'workers').glob('*/orphaned.json')]):
             if _linked(path) or any(_linked(p) for p in (path.parent, path.parent.parent)):
-                raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked')
+                raise BoardError('BACKUP_UNSAFE_PATH', 'Receipt spool cannot be linked: ' + _shown_path(str(path.relative_to(state))),
+                                 path=_shown_path(str(path.relative_to(state))))
             _private_copy(path, incoming / 'state' / path.relative_to(state))
         for name in ('console-sessions.json', 'console-settings.json', 'worker-pool.json', 'runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
             source = state / name
             if source.exists():
                 if _linked(source):
-                    raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked')
+                    raise BoardError('BACKUP_UNSAFE_PATH', 'State record cannot be linked: ' + name, path=name)
                 _private_copy(source, incoming / 'state' / source.name)
+        skipped_attempt_entries.sort()
         files = {str(path.relative_to(incoming)): {'bytes': path.stat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
-                    'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata', 'files': files}
+                    'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata',
+                    'skippedAttemptEntries': {'count': len(skipped_attempt_entries), 'paths': skipped_attempt_entries[:20]},
+                    'files': files}
         manifest_path = incoming / 'manifest.json'
         with manifest_path.open('x') as stream:
             os.chmod(manifest_path, 0o600)
@@ -397,7 +455,8 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
             sync_dir(root)
         return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),
-                'fileCount': len(files), 'durationSeconds': round(time.monotonic() - started, 3)}
+                'fileCount': len(files), 'skippedAttemptEntries': len(skipped_attempt_entries),
+                'durationSeconds': round(time.monotonic() - started, 3)}
     except Exception:
         if not published and not journal.exists() and incoming.exists() and not _linked(incoming):
             shutil.rmtree(incoming)

@@ -42,6 +42,55 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue((home / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
 
+    def test_upgrade_succeeds_with_no_tool_private_links_in_attempts(self):
+        board = self.board()
+        state = board.directory
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        target.mkdir()
+        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
+                    'pid': 123, 'contractVersion': '0.19.0'}
+        (state / 'control.json').write_text(json.dumps(endpoint))
+        invocation = state / ('attempts/run/attempt/no-tool-' + 'a' * 32)
+        dsh_modules = invocation / 'dsh-home/profiles/headless/node_modules'
+        dsh_modules.mkdir(parents=True)
+        (dsh_modules / '.bin').symlink_to(self.directory)
+        codex_home = invocation / 'native/codex-home'
+        codex_home.mkdir(parents=True)
+        secret = self.directory / 'private-auth.json'
+        secret.write_text('private credential')
+        (codex_home / 'auth.json').symlink_to(secret)
+        (invocation / 'call-1').mkdir(parents=True)
+        (invocation / 'call-1/request.json').write_text('{"prompt":"call evidence"}')
+        (state / 'attempts/run/attempt/scratch-link').symlink_to(secret)
+        health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
+             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
+             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('buddy.upgrade.probe', return_value=health), \
+             mock.patch('buddy.upgrade.detach'), \
+             mock.patch('buddy.upgrade.start', return_value={'runtimeContentId': target.name}), \
+             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
+             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete': True}):
+            result = upgrade.upgrade({})
+        self.assertTrue(result['upgraded'], result)
+        manifest = backup.verify(Path(result['backup']['path']))
+        entries = set(manifest['files'])
+        prefix = 'state/attempts/run/attempt/no-tool-' + 'a' * 32 + '/'
+        self.assertIn(prefix + 'call-1/request.json', entries)
+        self.assertFalse(any(name.startswith(prefix + 'dsh-home/') for name in entries))
+        self.assertFalse(any(name.startswith(prefix + 'native/') for name in entries))
+        self.assertEqual(manifest['skippedAttemptEntries'],
+                         {'count': 1, 'paths': ['attempts/run/attempt/scratch-link']})
+        leaked = [name for name in entries if (Path(result['backup']['path']) / name).read_bytes().find(b'private credential') >= 0]
+        self.assertEqual(leaked, [])
+        self.assertTrue((dsh_modules / '.bin').is_symlink())
+        self.assertTrue((codex_home / 'auth.json').is_symlink())
+        self.assertEqual(secret.read_text(), 'private credential')
+
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
         state = board.directory
