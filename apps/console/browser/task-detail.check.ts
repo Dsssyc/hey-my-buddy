@@ -31,6 +31,26 @@ const pane = (page: Page) => page.locator("[data-slot=detail-pane]");
 /** The scrolled content of the pane: the frame its parts have to stay inside, however far it scrolls. */
 const content = (page: Page) => pane(page).locator("div.w-0.min-w-full").first();
 
+/** Read the drawn selection frame, excluding the larger invisible SVG hit and focus areas. */
+async function stripPosition(page: Page) {
+  return strip(page).locator('[data-slot=detail-strip-scroll]').evaluate(view => {
+    const frame = view.getBoundingClientRect();
+    const selection = view.querySelector<SVGGraphicsElement>('[data-slot=selected-item]')!;
+    const slice = selection.getBoundingClientRect(), canvas = selection.ownerSVGElement!.getBoundingClientRect();
+    const drawnLeft = Math.max(slice.left, canvas.left), drawnRight = Math.min(slice.right, canvas.right);
+    const left = frame.left + view.clientLeft;
+    return { left: drawnLeft - left, right: drawnRight - left, width: drawnRight - drawnLeft,
+      available: view.clientWidth, scrollLeft: view.scrollLeft, top: frame.top, pageTop: window.scrollY };
+  });
+}
+
+async function expectSelectedInView(page: Page) {
+  await expect.poll(async () => {
+    const slice = await stripPosition(page);
+    return slice.left >= -1 && (slice.width > slice.available ? Math.abs(slice.left) <= 1 : slice.right <= slice.available + 1);
+  }, { message: "the selected slice is whole, or its beginning is visible when wider than the strip" }).toBe(true);
+}
+
 /** Every part of the open step is whole, apart from its neighbours, and drawn in full. */
 async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   const header = detail(page).locator("[data-slot=detail-header]");
@@ -78,6 +98,62 @@ async function go(page: Page, hash: string): Promise<void> {
 /** A slice of the strip by the words its readout carries. */
 const step = (page: Page, text: string | RegExp) => strip(page).getByRole("button", { name: typeof text === "string"
   ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: ·|$)`) : text });
+
+for (const { locale } of languages) for (const theme of ["dark", "light"]) for (const reducedMotion of ["reduce", "no-preference"] as const) {
+  test.describe(`strip selection ${locale} ${theme} ${reducedMotion}`, () => {
+    test.use({ locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+
+    test("keeps the selected slice in view through arrows, navigation buttons and clicks after zooming", async ({ page }, testInfo) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await open(page, `#tasks/${A}/preview-run-a1/1`);
+      await expect(chosen(page)).toHaveAttribute("data-key", "delegation");
+      const ruler = strip(page).locator('[data-slot=zoom-ruler]:visible');
+      const track = strip(page).locator('[data-slot=timeline-track]');
+      const fitted = Number(await track.getAttribute("width"));
+      for (let index = 0; index < 3; index++) await ruler.press("+");
+      await expect.poll(async () => Number(await track.getAttribute("width"))).toBeGreaterThan(fitted * 3);
+      // Finish zooming at a settled scale, then exercise the user's scroll motion preference.
+      await page.emulateMedia({ reducedMotion });
+      await expectSelectedInView(page);
+      const start = await stripPosition(page);
+      const total = Number((await strip(page).locator('[data-slot=step-counter]').innerText()).match(/\/\s*(\d+)$/)![1]);
+      const select = async (action: () => Promise<unknown>, number: number) => {
+        await action();
+        await expect(page).toHaveURL(new RegExp(`/preview-run-a1/${number}$`));
+        try { await expectSelectedInView(page); }
+        catch (error) {
+          await page.screenshot({ path: testInfo.outputPath(`offscreen-step-${number}.png`) });
+          throw error;
+        }
+        const position = await stripPosition(page);
+        expect(position.top, "the strip never moves vertically").toBe(start.top);
+        expect(position.pageTop, "the page never scrolls vertically").toBe(start.pageTop);
+      };
+      await page.screenshot({ path: testInfo.outputPath("strip-start.png") });
+      for (let number = 2; number <= total; number++) {
+        await select(() => page.keyboard.press("ArrowRight"), number);
+        if (number === 2) expect((await stripPosition(page)).scrollLeft, "an already visible slice leaves the scroll alone").toBe(start.scrollLeft);
+      }
+      expect((await stripPosition(page)).scrollLeft).toBeGreaterThan(start.scrollLeft + start.available);
+      await page.screenshot({ path: testInfo.outputPath("strip-right.png") });
+      for (let number = total - 1; number >= 1; number--) await select(() => page.keyboard.press("ArrowLeft"), number);
+      await page.screenshot({ path: testInfo.outputPath("strip-left.png") });
+
+      const next = strip(page).getByRole("button", { name: locale === "zh-CN" ? "下一步" : "Next step", exact: true });
+      const previous = strip(page).getByRole("button", { name: locale === "zh-CN" ? "上一步" : "Previous step", exact: true });
+      for (let number = 2; number <= total; number++) await select(() => next.click(), number);
+      for (let number = total - 1; number >= 1; number--) await select(() => previous.click(), number);
+
+      // Click the visible portion of the oversized first turn without Playwright scrolling it into view first.
+      const target = strip(page).locator('[data-key="span:execution:att-a1-1"] [data-slot=execution-bar]');
+      const view = (await strip(page).locator('[data-slot=detail-strip-scroll]').boundingBox())!;
+      const bar = (await target.boundingBox())!;
+      const x = (Math.max(view.x, bar.x) + Math.min(view.x + view.width, bar.x + bar.width)) / 2;
+      await select(() => page.mouse.click(x, bar.y + bar.height / 2), 3);
+      expect((await stripPosition(page)).width).toBeGreaterThan(start.available);
+    });
+  });
+}
 
 for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdue, waitingHost, failed, mode, answered, unavailable, delivered, conclusion, notCounted, integration, reported, handoff, unsure, helperDone, ask } of languages)
   for (const width of [1440, 1280, 390]) {

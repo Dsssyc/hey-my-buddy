@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import type { MacroTaskTimeline } from "../src/macro-task-types";
-import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
+import { screenshots as shots, expectNoSidewaysScroll, freezeTimelineClock, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 mkdirSync(shots, { recursive: true });
@@ -33,6 +33,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
     test.use({ locale, viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
 
     test("zooms time twice while the axis and tracks scroll together and names stay fixed", async ({ page }) => {
+      await freezeTimelineClock(page);
       await openMacro(page, theme);
       const ruler = page.locator('[data-slot=zoom-ruler]:visible');
       await expect(ruler).toHaveAttribute("tabindex", "0");

@@ -12,14 +12,14 @@ const scroll = () => document.querySelector<HTMLElement>('[data-slot=detail-stri
 const trackSvg = () => document.querySelector<SVGElement>('[data-slot=detail-strip] [data-slot=timeline-track]')!;
 
 describe("the step strip along the top of a micro task's detail", () => {
-  it("centres the step the detail opened with once; switching a step never moves the scroll again", async () => {
+  it("centres the step the detail opened with once; a later read never recentres it", async () => {
     const f = open({ origin: "span:e2" });
     await ready();
     const centred = scroll().scrollLeft;
     expect(centred).toBeGreaterThan(0);
-    fireEvent.click(stripSlice("span:r1")!);
+    f.reread({ origin: "span:e2", timeline: timeline() });
+    await ready();
     expect(scroll().scrollLeft).toBe(centred);
-    expect(pane().textContent).toContain("路由");
   });
 
   it("fits the whole micro task however far it is zoomed in, and takes the same zoom keys as the macro task", async () => {
@@ -109,14 +109,11 @@ describe("the step strip along the top of a micro task's detail", () => {
     const centred = scroll().scrollLeft;
     expect(centred).toBeGreaterThan(0);
     scroll().scrollLeft = 0;
-    fireEvent.click(stripSlice("span:e1")!);
-    expect(scroll().scrollLeft).toBe(0);
-    expect(pane().textContent).toContain("回合 1");
     // A later read that extends the open record does not move the reader either.
     const live = timeline();
     Object.assign(live.spans.find(span => span.spanId === "e2")!, { endAt: null, state: "executing", shutdownConfirmed: false });
     live.observedAt = "2026-09-26T12:30:00Z";
-    f.reread({ timeline: live, origin: "span:e1" });
+    f.reread({ timeline: live, origin: "settle:m1" });
     await ready();
     expect(scroll().scrollLeft).toBe(0);
   });

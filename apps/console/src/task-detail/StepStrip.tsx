@@ -46,8 +46,8 @@ function anchorOf(step: Step | null, spans: readonly { spanId: string; startAt: 
  * settled acceptance is its settling mark. The strip is centred on the step
  * the detail opened with exactly once — a step without an instant anchors on
  * the wait that leads to it, and if nothing is recorded the position is
- * decided then and there; selecting another step or a later read never moves
- * the scroll again.
+ * decided then and there. Selecting another step reveals its drawn slice or
+ * marker with the smallest horizontal scroll; later reads leave the view alone.
  */
 export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   row: TimelineRow; timeline: MacroTaskTimeline; steps: Steps; selected: number;
@@ -61,6 +61,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   viewportRef.current = viewport;
   const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
   const centered = useRef(false);
+  const previousSelected = useRef(selected);
   const spans = useMemo(() => timeline.spans.filter(span => span.runId === row.runId), [timeline, row.runId]);
   const events = useMemo(() => timeline.events.filter(event => event.runId === row.runId), [timeline, row.runId]);
   const wait = acceptanceInterval(row, spans, nowMs);
@@ -80,6 +81,22 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
     const at = initialAnchor.current ?? null;
     if (at !== null) viewport.scrollLeft = Math.max(0, scale.toX(at)! + SLACK - viewport.clientWidth / 2);
   }, [scale, viewport]);
+  useEffect(() => {
+    if (previousSelected.current === selected) return;
+    previousSelected.current = selected;
+    const view = viewport!;
+    const selection = view.querySelector<SVGGraphicsElement>('[data-slot="selected-item"]')!;
+    const frame = selection.getBoundingClientRect();
+    // Track clips the selection frame at the SVG's ends; follow only what is drawn.
+    const canvas = selection.ownerSVGElement!.getBoundingClientRect();
+    const slice = { left: Math.max(frame.left, canvas.left), right: Math.min(frame.right, canvas.right) };
+    const left = view.getBoundingClientRect().left + view.clientLeft;
+    const right = left + view.clientWidth;
+    const delta = slice.right - slice.left > view.clientWidth || slice.left < left ? slice.left - left
+      : slice.right > right ? slice.right - right : 0;
+    if (delta !== 0) view.scrollTo({ left: view.scrollLeft + delta,
+      behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" });
+  }, [selected, viewport]);
   const step = steps.steps[selected] ?? null;
   // A settled acceptance selects its settling mark; a pending one and a change of buddy are the overlays below.
   const selectedKey = step?.kind === "acceptance" && !step.pending

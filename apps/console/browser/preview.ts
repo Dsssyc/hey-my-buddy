@@ -28,6 +28,15 @@ export async function open(page: Page, hash: string): Promise<void> {
   await page.getByRole("navigation").first().waitFor();
 }
 
+/** Fit comparisons keep open spans at the fixture's observation time across polling reads. */
+export async function freezeTimelineClock(page: Page): Promise<void> {
+  await page.route("**/api/macro-tasks/*/timeline*", async route => {
+    const response = await route.fetch();
+    const timeline = await response.json();
+    await route.fulfill({ response, headers: { ...response.headers(), date: new Date(timeline.observedAt).toUTCString() } });
+  });
+}
+
 /** Open the timeline key after navigating to a macro task. */
 export async function openLegend(page: Page): Promise<Locator> {
   await page.locator('[data-slot="legend-trigger"]').click();
