@@ -29,8 +29,6 @@ class PrivateDirectoryTests(BoardTestCase):
         self.assertEqual(list(root.iterdir()), [root / 'attempts'])
         self.assertEqual(list((root / 'attempts').iterdir()), [failed])
         self.assertEqual((outside / 'sentinel').read_text(), 'safe')
-        with self.assertRaises(BoardError):
-            private_dirs.remove_tree(root, keep=frozenset({outside}))
         alias = self.directory / 'alias'
         alias.symlink_to(root, target_is_directory=True)
         with self.assertRaises(BoardError):

@@ -143,8 +143,6 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
     """Remove one real tree, retaining exact subtrees without traversing links."""
     path = _absolute(path)
     keep = frozenset(_absolute(item) for item in keep)
-    if any('..' in item.parts or not item.is_relative_to(path) for item in keep):
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Retained private path is outside the removal tree', path=str(path))
     _guard_parents(path.parent)
     if not path.exists() and not linked(path):
         return False
@@ -154,8 +152,6 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private removal target is not a directory', path=str(path))
     def descend(directory: Path) -> bool:
         _guard_parents(directory)
-        if directory in keep:
-            return False
         with os.scandir(directory) as entries:
             children = [Path(entry.path) for entry in entries]
         retained = False

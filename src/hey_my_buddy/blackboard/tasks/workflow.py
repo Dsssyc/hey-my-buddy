@@ -5541,10 +5541,15 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _failed_attempt_ids(connection, micro_task_id: str) -> frozenset[str]:
-        """Only an explicitly completed execution permits evidence reclamation."""
-        return frozenset(row['attempt_id'] for row in connection.execute(
+        """Only a successful, explicitly completed result permits evidence reclamation."""
+        failed = set()
+        for row in connection.execute(
             'SELECT attempt_id, result_json FROM attempts WHERE task_id=?', (micro_task_id,)
-        ) if json.loads(row['result_json'] or '{}').get('terminationReason') != 'completed')
+        ):
+            result = json.loads(row['result_json'] or '{}')
+            if result.get('status') != 'ok' or result.get('terminationReason') != 'completed':
+                failed.add(row['attempt_id'])
+        return frozenset(failed)
 
     def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
                       _lead_conclusion: bool = False) -> dict:
@@ -5674,6 +5679,8 @@ class WorkflowCoordinator:
         from ... import private_dirs
         for micro_task_id, attempt_ids in failed_attempts.items():
             for adapter in private_dirs.ADAPTERS:
+                for attempt_id in attempt_ids:
+                    private_dirs.cleanup_attempt_credentials(self.board.directory, adapter, micro_task_id, attempt_id)
                 private_dirs.remove_tree(
                     private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
                     keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)

@@ -16,6 +16,7 @@ import uuid
 from ... import private_dirs
 from ...protocol import schemas
 from ..store.db import utc_now
+from . import host_conclusions
 from ...errors import BoardError
 from ...install.runtime import DEFAULT_RUNTIME_ROOT, is_ready, installation_lock
 
@@ -206,14 +207,20 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     reasons = []
     if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
         reasons.append('shutdown-unconfirmed')
-    if run['state'] != 'accepted' or task['acceptance_verdict'] != 'accepted':
+    if run['state'] == 'accepted' and task['acceptance_verdict'] == 'accepted':
+        finished_at = task['accepted_at']
+        unproven = 'acceptance-time-unproven'
+    elif run['state'] == 'concluded':
+        finished_at = host_conclusions.current(connection, run)['created_at']
+        unproven = 'conclusion-time-unproven'
+    else:
         return ['continuation-supported', *reasons]
     try:
-        accepted = datetime.fromisoformat(task['accepted_at'].replace('Z', '+00:00')).timestamp()
-        if now - accepted < GRACE_SECONDS:
+        finished = datetime.fromisoformat(finished_at.replace('Z', '+00:00')).timestamp()
+        if now - finished < GRACE_SECONDS:
             reasons.append('grace-period')
     except (ValueError, TypeError, AttributeError):
-        reasons.append('acceptance-time-unproven')
+        reasons.append(unproven)
     if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run['run_id'],)).fetchone():
         reasons.append('pending-continuations')
     if connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=? AND state='open'", (run['run_id'],)).fetchone():
@@ -434,7 +441,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
     native_owners = {}
-    failed_attempts = {}
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
@@ -445,7 +451,6 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             for micro_task_id in micro_task_ids:
                 digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
                 native_owners[digest] = (run['run_id'], reasons)
-                failed_attempts[digest] = store.workflow._failed_attempt_ids(connection, micro_task_id)
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
@@ -478,17 +483,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    evidence = {}
-                    attempts_root = path / 'attempts'
-                    if (private_dirs.linked_component(path) is None and path.is_dir()
-                            and private_dirs.linked_component(attempts_root) is None and attempts_root.is_dir()):
-                        attempt_ids = sorted(attempt_id for attempt_id in failed_attempts.get(path.name, ())
-                                             if not private_dirs.linked(attempts_root / attempt_id)
-                                             and (attempts_root / attempt_id).is_dir())
-                        if attempt_ids:
-                            evidence = {'retentionReason': 'failed-attempt-evidence',
-                                        'description': '失败执行的证据', 'failedAttemptIds': attempt_ids}
-                    add('harnesses', path, reasons, runId=run_id, adapter=adapter, **evidence)
+                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
                     if path.name != 'micro-tasks':

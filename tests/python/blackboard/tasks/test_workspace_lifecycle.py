@@ -629,7 +629,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(repeat["removed"])
         self.assertEqual(repeat["alreadyRemoved"], applied["alreadyRemoved"])
 
-    def test_failed_execution_evidence_survives_continuation_acceptance_and_storage_reclaims_it(self):
+    def failed_evidence_worktree(self, *, import_failure=False):
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
@@ -652,15 +652,29 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', run_id))
         (native / 'session.json').write_text('native continuation state')
         seal = workspace_module.seal(self.directory, manifest, run_id, attempt['attemptId'])
+        result = {'status': 'ok' if import_failure else 'invalid-result', 'evidenceRefs': refs,
+                  'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}}
+        if import_failure:
+            result['turn'] = {'invalid': 'not an importable turn'}
         board.call('worker_result', {
             'workerId': self.worker, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
-            'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error',
+            'nonce': 'n' * 16, 'status': 'ok' if import_failure else 'failed',
+            'terminationReason': 'completed' if import_failure else 'harness-error',
             'shutdownConfirmed': True, 'exitCode': 1,
-            'result': {'status': 'invalid-result', 'evidenceRefs': refs, 'workspaceSeal': seal,
-                       'processState': {'shutdownConfirmed': True}},
+            'result': result,
         })
-        recorded = board.call('task_result', {'runId': run_id})['result']
+        receipt = board.call('task_result', {'runId': run_id})
+        recorded = receipt['result']
         self.assertEqual(recorded['evidenceRefs'], refs)
+        self.assertEqual(receipt['resultMeta']['status'], 'failed')
+        if import_failure:
+            self.assertEqual(receipt['resultMeta']['terminationReason'], 'completed')
+            self.assertIn('microTaskError', recorded)
+        return board, run_id, attempt, checkout, failed_root, refs, native, recorded
+
+    def assert_failed_evidence_survives_continuation(self, *, import_failure=False):
+        board, run_id, attempt, checkout, failed_root, refs, native, recorded = self.failed_evidence_worktree(
+            import_failure=import_failure)
         failed = self.view(board, run_id)
         board.call('workflow_continue', {
             'runId': run_id, 'commandId': 'retry-failed-evidence', 'expectedRevision': failed['revision'],
@@ -678,17 +692,23 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         delivered = self.view(board, run_id)
         artifact = next(row for row in delivered['artifacts'] if row['kind'] == 'output')
         target = self.target_with_artifact(artifact)
+        credential = failed_root / 'agent-credential.json'
+        credential.write_text('private credential fixture')
         accepted = self.accept(board, delivered, artifact, target=target)
         self.assertEqual(accepted['state'], 'accepted')
         self.assertFalse(checkout.exists())
         self.assertFalse(native.exists())
         self.assertFalse(successful_root.exists())
+        self.assertFalse(credential.exists())
         self.assertEqual([Path(ref).read_text() for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
         with board.store.db.write() as connection:
             stored = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                                    (attempt['attemptId'],)).fetchone()['result_json'])
             self.assertEqual(stored['result'], recorded)
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        self.assert_storage_reclaims_evidence(board, run_id, failed_root.parent.parent)
+
+    def assert_storage_reclaims_evidence(self, board, run_id, root):
         board.console.close()
         board.store.db.close()
         # Exercise the existing inventory and guarded deletion through a real private daemon.
@@ -697,12 +717,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             service = SimpleNamespace(call=lambda operation, params: transport._request(
                 endpoint, operation, params, state_dir=self.directory))
             planned = service.call('storage_plan', {})
-            root = failed_root.parent.parent
             candidate = next(row for row in planned['candidates'] if row['path'] == str(root))
             self.assertEqual(candidate['runId'], run_id)
-            self.assertEqual(candidate['retentionReason'], 'failed-attempt-evidence')
-            self.assertEqual(candidate['description'], '失败执行的证据')
-            self.assertEqual(candidate['failedAttemptIds'], [attempt['attemptId']])
+            self.assertEqual(candidate['reasons'], [])
             self.assertTrue(candidate['eligible'], candidate)
             result = service.call('storage_apply', {
                 'planId': planned['planId'], 'commandId': 'remove-failed-evidence', 'confirm': True,
@@ -712,6 +729,82 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             self.assertFalse(root.exists())
             after = service.call('storage_plan', {})
             self.assertFalse(any(row['path'] == str(root) for row in after['candidates']))
+
+    def test_failed_execution_evidence_survives_continuation_acceptance_and_storage_reclaims_it(self):
+        self.assert_failed_evidence_survives_continuation()
+
+    def test_completed_execution_with_an_import_failure_keeps_its_evidence(self):
+        self.assert_failed_evidence_survives_continuation(import_failure=True)
+
+    def test_concluded_failed_execution_evidence_expires_from_its_host_conclusion(self):
+        board, run_id, _attempt, checkout, failed_root, refs, native, _recorded = self.failed_evidence_worktree()
+        concluded = board.call('workflow_conclude', {
+            'runId': run_id, 'note': 'reviewed the failure and ended this micro task',
+            **self.control(self.view(board, run_id)),
+        })
+        self.assertEqual(concluded['state'], 'concluded')
+        self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
+        self.assertFalse(checkout.exists())
+        self.assertFalse(native.exists())
+        self.assertEqual([Path(ref).read_text() for ref in refs], ['failure evidence'] * 2)
+        root = failed_root.parent.parent
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+            planned = board.call('storage_plan', {})
+        candidate = next(row for row in planned['candidates'] if row['path'] == str(root))
+        self.assertFalse(candidate['eligible'], candidate)
+        self.assertEqual(candidate['reasons'], ['grace-period'])
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
+                               (run_id,))
+        self.assert_storage_reclaims_evidence(board, run_id, root)
+
+    def test_borrowed_helpers_private_evidence_uses_its_own_conclusion(self):
+        board = self.board()
+        self.register(board)
+        submitted, _claim, _manifest, checkout, _seal, yielded, _artifact = self.run_worktree(
+            board, request_id='borrowed-evidence', disposition='assistance')
+        run_id = submitted['runId']
+        decided = board.call('workflow_decide', {
+            'runId': run_id, 'requestId': yielded['activeRequest']['requestId'],
+            'commandId': 'borrowed-evidence-helper', 'expectedRevision': yielded['revision'], 'decision': 'approve',
+            'helpers': [{**BUDDY, 'requestId': 'evidence-helper', 'task': 'inspect the shared checkout',
+                         'cwd': str(checkout),
+                         'executionWorkspace': {'kind': 'existing', 'access': 'write', 'writeScope': ['.']}}],
+            **self.control(yielded),
+        })
+        helper_id = decided['children'][0]['taskId']
+        claim = self.claim(board, helper_id, request_id='evidence-helper-claim')['claim']
+        attempt = claim['attempt']
+        helper_manifest = claim['turn']['input']['executionWorkspace']
+        self.assertEqual(helper_manifest['checkoutRoot'], str(checkout))
+        evidence = private_dirs.ensure_private_dir(private_dirs.attempt_root(
+            board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
+        evidence.write_text('helper failure evidence')
+        seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
+        board.call('worker_result', {
+            'workerId': self.worker, 'attemptId': attempt['attemptId'], 'generation': attempt['generation'],
+            'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error',
+            'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal},
+        })
+        concluded = board.call('workflow_conclude', {
+            'runId': run_id, 'targetRunId': helper_id, 'note': 'end the failed helper',
+            **self.control(self.view(board, run_id)),
+        })
+        self.assertEqual(concluded['state'], 'concluded')
+        self.assertTrue(checkout.exists())
+        self.assertEqual(evidence.read_text(), 'helper failure evidence')
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
+                               (helper_id,))
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+            planned = board.call('storage_plan', {})
+        root = evidence.parent.parent.parent
+        candidate = next(row for row in planned['candidates'] if row['path'] == str(root))
+        self.assertEqual(candidate['runId'], helper_id)
+        self.assertTrue(candidate['eligible'], candidate)
+        self.assertNotIn(self.view(board, run_id)['state'], ('accepted', 'concluded'))
 
     def test_reclaim_reports_a_checkout_that_vanished_before_the_delete(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-vanished")
