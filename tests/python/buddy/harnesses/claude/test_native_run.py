@@ -115,6 +115,119 @@ class NativeRunCase(unittest.TestCase):
         return json.loads(self.state_path.read_text())
 
 
+class Batch4FactsTests(NativeRunCase):
+    def observations(self, result):
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
+        return json.loads(Path(ref.location).read_bytes())
+
+    def test_unread_catalog_continues_discovery_as_unknown(self):
+        from hey_my_buddy.blackboard.catalog.catalog import canonical_payload
+        self.fixture_case("invalid-catalog")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native", timeout_seconds=10,
+                                cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
+        self.assertEqual(canonical_payload(catalog)["discoveries"][0]["status"], "unknown")
+        self.assertEqual(catalog["providers"][0]["models"], [])
+        self.assertIn("NoneType", catalog["warnings"][0])
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+
+    def test_unread_catalog_continues_the_turn_without_checked_configuration(self):
+        self.fixture_case("invalid-catalog")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertTrue(result.model_started)
+        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.configuration.checked.effort)
+        facts = self.observations(result)
+        self.assertEqual(facts["catalogStatus"], "unknown")
+        self.assertEqual(facts["configurationStatus"], "unknown")
+        self.assertIn("unread", facts["catalogWarnings"][0])
+
+    def test_catalog_membership_absence_continues_as_unconfirmed(self):
+        self.fixture_case("empty-catalog")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNone(result.configuration.checked.model)
+        self.assertIsNone(result.configuration.checked.effort)
+        self.assertEqual(self.observations(result)["configurationStatus"], "unknown")
+
+    def test_unknown_initialize_reply_continues_with_correlated_result_facts(self):
+        self.fixture_case("unknown-initialize")
+        result = self.execute(self.request())
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        facts = self.observations(result)
+        self.assertEqual(facts["catalogStatus"], "unknown")
+        self.assertEqual(facts["protocol"]["status"], "incomplete")
+        self.assertEqual(facts["protocol"]["unreadResponses"], 1)
+        self.assertEqual(facts["protocol"]["samples"][0]["requestId"], "buddy-1")
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native", timeout_seconds=10,
+                                cancelled=lambda: False)
+        self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
+        self.assertTrue(any("buddy-1" in warning and "responseShape" in warning
+                            for warning in catalog["warnings"]))
+        self.assertEqual(self.fixture_state()["userTurns"], 0)
+
+    def test_untyped_event_continues_and_reaches_role_and_retained_facts(self):
+        self.fixture_case("missing-event-type")
+        callbacks = []
+        def observe(facts):
+            callbacks.append(facts)
+            return FEEDBACK_CONTINUE
+        result = self.execute(self.request(), observer=observe)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        facts = self.observations(result)["protocol"]
+        self.assertEqual(facts["unknownEvents"], 1)
+        self.assertEqual(facts["status"], "incomplete")
+        self.assertEqual(facts["samples"][0]["kind"], "event-type-unread")
+        self.assertNotIn("credential-fragment", json.dumps(facts))
+        self.assertTrue(any(item["protocolObservations"]["unknownEvents"] == 1 for item in callbacks))
+
+    def test_oversized_catalog_still_refuses_with_confirmed_stop(self):
+        self.fixture_case("oversized-catalog")
+        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                          native_root=self.base / "discovery-native", timeout_seconds=10,
+                          cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "invalid-catalog")
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_initialization_and_permission_request_bounds_still_refuse(self):
+        from hey_my_buddy.protocol.activity import ActivityPublisher
+        collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
+                                             lambda _facts: FEEDBACK_CONTINUE)
+        collector.install(mock.Mock(unknown_events=0))
+        for _ in range(128):
+            collector.buffer({"type": "future"})
+        with self.assertRaises(native_run.ClaudeProtocolError) as frames:
+            collector.buffer({"type": "future"})
+        self.assertEqual(frames.exception.code, "invalid-protocol")
+        for index in range(32):
+            collector.on_request({"type": "control_request", "request_id": str(index),
+                                  "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
+        with self.assertRaises(native_run.ClaudeProtocolError) as requests:
+            collector.on_request({"type": "control_request", "request_id": "overflow",
+                                  "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
+        self.assertEqual(requests.exception.code, "native-request-limit")
+
+    def test_unknown_interrupt_reply_does_not_confirm_acknowledgement(self):
+        connection = mock.Mock()
+        connection.call.return_value = None
+        self.assertFalse(native_run._interrupt(connection))
+
+    def test_unknown_terminal_remains_refused_pending_shared_contract(self):
+        from hey_my_buddy.buddy.harnesses.claude.protocol import TurnEvidence
+        for subtype, is_error in (("future", False), ("success", None),
+                                  ("error_during_execution", True)):
+            evidence = TurnEvidence("session", str(self.cwd))
+            evidence.init_observed = True
+            evidence.result = {"session_id": "session", "subtype": subtype, "is_error": is_error}
+            with self.assertRaises(native_run.ClaudeProtocolError) as caught:
+                native_run._check_terminal(evidence, "session")
+            self.assertEqual(caught.exception.code, "native-turn-failed")
+
+
 class WorkerCarrierTests(NativeRunCase):
     def test_one_write_run_delivers_the_native_schema_value_and_stop_facts(self):
         result = self.execute(self.request())
@@ -147,21 +260,21 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(checked.model.value, CONFIGURATION["model"])
         self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
 
-    def test_a_model_outside_the_catalog_is_refused_before_the_user_message(self):
+    def test_a_model_outside_the_catalog_continues_without_confirmed_membership(self):
         self.fixture_case("ok")
         request = self.request()
         broken = request.model_copy(update={"configuration": RunConfiguration(
             provider="anthropic", model="claude-not-in-catalog", effort="high")})
         result = self.execute(broken)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "invalid-configuration")
-        # Nothing is claimed that the run never reached.
-        self.assertFalse(result.model_started)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertTrue(result.model_started)
         checked = result.configuration.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
         self.assertIsNone(checked.effort)
-        self.assertEqual(self.fixture_state()["userTurns"], 0)
+        self.assertEqual(self.fixture_state()["userTurns"], 1)
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
+        self.assertEqual(json.loads(Path(ref.location).read_bytes())["configurationStatus"], "unknown")
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
         result = self.execute(self.request())
@@ -359,9 +472,8 @@ class RequestGateTests(NativeRunCase):
         with self.assertRaises(BoardError):
             self.execute(request.model_copy(update={"session_services": (
                 SessionService(tool_names=["mcp__x__y"]),)}))
-        with self.assertRaises(BoardError):
-            self.execute(self.request(continuation=RunContinuation(mode="native-session",
-                                                                  previous_session_id="00000000-0000-4000-8000-000000000000")))
+        # Native resume is checked once by WorkerRunExecutor.prepare; the
+        # role-boundary regression lives in test_claude.ClaudeAdapterTests.
         # The reconstruction mode stays legal and never resumes natively.
         self.fixture_case("ok")
         reconstructed = self.execute(self.request(
@@ -727,15 +839,15 @@ class DiscoveryTests(NativeRunCase):
         self.assertFalse(self.state_path.exists())
         # A settled refusal after a confirmed stop carries the true fact, and
         # the outer layer may recycle its directory on it.
-        self.fixture_case("invalid-catalog")
+        self.fixture_case("initialize-error")
         with self.assertRaises(native_run.ClaudeProtocolError) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-ok",
                           native_root=self.base / "ds-ok-n", timeout_seconds=25, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "invalid-catalog")
+        self.assertEqual(caught.exception.code, "native-rpc-error")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def test_discovery_metadata_error_with_an_unknown_stop_reports_false(self):
-        # The metadata refusal itself is real, but an unobserved native stop
+        # An unread catalog continues, but an unobserved native stop
         # must stay false: the outer layer keeps the directory for inspection
         # instead of trusting the error to mean the group is gone.
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
@@ -745,10 +857,9 @@ class DiscoveryTests(NativeRunCase):
             with self.assertRaises(native_run.ClaudeProtocolError) as caught:
                 run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-unk",
                               native_root=self.base / "ds-unk-n", timeout_seconds=25, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "invalid-catalog")
+        self.assertEqual(caught.exception.code, "native-shutdown-failed")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
-        # The witness is the real fact, never the error code: the same code
-        # carried True when the stop was actually observed.
+        # The unknown catalog cannot substitute for actual stop evidence.
 
     def test_discovery_refuses_an_unusable_cli(self):
         os.environ["BUDDY_CLAUDE_CLI"] = str(self.base / "missing-cli")
