@@ -150,7 +150,8 @@ function fixture(options: {
     }
     return structuredClone(state);
   });
-  const api = { snapshot, tasks, command, task: vi.fn(async (runId: string) => state.tasks.runs.find(t => t.runId === runId)) } as unknown as ConsoleApi;
+  const api = { snapshot, tasks, command, task: vi.fn(async (runId: string) => state.tasks.runs.find(t => t.runId === runId)),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
     setSession: (canWrite: boolean) => { state = { ...state, consoleSession: session(canWrite) }; } };
@@ -308,6 +309,7 @@ describe("superseded console session", () => {
     expect(controls.queryByRole("button")).toBeNull();
     expect(controls.queryByRole("link")).toBeNull();
     await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     expect(screen.getByRole("heading", { name: "选择一项委派" })).toBeTruthy();
     expect(f.operations).toEqual([]);
     // Refreshing again never regains rights: only a fresh CLI entry can.
@@ -340,6 +342,7 @@ describe("superseded console session", () => {
     await waitFor(() => expect(document.querySelectorAll(".guard-banner").length).toBeGreaterThan(discoverGuards));
     expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("link", { name: "委派记录" }));
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
     const cancel = await screen.findByRole("button", { name: "取消任务" });
     expect(cancel).toHaveProperty("disabled", true);
@@ -542,6 +545,7 @@ describe("superseded console session", () => {
     const readOnly = fixture({ readOnly: true, records, workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={readOnly.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("button", { name: /普通待执行任务/ });
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
@@ -566,6 +570,7 @@ describe("superseded console session", () => {
     // Baseline: the same fixture with a writer session has live controls.
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /待协助目标/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
     const writerDetail = screen.getByRole("complementary", { name: "任务详情" });
@@ -586,6 +591,7 @@ describe("superseded console session", () => {
     const f = fixture({ readOnly: true, records: [awaiting], workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /可浏览任务/ }));
     await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
@@ -626,6 +632,7 @@ describe("superseded console session", () => {
     await user.type(await screen.findByLabelText("我的意见"), "断线草稿");
 
     await user.click(screen.getByRole("link", { name: /委派记录/ }));
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
     expect(await screen.findByRole("button", { name: "取消任务" })).toHaveProperty("disabled", false);

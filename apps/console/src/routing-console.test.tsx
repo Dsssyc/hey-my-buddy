@@ -72,6 +72,7 @@ function apiFor(state: Snapshot, command: ReturnType<typeof vi.fn>): ConsoleApi 
     snapshot: vi.fn(async () => structuredClone(state)), command,
     tasks: vi.fn(async () => ({ ...state.tasks, nextCursor: null })),
     task: vi.fn(async (runId: string) => state.tasks.runs.find(record => record.runId === runId)),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
 function deferred<T>() {
@@ -169,6 +170,7 @@ describe("delegation routing rationale", () => {
     });
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await screen.findByRole("tab", { name: "路由依据" });
     expect(command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
@@ -287,6 +289,7 @@ describe("delegation routing rationale", () => {
     });
     const user = userEvent.setup();
     render(<App suppliedApi={apiFor(state, command)} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /完成 goal 状态内核/ }));
     await user.click(screen.getByRole("button", { name: "查看选择依据" }));
     const detail = await screen.findByRole("region", { name: "决策依据详情" });

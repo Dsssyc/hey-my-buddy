@@ -24,6 +24,7 @@ function api(): ConsoleApi {
     command: vi.fn(),
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
 }
 
@@ -40,7 +41,7 @@ describe("light and dark themes", () => {
   it("defaults to light and marks the document color scheme", async () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一个工作目标" });
     const toggle = screen.getByRole("switch", { name: "深色主题" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
@@ -54,7 +55,7 @@ describe("light and dark themes", () => {
   it("persists only the theme choice and restores it on the next page", async () => {
     const user = userEvent.setup();
     const first = render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一个工作目标" });
     await user.click(screen.getByRole("switch", { name: "深色主题" }));
     expect(Object.keys(window.localStorage)).toEqual([THEME_STORAGE_KEY]);
     expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
@@ -63,7 +64,7 @@ describe("light and dark themes", () => {
     expect(applyStoredTheme()).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一个工作目标" });
     expect(screen.getByRole("switch", { name: "深色主题" }).getAttribute("aria-checked")).toBe("true");
   });
 
@@ -72,7 +73,7 @@ describe("light and dark themes", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage disabled"); });
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一个工作目标" });
     expect(document.documentElement.dataset.theme).toBe("light");
     await user.click(screen.getByRole("switch", { name: "深色主题" }));
     expect(document.documentElement.dataset.theme).toBe("dark");
@@ -82,7 +83,7 @@ describe("light and dark themes", () => {
   it("toggles from the keyboard through the same switch role", async () => {
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
-    await screen.findByRole("heading", { name: "选择一项委派" });
+    await screen.findByRole("heading", { name: "选择一个工作目标" });
     const toggle = screen.getByRole("switch", { name: "深色主题" });
     toggle.focus();
     expect(document.activeElement).toBe(toggle);

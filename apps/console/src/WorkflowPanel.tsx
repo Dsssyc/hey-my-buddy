@@ -23,7 +23,7 @@ const lines = (text: string) => text.split("\n").map(s => s.trim()).filter(Boole
 const integrationLabel = (record: IntegrationRecord) =>
   record.state === "not-required" ? "整合：Host 记录无需整合" : "整合：已验证";
 
-export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0, authority, writesAvailable = true }: {
+export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active = true, onLockChange, onTaskUpdate, recordInfo, routingRequest = 0, authority, writesAvailable = true, initialSection }: {
   task: Task;
   snapshot: Snapshot;
   api: ConsoleApi;
@@ -36,6 +36,8 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   routingRequest?: number;
   authority?: AuthorityLatch;
   writesAvailable?: boolean;
+  /** Section to preselect once when opened from the timeline; later tab use stays the user's. */
+  initialSection?: string;
 }) {
   const state = useWorkflow(api, task, snapshot, refresh, active, writesAvailable, authority);
   const { value, command, writable, sessionWritable } = state;
@@ -56,6 +58,9 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
       document.getElementById(tabsId + "-routing-tab")?.focus();
     }
   }, [routingRequest]);
+  // Seeding writes the run's existing section draft, so a preselected tab from
+  // the timeline survives navigation while never fighting later user choices.
+  useEffect(() => { if (initialSection) setSection(initialSection); }, [initialSection]);
   useEffect(() => { onLockChange?.(state.busy || state.uncertain); }, [state.busy, state.uncertain, onLockChange]);
   useEffect(() => { if (value) onTaskUpdate?.({ ...task, ...value.task }); }, [value, onTaskUpdate]);
   const requestId = value?.activeRequest?.requestId;

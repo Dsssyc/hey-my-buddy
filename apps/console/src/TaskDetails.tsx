@@ -12,11 +12,15 @@ import { TaskActivityView } from "./task-activity";
 import { READ_ONLY_ACTION_REFUSAL, createAuthorityLatch } from "./console-session";
 import type { AuthorityLatch } from "./console-session";
 
-export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked, authority, writesAvailable = true }: {
+export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked, authority, writesAvailable = true, hideBackButton = false, initialSection }: {
   task: Task; snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
   selectTask: (runId: string | null) => void; active: boolean; onLockChange: (value: boolean) => void;
   onTaskUpdate: (value: Task) => void; navigationLocked: boolean;
   authority?: AuthorityLatch; writesAvailable?: boolean;
+  /** Timeline context: the locator bar is the return entry, so hide the built-in back button. */
+  hideBackButton?: boolean;
+  /** Section of the existing detail tabs to preselect once on open. */
+  initialSection?: string;
 }) {
   const [detail, setDetail] = useState<unknown>(null), [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -65,7 +69,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   </dl></details>;
   return <>
     <header className="detail-header">
-      <div className="row-between"><button className="button small-button mobile-back" disabled={busy || navigationLocked} onClick={() => selectTask(null)}>返回委派列表</button>
+      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" disabled={busy || navigationLocked} onClick={() => selectTask(null)}>返回委派列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
       <h2 title={task.task}>{excerpt(taskTitle(task), 100)}</h2>
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
@@ -73,8 +77,8 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
-      selectTask={selectTask} active={active} onLockChange={onLockChange} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
-      authority={latch} writesAvailable={writesAvailable} /> : <div className="detail-body">
+        selectTask={selectTask} active={active} onLockChange={onLockChange} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
+        authority={latch} writesAvailable={writesAvailable} initialSection={initialSection} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
       <p className="small muted">来源字段只展示已记录的信息；执行结束与验收分别记录。</p>

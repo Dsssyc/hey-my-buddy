@@ -118,6 +118,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     command,
     task: vi.fn(),
     tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
   } as unknown as ConsoleApi;
   return { api, command, published, operations, snapshot: () => state };
 }

@@ -52,6 +52,8 @@ const initial = (): Snapshot => ({
   capabilities: { selection: false, maintenance: false, evaluationWriteGate: true },
 });
 
+const emptyObjectives = () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false });
+
 afterEach(() => {
   cleanup();
   window.location.hash = "";
@@ -87,9 +89,11 @@ describe("console interactions", () => {
       task: vi.fn(async () => state.tasks.runs[0]),
       tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
         total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
@@ -146,9 +150,11 @@ describe("console interactions", () => {
       })),
       tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : state.tasks.runs,
         total: rootsOnly ? 0 : state.tasks.total, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByLabelText("显示协助任务与内部执行"));
     await user.click(
       await screen.findByRole("button", { name: /停止证据测试/ }),
@@ -166,9 +172,11 @@ describe("console interactions", () => {
       command: vi.fn(),
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("heading", { name: "选择一项委派" });
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await screen.findByRole("heading", { name: "模型 1" });
@@ -210,6 +218,7 @@ describe("console interactions", () => {
       command,
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => emptyObjectives()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     window.location.hash = "#models";

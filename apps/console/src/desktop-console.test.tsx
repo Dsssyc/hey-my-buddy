@@ -68,7 +68,8 @@ function fixture(records: Task[] = []) {
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
   const api = { snapshot: vi.fn(async () => structuredClone(snapshot)), tasks, command,
-    task: vi.fn(async (runId: string) => snapshot.tasks.runs.find(t => t.runId === runId)) } as unknown as ConsoleApi;
+    task: vi.fn(async (runId: string) => snapshot.tasks.runs.find(t => t.runId === runId)),
+    objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { snapshot, api, tasks, command, workflows };
 }
 
@@ -174,6 +175,7 @@ describe("desktop console", () => {
     const f = fixture([root, other, helper]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("button", { name: /目标 alpha/ });
     expect(f.tasks.mock.calls[0][0]).toMatchObject({ rootsOnly: true });
     expect(screen.queryByRole("button", { name: /目标 helper/ })).toBeNull();
@@ -205,6 +207,7 @@ describe("desktop console", () => {
     const f = fixture([goal("alpha"), goal("alpine")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("button", { name: /目标 alpine/ });
     expect(screen.getByText("已加载 2 个委派目标")).toBeTruthy();
     await user.click(screen.getByLabelText("显示协助任务与内部执行"));
@@ -216,6 +219,7 @@ describe("desktop console", () => {
     const f = fixture([goal("old")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("button", { name: /目标 old/ });
     await user.selectOptions(screen.getByLabelText("项目筛选"), "source-project");
     await screen.findByRole("button", { name: /目标 old/ });
@@ -240,6 +244,7 @@ describe("desktop console", () => {
     const f = fixture();
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await waitFor(() => expect(f.tasks).toHaveBeenCalledTimes(1));
     await screen.findByRole("heading", { name: "没有匹配的委派" });
     f.snapshot.tasks.runs.push(goal("first"));
@@ -255,6 +260,7 @@ describe("desktop console", () => {
     const f = fixture([goal("one"), goal("two")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
     await user.type(await screen.findByLabelText("决定理由"), "one 的决定草稿");
     await user.type(screen.getByLabelText("交给下一回合的输入"), "one 的接续草稿");
@@ -281,6 +287,7 @@ describe("desktop console", () => {
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 historical/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     await waitFor(() => expect(within(detail).getByRole("tab", { name: "产物与验收" }).getAttribute("aria-selected")).toBe("true"));
@@ -297,7 +304,9 @@ describe("desktop console", () => {
     first.workflow!.resultSummary = "第一项的现有结果";
     second.workflow!.resultSummary = "第二项的现有结果";
     const f = fixture([first, second]);
+    const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     expect(await screen.findByRole("button", { name: /第一项的现有结果/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /第二项的现有结果/ })).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
@@ -320,6 +329,7 @@ describe("desktop console", () => {
     f.workflows.set(record.runId, value);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 older/ }));
     const detail = screen.getByRole("complementary", { name: "任务详情" });
     // The bounded workflow_get refresh carries the newest concluded summary; the

@@ -185,6 +185,7 @@ describe("decision profile selector", () => {
       command,
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
     window.location.hash = "#settings";
     const user = userEvent.setup();
@@ -232,6 +233,7 @@ describe("model list display", () => {
       command: vi.fn(),
       task: vi.fn(),
       tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
+      objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })),
     } as unknown as ConsoleApi;
     window.location.hash = "#models";
     render(<App suppliedApi={api} />);

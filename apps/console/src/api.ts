@@ -1,4 +1,5 @@
 import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
+import type { ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveTimeline } from "./objective-types";
 import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
 
 export class ApiError extends Error {
@@ -157,6 +158,46 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       if (!data || !Array.isArray(data.runs) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")) {
         throw new ApiError("INVALID_RESPONSE", "委派历史响应不完整，请检查服务版本。");
+      }
+      return data;
+    },
+    /** Read-only work-objective list; available to superseded sessions, no lease or model call. */
+    async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") query.set(key, String(value));
+      }
+      const data = await request(`/objectives?${query}`, { signal }) as ObjectivePage;
+      if (!data || !Array.isArray(data.objectives) || !Number.isInteger(data.total)
+        || !(data.nextCursor === null || typeof data.nextCursor === "string")
+        || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean") {
+        throw new ApiError("INVALID_RESPONSE", "工作目标列表响应不完整，请检查服务版本。");
+      }
+      return data;
+    },
+    async objectiveTimeline(
+      objectiveId: string,
+      params: { limit?: number; query?: string; filter?: ObjectiveFilter },
+      signal?: AbortSignal,
+    ): Promise<ObjectiveTimeline> {
+      const query = new URLSearchParams();
+      for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") query.set(key, String(value));
+      }
+      const data = await request(
+        `/objectives/${encodeURIComponent(objectiveId)}/timeline?${query}`,
+        { signal },
+      ) as ObjectiveTimeline;
+      if (!data || typeof data.observedAt !== "string"
+        || !data.objective || typeof data.objective.objectiveId !== "string"
+        || !Array.isArray(data.rows) || !Array.isArray(data.spans) || !Array.isArray(data.events)
+        || !data.totals || !Number.isInteger(data.totals.rows) || !Number.isInteger(data.totals.allRows)
+        || !Number.isInteger(data.totals.spans) || !Number.isInteger(data.totals.events)
+        || !data.truncated || typeof data.truncated.rows !== "boolean"
+        || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
+        || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
+        || typeof data.filtered !== "boolean") {
+        throw new ApiError("INVALID_RESPONSE", "工作目标时间轴响应不完整，请检查服务版本。");
       }
       return data;
     },

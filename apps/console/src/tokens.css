@@ -25,6 +25,15 @@
   --edit-line: #a9c9b5;
   --edit-wash: #f1f7f1;
   --overlay: rgb(0 0 0 / 35%);
+  /* Execution-configuration colours (work-objective timeline). They deliberately
+     avoid the brand green, which stays reserved for selection, running and now. */
+  --cfg-1: #9a5226;
+  --cfg-2: #3e6aa1;
+  --cfg-3: #2f7684;
+  --cfg-4: #7a5ba6;
+  --cfg-5: #9b4d6a;
+  --cfg-6: #5d6b3a;
+  --on-cfg: #ffffff;
   --radius: 8px;
 }
 
@@ -58,4 +67,11 @@
   --edit-line: #4a6b58;
   --edit-wash: #1c2521;
   --overlay: rgb(0 0 0 / 60%);
+  --cfg-1: #e0a276;
+  --cfg-2: #93b4e6;
+  --cfg-3: #7cc4cf;
+  --cfg-4: #bda3e6;
+  --cfg-5: #e39ab5;
+  --cfg-6: #b6c27f;
+  --on-cfg: #101512;
 }
