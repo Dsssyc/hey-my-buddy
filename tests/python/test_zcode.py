@@ -72,6 +72,19 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(self.personal.read_bytes(), original)
         self.assertNotIn("fixture-secret-never-public", json.dumps(outcome.to_report()))
         self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
+        # Inquiry is a declared capability backed by this attempt's private bridge,
+        # and the session facts stay separate from the Git workspace facts.
+        self.assertIn("inquiry", self.adapter.capabilities)
+        self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
+        native = outcome.result["nativeSession"]
+        self.assertEqual(native["sessionId"], turn["sessionId"])
+        self.assertEqual(native["storageScope"], "task-private")
+        self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
+        self.assertTrue(native["bindingPresent"])
+        self.assertTrue(native["resumable"])
+        credentials = json.loads((context.directory / "inquiry.json").read_text())
+        self.assertEqual(len(credentials["token"]), 64)
+        self.assertEqual(oct((context.directory / "inquiry.json").stat().st_mode & 0o777), "0o600")
 
     def test_child_finish_does_not_replace_or_disable_root_finish(self):
         _, outcome = self.execute(self.context("child-first"))

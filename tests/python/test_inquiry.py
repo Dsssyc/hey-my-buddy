@@ -45,6 +45,7 @@ class FakeBridge:
         self.token = token
         self.requests: list[dict] = []
         self.answer: dict | None = None
+        self.refusal: str | None = None
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.listener.bind(str(self.path))
         self.listener.listen(4)
@@ -77,7 +78,10 @@ class FakeBridge:
                             "value": {"ready": True, "sessionId": "s-1", "agentStatus": "running", "activity": []},
                         }
                     elif request.get("method") == "ask":
-                        reply = {"version": 1, "id": request["id"], "ok": True, "value": {"state": "delivered"}}
+                        if self.refusal:
+                            reply = {"version": 1, "id": request["id"], "ok": False, "error": self.refusal}
+                        else:
+                            reply = {"version": 1, "id": request["id"], "ok": True, "value": {"state": "delivered"}}
                     else:
                         reply = {
                             "version": 1,
@@ -321,6 +325,55 @@ class TestInquiry(BoardTestCase):
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertFalse(result["bridge"]["enabled"])
         self.assertIn("no inquiry capability", result["bridge"]["reason"])
+
+    def test_inquiry_capability_comes_from_the_adapter_registry(self):
+        from buddy.inquiry import inquiry_capable
+
+        # Both coding harnesses that mount a private bridge declare it; adapters
+        # without one must keep answering honestly instead of half-observing.
+        self.assertTrue(inquiry_capable("dsh"))
+        self.assertTrue(inquiry_capable("zcode"))
+        self.assertFalse(inquiry_capable("command"))
+        self.assertFalse(inquiry_capable("external"))
+        self.assertFalse(inquiry_capable("not-an-adapter"))
+
+    def test_a_question_refused_after_the_turn_ended_is_recorded_unavailable(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        bridge.refusal = "agent-gone"
+        try:
+            result = board.call(
+                "inquiry_observe",
+                {"runId": task["runId"], "inquiryId": "q-ended", "question": "still running?"},
+            )
+            self.assertEqual(result["bridge"]["error"], "agent-gone")
+            message = client.get_message("q-ended", runId=task["runId"])
+            self.assertEqual(message["state"], "unavailable")
+            self.assertIn("agent-gone", message["reason"])
+            self.assertIsNone(message["answer"])
+        finally:
+            bridge.close()
+
+    def test_a_journal_record_bound_to_another_task_can_never_answer(self):
+        board = self.board()
+        client = board.client()
+        task, _attempt, bridge = self._attempt_directory(board, client, None, self.workdir())
+        journal = Path(bridge.directory) / "inquiry.results.jsonl"
+        journal.write_text(json.dumps({
+            "inquiryId": "q-foreign", "state": "answered", "taskId": "another-task", "attemptId": "another-attempt",
+            "answer": "answer that belongs to a different run", "via": "tool:buddy_inquiry_reply",
+        }) + "\n")
+        try:
+            result = board.call(
+                "inquiry_observe",
+                {"runId": task["runId"], "inquiryId": "q-foreign", "question": "who are you?"},
+            )
+            self.assertIn("another", result["bridge"]["journalRejected"])
+            message = client.get_message("q-foreign", runId=task["runId"])
+            self.assertIsNone(message["answer"], "a foreign journal record must never be imported as an answer")
+        finally:
+            bridge.close()
 
 
 if __name__ == "__main__":

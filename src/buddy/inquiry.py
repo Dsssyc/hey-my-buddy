@@ -1,10 +1,14 @@
-"""Bounded, read-only observation of one dsh attempt's inquiry bridge.
+"""Bounded, read-only observation of one attempt's inquiry bridge.
 
-The bridge socket itself lives in the Node dsh plugin, because upstream's plugin
-runs in Node. This module is the Python client of that socket plus the importer of
-its journal: the durable board message rows stay authoritative, the journal is
-idempotent transport evidence, and a missing or unreachable bridge is reported
-honestly instead of being invented.
+Every coding harness that can accept native input while its turn runs owns its own
+private bridge: the Node dsh plugin hosts one inside the upstream process, and the
+ZCode controller hosts one next to its native app-server connection. This module is
+the Python client of that socket plus the importer of its journal: the durable board
+message rows stay authoritative, the journal is idempotent transport evidence, and a
+missing or unreachable bridge is reported honestly instead of being invented.
+
+Whether an adapter can answer questions at all comes from the adapter registry's
+declared ``inquiry`` capability, not from a second hard-coded adapter list here.
 """
 from __future__ import annotations
 
@@ -42,6 +46,11 @@ BRIDGE_ERRORS = (
     "internal",
 )
 
+#: A bridge refuses a *new* question with these codes when the owned agent has
+#: already ended. A refused question is recorded as unavailable instead of staying
+#: queued forever; the question is never injected into a new or idle turn.
+TERMINAL_BRIDGE_ERRORS = ("agent-gone", "agent-not-running")
+
 LIMITS = {
     "maxQuestionBytes": schemas.MAX_QUESTION_BYTES,
     "maxAnswerBytes": schemas.MAX_ANSWER_BYTES,
@@ -58,6 +67,22 @@ NOTE = (
     "bridge cannot see are named in live.unavailable instead of being reported as zero. Repeating an inquiryId "
     "never injects the question twice; the same id with different text is a CONFLICT."
 )
+
+
+def inquiry_capable(adapter: str) -> bool:
+    """Whether this adapter declares the ``inquiry`` capability in its registry.
+
+    The registry is the single declaration point. A harness without it answers
+    honestly that it has no inquiry capability instead of half-observing a bridge
+    that was never mounted; the check never probes the native CLI or starts
+    anything, so a read-only observation stays free of side effects.
+    """
+    try:
+        from .adapters import adapters
+
+        return "inquiry" in adapters()[adapter].capabilities
+    except (KeyError, TypeError):
+        return False
 
 
 def inquiry_credentials(directory: Path) -> dict | None:
@@ -218,7 +243,7 @@ def observe(store: BoardStore, params: dict) -> dict:
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
-    if adapter != "dsh":
+    if not inquiry_capable(adapter):
         bridge["reason"] = "this adapter has no inquiry capability"
     elif terminal:
         bridge["reason"] = "the attempt is terminal; an idle or finished agent cannot be woken"
@@ -238,13 +263,23 @@ def observe(store: BoardStore, params: dict) -> dict:
         else:
             bridge["reason"] = result.get("reason")
             bridge["error"] = result.get("code")
+            if inquiry_id is not None and result.get("code") in TERMINAL_BRIDGE_ERRORS:
+                # The owned turn already ended: the question is refused, never
+                # injected into a new or idle turn and never left looking pending.
+                _mark_unavailable(store, view["taskId"], inquiry_id, result.get("code"))
         live = _live(result.get("value")) if result.get("ok") and inquiry_id is None else live
 
     journal = read_journal(credentials.get("resultsPath") if credentials else None)
     if inquiry_id is not None and inquiry_id in journal["entries"]:
         record = journal["entries"][inquiry_id]
-        _apply_journal(store, view["taskId"], inquiry_id, record)
-        bridge["journalImported"] = True
+        mismatch = _journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
+        if mismatch is not None:
+            # A journal record bound to another task/attempt is transport evidence
+            # for a different execution; it can never answer this run's question.
+            bridge["journalRejected"] = mismatch
+        else:
+            _apply_journal(store, view["taskId"], inquiry_id, record)
+            bridge["journalImported"] = True
 
     if inquiry_id is not None and wait_ms:
         deadline = time.monotonic() + wait_ms / 1000.0
@@ -298,6 +333,33 @@ def observe(store: BoardStore, params: dict) -> dict:
     }
 
 
+def _journal_identity_mismatch(record: dict, task_id: str, attempt_id: str | None) -> str | None:
+    """Reject journal transport evidence bound to another task or attempt."""
+    for key, expected, label in (("taskId", task_id, "task"), ("attemptId", attempt_id, "attempt")):
+        value = record.get(key)
+        if value in (None, ""):
+            continue
+        if not isinstance(value, str) or value != expected:
+            return f"the journal record belongs to another {label}"
+    return None
+
+
+def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> None:
+    """Record a question refused because the owned agent already ended."""
+    try:
+        store.message_update(
+            {
+                "runId": task_id,
+                "inquiryId": inquiry_id,
+                "actor": "live-bridge",
+                "state": "unavailable",
+                "reason": f"the owned agent already ended; the bridge refused this question ({code})",
+            }
+        )
+    except BoardError:
+        pass
+
+
 def _credentials_from_log_paths(attempt: dict) -> dict | None:
     paths = attempt.get("logPaths") or {}
     if not isinstance(paths, dict):
@@ -348,6 +410,12 @@ def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value
             patch["reason"] = "the live bridge reported answered without usable answer text"
         else:
             patch["state"] = state
+            reason = value.get("reason")
+            if state != "answered" and isinstance(reason, str) and reason.strip():
+                # A bridge may report a refusal inside a successful value (the dsh
+                # bridge reports agent-gone/agent-not-running this way). Keep the
+                # honest reason instead of a bare terminal state.
+                patch["reason"] = reason[:200]
     if isinstance(value.get("delivery"), dict):
         patch["delivery"] = value["delivery"]
     if patch.keys() - {"runId", "inquiryId", "actor"}:
@@ -444,6 +512,10 @@ def _live(value: Any) -> dict:
         "activityDropped": value.get("activityDropped"),
         "replyTool": value.get("replyTool"),
         "journal": value.get("journal"),
+        # Bounded, metadata-only evidence that the native harness asked for an
+        # interactive capability this adapter cannot grant. It is surfaced verbatim
+        # for the Host boundary and never fabricated when absent.
+        "attention": value.get("attention") if isinstance(value.get("attention"), (dict, list)) else None,
         "unavailable": value.get("unavailable") or [],
         "limits": LIMITS,
     }

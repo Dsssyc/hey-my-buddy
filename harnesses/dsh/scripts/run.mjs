@@ -97,6 +97,13 @@ const USAGE = [
   '  --settings-file <path>  settings document (default: DSH_SETTINGS_FILE,',
   '                          then $DSH_HOME/settings.yaml, then',
   '                          ~/.dsh/settings.yaml)',
+  '  --dsh-home <dir>        private DSH home for THIS child only: its sessions,',
+  '                          storages and profile copies stay under this attempt',
+  '                          directory instead of the user session store. Requires',
+  '                          --no-workspace, because the owning workspace bridge',
+  '                          verifies sessions in its own store. The settings',
+  '                          document is still read from the owning environment',
+  '                          first, so native model/auth settings are unchanged',
   '  --no-workspace          run without workspace grouping',
   '  --workspace-socket <p>  private host socket (default DSH_WORKSPACE_SOCKET,',
   '                          then $DSH_HOME/deepseek-delegate/workspace.sock)',
@@ -291,6 +298,7 @@ try {
       'log-dir': { type: 'string' },
       'dsh-bin': { type: 'string' },
       'settings-file': { type: 'string' },
+      'dsh-home': { type: 'string' },
       'no-workspace': { type: 'boolean', default: false },
       'workspace-socket': { type: 'string' },
       'workspace-timeout': { type: 'string', default: String(DEFAULT_WORKSPACE_TIMEOUT_SECONDS) },
@@ -351,6 +359,22 @@ if (inquiryToken !== undefined && inquiryToken === '') fail('--inquiry-token mus
 if (inquiryRawResults !== undefined && inquiryRawResults === '') fail('--inquiry-results must not be blank');
 if (inquiryToken !== undefined && (inquiryToken.length > 256 || inquiryToken.includes('\0'))) {
   fail('--inquiry-token must be at most 256 characters and contain no NUL');
+}
+// The private DSH home relocates only this child's session/storage root. It must
+// be an absolute owner-private directory and it never applies to attach mode,
+// which runs no child at all.
+const dshHome = values['dsh-home'] === undefined ? undefined : values['dsh-home'].trim();
+if (dshHome !== undefined) {
+  if (dshHome === '') fail('--dsh-home must not be blank');
+  if (!isAbsolute(dshHome)) fail('--dsh-home must be an absolute path');
+  if (attachSession !== undefined) fail('--dsh-home does not apply to --attach-session: attach mode runs no child');
+  // A relocated child home is incompatible with workspace grouping: the owning
+  // workspace bridge proves the completed session from ITS OWN session store
+  // (`sessionPersistence.list()`), so the grouped run would fail as
+  // unknown-session and exit 1. Require an explicit --no-workspace.
+  if (workspaceEnabled) {
+    fail('--dsh-home requires --no-workspace: the workspace bridge verifies sessions in the owning host session store');
+  }
 }
 if (attachSession !== undefined && inquiryRawSocket !== undefined) {
   fail('--attach-session does not mount an inquiry bridge: it runs no model task');
@@ -830,6 +854,21 @@ function buildResult(status, exitCode, signal, error, workspace, shutdownConfirm
     finalText: text.trim().slice(0, FINAL_TEXT_LIMIT),
     finalTextTruncated: truncated,
     workspace,
+    nativeStorage: {
+      // Truthful session-storage facts. The default grouped path keeps the
+      // inherited harness home, so the rollout stays readable through that
+      // harness store and the owning workspace host can verify its membership.
+      // A private home (ungrouped runs only) is NOT listed by the installed app,
+      // and DSH continuations reconstruct a new session instead of resuming it.
+      scope: dshHome === undefined ? 'harness-user-store' : 'task-private',
+      relocated: dshHome !== undefined,
+      sessionsSubdir: 'sessions',
+      nativeAppVisibility: dshHome === undefined ? 'user-store' : 'not-listed-in-native-app',
+      resumeMode: 'reconstructed-new-session',
+      note: dshHome === undefined
+        ? 'this child kept the inherited DSH home so the owning workspace host can verify and group the session; the rollout is readable through that harness store'
+        : 'this child wrote its sessions/storages under the attempt-private DSH home; it is not listed by the installed app and is not resumed by Buddy continuations',
+    },
     processState: { pid: child?.pid ?? null, shutdownConfirmed },
     ...(turnConfig === undefined ? {} : { turn, turnResultPath: turnConfig.outputFile, turnResultError: turnResultError ?? null }),
     note: 'exit 0 only means the dsh agent finished, not that the task is correct: inspect the real diff/artifacts and run the relevant checks yourself.',
@@ -898,6 +937,18 @@ try {
   const childEnv = { ...process.env };
   // Preserve the same home after changing the child's working directory.
   if (childEnv.DSH_HOME?.trim()) childEnv.DSH_HOME = resolve(childEnv.DSH_HOME);
+  // Task-owned native storage: only the child's DSH home moves under this
+  // attempt, so its rollouts/storages never join the user's session store.
+  // The settings document was already resolved above from the owning
+  // environment, so native model/auth settings stay untouched.
+  if (dshHome !== undefined) {
+    try {
+      mkdirSync(dshHome, { recursive: true, mode: 0o700 });
+    } catch {
+      fail(`could not create the private DSH home: ${dshHome}`);
+    }
+    childEnv.DSH_HOME = dshHome;
+  }
   // Discard obsolete Web credentials if inherited from an older installation.
   delete childEnv.DSH_WEB_URL;
   delete childEnv.DSH_WEB_URL_FILE;

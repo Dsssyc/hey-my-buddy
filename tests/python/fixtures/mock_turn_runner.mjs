@@ -69,6 +69,16 @@ process.stdout.write(
     mode: "run",
     finalText: "mock done",
     logPaths: { stdout: join(logDir, "stdout.log"), stderr: join(logDir, "stderr.log"), capture: join(logDir, "capture.json") },
+    nativeStorage: {
+      // The governed default keeps the inherited harness home so the owning
+      // workspace host can verify and group the completed session.
+      scope: "harness-user-store",
+      relocated: false,
+      sessionsSubdir: "sessions",
+      nativeAppVisibility: "user-store",
+      resumeMode: "reconstructed-new-session",
+    },
+    workspace: { enabled: true, bound: true, id: "mock-workspace", path: cwd, sessionId: record.sessionId },
     processState: { shutdownConfirmed: true },
   })}\n`,
 );

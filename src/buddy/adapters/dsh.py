@@ -123,7 +123,12 @@ class DshAdapter(Adapter):
             f"--inquiry-results={inquiry['resultsPath']}",
         ]
         if not spec.get("workspace", True):
+            # Task-owned native storage is only safe without workspace grouping:
+            # the installed workspace bridge proves a completed session from the
+            # *owning host's* session store, so a relocated child home would make
+            # that verification fail (UNKNOWN_SESSION) and the run would exit 1.
             args.append("--no-workspace")
+            args.append(f"--dsh-home={context.directory / 'dsh-home'}")
         for key in ("model", "provider", "effort"):
             if spec.get(key):
                 args.append(f"--{key}={spec[key]}")
@@ -189,6 +194,7 @@ class DshAdapter(Adapter):
                 shutdown_confirmed=handle.shutdown_confirmed(),
             )
         payload = {**payload, "inquiryBridge": {k: inquiry.get(k) for k in ("socketPath", "resultsPath", "errorPath")}}
+        payload["nativeSession"] = _native_session(payload)
         shutdown_confirmed = bool(payload.get("processState", {}).get("shutdownConfirmed")) or _preflight_failed(
             exit_code, stdout_path
         )
@@ -261,6 +267,44 @@ class DshAdapter(Adapter):
 
     def _seal_workspace(self, context: ExecutionContext) -> tuple[dict | None, str | None]:
         return turn_io.seal_workspace(context)
+
+
+def _native_session(payload: dict) -> dict:
+    """Truthful native-session facts for one dsh attempt.
+
+    Git isolation and native session storage are separate dimensions. A grouped run
+    keeps the owning harness store so the workspace bridge can verify session
+    membership; an ungrouped run may relocate the child home to the attempt, which
+    makes the rollout task-owned and therefore invisible to the installed app. The
+    id is reported only when the run's own session-capture observer wrote it.
+    """
+    workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
+    capture_path = (payload.get("logPaths") or {}).get("capture")
+    captured: dict = {}
+    if isinstance(capture_path, str):
+        try:
+            raw = Path(capture_path).read_bytes()
+            if len(raw) <= 64 * 1024:
+                value = json.loads(raw)
+                captured = value if isinstance(value, dict) else {}
+        except (OSError, ValueError, RecursionError):
+            captured = {}
+    session_id = workspace.get("sessionId") or captured.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        session_id = None
+    native_storage = payload.get("nativeStorage") if isinstance(payload.get("nativeStorage"), dict) else {}
+    return {
+        "adapter": "dsh",
+        "sessionId": session_id,
+        "captured": session_id is not None,
+        "ambiguous": captured.get("ambiguous") is True,
+        "storageScope": native_storage.get("scope") or "unknown",
+        "storageOwner": "buddy-attempt" if native_storage.get("relocated") else "harness-user-store",
+        "nativeAppVisibility": native_storage.get("nativeAppVisibility") or "unknown",
+        "resumeMode": native_storage.get("resumeMode") or "reconstructed-new-session",
+        "resumable": False,
+        "note": native_storage.get("note"),
+    }
 
 
 def _preflight_failed(exit_code: int | None, stdout_path: Path) -> bool:

@@ -123,6 +123,18 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertEqual(turn["disposition"], "completed")
             self.assertTrue(turn["sessionId"].startswith("mock-session-"))
 
+            # Git isolation and native session storage are separate facts: the
+            # grouped default keeps the owning harness store so membership stays
+            # verifiable, and the metadata says exactly that.
+            _, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())
+            native = (receipt.get("result") or {}).get("nativeSession") or {}
+            self.assertEqual(native.get("storageScope"), "harness-user-store")
+            self.assertEqual(native.get("storageOwner"), "harness-user-store")
+            self.assertEqual(native.get("nativeAppVisibility"), "user-store")
+            self.assertTrue(native.get("captured"))
+            self.assertFalse(native.get("resumable"))
+            self.assertEqual(native.get("sessionId"), turn["sessionId"])
+
             # The final acknowledgement is separate from execution and bound to the
             # actual sealed artifact. The Host records its explicit integration
             # decision through the same business method the public operation uses.
@@ -358,6 +370,38 @@ class SubmissionPreparationRaceTests(GovernedWorkerTestCase):
             self.assertEqual(path.read_text(), "{")
         finally:
             board.console.close()
+
+
+class DshNativeStorageArgumentsTests(unittest.TestCase):
+    """The private DSH home is only used where it cannot break session grouping."""
+
+    def arguments(self, workspace: bool) -> list[str]:
+        import tempfile
+        from unittest import mock
+
+        from buddy.adapters.base import ExecutionContext
+        from buddy.adapters.dsh import DshAdapter
+
+        directory = Path(tempfile.mkdtemp(prefix="buddy-dsh-args-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        context = ExecutionContext(
+            task_id="task", attempt_id="attempt", generation=1,
+            spec={"cwd": str(directory), "task": "x", "timeoutSeconds": 30, "workspace": workspace},
+            directory=directory, runtime={}, environment=dict(os.environ),
+        )
+        with mock.patch.dict(os.environ, {"BUDDY_RUNNER_PATH": str(RUNNER)}):
+            return DshAdapter().arguments(context, {"socketPath": "/tmp/inquiry.sock", "token": "a" * 64,
+                                                    "resultsPath": "/tmp/inquiry.jsonl"})
+
+    def test_grouped_runs_keep_the_owning_harness_home(self):
+        args = self.arguments(workspace=True)
+        self.assertNotIn("--no-workspace", args)
+        self.assertFalse(any(arg.startswith("--dsh-home") for arg in args), args)
+
+    def test_ungrouped_runs_get_an_attempt_private_dsh_home(self):
+        args = self.arguments(workspace=False)
+        self.assertIn("--no-workspace", args)
+        self.assertTrue(any(arg.startswith("--dsh-home=") and "dsh-home" in arg for arg in args), args)
 
 
 if __name__ == "__main__":  # pragma: no cover

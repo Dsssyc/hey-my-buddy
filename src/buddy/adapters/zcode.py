@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -19,7 +20,7 @@ from .zcode_protocol import NativeError, decode_json
 
 class ZcodeAdapter(Adapter):
     name = "zcode"
-    capabilities = ("zcode", "workspace", "cancel", "artifacts", "deadline", "native-session")
+    capabilities = ("zcode", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session")
     native_resume = True
     model_discovery = True
 
@@ -56,11 +57,17 @@ class ZcodeAdapter(Adapter):
         root = Path(state) / "harnesses" / "zcode" / hashlib.sha256(context.task_id.encode()).hexdigest()
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(root, 0o700)
+        # The controller hosts the private inquiry socket: observe is always
+        # available, and a question is only ever injected into this attempt's live
+        # root turn through the confirmed native guide command.
+        inquiry = turn_io.inquiry_paths(context)
         turn_io.private_json(context.directory / "zcode-control.json", {
             "directory": str(context.directory.resolve()), "nativeRoot": str(root.resolve()),
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
-            "taskFile": str(context.task_file()), "spec": {k: context.spec[k] for k in ("provider", "model", "effort") if context.spec.get(k)},
+            "taskFile": str(context.task_file()),
+            "inquiry": {k: inquiry[k] for k in ("socketPath", "resultsPath", "errorPath", "token")},
+            "spec": {k: context.spec[k] for k in ("provider", "model", "effort") if context.spec.get(k)},
         })
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
@@ -94,6 +101,7 @@ class ZcodeAdapter(Adapter):
         record, error = turn_io.read_turn(context, shutdown, exit_code, self.validate_turn_provenance)
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
+        payload["nativeSession"] = _native_session(payload, context, shutdown, record)
         if isinstance(getattr(context, "effective_workspace", None), dict):
             payload["workspaceManifest"] = context.effective_workspace
         if error:
@@ -182,6 +190,49 @@ class ZcodeAdapter(Adapter):
                 shutil.rmtree(directory)
 
 
+def _native_session(payload: dict, context: ExecutionContext, shutdown_confirmed: bool,
+                    record: dict | None = None) -> dict:
+    """Truthful native-session facts for one ZCode attempt.
+
+    Git isolation and native session storage are separate dimensions. The root
+    session lives in this attempt's private ZCode store, so the installed ZCode app
+    does not list it; a continuation can resume it only when the private binding
+    for the exact session still exists and the attempt settled with real shutdown
+    evidence.
+    """
+    turn = payload.get("turn") if isinstance(payload.get("turn"), dict) else (record if isinstance(record, dict) else {})
+    provenance = turn.get("provenance") if isinstance(turn.get("provenance"), dict) else {}
+    session_id = payload.get("sessionId") or turn.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        session_id = None
+    mode = (context.turn_input or {}).get("resumeMode") if isinstance(context.turn_input, dict) else None
+    bound = False
+    if session_id:
+        try:
+            control = json.loads((context.directory / "zcode-control.json").read_text())
+            native_root = Path(control["nativeRoot"])
+            binding = native_root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
+            bound = binding.is_file()
+        except (OSError, ValueError, KeyError, TypeError):
+            bound = False
+    return {
+        "adapter": "zcode",
+        "sessionId": session_id,
+        "captured": session_id is not None,
+        "storageScope": "task-private",
+        "storageOwner": "buddy-attempt",
+        "nativeAppVisibility": "not-listed-in-native-app",
+        "resumeMode": mode,
+        "bindingPresent": bound,
+        "resumable": bool(bound and shutdown_confirmed and provenance.get("settlement") == "session-closed"),
+        "note": (
+            "the root session is stored in this attempt's private ZCode native root (ZCODE_SESSION_DB_PATH/"
+            "ZCODE_STORAGE_DIR); the installed ZCode app lists only sessions in its own user home, so the "
+            "checkable entrypoint is this attempt's activity, tool summary and fixed artifacts"
+        ),
+    }
+
+
 def _read_result(path: Path) -> dict | None:
     try:
         with path.open("rb") as stream:
@@ -206,6 +257,7 @@ def _signal_name(code: int | None) -> str | None:
 
 def _artifacts(context: ExecutionContext, handle: ProcessHandle) -> list[dict]:
     paths = [("task-specification", context.task_file()), ("turn-result", context.turn_output_file()),
+             ("native-attention", context.directory / "attention.json"),
              *(("runner-" + key, Path(value)) for key, value in handle.log_paths.items() if key in ("stdout", "stderr"))]
     out = []
     for kind, path in paths:

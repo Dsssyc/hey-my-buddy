@@ -89,6 +89,9 @@ export function apply(ctx, config) {
       text: [
         `This is a governed Buddy turn. You MUST finish by calling ${TURN_TOOL} with the full result. Plain final text does not record a result.`,
         'Call it after your own work and internal subagents have settled. Internal subagents remain available; only you conclude the Buddy turn.',
+        'End the turn with assistance or attention instead of guessing when any of these is true: the work needs files or permissions outside the authorized scope; validation keeps failing and you have no further evidence for the next step; the assigned capability clearly does not fit; or the Host/user agreed review condition has been reached.',
+        'Ask the Host for help through your turn outcome, not by acting outside scope. Put what you already tried in attempted, the exact work you need in neededWork and the acceptance condition in acceptance, with expectedArtifacts listing the fixed artifacts the help must produce; a suggestedProfileId is only a suggestion the Host may ignore.',
+        'You may not create or dispatch another Buddy task, worker or peer job yourself, and you must never claim that a reviewer or helper already ran. The Host decides whether to handle the work, authorize a helper or continue you; your internal subagents remain available for work inside this authorized scope.',
         'Use request: null for completed. Assistance/attention requires a nonblank summary, attempted, neededWork and acceptance, plus expectedArtifacts as an array. Keep arrays to 32 items and the whole outcome to 64 KiB.',
         'The following JSON is the Host-provided frozen input for this execution. Consume its decisions, pinned artifacts and next actions. Reconstructed-new-session means a new session, not native session resume.',
         JSON.stringify({ resumeMode: input.resumeMode, previousSessionId: input.previousSessionId, context: input.context, executionWorkspace: input.executionWorkspace }),

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -14,6 +15,99 @@ from .base import ExecutionContext
 MAX_INPUT_BYTES = 262144
 MAX_OUTCOME_BYTES = 65536
 MAX_RECORD_BYTES = 98304
+
+#: Frozen activity sidecar contract (ADR-010 "recovery and activity"). A native
+#: controller writes this metadata next to its private turn files so the owning
+#: Worker can forward a bounded projection through ``worker_progress``. Only the
+#: fields below may appear; raw prompts, tool arguments, outputs, credentials and
+#: reasoning are never part of it.
+ACTIVITY_CONTRACT = {
+    "version": 1,
+    "helperModule": "buddy.activity",
+    "helperFunction": "write_activity_sidecar",
+    "fileName": "activity.json",
+    "phases": (
+        "starting",
+        "waiting-model",
+        "streaming-model",
+        "tool-running",
+        "waiting-external",
+        "waiting-host",
+        "finishing",
+        "unknown",
+    ),
+    "fields": ("phase", "observedAt", "eventSeq", "nativeSessionId", "lastNativeActivityAt",
+               "lastToolActivityAt", "toolName", "waitingReason", "counts"),
+}
+
+#: Bounded, shared capability hints. A coding harness prompt carries exactly these
+#: trigger conditions so a Worker ends its turn with assistance/attention instead of
+#: silently overreaching, and so it asks the Host for an authorized helper/reviewer
+#: rather than creating a peer Buddy itself. The DSH prompt section
+#: (harnesses/dsh/plugins/turn-result.mjs) states the same triggers in the agent's
+#: own system prompt; this tuple is the harness-neutral wording both sides keep.
+ASSISTANCE_HINTS = (
+    "End your turn with assistance or attention instead of guessing when any of these is true: "
+    "the work needs files or permissions outside the authorized scope; validation keeps failing and "
+    "you have no further evidence for the next step; the assigned capability clearly does not fit; "
+    "or the Host/user agreed review condition has been reached.",
+    "Ask the Host for help through your turn outcome, not by acting outside scope. Put what you "
+    "already tried in attempted, the exact work you need in neededWork and the acceptance condition "
+    "in acceptance, with expectedArtifacts listing the fixed artifacts the help must produce; a "
+    "suggestedProfileId is only a suggestion the Host may ignore.",
+    "You may not create or dispatch another Buddy task, worker or peer job yourself, and you must "
+    "never claim that a reviewer or helper already ran. The Host decides whether to handle the work, "
+    "authorize a helper or continue you; your internal subagents remain available for work inside "
+    "this authorized scope.",
+)
+
+
+def activity_document(*, version_identity: dict, payload: dict) -> dict:
+    """Build the bounded activity document the ``buddy.activity`` helper validates.
+
+    This assembles only the frozen fields: identity plus the latest projection. The
+    helper owns validation, atomic replacement and throttling, so this function
+    never writes a look-alike sidecar on its own.
+    """
+    allowed = set(ACTIVITY_CONTRACT["fields"])
+    document = {
+        "version": ACTIVITY_CONTRACT["version"],
+        "taskId": version_identity.get("taskId"),
+        "attemptId": version_identity.get("attemptId"),
+        "generation": version_identity.get("generation"),
+    }
+    for key in ACTIVITY_CONTRACT["fields"]:
+        if key in payload and key in allowed:
+            document[key] = payload[key]
+    return document
+
+
+def write_activity_sidecar(directory: Path, document: dict) -> dict:
+    """Publish one attempt-private activity sidecar through the owning helper.
+
+    ``buddy.activity`` (a separate slice) owns the frozen field validation, the
+    atomic throttled write and the Worker handoff. Required integration API:
+
+        buddy.activity.write_activity_sidecar(directory: Path, document: dict) -> str | None
+
+    It receives the attempt directory and the document built by
+    :func:`activity_document`, writes ``activity.json`` atomically when the
+    projection changed, and returns its path (or ``None`` when throttled). This
+    module never duplicates that logic: when the helper is missing the caller gets
+    an honest ``written: false`` result and the turn itself is never affected.
+    """
+    try:
+        from buddy import activity
+    except ImportError:
+        return {"written": False, "reason": "the buddy.activity helper is not installed in this runtime"}
+    writer = getattr(activity, ACTIVITY_CONTRACT["helperFunction"], None)
+    if not callable(writer):
+        return {"written": False, "reason": "buddy.activity does not expose the frozen write_activity_sidecar API"}
+    try:
+        path = writer(Path(directory), document)
+    except Exception as error:  # noqa: BLE001 - activity is metadata and must never fail a turn
+        return {"written": False, "reason": f"the buddy.activity helper failed: {type(error).__name__}"}
+    return {"written": True, "path": str(path) if path else None}
 
 
 def canonical_json(value: object) -> str:
@@ -76,6 +170,42 @@ def write_turn_files(context: ExecutionContext) -> None:
 def workspace_cwd(context: ExecutionContext) -> str:
     manifest = getattr(context, "effective_workspace", None)
     return str(manifest["path"]) if isinstance(manifest, dict) and manifest.get("path") else context.cwd
+
+
+#: ``sun_path`` budget for a private Unix socket. The attempt directory can be
+#: deep, so callers fall back to a short temp directory and keep the credentials
+#: (not the socket) in the attempt directory the service reads.
+UNIX_SOCKET_PATH_BUDGET = 105 if os.uname().sysname == "Linux" else 101
+
+
+def inquiry_paths(context: ExecutionContext) -> dict:
+    """Owner-private paths and token for one attempt's inquiry bridge.
+
+    The credentials file always lives in the attempt directory so the service can
+    find it; only the socket may move to a short temp directory. Every directory is
+    created 0700 and the token is hex so it can never be parsed as an option.
+    """
+    candidates = [
+        context.directory,
+        Path("/tmp") / "hey-my-buddy-inquiry" / context.attempt_id,
+        Path(os.environ.get("TMPDIR", "/tmp")) / "hey-my-buddy-inquiry" / context.attempt_id,
+    ]
+    directory = next(
+        (candidate for candidate in candidates if len(str(candidate / "inquiry.sock").encode()) <= UNIX_SOCKET_PATH_BUDGET),
+        candidates[-1],
+    )
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    credentials = {
+        "socketPath": str(directory / "inquiry.sock"),
+        "resultsPath": str(directory / "inquiry.results.jsonl"),
+        "errorPath": str(directory / "inquiry.sock.error.json"),
+        "token": secrets.token_hex(32),
+    }
+    context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    credentials_path = context.directory / "inquiry.json"
+    private_json(credentials_path, credentials)
+    return {"directory": directory, **credentials}
 
 
 def verify_workspace(context: ExecutionContext) -> None:
