@@ -41,7 +41,7 @@ class ExecutionContext:
 
     @property
     def cwd(self) -> str:
-        """The effective execution directory: the resolved workspace path when present."""
+        """The Worker workspace path, or the directory of a non-Worker execution."""
         turn_input = self.turn_input
         if turn_input is not None:
             return turn_input["executionWorkspace"]["path"]
@@ -70,7 +70,7 @@ class ExecutionContext:
 
     def credential_file(self) -> Path:
         from ...private_dirs import context_root
-        return context_root(self, getattr(self, "private_adapter", None)) / "agent-credential.json"
+        return context_root(self) / "agent-credential.json"
 
     def log_paths(self) -> dict:
         return {

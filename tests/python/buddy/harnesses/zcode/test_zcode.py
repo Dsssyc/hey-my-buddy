@@ -60,7 +60,7 @@ class ZcodeFixtureCase(unittest.TestCase):
                     "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
                                 session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
+                                spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -195,6 +195,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result["requested"], {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
         self.assertEqual({key: getattr(handle.result.buddy.checked, key).value
                           for key in ("provider", "model", "effort")}, outcome.result["requested"])
+        self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
         self.assertNotIn("observed", outcome.result)
         self.assertNotIn("observedConfig", outcome.result)
         self.assertNotIn("requestedConfig", outcome.result)

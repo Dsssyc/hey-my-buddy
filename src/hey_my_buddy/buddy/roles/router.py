@@ -136,7 +136,7 @@ class DecisionAdapter(Adapter):
         }
         result = {
             "operation": "select", "status": "ok" if outcome.status == "ok" else "error",
-            "requested": document["buddy"],
+            "requested": document["buddy"], "resolved": native_result.get("resolved"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
             "toolEvidence": native_result.get("toolEvidence"),

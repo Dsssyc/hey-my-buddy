@@ -13,20 +13,18 @@ from ...blackboard.tasks import workspace
 from ...private_dirs import directory_mode, remove_tree
 
 
-def _remaining(deadline: float | None) -> float | None:
-    if deadline is None:
-        return None
+def _remaining(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise BoardError("router-input-unknown", "The frozen input read did not finish within its wait")
     return remaining
 
 
-def digest(root: Path, *, deadline: float | None) -> str:
+def digest(root: Path, *, deadline: float) -> str:
     return _digest(root, deadline)
 
 
-def _digest(root: Path, deadline: float | None) -> str:
+def _digest(root: Path, deadline: float) -> str:
     value = hashlib.sha256()
     for directory, names, files in os.walk(root, followlinks=False):
         _remaining(deadline)
@@ -49,7 +47,7 @@ def _digest(root: Path, deadline: float | None) -> str:
     return value.hexdigest()
 
 
-def prepare(manifest: dict | None, directory: Path, *, deadline: float | None) -> tuple[Path, str]:
+def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple[Path, str]:
     _remaining(deadline)
     if manifest is None:
         # Public standalone selection has no filesystem input. Freeze an empty
@@ -164,7 +162,7 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float | None) -
             except OSError:
                 pass
             try:
-                reader.wait(timeout=(None if deadline is None else max(0, deadline - time.monotonic())))
+                reader.wait(timeout=max(0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 reader.kill()
                 reader.wait()
@@ -180,7 +178,7 @@ def discard(root: Path) -> None:
         remove_tree(root)
 
 
-def verify(manifest: dict | None, root: Path, expected: str, *, deadline: float | None) -> dict:
+def verify(manifest: dict | None, root: Path, expected: str, *, deadline: float) -> dict:
     try:
         _remaining(deadline)
         if manifest is not None:

@@ -41,7 +41,7 @@ def write_turn_files(context: ExecutionContext) -> None:
         raise BoardError("INVALID_ARGUMENT", "the micro task turn input exceeds its byte bound")
     private_json(context.turn_input_file(), context.turn_input)
     if context.agent_credential:
-        ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
+        ensure_private_dir(context_root(context))
         private_json(context.credential_file(), {
             "token": context.agent_credential, "taskId": context.task_id,
             "attemptId": context.attempt_id, "generation": context.generation, "turnId": context.turn_id,
@@ -51,13 +51,13 @@ def write_turn_files(context: ExecutionContext) -> None:
 
 def inquiry_paths(context: ExecutionContext) -> dict:
     """The durable checkpoint journal of one attempt; live credentials stay in memory."""
-    private_root = ensure_private_dir(context_root(context, getattr(context, "private_adapter", None)))
+    private_root = ensure_private_dir(context_root(context))
     ensure_private_dir(context.directory)
     return {"directory": private_root, "resultsPath": str(context.directory / "inquiry.results.jsonl")}
 
 
 def verify_workspace(context: ExecutionContext) -> None:
-    manifest = context.turn_input.get("executionWorkspace")
+    manifest = context.turn_input["executionWorkspace"]
     from ...blackboard.tasks.workflow import workspace_module
     routing = (context.turn_input.get("context") or {}).get("routing") or {}
     workspace_module().verify(manifest, require_unchanged=bool(routing.get("decisionId")))

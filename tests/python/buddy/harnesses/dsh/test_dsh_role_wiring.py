@@ -34,7 +34,7 @@ from buddy.harnesses.fixture_selection import mock_role_workspace
 
 CKROOT = Path(__file__).resolve().parents[5]
 
-SPEC = {"provider": "fake", "model": "m1", "effort": "high"}
+SPEC = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
 
 
 def qualified_tools(attempt_id: str) -> tuple[str, str, str]:
@@ -345,7 +345,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 self.assertNotIn(failed_key, refused.result)
                 self.assertNotIn("turn", refused.result)
 
-    def test_a_worker_result_claiming_an_unconfirmed_native_stop_cannot_publish(self):
+    def test_a_worker_result_with_unconfirmed_native_stop_cannot_be_imported(self):
         context = self.context()
         handle, original = self.execute(context)
         self.assertEqual(original.status, "ok", original.to_report())

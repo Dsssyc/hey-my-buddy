@@ -365,7 +365,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
 
 
 class DshPublishedReceiptTests(unittest.TestCase):
-    def test_an_unvalidated_dsh_turn_does_not_publish_a_captured_session(self):
+    def test_an_undelivered_dsh_turn_does_not_publish_a_captured_session(self):
         from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
         fixture = DshRoleCase()
         fixture.setUp()

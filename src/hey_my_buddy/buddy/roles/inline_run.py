@@ -178,8 +178,7 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     if control["operation"] == "worker":
         delivered = False
         wrap_up_run = result.identity != original_identity
-        if (code == 0 and result.stop_evidence.native.group_state == "gone"
-                and (not wrap_up_run or wrap_up_candidate)):
+        if code == 0 and (not wrap_up_run or wrap_up_candidate):
             try:
                 turn_input = decode_strict_json(read_bytes(Path(control["inputFile"])))
                 handle.turn_record = run_execution._worker_result(

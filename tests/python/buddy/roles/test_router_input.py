@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -50,7 +51,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
                 mock.patch.object(router_input, "discard", side_effect=check_partial_input) as cleanup:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=None)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         self.assertEqual(refused.exception.code, "router-input-unavailable")
         self.assertEqual(refused.exception.message, message)
         cleanup.assert_called_once_with(frozen)
@@ -121,7 +122,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_indeterminate_workspace_verification_stays_unknown(self):
         self.enterContext(mock.patch.object(router_input.workspace, "verify",
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
-        result = router_input.verify(self.manifest, self.checkout, "expected", deadline=None)
+        result = router_input.verify(self.manifest, self.checkout, "expected", deadline=time.monotonic() + 120)
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")
 
@@ -132,7 +133,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
         with mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=None)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
@@ -151,7 +152,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.assertTrue(result["unchanged"])
 
     def test_completed_digest_mismatch_is_changed(self):
-        result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=None)
+        result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=time.monotonic() + 120)
         self.assertIs(result["unchanged"], False)
         self.assertEqual(result["code"], "router-input-changed")
 

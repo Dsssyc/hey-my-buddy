@@ -201,12 +201,25 @@ class SessionService(InternalModel):
 
 
 
-class SessionRecordFailureParams(InternalModel):
-    """Bounded diagnostic facts of a failed display-record operation."""
+class SessionRecordCloseFailure(InternalModel):
+    """Bounded diagnostic facts of a failed display-record close."""
 
     category: Text(128)
     message: RawText(8192)
     truncated: bool = False
+
+
+class SessionRecordFailureParams(InternalModel):
+    """The first display failure, with any failure while closing its file."""
+
+    category: Text(128)
+    message: RawText(8192)
+    truncated: bool = False
+    close_failure: Optional[SessionRecordCloseFailure] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_close_failure(self, handler: Any) -> dict:
+        return {key: value for key, value in handler(self).items() if value is not None}
 
 
 class SessionRecordFailure(InternalModel):
@@ -292,8 +305,8 @@ class CheckedBuddy(InternalModel):
 class ResultBuddy(InternalModel):
     """Requested and checked buddy, kept strictly apart.
 
-    The legacy receipts' ``observed`` key stays the role projection's ``None``
-    placeholder; the native readback lands here as checked values, never as a look-alike observed block.
+    Native readback is retained as checked values. The role projects a complete
+    checked buddy into ``resolved``; it never fills an unknown value from the request.
     """
 
     requested: Optional[RunBuddy] = None

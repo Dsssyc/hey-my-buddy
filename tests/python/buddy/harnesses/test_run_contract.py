@@ -461,9 +461,19 @@ class SessionRecordFailureTests(unittest.TestCase):
         self.assertEqual({**decoded.to_payload(), "sessionRecordFailure": None}, payload)
         self.assertEqual(decoded.end.status, "ok")
         self.assertEqual(decoded.stop_evidence.native.group_state, "gone")
+        close_failure = {"category": "OSError", "message": "close failed", "truncated": False}
+        with_close = {**failure, "params": {**failure["params"], "closeFailure": close_failure}}
+        self.assertEqual(rc.RunResult.from_payload({**payload, "sessionRecordFailure": with_close})
+                         .session_record_failure.to_payload(), with_close)
         for bad in ({**failure, "code": "unknown"}, {**failure, "params": {**failure["params"], "category": None}}):
             with self.subTest(bad=bad), self.assertRaises(BoardError):
                 rc.RunResult.from_payload({**payload, "sessionRecordFailure": bad})
+        for bad_close in ({**close_failure, "category": None},
+                          {**close_failure, "message": "x" * 8193},
+                          {**close_failure, "unexpected": "x"}):
+            with self.subTest(bad_close=bad_close), self.assertRaises(BoardError):
+                rc.RunResult.from_payload({**payload, "sessionRecordFailure": {
+                    **failure, "params": {**failure["params"], "closeFailure": bad_close}}})
 
 
 class FreezingTests(unittest.TestCase):

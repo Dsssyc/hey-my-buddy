@@ -130,7 +130,9 @@ class InstalledZcodeTests(ZcodeFixtureCase):
             key: value.value for key in ("provider", "model", "effort")
             if (value := getattr(second_handle.result.buddy.checked, key)) is not None})
         self.assertNotIn("observed", second.result)
-        self.assertNotIn("resolved", second.result)
+        self.assertEqual(second.result["resolved"], {
+            key: value.value for key in ("provider", "model", "effort")
+            if (value := getattr(second_handle.result.buddy.checked, key)) is not None})
         finish_names = {name for request in self.requests for name in request["tools"] if name.endswith("__hey_my_buddy_finish_turn")}
         self.assertEqual(len(finish_names), 2, "continuation did not receive its own private finish bridge")
 

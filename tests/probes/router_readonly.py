@@ -161,7 +161,7 @@ def check(status, evidence):
     return {"status": status, "evidence": evidence}
 
 
-def evaluate(report, result, handle_stopped, marker, before, after, sentinel_before, sentinel_after, checked):
+def evaluate(report, result, handle_stopped, marker, before, after, sentinel_before, sentinel_after):
     raw = result.result.get("rawAnswer")
     try:
         answer = json.loads(raw) if isinstance(raw, str) else raw
@@ -183,15 +183,16 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
                                       (tools, limits["toolCalls"]), (byte_count, limits["bytesRead"])))
     over = over or (rounds is not None and rounds > report["cost"]["maxNativeTurns"])
     native_identity = result.result.get("nativeIdentity") or {}
+    resolved = result.result.get("resolved") or {}
     identity_matches = (isinstance(native_identity.get("sessionId"), str)
                         and bool(native_identity["sessionId"])
-                        and all(checked.get(key) == value for key, value in report["buddy"].items()))
+                        and all(resolved.get(key) == value for key, value in report["buddy"].items()))
     if report["harness"] == "codex":
         identity_matches = identity_matches and isinstance(native_identity.get("turnId"), str) \
             and bool(native_identity["turnId"])
     checks = {
         "requestIdentity": check("passed" if identity_matches else "failed",
-                                 {"nativeIdentity": native_identity, "checked": checked}),
+                                 {"nativeIdentity": native_identity, "resolved": resolved}),
         "nativePolicy": check("unverified", result.result.get('nativePolicy') or "缺少原生策略回执；模型自述不作证据。"),
         "forbiddenTools": check("unverified", "Host 必须核对原生工具事件及策略回执，确认没有写入或未知工具调用。"),
         "writeDenials": check("unverified", result.result.get('nativeToolEvents') or "缺少关联原生写入请求/拒绝记录。"),
@@ -329,11 +330,8 @@ def run(args):
                     report["activity"] = json.loads(activity.read_text())
                 except (ValueError, OSError):
                     report["activity"] = None
-            readback = handle.result.buddy.checked
-            checked = {key: value.value for key in ("provider", "model", "effort")
-                       if (value := getattr(readback, key)) is not None}
             evaluate(report, result, handle.shutdown_confirmed(), marker, before, input_hashes(frozen),
-                     sentinel_before, file_hash(sentinel), checked)
+                     sentinel_before, file_hash(sentinel))
     except (Exception, KeyboardInterrupt) as error:
         report.update(status="failed", error=type(error).__name__,
                       reason="探针中断或失败；不自动重试，检查私有证据。")

@@ -51,7 +51,7 @@ def outcome_schema(*, summary_description: str | None = None, suggested_buddy: b
 class WorkerReceiptOptions:
     """Registered receipt projections over the same Worker collection path."""
 
-    capture_session_from_validated_turn: bool = False
+    capture_session_from_turn: bool = False
 
 
 @dataclass(frozen=True)

@@ -65,10 +65,7 @@ class SessionRecordTests(unittest.TestCase):
         original_error = ValueError("\ud800" + "文" * 4000)
         close_error = KeyError("cleanup")
         with mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=close_error):
-            with self.assertRaises(KeyError) as caught:
-                self.record.project(mock.Mock(side_effect=original_error))
-        self.assertIs(caught.exception, close_error)
-        self.assertIs(caught.exception.__context__, original_error)
+            self.record.project(mock.Mock(side_effect=original_error))
         # The mocked close did not close the actual descriptor.
         os.close(descriptor)
         failure = self.record.failure
@@ -77,6 +74,8 @@ class SessionRecordTests(unittest.TestCase):
         message = failure["params"]["message"]
         self.assertTrue(message.startswith("\\ud800"))
         self.assertLessEqual(len(message.encode("utf-8")), 8192)
+        self.assertEqual(failure["params"]["closeFailure"], {
+            "category": "KeyError", "message": "'cleanup'", "truncated": False})
         self.record._failed(RuntimeError("second error"))
         self.assertEqual(self.record.failure, failure)
 
@@ -87,24 +86,25 @@ class SessionRecordTests(unittest.TestCase):
             self.record.close()
         os.close(descriptor)
         self.assertEqual(self.record.failure["params"]["category"], "ValueError")
+        self.assertNotIn("closeFailure", self.record.failure["params"])
         self.assertIsNone(self.record._fd)
 
-    def test_cleanup_error_propagates_without_replacing_first_failure(self):
+    def test_cleanup_error_is_bounded_without_replacing_first_failure(self):
         self.record.append(self.update())
         descriptor = self.record._fd
         close_error = KeyError("cleanup " + "文" * 10000)
         original_error = ValueError("first error")
         with mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=close_error):
-            with self.assertRaises(KeyError) as caught:
-                self.record.project(mock.Mock(side_effect=original_error))
-        self.assertIs(caught.exception, close_error)
-        self.assertIs(caught.exception.__context__, original_error)
+            self.record.project(mock.Mock(side_effect=original_error))
         os.close(descriptor)
-        self.assertEqual(self.record.failure["params"], {
+        params = self.record.failure["params"]
+        self.assertEqual({key: params[key] for key in ("category", "message", "truncated")}, {
             "category": "ValueError", "message": "first error", "truncated": False})
+        self.assertEqual(params["closeFailure"]["category"], "KeyError")
+        self.assertTrue(params["closeFailure"]["truncated"])
+        self.assertLessEqual(len(params["closeFailure"]["message"].encode("utf-8")), 8192)
         self.record._failed(RuntimeError("later"))
-        self.assertEqual(self.record.failure["params"], {
-            "category": "ValueError", "message": "first error", "truncated": False})
+        self.assertEqual(self.record.failure["params"], params)
 
     def test_cancellation_is_not_a_projection_failure(self):
         for cancellation in (KeyboardInterrupt(), SystemExit()):

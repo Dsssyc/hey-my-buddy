@@ -86,7 +86,7 @@ def worker_receipt_options(name: str):
     from ..roles.schema_worker import WorkerReceiptOptions
 
     if name == "dsh":
-        return WorkerReceiptOptions(capture_session_from_validated_turn=True)
+        return WorkerReceiptOptions(capture_session_from_turn=True)
     return WorkerReceiptOptions()
 
 

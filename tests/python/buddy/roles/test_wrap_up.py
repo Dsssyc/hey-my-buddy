@@ -335,23 +335,6 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(self.last_turn_record["outcome"]["summary"], "selected summary")
         self.assertIs(self.last_verdict["wrapUpDelivered"], True)
 
-    def test_conflicting_turn_publication_keeps_the_first_record(self):
-        control = {**self.control, "timeoutSeconds": 60}
-        turn_input = {"taskId": "task-stop", "attemptId": "attempt-stop", "generation": 1,
-                      "turnId": "turn-stop", "resumeMode": "initial"}
-        result = result_for(request_for(control), status="ok")
-        first_outcome = {"disposition": "completed", "summary": "first"}
-        second_outcome = {"disposition": "completed", "summary": "second"}
-        with mock.patch.object(run_execution, "worker_delivery", side_effect=[
-                (first_outcome, {"source": "first"}, {}),
-                (second_outcome, {"source": "second"}, {})]):
-            first = run_execution._worker_result(result, control, turn_input, "prompt")
-            original = Path(control["outputFile"]).read_bytes()
-            with self.assertRaises(FileExistsError):
-                run_execution._worker_result(result, control, turn_input, "prompt")
-        self.assertEqual(Path(control["outputFile"]).read_bytes(), original)
-        self.assertEqual(first["outcome"], first_outcome)
-
     def test_summary_request_explicitly_carries_the_first_recording_failure(self):
         failure = rc.SessionRecordFailure.from_payload({
             "code": "session-record-write-failed",

@@ -61,7 +61,7 @@ class CodexAdapterTests(unittest.TestCase):
                       "previousSessionId": previous, "context": {},
                       "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(session_record_path=str(self.root / f"session-{index}.jsonl"), task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                spec={"adapter": "codex", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "openai", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},

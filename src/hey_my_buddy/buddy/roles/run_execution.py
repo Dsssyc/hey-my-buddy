@@ -132,17 +132,20 @@ def _base_result(result) -> dict:
         "status": result.end.status, "mode": result.harness,
         "harnessVersion": result.harness_version or "unknown",
         "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
+        "resolved": None,
         "modelStarted": result.model_started is True,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
+    checked = result.buddy.checked
+    if checked.provider is not None and checked.model is not None and checked.effort is not None:
+        payload["resolved"] = {"provider": checked.provider.value, "model": checked.model.value,
+                               "effort": checked.effort.value}
     if result.native_identity is not None:
         payload["sessionId"] = result.native_identity.session_id
     if result.end.status != "ok":
         payload["code"] = result.end.reason_code
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
-        if result.end.reason_code == "native-disconnected":
-            payload["failureKind"] = "transport"
     if result.native_failure is not None:
         payload["quotaFailure"] = result.native_failure.value
     if result.session_record_failure is not None:
@@ -194,7 +197,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
         evidence = module.native_evidence(result) if module.native_evidence is not None else {}
         if top_level:
             payload.update(evidence)
-        else:
+        elif evidence:
             payload.setdefault("nativeEvidence", {}).update(evidence)
     if tools:
         payload["toolEvidence"] = tools
@@ -592,7 +595,6 @@ class WorkerRunExecutor:
         return self.description.available()
 
     def prepare(self, context: ExecutionContext) -> None:
-        context.private_adapter = self.name
         from ..harnesses.registry import worker_format
         format = worker_format(self.name)
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
@@ -711,9 +713,9 @@ class WorkerRunExecutor:
         seal_error = None
         payload["turnResultPath"] = str(context.turn_output_file())
         session_id = payload.get("sessionId") or (record or {}).get("sessionId")
-        if self.receipt_options.capture_session_from_validated_turn:
-            # Only an imported, validated turn can establish capture where
-            # that is the registered native receipt rule.
+        if self.receipt_options.capture_session_from_turn:
+            # This registered projection takes its session from the delivered
+            # record. The service validates that record in workflow._validate_turn.
             session_id = (record or {}).get("sessionId")
         facts = self.module.session_facts(Path(handle.role_run_control["nativeRoot"]), session_id)
         payload["nativeSession"] = {**facts, "resumeMode": context.turn_input.get("resumeMode"),
@@ -721,10 +723,9 @@ class WorkerRunExecutor:
                               and result.continuation is not None and result.continuation.resumable is True
                               and (record is not None or checkpoint is not None
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
-        if self.receipt_options.capture_session_from_validated_turn:
-            payload["nativeSession"]["sessionIdSource"] = "validated-turn" if session_id else "none"
-        if context.effective_workspace is not None:
-            payload["workspaceManifest"] = context.effective_workspace
+        if self.receipt_options.capture_session_from_turn:
+            payload["nativeSession"]["sessionIdSource"] = "turn-record" if session_id else "none"
+        payload["workspaceManifest"] = context.effective_workspace
         if error:
             payload["turnError"] = error
             if status == "ok":

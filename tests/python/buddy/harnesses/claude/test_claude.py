@@ -95,7 +95,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                       "executionWorkspace": {"path": str(self.cwd), "access": access or "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 session_record_path=str(self.root / f"session-attempt-{index}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},

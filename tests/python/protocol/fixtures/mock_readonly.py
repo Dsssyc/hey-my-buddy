@@ -84,7 +84,7 @@ _END = {"error": ("call-timeout", 1), "protocol_error": ("invalid-native-result"
 def start(harness, context, request, fixture, options):
     """Freeze the production review request and return its direct native result."""
     from hey_my_buddy.buddy.harnesses.run_contract import (
-        NativeIdentity, ResultBuddy, RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer)
+        CheckedBuddy, CheckedValue, NativeIdentity, ResultBuddy, RunEnd, RunIdentity, RunResult, RunValue, StopEvidence, StopLayer)
     from hey_my_buddy.buddy.roles import run_execution
     from hey_my_buddy.private_dirs import context_root, ensure_private_dir
 
@@ -139,7 +139,9 @@ def start(harness, context, request, fixture, options):
             identity=built_request.identity, harness=harness,
             end=RunEnd(status="error" if mode in _END else "ok", reason_code=reason_code,
                        native_exit_code=exit_code), model_started=True,
-            buddy=ResultBuddy(requested=built_request.buddy),
+            buddy=ResultBuddy(requested=built_request.buddy, checked=CheckedBuddy(
+                provider=CheckedValue(value=context.spec["provider"]),
+                model=CheckedValue(value=context.spec["model"]), effort=CheckedValue(value=context.spec["effort"]))),
             native_identity=NativeIdentity(session_id="mock-native"),
             value=None if mode in _END else RunValue(schema_status=schema_status, raw=raw, parsed=parsed),
             tool_evidence=tool_receipt(binding, 1, native_identity={"sessionId": "mock-native"})["toolEvidence"],

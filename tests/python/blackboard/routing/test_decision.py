@@ -201,8 +201,9 @@ class SelectionRequestTests(DecisionTestCase):
         # parameters, and the decision run itself is not an execution permit.
         self.assertEqual(decision["requestedBuddy"]["model"], CATALOG_BUDDY["model"])
         self.assertEqual(decision["requestedBuddy"]["effort"], CATALOG_BUDDY["effort"])
-        self.assertEqual(decision["decisionModel"], {"requested": decision["requestedBuddy"]})
-        self.assertNotIn("resolvedBuddy", decision)
+        readback = {key: CATALOG_BUDDY[key] for key in ("provider", "model", "effort")}
+        self.assertEqual(decision["decisionModel"], {"requested": decision["requestedBuddy"], "resolved": readback})
+        self.assertEqual(decision["resolvedBuddy"], readback)
         self.assertNotIn("observedBuddy", decision)
         self.assertTrue(decision["stopEvidence"]["shutdownConfirmed"])
         self.assert_code("UNSUPPORTED", board.call, "task_retry", {"runId": request["runId"]})

@@ -78,17 +78,27 @@ class SessionRecord:
             self._write(fd, self._line(SESSION_FORMAT))
         return fd
 
+    @staticmethod
+    def _diagnostic(error: Exception) -> dict:
+        encoded = str(error).encode("utf-8", errors="backslashreplace")
+        category = type(error).__name__.encode("utf-8", errors="backslashreplace")
+        return {"category": category[:128].decode("utf-8", errors="ignore"),
+                "message": encoded[:8192].decode("utf-8", errors="ignore"),
+                "truncated": len(encoded) > 8192}
+
     def _failed(self, error: Exception) -> None:
         if self.failure is None:
-            encoded = str(error).encode("utf-8", errors="backslashreplace")
-            category = type(error).__name__.encode("utf-8", errors="backslashreplace")
+            diagnostic = self._diagnostic(error)
             self.failure = reason("session-record-write-failed",
-                                  category=category[:128].decode("utf-8", errors="ignore"),
-                                  message=encoded[:8192].decode("utf-8", errors="ignore"),
-                                  truncated=len(encoded) > 8192)
+                                  category=diagnostic["category"],
+                                  message=diagnostic["message"],
+                                  truncated=diagnostic["truncated"])
         fd, self._fd = self._fd, None
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except Exception as close_error:
+                self.failure["params"]["closeFailure"] = self._diagnostic(close_error)
 
     def append(self, update: SessionUpdate) -> None:
         if self.failure is not None:
