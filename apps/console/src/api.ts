@@ -1,10 +1,15 @@
 import i18n from "i18next";
+import { z } from "zod";
 import { locale } from "./i18n";
-import { isReason } from "./reason";
-import type { RuntimeVersionInfo, VersionFacts, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, Preference } from "./types";
+import type { RuntimeVersionInfo, Configuration, ConsoleAccess, ConsoleSession, ReminderSettings, RoutingHealth, Snapshot, Preference } from "./types";
 import type {
-  MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan,
+  MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskTimeline,
 } from "./macro-task-types";
+import { macroTaskPageSchema, macroTaskTimelineSchema } from "./macro-task-types";
+import {
+  configurationSchema, consoleAccessSchema, consoleSessionSchema, harnessHealthSchema, permissionLevelsSchema,
+  preferencesSchema, providerCoolingSchema, reminderSettingsSchema, routingHealthSchema, runtimeVersionSchema, safeCount, dateString, snapshotReadSchema,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -35,134 +40,43 @@ export function isSessionExpiredRefusal(error: unknown): boolean {
  * reported by the HTTP layer as a 401 `CONSOLE_SESSION_EXPIRED`.
  */
 function parseConsoleSession(value: unknown): ConsoleSession {
-  const session = value as Partial<ConsoleSession> | null | undefined;
-  const valid = !!session && typeof session === "object" && !Array.isArray(session)
-    && typeof session.id === "string" && session.id.trim().length > 0;
-  if (!valid) {
+  if (!consoleSessionSchema.safeParse(value).success) {
     throw new ApiError(
       "INVALID_RESPONSE",
       () => i18n.t("common:error.session"),
     );
   }
-  return session as ConsoleSession;
+  return value as ConsoleSession;
 }
 
 export function parseConsoleAccess(value: unknown): ConsoleAccess {
-  const access = value as ConsoleAccess | null;
-  if (!access || typeof access.requireLogin !== "boolean" || !Number.isSafeInteger(access.revision)
-    || access.revision < 0 || !Array.isArray(access.sessions) || access.sessions.length > 64
-    || access.sessions.some(session => !session || typeof session.id !== "string" || !/^[a-f0-9]{24}$/.test(session.id)
-      || !Number.isFinite(session.lastSeen) || typeof session.current !== "boolean")) {
+  if (!consoleAccessSchema.safeParse(value).success) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.access"));
   }
-  return access;
+  return value as ConsoleAccess;
 }
 
 export function parseReminderSettings(value: unknown): ReminderSettings {
-  const settings = value as ReminderSettings | null;
-  if (!settings || !Number.isSafeInteger(settings.silenceSeconds) || settings.silenceSeconds < 1
-    || settings.silenceSeconds > 86400 || !Number.isSafeInteger(settings.revision) || settings.revision < 1
-    || typeof settings.updatedAt !== "string" || !Number.isFinite(Date.parse(settings.updatedAt))) {
+  if (!reminderSettingsSchema.safeParse(value).success) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.reminders"));
   }
-  return settings;
+  return value as ReminderSettings;
 }
 
 
-/**
- * Current L4 list settings: the ordered Router list, its retry interval, mode
- * and review budget. Every retired slot shape — the schema-13 decision buddy
- * and the single/dual Router positions — is refused; no production alias exists.
- */
-const ROUTER_RETRY_INTERVAL_MAX = 2147483647;
-
-function validRouterBuddyIds(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(id => typeof id === "string" && id.trim().length > 0)
-    && new Set(value).size === value.length;
-}
-
+/** Current L4 list settings; retired single/dual Router slots are refused. */
 export function validRoutingConfiguration(value: unknown): value is Configuration {
-  const config = value as Partial<Configuration> | null;
-  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
-  const interval = config.routerRetryIntervalSeconds;
-  return !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config)
-    && validRouterBuddyIds(config.routerBuddyIds)
-    && typeof interval === "number" && Number.isInteger(interval) && interval >= 1 && interval <= ROUTER_RETRY_INTERVAL_MAX
-    && (config.defaultRoutingMode === "fast" || config.defaultRoutingMode === "review")
-    && (config.routingBudget === "brief" || config.routingBudget === "standard" || config.routingBudget === "deep");
-}
-
-function validConfigurationState(data: Snapshot): boolean {
-  return validRoutingConfiguration(data.configuration);
-}
-
-/** One per-buddy health entry; a malformed field refuses the whole entry. */
-function validRouterHealthEntry(entry: unknown): entry is NonNullable<RoutingHealth["routers"]>[number] {
-  const item = entry as NonNullable<RoutingHealth["routers"]>[number] | null;
-  if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-  if (typeof item.buddyId !== "string" || !item.buddyId.trim()) return false;
-  if (!Number.isSafeInteger(item.index) || item.index < 0) return false;
-  if (typeof item.eligible !== "boolean") return false;
-  for (const key of ["code", "skipUntil", "retryAt", "lastAnsweredAt", "lastNoAnswerAt"] as const) {
-    if (!(item[key] === undefined || item[key] === null || typeof item[key] === "string")) return false;
-  }
-  for (const key of ["inSkipWindow", "retryInProgress"] as const) {
-    if (!(item[key] === undefined || typeof item[key] === "boolean")) return false;
-  }
-  for (const key of ["consecutiveNoAnswers", "answeredCount", "noAnswerCount", "windowSize", "windowEntries",
-    "windowAnsweredCount", "windowFailureCount", "windowBudgetExhaustedCount", "windowBoundsRejectedCount",
-    "windowAttemptCount"] as const) {
-    if (!(item[key] === undefined || (Number.isSafeInteger(item[key]) && item[key]! >= 0))) return false;
-  }
-  if (!(item.identity === undefined || item.identity === null
-    || (!!item.identity && typeof item.identity === "object" && !Array.isArray(item.identity)
-      && ["harness", "provider", "model", "effort"].every(key => typeof (item.identity as Record<string, unknown>)[key] === "string")))) return false;
-  const lastError = item.lastError;
-  if (!(lastError === undefined || lastError === null
-    || (!!lastError && typeof lastError === "object"
-      && typeof lastError.at === "string"
-      && (lastError.code === null || typeof lastError.code === "string")
-      && (lastError.phase === undefined || lastError.phase === null || typeof lastError.phase === "string")))) return false;
-  return true;
+  return configurationSchema.safeParse(value).success;
 }
 
 /** Preferences carry only user-authored notes and their effective mode. */
 export function validPreferences(value: unknown): value is Preference[] {
-  return Array.isArray(value) && value.every(entry => entry && typeof entry === "object"
-    && !Array.isArray(entry) && Object.keys(entry).length === 3
-    && typeof entry.buddyId === "string" && ["prefer", "pin", "exclude"].includes(entry.mode)
-    && (entry.note === null || typeof entry.note === "string"));
+  return preferencesSchema.safeParse(value).success;
 }
 
 /** Optional health observations are never inferred from a failure count. */
 export function parseRoutingHealth(value: unknown): RoutingHealth | undefined {
-  const health = value as RoutingHealth | null;
-  if (!health || typeof health !== "object" || Array.isArray(health)) return undefined;
-  const counts = [health.windowSize, health.sampleCount, health.failureCount, health.consecutiveFailures,
-    health.abstentionCount, health.cancelledCount];
-  if (counts.some(count => !Number.isSafeInteger(count) || count < 0)
-    || [health.budgetExhaustedCount, health.boundsRejectedCount, health.inputChangedCount, health.attemptCount,
-      health.unattributedCount]
-      .some(count => count !== undefined && (!Number.isSafeInteger(count) || count < 0))
-    || (health.available !== undefined && typeof health.available !== "boolean")
-    || (health.reason !== undefined && health.reason !== null && !isReason(health.reason))
-    || (health.currentRouterBuddyId !== undefined && health.currentRouterBuddyId !== null
-      && typeof health.currentRouterBuddyId !== "string")
-    || (health.routers !== undefined
-      && (!Array.isArray(health.routers) || !health.routers.every(validRouterHealthEntry)))
-    || !(health.lastSuccessAt === null || typeof health.lastSuccessAt === "string")
-    || !(health.lastSuccessDecisionId === null || typeof health.lastSuccessDecisionId === "string")
-    || !Array.isArray(health.recentFailures)
-    || health.recentFailures.some(failure => !failure || typeof failure.decisionId !== "string"
-      || !(failure.runId === null || typeof failure.runId === "string")
-      || typeof failure.at !== "string" || typeof failure.code !== "string"))
-    return undefined;
-  if (health.unattributed !== undefined
-    && (!Array.isArray(health.unattributed) || health.unattributed.some(entry => !entry
-      || typeof entry.decisionId !== "string" || typeof entry.at !== "string"
-      || typeof entry.outcome !== "string"
-      || !(entry.code === null || typeof entry.code === "string")))) return undefined;
-  return health;
+  return routingHealthSchema.safeParse(value).success ? value as RoutingHealth : undefined;
 }
 
 export function errorText(error: unknown): string {
@@ -187,158 +101,37 @@ export function readVerificationText(verifiedAtMs: number | null | undefined): s
 
 /* ---- 0.16.0 storage wire shapes (docs/reference/operations.md) ---- */
 
-export type StorageCategory = {
-  id: string;
-  bytes: number;
-  reclaimableBytes: number;
-  count: number;
-  eligibleCount: number;
-  reasons: string[];
-};
-type StorageCandidate = {
-  id: string;
-  category: string;
-  path: string;
-  bytes: number;
-  eligible: boolean;
-  reasons: string[];
-};
-export type StorageOrphanProcess = {
-  pid: number;
-  kind: string;
-  stateDir: string | null;
-  runtimeDir: string | null;
-};
-export type StoragePlan = {
-  planId: string;
-  createdAt: string;
-  expiresAt: string;
-  categories: StorageCategory[];
-  candidates: StorageCandidate[];
-  orphanProcesses: StorageOrphanProcess[];
-};
-export type StorageApplyResult = {
-  planId: string;
-  removedBytes: number;
-  /** Removed candidates; a record list, never a count. */
-  removed: { id: string; path: string; bytes: number }[];
-  /** Skipped candidates with their per-item reason codes. */
-  skipped: { id: string; path: string; reasons: string[] }[];
-  /** True only when the whole plan finished; anything else is unresolved. */
-  complete: boolean;
-};
-
-/** The storage read boundary rejects malformed candidates and process evidence too. */
-function storageObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-const storageCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
-const storageReasons = (value: unknown): value is string[] => Array.isArray(value) && value.every(code => typeof code === "string");
-const storageString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
-
-function validStoragePlan(value: unknown): value is StoragePlan {
-  if (!storageObject(value) || !storageString(value.planId)) return false;
-  if (typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt))
-    || typeof value.expiresAt !== "string" || !Number.isFinite(Date.parse(value.expiresAt))) return false;
-  if (!Array.isArray(value.categories) || !Array.isArray(value.candidates) || !Array.isArray(value.orphanProcesses)) return false;
-  return value.categories.every(category => storageObject(category) && storageString(category.id)
-    && storageCount(category.bytes) && storageCount(category.reclaimableBytes)
-    && storageCount(category.count) && storageCount(category.eligibleCount) && storageReasons(category.reasons))
-    && new Set(value.categories.map(category => category.id)).size === value.categories.length
-    && value.candidates.every(row => storageObject(row) && storageString(row.id) && storageString(row.category)
-      && typeof row.path === "string" && storageCount(row.bytes) && typeof row.eligible === "boolean" && storageReasons(row.reasons))
-    && value.orphanProcesses.every(row => storageObject(row) && storageCount(row.pid) && row.pid > 0
-      && typeof row.kind === "string" && (row.stateDir === null || typeof row.stateDir === "string")
-      && (row.runtimeDir === null || typeof row.runtimeDir === "string"));
-}
+const storageCategorySchema = z.looseObject({
+  id: z.string().min(1), bytes: safeCount, reclaimableBytes: safeCount, count: safeCount, eligibleCount: safeCount, reasons: z.array(z.string()),
+});
+export type StorageCategory = z.infer<typeof storageCategorySchema>;
+const storageCandidateSchema = z.looseObject({
+  id: z.string().min(1), category: z.string().min(1), path: z.string(), bytes: safeCount, eligible: z.boolean(), reasons: z.array(z.string()),
+});
+const storageOrphanProcessSchema = z.looseObject({ pid: z.int().positive(), kind: z.string(), stateDir: z.string().nullable(), runtimeDir: z.string().nullable() });
+export type StorageOrphanProcess = z.infer<typeof storageOrphanProcessSchema>;
+const storagePlanSchema = z.looseObject({
+  planId: z.string().min(1), createdAt: dateString, expiresAt: dateString,
+  categories: z.array(storageCategorySchema).refine(rows => new Set(rows.map(row => row.id)).size === rows.length),
+  candidates: z.array(storageCandidateSchema), orphanProcesses: z.array(storageOrphanProcessSchema),
+});
+export type StoragePlan = z.infer<typeof storagePlanSchema>;
+const storageApplyResultSchema = z.looseObject({
+  planId: z.string().min(1), removedBytes: safeCount, complete: z.literal(true),
+  removed: z.array(z.looseObject({ id: z.string().min(1), path: z.string(), bytes: safeCount })),
+  skipped: z.array(z.looseObject({ id: z.string().min(1), path: z.string(), reasons: z.array(z.string()) })),
+});
+export type StorageApplyResult = z.infer<typeof storageApplyResultSchema>;
 
 function parseStoragePlan(value: unknown): StoragePlan {
-  if (!validStoragePlan(value)) {
+  if (!storagePlanSchema.safeParse(value).success) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.storagePlan"));
   }
-  return value;
+  return value as StoragePlan;
 }
 
 function validStorageApplyResult(value: unknown): value is StorageApplyResult {
-  return storageObject(value) && storageString(value.planId) && storageCount(value.removedBytes) && value.complete === true
-    && Array.isArray(value.removed) && value.removed.every(row => storageObject(row) && storageString(row.id)
-      && typeof row.path === "string" && storageCount(row.bytes))
-    && Array.isArray(value.skipped) && value.skipped.every(row => storageObject(row) && storageString(row.id)
-      && typeof row.path === "string" && storageReasons(row.reasons));
-}
-
-/**
- * The real service's `_summary` projection is the read boundary. Nullable
- * fields stay nullable rather than acquiring fixture-only defaults.
- */
-function validMacroTaskSummary(value: unknown): boolean {
-  const summary = value as MacroTaskSummary | null;
-  if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
-  const counts = summary.counts;
-  const project = summary.project;
-  return typeof summary.macroTaskId === "string" && summary.macroTaskId.length > 0
-    && (summary.kind === "macro-task" || summary.kind === "standalone")
-    && (summary.title === null || typeof summary.title === "string")
-    && ["macro-task", "title", "task", "none"].includes(summary.titleSource)
-    && (summary.description === null || typeof summary.description === "string")
-    && (summary.summary === null || typeof summary.summary === "string")
-    && (project === null || !!project && typeof project === "object" && !Array.isArray(project)
-      && typeof project.id === "string" && typeof project.label === "string"
-      && (project.path === null || typeof project.path === "string"))
-    && (summary.sourceHostId === null || typeof summary.sourceHostId === "string")
-    && Array.isArray(summary.currentHostIds) && summary.currentHostIds.every(id => typeof id === "string")
-    && (summary.createdAt === null || typeof summary.createdAt === "string")
-    && (summary.lastActivityAt === null || typeof summary.lastActivityAt === "string")
-    && Number.isSafeInteger(summary.lastActivitySeq) && summary.lastActivitySeq >= 0
-    && ["host", "active", "review", "ended"].includes(summary.state)
-    && !!counts && typeof counts === "object" && !Array.isArray(counts)
-    && ["roots", "helpers", "accepted", "failed", "active", "host", "review", "ended", "stoppableRoots",
-      "stoppableHelpers", "delivered", "awaitingHost"].every(key => {
-      const count = counts[key as keyof typeof counts];
-      return Number.isSafeInteger(count) && count >= 0;
-    })
-    && Number.isSafeInteger(summary.matchingRuns) && summary.matchingRuns >= 0
-    && Array.isArray(summary.rootRunIds) && summary.rootRunIds.every(id => typeof id === "string");
-}
-
-function validTimelineRows(rows: unknown): boolean {
-  return Array.isArray(rows) && rows.every(row => {
-    const entry = row as TimelineRow | null;
-    return !!entry && typeof entry === "object"
-      && typeof entry.delegationAuthority === "boolean"
-      && (entry.title === null || typeof entry.title === "string")
-      && (entry.taskSummary === null || typeof entry.taskSummary === "string")
-      && (Object.hasOwn(entry, "fixes")
-        ? typeof entry.fixes === "string" && entry.fixes.length > 0 && (entry.fixesTitle === null || typeof entry.fixesTitle === "string")
-          && ["title", "task", "none"].includes(entry.fixesTitleSource!)
-        : !Object.hasOwn(entry, "fixesTitle") && !Object.hasOwn(entry, "fixesTitleSource"))
-      && (!Object.hasOwn(entry, "fixedBy") || (Array.isArray(entry.fixedBy) && entry.fixedBy.length > 0
-        && entry.fixedBy.every(runId => typeof runId === "string" && runId.length > 0)));
-  });
-}
-
-function validTimelineSpans(spans: unknown): boolean {
-  return Array.isArray(spans) && spans.every(span => {
-    const entry = span as TimelineSpan | null;
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    const router = entry.routing?.routerBuddy;
-    if (router != null && ["harness", "provider", "model", "effort"].some(key => typeof router[key as keyof typeof router] !== "string")) return false;
-    if (entry.kind !== "execution") {
-      return entry.expectedSeconds === null && entry.reminders === null && entry.inquiries === null;
-    }
-    if (!(entry.expectedSeconds === null || (typeof entry.expectedSeconds === "number"
-      && Number.isSafeInteger(entry.expectedSeconds) && entry.expectedSeconds > 0))
-      || !Array.isArray(entry.inquiries) || !entry.inquiries.every(inquiry =>
-        inquiry && typeof inquiry === "object" && !Array.isArray(inquiry)
-        && typeof inquiry.inquiryId === "string" && inquiry.inquiryId.length > 0
-        && typeof inquiry.createdAt === "string" && Number.isFinite(Date.parse(inquiry.createdAt))
-        && typeof inquiry.state === "string" && inquiry.state.length > 0)) return false;
-    const reminders = entry.reminders;
-    return reminders === null || !!reminders && typeof reminders === "object" && !Array.isArray(reminders)
-      && typeof reminders.overdue === "boolean" && typeof reminders.possiblyStuck === "boolean"
-      && (reminders.lastNativeEventAt === null || typeof reminders.lastNativeEventAt === "string" && Number.isFinite(Date.parse(reminders.lastNativeEventAt)))
-      && typeof reminders.toolInProgress === "boolean";
-  });
+  return storageApplyResultSchema.safeParse(value).success;
 }
 
 /* ---- harness health wire shapes (ADR-017 §15) ---- */
@@ -349,23 +142,18 @@ import type { HarnessHealth, ProviderCooling } from "./types";
 /** The supported harnesses, in the Buddy page's fixed display order. */
 const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
+const providersSchema = z.array(providerCoolingSchema);
+const harnessRowsSchema = z.array(z.unknown());
+
 /** Parse provider cooling facts once at the service boundary. */
 function parseProviders(value: unknown): ProviderCooling[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const records = value as ProviderCooling[];
-  if (records.some(record => !record || typeof record.provider !== "string" || !record.provider.trim()
-    || !(record.coolingUntil === null || typeof record.coolingUntil === "string" && Number.isFinite(Date.parse(record.coolingUntil)))
-    || !Number.isInteger(record.consecutiveRejections) || record.consecutiveRejections <= 0)) return undefined;
-  return records;
+  return providersSchema.safeParse(value).success ? value as ProviderCooling[] : undefined;
 }
 
 /** The harness's declared levels, with their native enforcement strength. */
 export function parsePermissionLevels(value: unknown): NonNullable<HarnessHealth["permissions"]> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const entries = Object.entries(value);
-  if (entries.some(([level, enforcement]) => !["none", "read", "write", "full"].includes(level)
-    || !["enforced", "convention"].includes(enforcement as string))) return null;
-  return Object.fromEntries(entries) as NonNullable<HarnessHealth["permissions"]>;
+  if (!permissionLevelsSchema.safeParse(value).success) return null;
+  return Object.fromEntries(Object.entries(value as NonNullable<HarnessHealth["permissions"]>));
 }
 
 /**
@@ -373,21 +161,8 @@ export function parsePermissionLevels(value: unknown): NonNullable<HarnessHealth
  * than presented as health; an absent snapshot field is not invented either.
  */
 function harnessRow(value: unknown): HarnessHealth | null {
-  const row = value as HarnessHealth | null;
-  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
-  if (typeof row.harness !== "string" || !row.harness.trim()) return null;
-  if (!["unknown", "ready", "missing", "login-required", "unhealthy"].includes(row.status)) return null;
-  if (!Number.isInteger(row.revision) || row.revision < 0) return null;
-  if (!(row.manualPath === null || row.manualPath === undefined || typeof row.manualPath === "string")) return null;
-  for (const key of ["executable", "version", "source", "checkedAt", "expiresAt"] as const) {
-    if (row[key] != null && typeof row[key] !== "string") return null;
-  }
-  if (row.reason != null && !isReason(row.reason)) return null;
-  if (row.command != null && (!Array.isArray(row.command) || row.command.some(value => typeof value !== "string"))) return null;
-  if (row.candidates != null && (!Array.isArray(row.candidates) || row.candidates.some(candidate =>
-    !candidate || typeof candidate !== "object" || ["path", "source", "status"].some(key =>
-      (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")
-      || candidate.reason != null && !isReason(candidate.reason)))) return null;
+  if (!harnessHealthSchema.safeParse(value).success) return null;
+  const row = value as HarnessHealth;
   const { providers: rawProviders, permissions: rawPermissions, ...rest } = row;
   const providers = parseProviders(rawProviders);
   const permissions = parsePermissionLevels(rawPermissions);
@@ -398,12 +173,13 @@ function harnessRow(value: unknown): HarnessHealth | null {
 
 /** Known harnesses first in their fixed order; anything else keeps its own order. */
 function harnessRows(value: unknown): HarnessHealth[] {
-  if (!Array.isArray(value)) return [];
+  const rows = harnessRowsSchema.safeParse(value);
+  if (!rows.success) return [];
   const rank = (harness: string) => {
     const index = (HARNESS_ORDER as readonly string[]).indexOf(harness.trim().toLowerCase());
     return index === -1 ? HARNESS_ORDER.length : index;
   };
-  return value.map(harnessRow)
+  return rows.data.map(harnessRow)
     .filter((row): row is HarnessHealth => row !== null)
     .sort((a, b) => rank(a.harness) - rank(b.harness));
 }
@@ -419,17 +195,10 @@ function commandHarnesses(reply: unknown): HarnessHealth[] {
 }
 
 export function parseRuntimeVersion(value: unknown): RuntimeVersionInfo {
-  const info = value as RuntimeVersionInfo | null;
-  const facts = (record: VersionFacts | null) => !!record && typeof record === "object" && !Array.isArray(record)
-    && (["softwareVersion", "contractVersion", "sourceCommit", "installedAt"] as const).every(key =>
-      record[key] === null || typeof record[key] === "string" && !!record[key].trim())
-    && (record.installedAt === null || Number.isFinite(Date.parse(record.installedAt)))
-    && (record.schemaVersion === null || Number.isSafeInteger(record.schemaVersion) && record.schemaVersion >= 0);
-  if (!info || !facts(info.running) || !["source", "runtime"].includes(info.running.mode)
-    || !(info.installed === null || facts(info.installed))) {
+  if (!runtimeVersionSchema.safeParse(value).success) {
     throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.version"));
   }
-  return info;
+  return value as RuntimeVersionInfo;
 }
 
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
@@ -619,19 +388,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     readVerifiedAt,
     async snapshot(signal?: AbortSignal): Promise<Snapshot> {
       const { data, verifiedAtMs } = (await conditionalRead("/console", signal)) as { data: Snapshot; verifiedAtMs: number | null };
-      if (
-        !data ||
-        !Number.isSafeInteger(data.eventCursor) || data.eventCursor < 0 ||
-        !validConfigurationState(data) ||
-        !Array.isArray(data.buddies) ||
-        !validPreferences(data.preferences) ||
-        !Array.isArray(data.modelServiceNotes) ||
-        !Array.isArray(data.modelServiceConcurrency) ||
-        !data.tasks ||
-        !Number.isSafeInteger(data.tasks.pendingCount) ||
-        data.tasks.pendingCount < 0 ||
-        typeof data.csrfToken !== "string"
-      ) {
+      if (!snapshotReadSchema.safeParse(data).success) {
         throw new ApiError(
           "INVALID_RESPONSE",
           () => i18n.t("common:error.snapshot"),
@@ -681,12 +438,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         if (value !== undefined && value !== "") query.set(key, String(value));
       }
       const { data, verifiedAtMs } = await conditionalRead(`/macro-tasks?${query}`, signal) as { data: MacroTaskPage; verifiedAtMs: number | null };
-      if (!data || !Array.isArray(data.macroTasks) || !data.totals
-        || (["all", "active", "host", "review"] as const).some(name =>
-          !Number.isSafeInteger(data.totals[name]) || data.totals[name] < 0)
-        || !(data.nextCursor === null || typeof data.nextCursor === "string")
-        || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
-        || !data.macroTasks.every(validMacroTaskSummary)) {
+      if (!macroTaskPageSchema.safeParse(data).success) {
         throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.macroTasks"));
       }
       return verifiedRead(data, verifiedAtMs);
@@ -713,17 +465,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
         `/macro-tasks/${encodeURIComponent(macroTaskId)}/timeline?${query}`,
         signal,
       ) as { data: MacroTaskTimeline; verifiedAtMs: number | null };
-      if (!data || typeof data.observedAt !== "string"
-        || !data.macroTask || typeof data.macroTask.macroTaskId !== "string"
-        || !validMacroTaskSummary(data.macroTask)
-        || !Array.isArray(data.rows) || !Array.isArray(data.spans) || !Array.isArray(data.events)
-        || !validTimelineRows(data.rows) || !validTimelineSpans(data.spans)
-        || !data.totals || !Number.isInteger(data.totals.rows) || !Number.isInteger(data.totals.allRows)
-        || !Number.isInteger(data.totals.spans) || !Number.isInteger(data.totals.events)
-        || !data.truncated || typeof data.truncated.rows !== "boolean"
-        || typeof data.truncated.spans !== "boolean" || typeof data.truncated.events !== "boolean"
-        || !Number.isInteger(data.cursor) || typeof data.scopeComplete !== "boolean"
-        || typeof data.filtered !== "boolean") {
+      if (!macroTaskTimelineSchema.safeParse(data).success) {
         throw new ApiError("INVALID_RESPONSE", () => i18n.t("common:error.timeline"));
       }
       return { timeline: data, verifiedAtMs };
