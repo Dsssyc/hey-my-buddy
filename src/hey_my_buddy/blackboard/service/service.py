@@ -331,8 +331,8 @@ class BoardService(_BaseResource):
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
                 "backupPreflight": preflight(self.store.directory),
-                "managedWorkerIds": list(pool.get("managedWorkerIds") or []),
-                "managedWorkers": self._managed_workers(),
+                "managedWorkerIds": list(pool.get("workerIds") or []),
+                "workerSupervisors": self._worker_supervisors(),
                 "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
                 "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
                 "surplusWorkerIds": list(pool.get("surplusWorkerIds") or []),
@@ -935,20 +935,20 @@ class BoardService(_BaseResource):
     def worker_list(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             result = self.store.worker_list(params)
-            managed = self._managed_workers()
-            statuses = {row["workerId"]: row["supervisor"] for row in managed}
+            supervisors = self._worker_supervisors()
+            statuses = {row["workerId"]: row["supervisor"] for row in supervisors}
             for worker in result["workers"]:
                 worker_id = worker["workerId"]
                 worker["supervisor"] = (statuses[worker_id] if worker_id in statuses
                                         else supervisor_status(self.store.directory, worker_id))
-            return {**result, "managedWorkers": managed}
+            return {**result, "workerSupervisors": supervisors}
 
         return self._guard("worker.list", request_json, handler)
 
-    def _managed_workers(self) -> list[dict]:
+    def _worker_supervisors(self) -> list[dict]:
         pool = self.control.get("worker_pool") or {}
         return [{"workerId": worker_id, "supervisor": supervisor_status(self.store.directory, worker_id)}
-                for worker_id in pool.get("managedWorkerIds", [])]
+                for worker_id in pool.get("supervisedWorkerIds", [])]
 
     # -- messages -----------------------------------------------------------
     def message_post(self, request_json: str) -> str:

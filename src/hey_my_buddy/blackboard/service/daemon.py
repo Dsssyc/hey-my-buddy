@@ -281,7 +281,7 @@ class WorkerPool:
             "configuredPrefixValid": self.configured_prefix_valid,
             "totalLimit": self.total_limit,
             "workerIds": list(self.worker_ids),
-            "managedWorkerIds": self.managed_ids(),
+            "supervisedWorkerIds": self.managed_ids(),
             "unstartedWorkerIds": list(unstarted),
             "stoppedWorkerIds": list(stopped),
             "surplusWorkerIds": list(surplus_running),

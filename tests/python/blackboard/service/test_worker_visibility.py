@@ -13,28 +13,34 @@ from hey_my_buddy.buddy.runtime.worker import Worker
 class WorkerVisibilityTests(BoardTestCase):
     def test_unregistered_and_surplus_workers_are_visible_without_writing_files(self):
         board = self.board()
-        board.control["worker_pool"] = {"managedWorkerIds": ["local", "surplus"]}
+        board.control["worker_pool"] = {"workerIds": ["local"], "supervisedWorkerIds": ["local", "surplus", "missing"]}
         path = self.directory / "workers/local/supervisor.json"
         path.parent.mkdir(parents=True)
         status = {"workerId": "local", "state": "restarting", "lastError": "RuntimeError('startup')",
                   "startedAt": "2026-10-15T01:00:00Z", "updatedAt": "2026-10-15T01:01:00Z"}
         path.write_text(json.dumps(status))
+        surplus_path = self.directory / "workers/surplus/supervisor.json"
+        surplus_path.parent.mkdir(parents=True)
+        surplus_path.write_text(json.dumps({**status, "workerId": "surplus", "lastError": "surplus startup failed"}))
         before = path.read_bytes(), path.stat().st_mtime_ns
         health = board.call("health", {})
         workers = board.call("worker_list", {"state": "idle", "limit": 1})
-        self.assertEqual(health["managedWorkerIds"], ["local", "surplus"])
+        self.assertEqual(health["managedWorkerIds"], ["local"])
         self.assertEqual(workers["workers"], [])
-        self.assertEqual(workers["managedWorkers"], health["managedWorkers"])
-        self.assertEqual(health["managedWorkers"][0]["supervisor"], {
+        self.assertEqual(workers["workerSupervisors"], health["workerSupervisors"])
+        self.assertEqual(health["workerSupervisors"][0]["supervisor"], {
             "state": "restarting", "lastError": status["lastError"], "lastErrorAt": status["updatedAt"],
             "startedAt": status["startedAt"], "updatedAt": status["updatedAt"]})
-        self.assertEqual(health["managedWorkers"][1]["supervisor"]["state"], "unknown")
+        self.assertEqual([row["workerId"] for row in health["workerSupervisors"]], ["local", "surplus", "missing"])
+        self.assertEqual(health["workerSupervisors"][1]["supervisor"]["state"], "restarting")
+        self.assertEqual(health["workerSupervisors"][1]["supervisor"]["lastError"], "surplus startup failed")
+        self.assertEqual(health["workerSupervisors"][2]["supervisor"]["state"], "unknown")
         self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
-        self.assertFalse((self.directory / "workers/surplus").exists())
+        self.assertFalse((self.directory / "workers/missing").exists())
 
     def test_invalid_observations_are_unknown_in_both_queries(self):
         board = self.board()
-        board.control["worker_pool"] = {"managedWorkerIds": ["local"]}
+        board.control["worker_pool"] = {"workerIds": ["local"], "supervisedWorkerIds": ["local"]}
         board.client().register_worker("local", adapter="command")
         path = self.directory / "workers/local/supervisor.json"
         path.parent.mkdir(parents=True)
@@ -48,7 +54,7 @@ class WorkerVisibilityTests(BoardTestCase):
             with self.subTest(value=value):
                 if value is not None:
                     path.write_text(value)
-                health = board.call("health", {})["managedWorkers"][0]["supervisor"]
+                health = board.call("health", {})["workerSupervisors"][0]["supervisor"]
                 worker = board.call("worker_list", {})["workers"][0]
                 self.assertEqual(health["state"], "unknown")
                 self.assertIsNone(health["startedAt"])
@@ -57,7 +63,7 @@ class WorkerVisibilityTests(BoardTestCase):
         for state in ("starting", "running", "retiring", "retired", "stopped"):
             with self.subTest(state=state):
                 path.write_text(json.dumps({**valid, "state": state}))
-                self.assertEqual(board.call("health", {})["managedWorkers"][0]["supervisor"]["state"], state)
+                self.assertEqual(board.call("health", {})["workerSupervisors"][0]["supervisor"]["state"], state)
 
     def test_private_service_and_cli_observe_startup_failure_then_recovery(self):
         fail = threading.Event()
@@ -88,7 +94,7 @@ class WorkerVisibilityTests(BoardTestCase):
                 with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                     code, health = self.cli("health")
                     self.assertEqual(code, 0, health)
-                    failed = health["managedWorkers"][0]["supervisor"]
+                    failed = health["workerSupervisors"][0]["supervisor"]
                     self.assertEqual(failed["state"], "restarting")
                     self.assertEqual(failed["lastError"], "RuntimeError('injected Worker startup failure')")
                     self.assertEqual(failed["lastErrorAt"], failed["updatedAt"])
@@ -96,12 +102,12 @@ class WorkerVisibilityTests(BoardTestCase):
                     code, workers = self.cli("workers")
                     self.assertEqual(code, 0, workers)
                     self.assertEqual(workers["workers"], [])
-                    self.assertEqual(workers["managedWorkers"][0]["supervisor"]["state"], "restarting")
+                    self.assertEqual(workers["workerSupervisors"][0]["supervisor"]["state"], "restarting")
                     fail.clear()
                     self.assertTrue(registered.wait(10), errors)
                     code, health = self.cli("health")
                     self.assertEqual(code, 0, health)
-                    recovered = health["managedWorkers"][0]["supervisor"]
+                    recovered = health["workerSupervisors"][0]["supervisor"]
                     self.assertEqual(recovered["state"], "running")
                     self.assertEqual(recovered["startedAt"], failed["startedAt"])
                     self.assertIsNone(recovered["lastError"])

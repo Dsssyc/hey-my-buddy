@@ -4,9 +4,11 @@
 
 ## 查询字段
 
-`health.managedWorkerIds` 是当前期望的槽位与池清单中保留的标识的并集，包含缩容后仍需处理证据的 surplus Worker；标识数量不表示运行数量。新增 `managedWorkers` 数组，每项为 `{workerId, supervisor}`，即使 Worker 从未成功注册、因而没有 `workers` 表行，也会列出。`health.status` 仍表示服务能响应查询，Worker 的报告逐项查看 `managedWorkers`。
+`health.managedWorkerIds` 保持现有含义，只列当前期望的槽位；多余成员继续由 `surplusWorkerIds`、`surplusDraining`、`surplusRetained` 分别报告。新增 `workerSupervisors` 数组，每项为 `{workerId, supervisor}`，覆盖期望槽位及池清单中仍保留的所有多余成员，即使 Worker 从未成功注册、因而没有 `workers` 表行，也会列出。标识数量不表示运行数量；`health.status` 仍表示服务能响应查询，supervisor 的报告逐项查看 `workerSupervisors`。
 
-`workers` 保留原来的 `workers` 数组与看板字段，在每行增加 `supervisor`，另增加与 `health` 同义的 `managedWorkers` 数组。原来的 `state`、`adapter`、`limit` 参数只过滤看板行，不过滤 `managedWorkers`，因此注册前持续崩溃的槽位不会被过滤或行数限制遮住；显式启动且已注册的非受管 Worker 也会读取自己目录里的 supervisor 文件，但不会因此被算作受管成员。
+`workers` 保留原来的 `workers` 数组与看板字段，在每行增加 `supervisor`，另增加与 `health` 同义的 `workerSupervisors` 数组。原来的 `state`、`adapter`、`limit` 参数只过滤看板行，不过滤 `workerSupervisors`，因此注册前持续崩溃的槽位不会被过滤或行数限制遮住；显式启动且已注册的非受管 Worker 也会读取自己目录里的 supervisor 文件，但不会因此被算作受管成员。
+
+Host 在整合树的下游测试中发现，初稿把 `managedWorkerIds` 扩成期望槽位与多余成员的并集，破坏了缩容读者对该字段的既有判断；本轮恢复其原义，并删除守护进程报告中误加的同名键。池报告通过独立的内部 `supervisedWorkerIds` 提供 `managed_ids()` 的完整成员集合，服务每次查询为这些标识读取状态文件，公开查询统一命名为 `workerSupervisors`；这一集合不会从“运行中的多余成员”推断，因此持续起不来的多余成员也可见。既有多余成员字段、注册和中断结算修正保持原行为。
 
 两个查询共用一处文件读取边界，每次查询读取 `<state>/workers/<workerId>/supervisor.json`，不创建目录、不写回文件、不缓存正常状态。`supervisor.state` 保留发布者原生值：`starting`（启动中）、`running`（运行）、`restarting`（重启中）、`retiring`（退役中）、`retired`（退役完成）、`stopped`（已停止）。文件缺失、不可读、JSON 或相关字段不合法、标识不符、时间缺失或无时区、重启状态缺少错误时，返回 `state: unknown`，其余事实字段为 `null`。路径使用现有 Worker 目录标识规则校验，不能借注册标识遍历其他目录。
 
@@ -32,6 +34,8 @@
 
 扩展运行 `blackboard/service/test_daemon.py`、`blackboard/service/test_service.py`、`blackboard/service/test_worker_event_recovery.py`、`buddy/runtime/test_repair_recovery.py`、`buddy/runtime/test_worker_invariants.py`、`buddy/runtime/test_worker_idle.py`、`buddy/runtime/test_run.py`、`blackboard/store/test_worker_orphan_settlement.py`、`blackboard/store/test_interruption_native_tree.py`、`cli/test_cli.py`：10 个文件、116 个测试通过，退出码 0，私有根目录已移除。
 
-补充测试最初尝试让新进程在前任结算前认领另一条微任务，检查因既有 `WORKER_BUSY` 约束而失败；确认执行记录的约束后，替换为注册先于启动恢复的有效顺序测试。另在真实 supervisor 被杀、子进程存活或一并消失的两种恢复测试中增加 `workers` 断言：替换进程仍存活、PID 对应替换进程、看板为 `idle`、旧执行指针为空、supervisor 报告 `running`。最终重新运行 `blackboard/store/test_interruption_recovery.py` 与 `buddy/runtime/test_repair_recovery.py`：2 个文件、23 个测试通过，退出码 0，私有根目录已移除。三轮成功运行覆盖最终源码的 13 个不同测试文件、136 个不同测试，均无跳过；后续只更新本说明。
+补充测试最初尝试让新进程在前任结算前认领另一条微任务，检查因既有 `WORKER_BUSY` 约束而失败；确认执行记录的约束后，替换为注册先于启动恢复的有效顺序测试。另在真实 supervisor 被杀、子进程存活或一并消失的两种恢复测试中增加 `workers` 断言：替换进程仍存活、PID 对应替换进程、看板为 `idle`、旧执行指针为空、supervisor 报告 `running`。重新运行 `blackboard/store/test_interruption_recovery.py` 与 `buddy/runtime/test_repair_recovery.py`：2 个文件、23 个测试通过，退出码 0，私有根目录已移除。三轮成功运行覆盖当时源码的 13 个不同测试文件、136 个不同测试，均无跳过。
+
+本轮回修补强了多余 Worker 重启失败与状态缺失的查询断言，以及真实缩容时 `managedWorkerIds` 与 `workerSupervisors` 各自的成员断言；重新运行上述 13 个文件和 `blackboard/tasks/test_parallel_dispatch.py`，包含 Host 指定的 `blackboard/service/test_daemon.py`：14 个文件、163 个测试全部通过，无跳过，退出码 0，私有根目录已移除。`test_parallel_dispatch.py` 耗时 75.8 秒，`test_repair_recovery.py` 耗时 160.3 秒；此后只补录本段验证结果。
 
 本记录是该检出的测试证据，不表示日常安装或 Host 已验收；没有运行完整检查。
