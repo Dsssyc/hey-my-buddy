@@ -305,7 +305,7 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
         self.assertNotIn("outcomeTruncated", view["audit"]["turns"][0]["outcome"])
 
-    def test_failed_receipt_turn_outcome_stays_masked_but_seal_is_visible(self):
+    def test_failed_receipt_turn_outcome_and_unaccepted_seal_stay_hidden(self):
         board = self.board()
         self.register(board)
         submitted = self.submit(board)
@@ -330,7 +330,7 @@ class LifecycleTests(WorkflowTestCase):
         self.assertIsNone(audit["promptSha256"])
         self.assertIsNone(audit["inputSha256"])
         self.assertIsNone(audit["turnResultPath"])
-        self.assertTrue(audit["sealedArtifacts"])
+        self.assertEqual(audit["sealedArtifacts"], [])
 
     def test_unselected_buddy_reads_have_no_provider_cooling_fact(self):
         board = self.board()

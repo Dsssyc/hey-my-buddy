@@ -820,7 +820,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 17)
+        self.assertEqual(len(references), 18)
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
             self.assertIsNotNone(receipt)
@@ -828,7 +828,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
         sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
-        self.assertEqual(len(sessions), 11)
+        self.assertEqual(len(sessions), 12)
         for path in sessions:
             lines = path.read_text(encoding="utf-8").splitlines()
             format = SessionFormat.model_validate_json(lines[0])

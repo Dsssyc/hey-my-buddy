@@ -1,5 +1,5 @@
 {
-  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
   "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
@@ -19,6 +19,11 @@
       "runId": "00000000-0000-0000-0000-00000000011e",
       "turnId": "00000000-0000-0000-0000-000000000123"
     },
+    "rejected-seal": {
+      "attemptId": "00000000-0000-0000-0000-00000000013b",
+      "runId": "00000000-0000-0000-0000-000000000138",
+      "turnId": "00000000-0000-0000-0000-00000000013d"
+    },
     "rejected-turn": {
       "attemptId": "00000000-0000-0000-0000-000000000130",
       "runId": "00000000-0000-0000-0000-00000000012d",
@@ -27,8 +32,8 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir tmp/s4b-generation-7 --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "bb2f10fc3530fe9cb1af60fb154894a7346db420621a85dafa6c0e813bb932f9",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "cb0974822c5ed4bf7ea899c0bf3d70299c00575af3e383242902c1bf24967136",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000bb",
@@ -262,10 +267,10 @@
     "src/hey_my_buddy/protocol/windows_process.py",
     "src/hey_my_buddy/windows_files.py"
   ],
-  "operationsSha256": "2926394eebb023982bfcdaeaf45c03421c2323a92dc28e1e55f4b42e02287d4e",
+  "operationsSha256": "e736110664330e9c8edd5e7bee7a72bdf3ac6d9c5f0add93213a1fb6b958a82b",
   "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
   "pythonVersion": "3.12.12",
-  "resourcesSha256": "a141a3985ae00cc88256f5ba4f72589d09094e5248d4be0e8c0dc542c37d038c",
+  "resourcesSha256": "46b00fa9b2c2b9d8a8e7116ec2cad2a99986161ea0b8da63d35b213d7cb4ffb1",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 28; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -469,7 +474,7 @@
   },
   "sourceTree": "507fd2b6b2fbda0b1953781419358fecc43e9236",
   "sourceVersion": "0.51.0",
-  "sqlSha256": "cc97465f334ac91e6d975e06b27d02923ca97dfe7ce5da3967a68bc19dae1ecb",
+  "sqlSha256": "1ca799e0777ce39c0811b19c6150752c4a8340a2d1d8da8c89e7f23c6477acf4",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000003e",
     "cancelled": "00000000-0000-0000-0000-00000000006c",
@@ -485,14 +490,14 @@
     "verified": "00000000-0000-0000-0000-0000000000a5"
   },
   "tableRowCounts": {
-    "agent_credentials": 12,
+    "agent_credentials": 13,
     "artifacts": 0,
     "attempt_activity": 1,
     "attempt_interruptions": 2,
     "attempt_process_identities": 2,
     "attempt_reminders": 2,
     "attempt_shutdown_evidence": 2,
-    "attempts": 19,
+    "attempts": 20,
     "buddies": 3,
     "catalog_current": 1,
     "catalog_observations": 4,
@@ -502,7 +507,7 @@
     "evaluation_catalog": 3,
     "evaluation_decisions": 8,
     "evaluation_preferences": 2,
-    "events": 233,
+    "events": 238,
     "execution_issues": 0,
     "harness_account_reads": 1,
     "harness_health": 4,
@@ -514,7 +519,7 @@
     "model_service_notes": 1,
     "provider_cooling": 1,
     "reminder_settings": 1,
-    "resource_claims": 18,
+    "resource_claims": 19,
     "router_buddies": 2,
     "router_claims": 7,
     "router_dispatches": 7,
@@ -522,8 +527,8 @@
     "router_requests": 6,
     "router_settings": 1,
     "service_issues": 0,
-    "tasks": 20,
-    "workflow_artifacts": 45,
+    "tasks": 21,
+    "workflow_artifacts": 47,
     "workflow_children": 1,
     "workflow_continuations": 1,
     "workflow_fixes": 0,
@@ -532,13 +537,13 @@
     "workflow_lead_tasks": 1,
     "workflow_requests": 4,
     "workflow_routes": 1,
-    "workflow_runs": 13,
-    "workflow_scope_versions": 13,
+    "workflow_runs": 14,
+    "workflow_scope_versions": 14,
     "workflow_suggestions": 2,
-    "workflow_turns": 12,
+    "workflow_turns": 13,
     "workflow_workspace_conflicts": 2,
     "workspace_cleanup_plans": 6,
-    "workspace_reservations": 13
+    "workspace_reservations": 14
   },
   "taskOnlyStock": {
     "initialSole": "dec-00000000-0000-0000-0000-000000000016",

@@ -69,10 +69,24 @@ def private_environment(work):
 
 def generate(args):
     root = Path(__file__).resolve().parents[1]
-    work = args.work_dir.resolve()
-    if not work.is_relative_to(root / "tmp"):
+    retained = args.work_dir.resolve()
+    if not retained.is_relative_to(root / "tmp"):
         raise ValueError("work-dir must be a new directory inside this checkout's ignored tmp/")
-    work.mkdir(parents=True, exist_ok=False)
+    if retained.exists():
+        raise ValueError("work-dir must not already exist")
+    retained.parent.mkdir(parents=True, exist_ok=True)
+    # Frozen writers include source paths in IDs, refs and Git commit messages.
+    # Generate at one private canonical path, then retain the whole work tree
+    # at the caller's fresh destination. Each run still starts from empty stock.
+    work = root / "tmp" / ".upgrade-fixture-generation-active"
+    work.mkdir(exist_ok=False)
+    try:
+        generate_in_canonical_slot(args, root, work)
+    finally:
+        work.rename(retained)
+
+
+def generate_in_canonical_slot(args, root, work):
     (work / "scratch").mkdir()
     (work / "home").mkdir(mode=0o700)
     source = work / "base"
@@ -98,7 +112,8 @@ def generate(args):
     (repo / ".git/HEAD").write_bytes((WORKSPACE_INPUT + "\n").encode("utf-8"))
     run(["git", "-C", str(repo), "read-tree", WORKSPACE_INPUT], env=env)
     run(["git", "-C", str(repo), "checkout-index", "--all"], env=env)
-    for label in ("delivered", "accepted", "failed", "cancelled"):
+    for label in ("delivered", "accepted", "failed", "cancelled",
+                  "partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal"):
         run(["git", "-C", str(repo), "worktree", "add", "--quiet", "--detach",
              str(work / "workspaces" / label), WORKSPACE_INPUT], env=env)
     env["PYTHONPATH"] = str(source / "src")
@@ -128,8 +143,9 @@ def populate(args):
     from hey_my_buddy.blackboard.store.store import BoardStore
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
     from hey_my_buddy.blackboard.routing import quota_routing
-    from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion, reminders
+    from hey_my_buddy.blackboard.tasks import workspace, workspace_identity, macro_task_deletion, reminders
     from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
+    from hey_my_buddy.private_dirs import ensure_private_dir
     from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
     from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
     from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
@@ -162,6 +178,17 @@ def populate(args):
         ascii_json = caller.f_globals.get("__name__") in {"hey_my_buddy.blackboard.tasks.workspace", "hey_my_buddy.blackboard.tasks.workspace_identity"}
         preimages[result.hexdigest()] = (bytes(data).decode("utf-8"), ascii_json)
         return result
+
+    def fixture_identity(path):
+        # The released identity includes the directory inode. Use a fixed
+        # synthetic inode while generating stock; load_fixture rebinds every
+        # identity to the restored directory's real path and inode.
+        directory = Path(path).resolve(strict=True)
+        fixture_path = str(directory).replace(str(work), "<fixture-root>")
+        payload = json.dumps([fixture_path, 0], sort_keys=True,
+                             separators=(",", ":"), ensure_ascii=True).encode()
+        return hashlib.sha256(payload).hexdigest()
+
     @contextmanager
     def retained_directory(*, prefix="tmp", suffix="", dir=None, **kwargs):
         yield tempfile.mkdtemp(prefix=prefix, suffix=suffix, dir=dir or work / "scratch")
@@ -172,6 +199,7 @@ def populate(args):
         stack.enter_context(patch("tempfile.TemporaryDirectory", retained_directory))
         hashing = stack.enter_context(ExitStack())
         hashing.enter_context(patch.object(hashlib, "sha256", recorded_sha256))
+        stack.enter_context(patch.object(workspace_identity, "stable_identity", fixture_identity))
         # Stable fake secrets and IDs are inputs to the base public operations.
         stack.enter_context(patch("uuid.uuid4", side_effect=lambda: uuid.UUID(int=next(counter))))
         stack.enter_context(patch("secrets.token_hex", side_effect=lambda n=32: "ab" * n))
@@ -240,7 +268,7 @@ def populate(args):
 
         def completed_record(claim, label):
             attempt, turn = claim["attempt"], claim["turn"]
-            return {"version": 1, "taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
+            record = {"version": 1, "taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
                     "generation": attempt["generation"], "turnId": turn["turnId"], "resumeMode": turn["resumeMode"],
                     "previousSessionId": turn["input"]["previousSessionId"], "sessionId": "fixture-session-" + label,
                     "promptSha256": "a" * 64, "inputSha256": turn["inputSha256"],
@@ -250,6 +278,11 @@ def populate(args):
                                    "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True,
                                    "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
                                    "finalItemId": "fixture-item", "eventSeq": 2}}
+            if label == "delivered":
+                record["outcomeTruncated"] = {}
+            elif label == "accepted":
+                record["outcomeTruncated"] = {"remaining": {"droppedItems": 5, "shortenedItems": 1}}
+            return record
 
         def answer_router(claim, outcome, *, selected_buddy=PROFILES[0]):
             document = claim["decisionInput"]
@@ -420,8 +453,17 @@ def populate(args):
                 (work / "workspaces" / label / "fixture.txt").write_bytes(b"fixture sealed change\n")
             sealed = workspace.seal(work / "state", manifest, run_id, attempt["attemptId"])
             record = completed_record(claim, label)
+            turn_path = None
+            if label == "delivered":
+                turn_path = execution_directory(claim, work / "state") / "turn-result.json"
+                # Synthetic native output: avoid the base atomic file writer's
+                # temporary UUID, which would renumber all existing stock IDs.
+                ensure_private_dir(turn_path.parent)
+                turn_path.write_bytes(json_text(record).encode("utf-8"))
+                turn_path.chmod(0o600)
             report(claim, nonce, status="ok", result={"status": "ok", "turn": record, "workspaceSeal": sealed,
-                                                      "processState": {"shutdownConfirmed": True}, "fixture": True})
+                **({"turnResultPath": str(turn_path)} if turn_path is not None else {}),
+                "processState": {"shutdownConfirmed": True}, "fixture": True})
             view = call("workflow_get", {"runId": run_id})
             assert view["state"] == "delivered", view
             if label == "accepted":
@@ -800,6 +842,71 @@ def populate(args):
         operations.append({"operation": "catalog_store.begin",
                            "params": {"requestId": "fixture-pending-observation"},
                            "response": pending_observation})
+        # Add old-writer evidence for failed and recovered partial seals, plus a
+        # successful native receipt whose turn the base importer rejects. These
+        # runs follow the original stock so its stable IDs and facts do not move.
+        edge_stock = {}
+        edge_parent = None
+        for label in ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal"):
+            submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
+                "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
+                "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "workspaces" / label),
+                "executionWorkspace": {"kind": "existing", "access": "full",
+                                       "accessNote": "Isolated fixture stock generation",
+                                       "writeScope": ["fixture.txt"]},
+                **({"macroTask": {"title": "Old writer edge stock"}} if edge_parent is None
+                   else {"macroTaskOf": edge_parent})})
+            if edge_parent is None:
+                edge_parent = submitted["runId"]
+            claim = admit(nonce, submitted["runId"])
+            attempt = claim["attempt"]
+            turn = claim["turn"]
+            if label in ("partial-failed", "partial-interrupted"):
+                (work / "workspaces" / label / "fixture.txt").write_bytes(
+                    ("fixture " + label + " change\n").encode("utf-8"))
+            edge_stock[label] = {"runId": submitted["runId"], "attemptId": attempt["attemptId"],
+                                 "turnId": turn["turnId"]}
+            if label == "partial-interrupted":
+                identity = {"bootId": "macos:00000000-0000-0000-0000-000000000000",
+                            "pid": 2147483646, "startedAt": 1, "processGroupId": 2147483646,
+                            "jobName": None}
+                recovered = store.recover_executions(attempt["attemptId"], process_identity=identity,
+                    stopped_evidence={"kind": "identity-absent"})
+                assert recovered and recovered[0]["attempt"]["shutdownConfirmed"], recovered
+                operations.append({"operation": "store.recover_executions",
+                    "params": {"attemptId": attempt["attemptId"], "processIdentity": identity,
+                               "stoppedEvidence": {"kind": "identity-absent"}}, "response": recovered})
+                continue
+            if label == "partial-failed":
+                seal = workspace.seal(work / "state", turn["input"]["executionWorkspace"],
+                                      submitted["runId"], attempt["attemptId"])
+                report(claim, nonce, status="failed", result={"status": "error",
+                    "partialWorkspaceSeal": seal, "processState": {"shutdownConfirmed": True}})
+            elif label == "rejected-turn":
+                record = completed_record(claim, label)
+                record["inputSha256"] = "b" * 64
+                report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                    "processState": {"shutdownConfirmed": True}})
+            else:
+                record = completed_record(claim, label)
+                report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                    "workspaceSeal": {"manifestSha256": "not-a-hash"},
+                    "processState": {"shutdownConfirmed": True}})
+            with store.db.read() as connection:
+                attempt_row = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                                 (attempt["attemptId"],)).fetchone()
+                turn_row = connection.execute("SELECT state FROM workflow_turns WHERE turn_id=?",
+                                              (turn["turnId"],)).fetchone()
+                stored_result = json.loads(attempt_row["result_json"])
+                if label == "rejected-turn":
+                    assert stored_result["result"]["microTaskError"]["code"] == "TURN_INVALID"
+                elif label == "rejected-seal":
+                    assert turn_row["state"] == "failed"
+                    assert stored_result["result"]["workspaceSeal"] == {"manifestSha256": "not-a-hash"}
+                else:
+                    assert turn_row["state"] == "failed"
+                    assert stored_result["result"]["partialWorkspaceSeal"] == seal
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -836,7 +943,7 @@ def populate(args):
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py" +
                 (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
-                " --work-dir " + str(work.relative_to(Path(__file__).resolve().parents[1])) +
+                " --work-dir <new-private-tmp-dir>" +
                 " --output-dir tests/fixtures/upgrade-base",
             "dependencyMode": "prepared-read-only-interpreter" if args.python else "base-frozen-uv-environment",
             "dependencyVersions": {name: importlib.metadata.version(name) for name in ("c-two", "pydantic", "zstandard", "portalocker")},
@@ -844,11 +951,12 @@ def populate(args):
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
             "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
+            "edgeStock": edge_stock,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
@@ -869,7 +977,8 @@ def export_resources(work, workspace, preimages):
         return text.replace(str(work), "<fixture-root>")
 
     identities, checkouts = {}, {}
-    for label in ("delivered", "accepted", "failed", "cancelled", "adopted"):
+    for label in ("delivered", "accepted", "failed", "cancelled", "adopted",
+                  "partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal"):
         checkout = ((work / "state" / "workspaces") if label == "adopted" else (work / "workspaces"))
         if label == "adopted":
             checkout = next(path / "checkout" for path in checkout.iterdir()
@@ -983,7 +1092,7 @@ def verify(output, restored):
                 assert row[0] == "completed" and row[3] is None and row[4] is None
             else:
                 assert row[3] is None and row[4] is None
-        assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0] == 1
         for table in ("attempt_interruptions", "attempt_process_identities", "attempt_shutdown_evidence",
@@ -997,7 +1106,49 @@ def verify(output, restored):
         assert set(connection.execute("SELECT attempt_id IS NULL FROM workflow_suggestions")) == {(0,), (1,)}
         assert set(connection.execute("SELECT state FROM workspace_cleanup_plans")) == {("planned",), ("applied",), ("blocked",)}
         assert connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE state='consumed'").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 2
+        for label, expected in (("delivered", {}),
+                                ("accepted", {"remaining": {"droppedItems": 5, "shortenedItems": 1}})):
+            row = connection.execute("SELECT w.state,w.outcome_truncated_json,a.result_json,w.turn_result_path FROM workflow_turns w"
+                                     " JOIN attempts a ON a.attempt_id=w.attempt_id WHERE w.run_id=?",
+                                     (metadata["stableIds"][label],)).fetchone()
+            assert row[0] == "returned" and json.loads(row[1]) == expected
+            assert json.loads(row[2])["result"]["turn"]["outcomeTruncated"] == expected
+            if label == "delivered":
+                assert row[3] == json.loads(row[2])["result"]["turnResultPath"]
+                assert row[3].endswith("/turn-result.json")
+        for label, expected_state in (("partial-failed", "failed"),
+                                      ("partial-interrupted", "interrupted"),
+                                      ("rejected-turn", "failed"),
+                                      ("rejected-seal", "failed")):
+            stock = metadata["edgeStock"][label]
+            row = connection.execute("SELECT w.state,w.sealed_artifacts_json,a.result_json"
+                                     " FROM workflow_turns w JOIN attempts a ON a.attempt_id=w.attempt_id"
+                                     " WHERE w.run_id=? AND w.turn_id=? AND a.attempt_id=?",
+                                     (stock["runId"], stock["turnId"], stock["attemptId"])).fetchone()
+            assert row is not None and row[0] == expected_state
+            result = json.loads(row[2])
+            assert result["status"] == "failed"
+            if label == "rejected-turn":
+                assert result["result"]["microTaskError"]["code"] == "TURN_INVALID"
+                assert result["result"]["turn"]["inputSha256"] == "b" * 64
+            elif label == "rejected-seal":
+                assert result["result"]["workspaceSeal"] == {"manifestSha256": "not-a-hash"}
+                assert json.loads(row[1]) == []
+                result_fields = connection.execute(
+                    "SELECT previous_session_id,session_id,prompt_sha256,disposition,"
+                    "outcome_json,outcome_truncated_json,provenance_json,turn_result_path"
+                    " FROM workflow_turns WHERE turn_id=?", (stock["turnId"],)).fetchone()
+                assert result_fields == (None,) * 8
+                assert connection.execute("SELECT COUNT(*) FROM workflow_artifacts"
+                    " WHERE turn_id=? AND kind='output'", (stock["turnId"],)).fetchone()[0] == 0
+            else:
+                assert json.loads(row[1])[0]["kind"] == "workspace-seal"
+                assert result["result"]["partialWorkspaceSeal"]["changedPaths"] == ["fixture.txt"]
+                if label == "partial-interrupted":
+                    assert result["terminationReason"] == "interrupted"
+                assert connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE turn_id=?"
+                                          " AND kind='partial-output'", (stock["turnId"],)).fetchone()[0] == 1
         assert set(dict(connection.execute("SELECT key,value FROM meta"))) == {"schema_version", "capability_secret"}
         messages = connection.execute(
             "SELECT message_id,attempt_id,inquiry_id,author_role,author_id,state,reason_code "
@@ -1024,7 +1175,9 @@ def verify(output, restored):
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
                           metadata["stockIds"]["helperParent"]: "concluded",
-                          metadata["stockIds"]["leadOwned"]: "concluded"}
+                          metadata["stockIds"]["leadOwned"]: "concluded",
+                          **{metadata["edgeStock"][key]["runId"]: "failed" for key in
+                             ("partial-failed", "partial-interrupted", "rejected-turn", "rejected-seal")}}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
         assert "<fixture-root>" in (output / "board.sql").read_text(encoding="utf-8")

@@ -283,7 +283,7 @@ class WorkflowCoordinator:
         return row
 
     @classmethod
-    def _turn_view(cls, row, *, include_audit: bool = False, compact: bool = False) -> dict:
+    def _turn_view(cls, connection, row, *, include_audit: bool = False, compact: bool = False) -> dict:
         payload = json.loads(row["result_json"]) if row["result_json"] is not None else None
         result = cls.result_payload(payload)
         turn = result["turn"] if row["state"] == "returned" else {}
@@ -343,7 +343,7 @@ class WorkflowCoordinator:
             view["sealedArtifacts"] = [
                 # The former canonical JSON column fixed these keys' byte order.
                 cls._bounded_path_fields(dict(sorted(item.items())), ("changedPaths", "outsideScope"))
-                for item in cls._sealed_artifacts(payload)
+                for item in cls._sealed_artifacts(connection, run_id=row["run_id"], turn_id=row["turn_id"])
             ]
         return view
 
@@ -764,8 +764,8 @@ class WorkflowCoordinator:
             "buddyRevision": run_row["buddy_revision"],
             "providerCooling": cooling(connection, self._buddy(run_row), now=projection_now),
             "routing": self._routing_view(connection, run_row, now=projection_now),
-            "currentTurn": self._turn_view(turns[0]) if turns else None,
-            "turns": [self._turn_view(row, compact=True) for row in turns],
+            "currentTurn": self._turn_view(connection, turns[0]) if turns else None,
+            "turns": [self._turn_view(connection, row, compact=True) for row in turns],
             "activeRequest": active_request,
             "requests": [self._request_view(row, compact=True, connection=connection, now=projection_now) for row in requests],
             "pendingRequests": [self._request_view(row, compact=True, connection=connection, now=projection_now) for row in pending[:MAX_REQUEST_VIEW]],
@@ -2073,7 +2073,7 @@ class WorkflowCoordinator:
         return {
             "hostConclusions": [host_conclusions.view(row) for row in conclusions[:50]],
             "hostConclusionsTruncated": len(conclusions) > 50,
-            "turns": [self._turn_view(row, include_audit=True) for row in turns],
+            "turns": [self._turn_view(connection, row, include_audit=True) for row in turns],
             "requests": [self._request_view(row, include_audit=True, connection=connection) for row in requests],
             "continuations": [
                 {
@@ -7352,14 +7352,22 @@ class WorkflowCoordinator:
             },
         }
 
-    @classmethod
-    def _sealed_artifacts(cls, payload: dict | None) -> list[dict]:
-        result = cls.result_payload(payload)
-        seal = result.get("workspaceSeal") or result.get("partialWorkspaceSeal")
-        if not isinstance(seal, dict):
-            return []
-        return [
-            {
+    @staticmethod
+    def _sealed_artifacts(connection, *, run_id: str, turn_id: str) -> list[dict]:
+        """Worker seals the service accepted for this turn, including partial work.
+
+        Host conclusions and workspace resolutions are separately typed outputs;
+        they do not change the turn's imported seal evidence.
+        """
+        artifacts = []
+        for row in connection.execute(
+            "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND turn_id=?"
+            " AND kind IN ('output','partial-output')"
+            " AND json_extract(manifest_json,'$.kind') IS NOT 'host-output' ORDER BY rowid",
+            (run_id, turn_id),
+        ):
+            seal = json.loads(row[0])
+            artifacts.append({
                 "kind": "workspace-seal",
                 # ``manifestSha256`` is the input digest the turn executed on;
                 # ``snapshotSha256`` is the output identity that was pinned.
@@ -7369,8 +7377,8 @@ class WorkflowCoordinator:
                 "tree": seal.get("tree"),
                 "changedPaths": seal.get("changedPaths", []),
                 "outsideScope": seal.get("outsideScope", []),
-            }
-        ]
+            })
+        return artifacts
 
     def _pin_result_artifacts(self, connection, run_row, attempt, payload, turn_id, now) -> str | None:
         """Pin the turn's effective input manifest and its sealed output."""

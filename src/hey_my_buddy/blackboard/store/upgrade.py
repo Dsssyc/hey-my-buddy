@@ -225,7 +225,7 @@ def _validate_router_stock(connection) -> None:
 
 
 def _validate_turn_stock(connection) -> None:
-    """Retire only receipt copies that reproduce the old importer's projection."""
+    """Check receipt copies and the turn's accepted pins before retiring them."""
     from ..tasks.workflow import WorkflowCoordinator
 
     cursor = connection.execute(
@@ -259,10 +259,11 @@ def _validate_turn_stock(connection) -> None:
             expected = dict.fromkeys((
                 'disposition', 'outcome_json', 'outcome_truncated_json', 'provenance_json',
                 'session_id', 'prompt_sha256', 'input_sha256', 'turn_result_path'))
-        expected['sealed_artifacts_json'] = canonical_json(WorkflowCoordinator._sealed_artifacts(payload))
+        expected['sealed_artifacts_json'] = canonical_json(WorkflowCoordinator._sealed_artifacts(
+            connection, run_id=row['run_id'], turn_id=row['turn_id']))
         for column, value in expected.items():
             if row[column] != value:
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Turn copy differs from its execution receipt projection',
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Turn copy differs from its authoritative projection',
                                  turnId=row['turn_id'], field=column)
 
 

@@ -7,7 +7,7 @@ import unittest
 
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import upgrade
-from hey_my_buddy.blackboard.store.db import UPGRADE_BASE_SCHEMA
+from hey_my_buddy.blackboard.store.db import UPGRADE_BASE_SCHEMA, canonical_json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator, MAX_RESULT_SUMMARY
 from hey_my_buddy.errors import BoardError
@@ -39,7 +39,14 @@ class TurnReceiptUpgradeTests(unittest.TestCase):
         rejected = stock[self.fixture['edgeStock']['rejected-turn']['turnId']]
         self.assertEqual(rejected['state'], 'failed')
         self.assertIsNotNone(json.loads(receipts[rejected['attempt_id']])['result']['turn']['outcome'])
+        rejected_seal = stock[self.fixture['edgeStock']['rejected-seal']['turnId']]
+        self.assertEqual(rejected_seal['state'], 'failed')
+        self.assertEqual(rejected_seal['sealed_artifacts_json'], '[]')
+        self.assertEqual(json.loads(receipts[rejected_seal['attempt_id']])['result']['workspaceSeal'],
+                         {'manifestSha256': 'not-a-hash'})
         for row in stock.values():
+            self.assertEqual(canonical_json(WorkflowCoordinator._sealed_artifacts(
+                connection, run_id=row['run_id'], turn_id=row['turn_id'])), row['sealed_artifacts_json'])
             for column in REMOVED:
                 if row['state'] != 'returned' and column != 'sealed_artifacts_json':
                     self.assertIsNone(row[column], (row['turn_id'], column))
@@ -60,7 +67,7 @@ class TurnReceiptUpgradeTests(unittest.TestCase):
                       if old['outcome_truncated_json'] is not None else None}
             for compact, audit in ((True, False), (False, False), (False, True)):
                 with self.subTest(turn=row['turn_id'], compact=compact, audit=audit):
-                    view = WorkflowCoordinator._turn_view(row, compact=compact, include_audit=audit)
+                    view = WorkflowCoordinator._turn_view(connection, row, compact=compact, include_audit=audit)
                     expected = dict(common)
                     fields = set(common) | {'summary', 'summaryTruncated', 'remaining', 'request',
                                             'artifactReferences', 'promptSha256', 'inputSha256', 'input',
