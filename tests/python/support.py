@@ -25,8 +25,7 @@ if str(PYTHON_ROOT) not in sys.path:
 
 from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
-from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
-from hey_my_buddy.cli.checks_cleanup import remove_private_test_root  # noqa: E402
+from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
 from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402

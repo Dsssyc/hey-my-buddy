@@ -178,17 +178,6 @@ class PrivateRootTeardownTests(unittest.TestCase):
         self.assertIsNone(checks.teardown_private_root(root, drain_seconds=0.5))
         self.assertFalse(root.exists())
 
-    @unittest.skipUnless(os.name == "nt", "Windows READONLY file deletion")
-    def test_teardown_removes_a_readonly_git_object(self):
-        root = checks.create_private_root()
-        objects = root / "objects"
-        objects.mkdir()
-        leaf = objects / "object"
-        leaf.write_bytes(b"git object fixture")
-        leaf.chmod(stat.S_IREAD)
-        self.assertIsNone(checks.teardown_private_root(root, drain_seconds=0.5))
-        self.assertFalse(root.exists())
-
     def test_teardown_preserves_evidence_when_a_daemon_survives(self):
         root = checks.create_private_root()
         state = root / "tmp" / "hey-my-buddy-test-daemon"

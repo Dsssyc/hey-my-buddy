@@ -43,6 +43,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -54,7 +55,6 @@ from ..text import configure_utf8_output
 from .. import locking, private_dirs, state_root
 from ..errors import BoardError
 from ..process_observation import observe_open_paths, observe_process_argv
-from .checks_cleanup import remove_private_test_root
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -629,6 +629,36 @@ def _log_tail(path: Path, limit: int = 4000) -> str | None:
         return None
 
 
+def remove_private_test_root(directory: Path) -> None:
+    """Remove a stopped fixture, retrying only Windows READONLY regular files.
+
+    The caller must first close its resources and confirm its work has stopped.
+    A sharing violation or any other deletion failure preserves the remaining tree.
+    """
+    directory = Path(directory)
+
+    def readonly_file(operation, name, error):
+        if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
+            raise error
+        path = Path(name)
+        # Never chmod a link/reparse target, including through a replaced ancestor.
+        for part in (path, *path.parents):
+            info = part.lstat()
+            attributes = getattr(info, "st_file_attributes", 0)
+            if stat.S_ISLNK(info.st_mode) or attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                raise error
+            if part == path and (not stat.S_ISREG(info.st_mode) or not attributes & stat.FILE_ATTRIBUTE_READONLY):
+                raise error
+            if part == directory:
+                break
+        else:
+            raise error
+        os.chmod(path, stat.S_IWRITE)
+        operation(name)
+
+    shutil.rmtree(directory, onexc=readonly_file)
+
+
 def _write_evidence(root: Path, evidence: dict) -> Path:
     path = root / EVIDENCE_FILE_NAME
     path.write_text(json.dumps(evidence, indent=2, default=str),
@@ -731,6 +761,8 @@ def sweep_private_roots(directory: Path) -> int:
         try:
             state_root.check_state_root(root)
         except BoardError:
+            retained += 1
+            print(f"hey_my_buddy.cli.checks: retained {root}: outside this account's private boundary")
             continue
         creator = root / CREATOR_FILE_NAME
         reason = None

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from support import BoardTestCase, InProcessBoard, private_state_dir, remove_private_test_root
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.cli import checks_cleanup
+from hey_my_buddy.cli import checks
 
 
 class PrivateRootCleanupTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
             self.assertEqual(directory, root)
             onexc(unlink, str(path), error)
 
-        with patch.object(checks_cleanup, 'os', wraps=os) as windows, patch.object(checks_cleanup.shutil, 'rmtree', side_effect=removal), patch.object(Path, 'lstat', information):
+        with patch.object(checks, 'os', wraps=os) as windows, patch.object(checks.shutil, 'rmtree', side_effect=removal), patch.object(Path, 'lstat', information):
             windows.name = 'nt'
             windows.unlink = unlink
             windows.chmod = Mock()
