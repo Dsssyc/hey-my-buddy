@@ -268,14 +268,19 @@ def _inspect_job_identity(record: dict, source, job) -> str:
     return "alive"
 
 
-def inspect_process_identity(record: dict, *, source=None) -> str:
+def inspect_process_identity(record: dict, *, source=None, members=None) -> str:
     """Return boot-changed, identity-absent, alive, or unknown."""
     source = source or _SystemSource()
     try:
         if record["jobName"] is not None:
             with source.open_job(record["jobName"]) as job:
                 return _inspect_job_identity(record, source, job)
-        return _inspect_posix(record, source, _posix_members(record, source))
+        persistent = members is not None
+        members = members or _posix_members(record, source)
+        observation = _inspect_posix(record, source, members)
+        if observation == "empty" and not persistent:
+            observation = _inspect_posix(record, source, members)
+        return "unknown" if observation == "empty" else observation
     except Exception as error:
         if not _observation_failure(error):
             raise
@@ -289,12 +294,17 @@ def _posix_members(record, source):
 
 
 def _inspect_posix(record, source, members):
-    if source.boot_id() != record["bootId"]:
+    try:
+        current_boot = source.boot_id()
+    except OSError:
+        members.invalidate_observation()
+        raise
+    if current_boot != record["bootId"]:
         return "boot-changed"
     return members.observe()
 
 
-def kill_verified_process_group(record: dict, *, source=None) -> None:
+def kill_verified_process_session(record: dict, *, source=None, members=None) -> None:
     """Request a hard stop only while the complete recorded identity is alive.
 
     Sending a signal is not shutdown evidence; the observer must establish absence.
@@ -303,10 +313,16 @@ def kill_verified_process_group(record: dict, *, source=None) -> None:
     if record["jobName"] is not None:
         _stop_windows_job(record, source, settle_seconds=2.0)
         return
-    members = _posix_members(record, source)
     try:
-        if _inspect_posix(record, source, members) == "alive":
-            members.signal(signal.SIGKILL)
+        if source.boot_id() != record["bootId"]:
+            return
+        if members is None:
+            members = _posix_members(record, source)
+            try:
+                members.observe()
+            except OSError:
+                pass  # The verified root remains stoppable; no absence is claimed.
+        members.signal(signal.SIGKILL)
     except OSError:
         return
 
@@ -352,45 +368,38 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     source = source or _SystemSource()
     if record["jobName"] is not None:
         return _stop_windows_job(record, source, settle_seconds=settle_seconds)
-    members = _posix_members(record, source)
     try:
-        observation = _inspect_posix(record, source, members)
-        if observation != "alive":
-            return observation
-        members.signal(signal.SIGTERM)
-    except Exception as error:
-        if not _observation_failure(error):
-            raise
+        if source.boot_id() != record["bootId"]:
+            return "boot-changed"
+    except OSError:
         return "unknown"
-    escalated = False
+    members = _posix_members(record, source)
     deadline = time.monotonic() + COMMAND_STOP_GRACE_SECONDS
+    escalated = False
+    requested = False
     while True:
         try:
-            observation = _inspect_posix(record, source, members)
+            observation = members.observe()
         except OSError:
             observation = "unknown"
-        if observation in ("boot-changed", "identity-absent"):
-            return "orphan-stopped"
-        if escalated and observation == "alive":
-            try:
-                members.signal(signal.SIGKILL)
-            except OSError:
-                observation = "unknown"
-        if time.monotonic() >= deadline:
-            if escalated or observation != "alive":
+        if observation == "identity-absent":
+            return "orphan-stopped" if requested else observation
+        if not requested:
+            if observation in ("alive", "unknown"):
+                verified = members.signal(signal.SIGTERM)
+                if observation == "unknown" and not verified:
+                    return "unknown"
+                requested = True
+        now = time.monotonic()
+        if now >= deadline and not escalated:
+            escalated = True
+            deadline = now + settle_seconds
+        if escalated:
+            # Unknown prevents confirming absence, never stopping known members.
+            members.signal(signal.SIGKILL)
+            if now >= deadline:
                 return "unknown"
-            try:
-                if _inspect_posix(record, source, members) == "alive":
-                    members.signal(signal.SIGKILL)
-                    escalated = True
-                    deadline = time.monotonic() + settle_seconds
-                    continue
-            except Exception as error:
-                if not _observation_failure(error):
-                    raise
-                return "unknown"
-            return "unknown"
-        time.sleep(0.05)
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 def _observation_failure(error: Exception) -> bool:

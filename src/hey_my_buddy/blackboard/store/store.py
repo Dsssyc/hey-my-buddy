@@ -2402,7 +2402,7 @@ class BoardStore:
                 (attempt["task_id"],),
             )
             if shutdown_confirmed:
-                # Resources are released only when the owned process group is
+                # Resources are released only when the owned process session is
                 # confirmed gone. A cancelled or failed attempt whose shutdown is
                 # unconfirmed keeps its claims retained: a replacement must not
                 # touch resources a survivor may still be writing.

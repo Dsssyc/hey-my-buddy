@@ -968,7 +968,7 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
             job = mock.Mock()
             process._buddy_job = job
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         handle._exit_code = 0
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
             with self.subTest(error=type(error).__name__):

@@ -44,7 +44,7 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
                 raise
             evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=False,
                                                exit_code=process.returncode)
-            handle = ProcessHandle(process, own_group=True, log_paths=log_paths, stop_channel=stop_channel)
+            handle = ProcessHandle(process, log_paths=log_paths, stop_channel=stop_channel)
         finally:
             try:
                 os.close(stdout)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import threading
 
 import psutil
 
@@ -37,7 +38,10 @@ def process_snapshot() -> dict[int, ProcessMember]:
                 parent = process.ppid()
                 session = os.getsid(pid)
                 live = process.status() != psutil.STATUS_ZOMBIE
-                if process_start(pid, include_exited=True) != started:
+                after = process_start(pid, include_exited=True)
+                if after is None:
+                    continue
+                if after != started:
                     raise OSError("process identity changed during session scan")
                 rows[pid] = ProcessMember(pid, started, parent, session, live)
             except (psutil.NoSuchProcess, ProcessLookupError):
@@ -51,7 +55,7 @@ class SessionProcesses:
     """One root's admitted identities, shared by owned and recovery stops."""
 
     def __init__(self, pid: int, started_at: int, *, session: int | None = None,
-                 snapshot=None, creation=None, alive=None, send=None):
+                 snapshot=None, creation=None, alive=None, send=None, lock=None):
         self.pid = pid
         self.started_at = started_at
         self.session = session
@@ -59,16 +63,40 @@ class SessionProcesses:
         self.creation = creation or (lambda pid: process_start(pid, include_exited=True))
         self.alive = alive or (lambda pid: process_start(pid, include_exited=False))
         self.send = send or os.kill
-        self.known: dict[int, int] = {}
+        # The creating handle or durable identity already names the root.
+        # Its exact creation value is rechecked before every signal; only new
+        # members require a complete scan while that original root pins its PID.
+        self.known: dict[int, int] = {pid: started_at}
         self.live: dict[int, int] = {}
+        self.lock = lock or threading.RLock()
+        self._empty_observations = 0
 
     def observe(self) -> str:
+        """One scan; two consecutive empty scans are needed to prove absence."""
+        with self.lock:
+            try:
+                observation = self._observe()
+            except OSError:
+                self._empty_observations = 0
+                raise
+            if observation != "identity-absent":
+                self._empty_observations = 0
+                return observation
+            self._empty_observations += 1
+            return "identity-absent" if self._empty_observations >= 2 else "empty"
+
+    def invalidate_observation(self) -> None:
+        """An unavailable prerequisite breaks consecutive empty evidence."""
+        with self.lock:
+            self._empty_observations = 0
+
+    def _observe(self) -> str:
         root_before = self.creation(self.pid)
         rows = self.snapshot()
         root_after = self.creation(self.pid)
-        if root_before != root_after:
+        if root_after is not None and root_before != root_after:
             raise OSError("root identity changed during session scan")
-        pinned = root_before == self.started_at
+        pinned = root_before == root_after == self.started_at
         if pinned:
             root = rows.get(self.pid)
             # Darwin's libproc/psutil omits zombies; KERN_PROC_PID still pins
@@ -84,10 +112,14 @@ class SessionProcesses:
                             if self.session is not None and row.session == self.session)
             admitted.update(pid for pid, start in self.known.items()
                             if pid in rows and rows[pid].started_at == start)
+            parent_starts = {pid: row.started_at for pid, row in rows.items()}
+            # The root may have exited after a child's PPID was read and be
+            # omitted as a zombie by Darwin. Its pinned creation identity still
+            # proves that edge without requiring a live root table row.
+            parent_starts[self.pid] = self.started_at
             while True:
                 children = {pid for pid, row in rows.items()
-                            if row.parent in admitted and row.parent in rows
-                            and rows[row.parent].started_at <= row.started_at}
+                            if row.parent in admitted and parent_starts[row.parent] <= row.started_at}
                 if children <= admitted:
                     break
                 admitted.update(children)
@@ -102,14 +134,21 @@ class SessionProcesses:
             return "unknown"
         return "alive" if self.live else "identity-absent"
 
-    def signal(self, sig: int) -> None:
-        if self.observe() == "unknown":
-            return
-        # Descendants first: all identities were admitted before stopping root.
-        for pid, started in sorted(self.live.items(), key=lambda item: item[0] == self.pid):
-            if self.creation(pid) != started:
-                continue
-            try:
-                self.send(pid, sig)
-            except ProcessLookupError:
-                pass
+    def signal(self, sig: int) -> bool:
+        """Signal admitted identities even when the latest scan is unknown.
+
+        Unknown blocks confirmation and admission, never stopping an identity
+        already proved while the root pinned its PID. No scan runs here.
+        """
+        with self.lock:
+            verified = False
+            # Descendants first. Recheck every identity, including after a
+            # failed scan, and let an unreadable member leave others stoppable.
+            for pid, started in sorted(self.known.items(), key=lambda item: item[0] == self.pid):
+                try:
+                    if self.creation(pid) == started:
+                        verified = True
+                        self.send(pid, sig)
+                except OSError:
+                    continue
+            return verified

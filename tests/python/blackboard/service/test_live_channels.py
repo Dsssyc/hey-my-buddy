@@ -5,7 +5,7 @@ import time
 
 from support import BoardTestCase, wait_for
 from blackboard.service import test_execution_recovery as recovery_fixture
-from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_group
+from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
 
 
 class PrivateLiveChannelTests(BoardTestCase):
@@ -62,5 +62,5 @@ class PrivateLiveChannelTests(BoardTestCase):
                 self.resume_execution(identity, frozen_process)
                 release.touch()
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
 

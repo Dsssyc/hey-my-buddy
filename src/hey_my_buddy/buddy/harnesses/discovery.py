@@ -395,7 +395,7 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
 
 def _probe_posix(process: subprocess.Popen, stop_at: float,
                  deadline: float | None, handle) -> tuple[str | None, bytes, bool]:
-    """Keep the read outcome separate from the final group/pipe stop evidence."""
+    """Keep the read outcome separate from the final session/pipe stop evidence."""
     assert process.stdout is not None
     chunks: list[bytes] = []
     count = 0
@@ -546,7 +546,7 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     try:
         from .base import ProcessHandle
         try:
-            handle = ProcessHandle(process, stop_channel="signal", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="signal", log_paths={})
         except Exception:
             process.stdout.close()
             raise

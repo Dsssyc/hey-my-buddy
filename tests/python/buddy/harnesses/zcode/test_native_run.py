@@ -398,45 +398,33 @@ class FastSeamTests(NativeRunCase):
         # fields; the common result no longer carries it, so the surviving
         # facts here are the confirmed group stop and the failure reason.)
 
-    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
-        # The run module's own stop collection through the real run path: the
-        # narrow stop-observation point (ProcessHandle.shutdown_confirmed) is
-        # denied confirmation, so the halt still closes stdin, waits and
-        # terminates the real fake app-server while the reported group state
-        # stays the honest unknown — a factually reaped leader never becomes
-        # confirmed-gone evidence, and the settlement is refused without it.
+    def test_an_unconfirmed_native_session_stop_reports_unknown_not_gone(self):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-        observed: list[ProcessHandle] = []
-        observe = ProcessHandle.shutdown_confirmed
-
-        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
-            if "--version" in handle.process.args:
-                return observe(handle, settle_seconds=settle_seconds)
-            observed.append(handle)
-            return False
-
+        observed = []
+        initialize = ProcessHandle.__init__
+        def fail_scan(handle, *args, **kwargs):
+            initialize(handle, *args, **kwargs)
+            if "--version" not in handle.process.args:
+                target, attribute = (handle._members, "snapshot") if handle._members is not None else (handle.job, "active")
+                observed.append((handle, target, attribute, getattr(target, attribute)))
+                setattr(target, attribute, _mock.Mock(side_effect=OSError("fixture member scan failed")))
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
-        with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
-            result = run(self.fast_request(prompt), observer=correction.observer,
-                         services=None, cancelled=lambda: False)
-        native = result.stop_evidence.native
-        self.assertEqual(native.group_state, "unknown")
-        self.assertIsNotNone(result.end.native_exit_code)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        # Denied confirmation applies to this run's owned handle. An EOF exit
-        # needs no signal; withholding evidence still refuses settlement.
-        self.assertGreaterEqual(len(observed), 1)
-        # No orphan: with the patch gone, the run's own captured handle shows
-        # the leader reaped and the whole group confirmed gone by the real
-        # observation the halt performed.
-        handle = observed[0]
-        self.assertIsNotNone(handle.process.poll())
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
-        self.assertFalse(handle.group_alive())
+        try:
+            with _mock.patch.object(ProcessHandle, "__init__", fail_scan):
+                result = run(self.fast_request(prompt), observer=correction.observer,
+                             services=None, cancelled=lambda: False)
+            self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+            self.assertIsNotNone(result.end.native_exit_code)
+            self.assertEqual(result.end.status, "error")
+            self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+            self.assertIsNotNone(observed[0][0].poll())
+        finally:
+            for handle, target, attribute, observation in observed:
+                setattr(target, attribute, observation)
+                self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
@@ -1688,7 +1676,7 @@ class DiscoveryStopTests(NativeRunCase):
                 try:
                     if owner._members is not None:
                         owner._members.snapshot = process_members.process_snapshot
-                    native_run.halt_owned_group(owner, time.monotonic() + 5)
+                    native_run.halt_owned_session(owner, time.monotonic() + 5)
                 finally:
                     owner.process.stdout.close()
             self.addCleanup(reap)
@@ -1934,12 +1922,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_connection_construction_failure_keeps_unconfirmed_stop(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def unobserved(handle, deadline):
             halt(handle, deadline)
             return False, True
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=unobserved):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
@@ -1964,12 +1952,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def stopped_without_receipt(handle, deadline):
             halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=stopped_without_receipt):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)

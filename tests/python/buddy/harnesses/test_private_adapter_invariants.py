@@ -221,7 +221,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
              "argv": [sys.executable, "-c", "print('ok')"]}, command_evidence, {}, fixture.environment, session_record_path=None)
         adapter = CommandAdapter()
         child = adapter.start(command)
-        self.addCleanup(lambda: child.terminate(grace_seconds=0.1) if child.group_alive() else None)
+        self.addCleanup(lambda: child.terminate(grace_seconds=0.1) if child.session_alive() else None)
         self.assertEqual(child.wait(5), 0)
         self.assertEqual(adapter.collect(child, command).status, "ok")
         self.assert_partition(command, None)
@@ -431,7 +431,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 if os.name == "nt":
                     process = owned_popen(argv, env=env, cwd=evidence, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, text=True, encoding="utf-8", job_name=job_name)
-                    handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+                    handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
                     try:
                         stdout, stderr = process.communicate(timeout=35)
                     finally:

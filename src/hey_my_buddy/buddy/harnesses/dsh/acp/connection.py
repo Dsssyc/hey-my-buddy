@@ -620,9 +620,9 @@ class AcpConnection:
                     pass
 
 
-def group_observation(handle) -> str:
+def session_observation(handle) -> str:
     """Use the same session/tree or Job observation as every owned stop."""
-    return handle.group_observation()
+    return handle.session_observation()
 
 
 def stop_evidence(handle) -> dict:
@@ -633,7 +633,7 @@ def stop_evidence(handle) -> dict:
     or an unreachable channel never appears here as a stop proof.
     """
     code = handle.poll()
-    observation = group_observation(handle)
+    observation = session_observation(handle)
     return {
         "leaderExited": code is not None,
         "leaderExitCode": code,

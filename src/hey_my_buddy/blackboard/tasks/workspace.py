@@ -2441,11 +2441,11 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
         return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
 
 
-def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, first_execution_at=None) -> dict:
+def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
-    The caller has rechecked acceptance, integration, shutdown and dependency
-    evidence. This function only proves that the exact path still is that
+    The caller has rechecked acceptance, integration, shutdown, dependency and
+    checkout working-directory evidence before its deletion fence. This function only proves that the exact path still is that
     allocation's own locked worktree and then removes that one path; no parent
     directory, source checkout, outputs directory or Git reference is touched.
     A borrowed existing checkout, a sibling worktree and a registry entry that
@@ -2472,8 +2472,6 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, fi
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
         if not _path_present(checkout_root):
             return removal
-        from .checkout_processes import require_idle_checkout
-        require_idle_checkout(checkout_root, first_execution_at=first_execution_at)
         restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])

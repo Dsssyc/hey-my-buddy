@@ -252,9 +252,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                                        for reason in proof["reasons"])
                         checkout_retained = True
                     else:
-                        workspace.cleanup_remove(state, manifest, retained=manifests,
-                                                 resume=proof["resume"], first_execution_at=first_execution_times.get(
-                                                     (manifest["repositoryId"], manifest["checkoutId"])))
+                        workspace.cleanup_remove(state, manifest, retained=manifests, resume=proof["resume"])
             if checkout_retained or workspace._path_present(checkout):
                 skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["DEPENDENCY_RETAINED"]

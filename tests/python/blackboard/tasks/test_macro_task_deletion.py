@@ -61,8 +61,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         board = self.board()
         run = self.closed(board, "cwd-blocker", macro_task="Blocked deletion")
         target = run["macroTaskId"]
-        cause = reason("checkout.live-processes", processes=[
-            {"pid": 321, "startedAt": 456, "executable": "python"}])
+        cause = reason("checkout.process-blockers", processes=[
+            {"pid": 321, "startedAt": 456, "executable": "python"}], unreadableProcesses=[])
         with self.without_physical_io()[0], patch.object(macro_task_deletion, "_delete_workspaces",
                 side_effect=BoardError("NOT_READY", "process blocker", reason=cause)):
             blocked = macro_task_deletion.delete(board.store, target, 1)

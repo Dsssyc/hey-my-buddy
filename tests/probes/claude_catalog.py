@@ -51,7 +51,7 @@ def run_probe(root: Path, cli: str) -> dict:
         process = subprocess.Popen(argv, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=err, start_new_session=True, close_fds=True)
     stderr_path.chmod(0o600)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
+    handle = ProcessHandle(process, log_paths={})
     def read():
         try:
             while raw := process.stdout.readline(8*1024*1024+1):

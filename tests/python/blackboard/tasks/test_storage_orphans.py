@@ -257,6 +257,33 @@ class StorageOrphanTests(WorkflowTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations').fetchone()[0], 0)
 
+    def test_process_scan_precedes_writer_fence_and_blocks_orphan_removal(self):
+        from hey_my_buddy.blackboard.tasks import checkout_processes
+        manifest, checkout, planned = self.orphan()
+        candidate = next(row for row in planned['candidates'] if row['path'] == str(checkout))
+        calls = []
+        cause = {"code": "checkout.process-blockers", "params": {
+            "processes": [{"pid": 321, "startedAt": 456, "executable": "python"}], "unreadableProcesses": []}}
+        def inspect(path, **kwargs):
+            calls.append(path)
+            connection = sqlite3.connect(str(self.board_instance.store.db.path), timeout=0)
+            try:
+                connection.execute('BEGIN IMMEDIATE')
+                connection.rollback()
+            finally:
+                connection.close()
+            raise BoardError('NOT_READY', 'private process blocker', reasons=[cause['code']], reason=cause)
+        with patch.object(checkout_processes, 'require_idle_checkout', side_effect=inspect):
+            with self.assertRaises(BoardError) as caught:
+                storage._remove_orphan_workspace(self.board_instance.store, candidate)
+        self.assertEqual(caught.exception.details['reason'], cause)
+        self.assertEqual(calls, [checkout])
+        self.assertTrue(checkout.exists())
+        with patch.object(checkout_processes, 'require_idle_checkout') as scan:
+            storage._remove_orphan_workspace(self.board_instance.store, candidate)
+        scan.assert_called_once_with(checkout)
+        self.assertFalse(checkout.exists())
+
     def test_apply_refuses_new_workflow_registration(self):
         _, checkout, planned = self.orphan()
         self.submit(self.board_instance, request_id='registered', cwd=str(checkout), kind='existing')

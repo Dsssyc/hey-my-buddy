@@ -21,11 +21,10 @@ class ProcessHandle:
     orphan only after the full durable identity and absent creator are checked.
     """
 
-    def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict,
+    def __init__(self, process: subprocess.Popen, *, log_paths: dict,
                  stop_channel: Literal["stdin", "protocol", "signal"],
                  close_input: Callable[[], None] | None = None):
         self.process = process
-        self.own_group = own_group
         self.log_paths = log_paths
         self.stop_channel = stop_channel
         self.close_input = close_input
@@ -49,7 +48,7 @@ class ProcessHandle:
         # start_new_session makes the owned child's PID its session ID.
         # Keep it even if the leader exits before identity capture.
         self.session_id: int | None = None
-        if own_group and self.job is None and os.name != "nt" and process.pid is not None:
+        if self.job is None and os.name != "nt" and process.pid is not None:
             self.session_id = process.pid
         try:
             from .process_identity import _creation_time, record_native_process_spawn
@@ -58,7 +57,7 @@ class ProcessHandle:
                                        if type(process.pid) is int and process.pid > 0 else None)
             if self.job is None and os.name != "nt" and self.process_started_at is not None:
                 self._members = SessionProcesses(process.pid, self.process_started_at,
-                                                 session=self.session_id)
+                                                 session=self.session_id, lock=self.stop_lock)
             if stop_channel == "stdin":
                 if process.stdin is None:
                     raise ValueError("stdin stop channel requires a pipe")
@@ -100,38 +99,47 @@ class ProcessHandle:
     def finished(self) -> bool:
         return self.poll() is not None
 
-    def poll(self) -> int | None:
-        """Observe exit without releasing the PID before membership is known empty."""
+    def observe(self) -> tuple[int | None, str]:
+        """Read the root exit and scan its member boundary once, under one lock."""
         with self.stop_lock:
             if self.job is not None or os.name == "nt":
-                return self.process.poll()
-            if self._confirmed:
-                return self.process.returncode
-            if self._exit_code is None:
-                self._exit_code = child_exit_code(self.pid)
+                code = self.process.poll()
+            else:
+                if self._confirmed:
+                    return self._exit_code, "gone"
                 if self._exit_code is None:
-                    return None
-            # Keep the zombie (and therefore its number) while any member lives
-            # or observation is incomplete. Popen.wait is the only reaping step.
-            if not self.group_alive():
-                self.process.wait()
+                    self._exit_code = (self.process.returncode if self.process.returncode is not None
+                                       else child_exit_code(self.pid))
+                code = self._exit_code
+            observation = self._session_observation()
+            if code is not None and observation == "gone" and not self._confirmed:
+                if self.job is None and os.name != "nt":
+                    self.process.wait()
                 self._confirmed = True
-            return self._exit_code
+            return code, observation
 
-    def _signal_group(self, sig: int) -> None:
-        if self.process.pid is None or self._members is None:
-            return
-        try:
-            self._members.signal(sig)
-        except (ProcessLookupError, PermissionError, OSError, ValueError):
-            pass
+    def poll(self) -> int | None:
+        """Observe exit without releasing the PID before membership is empty."""
+        return self.observe()[0]
 
-    def group_alive(self) -> bool:
-        """Remain live unless the one ownership boundary is observed empty."""
-        return self.group_observation() != "gone"
+    def _signal_session(self, sig: int) -> None:
+        with self.stop_lock:
+            if self._members is None:
+                # The unreaped child is ours even if creation-time capture failed.
+                # Popen checks its held child before signalling; absence of member
+                # evidence still prevents shutdown confirmation.
+                self.process.send_signal(sig)
+            else:
+                self._members.signal(sig)
 
-    def group_observation(self) -> str:
-        """Keep unavailable membership distinct from an observed live member."""
+    def session_alive(self) -> bool:
+        return self.session_observation() != "gone"
+
+    def session_observation(self) -> str:
+        observation = self.observe()[1]
+        return "unknown" if observation == "empty" else observation
+
+    def _session_observation(self) -> str:
         if self._confirmed:
             return "gone"
         if self.job is not None:
@@ -140,23 +148,24 @@ class ProcessHandle:
                 return "unknown" if active is None else "gone" if active == 0 else "alive"
             except OSError:
                 return "unknown"
-        if self.own_group and os.name == 'nt':
+        if os.name == "nt":
             return "unknown"  # A root PID without a held Job cannot prove tree shutdown.
-        if self.process.pid is None:
-            return "gone"
         if self._members is None:
-            return "unknown"  # Failed identity capture cannot admit a POSIX member.
+            return "unknown"
         try:
             observation = self._members.observe()
             return "gone" if observation == "identity-absent" else observation
         except OSError:
             return "unknown"
 
-    def _wait_for_group(self, seconds: float) -> bool:
+    def _wait_for_session(self, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
         while True:
-            if self.poll() is not None and not self.group_alive():
+            code, observation = self.observe()
+            if code is not None and observation == "gone":
                 return True
+            if observation == "empty":
+                continue  # The next PID list starts after the first scan finished.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
@@ -164,39 +173,28 @@ class ProcessHandle:
 
     def terminate(self, *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS,
                   settle_seconds: float = 2.0) -> tuple[bool, bool]:
-        """Request, wait, POSIX TERM, force and observe the ownership boundary.
-
-        Protocol owners send their native interrupt (or C-Two stop) before
-        calling this primitive. Stdio owners then close input here. A signal
-        channel is SIGTERM on POSIX and has no Windows counterpart, so Windows
-        children without a channel go straight to Job termination. Returns
-        (confirmed, escalated); a reaped leader alone never confirms shutdown.
-        """
+        """Request, wait, POSIX TERM, force and observe the ownership boundary."""
         with self.stop_lock:
             self.cancel_requested = True
             self.signalled_at = time.monotonic()
             windows = self.job is not None or os.name == "nt"
             if not windows:
-                # Admit descendants before closing input or signalling the root.
-                self.group_alive()
-            # Input setup can fail during construction; the owned child still
-            # reaches this primitive's force and observation phases.
+                self.observe()  # Admit members before the first stop request.
             if self.stop_channel == "stdin" and self.close_input is not None:
                 try:
                     self.close_input()
                 except OSError:
                     pass
             elif self.stop_channel == "signal" and not windows:
-                self._signal_group(signal.SIGTERM)
+                self._signal_session(signal.SIGTERM)
             if self.stop_channel != "signal" or not windows:
-                # The request belongs to the root. Once it exits, surviving
-                # tools immediately reach TERM (POSIX) or Job termination.
+                # A root exit ends its grace even when tools still live.
                 self.wait(grace_seconds)
-            if self._wait_for_group(0):
+            if self._wait_for_session(0):
                 return self.shutdown_confirmed(settle_seconds=0), False
             if not windows and self.stop_channel != "signal":
-                self._signal_group(signal.SIGTERM)
-                if self._wait_for_group(1.0):
+                self._signal_session(signal.SIGTERM)
+                if self._wait_for_session(1.0):
                     return self.shutdown_confirmed(settle_seconds=0), True
             if self.job is not None:
                 self.job.terminate()
@@ -204,13 +202,15 @@ class ProcessHandle:
                 self.process.kill()
             deadline = time.monotonic() + settle_seconds
             while True:
-                if not windows:
-                    # Rescan and stop exact admitted identities until empty.
-                    self._signal_group(signal.SIGKILL)
-                if self._wait_for_group(min(0.025, max(0.0, deadline - time.monotonic()))):
+                code, observation = self.observe()
+                if code is not None and observation == "gone":
                     return self.shutdown_confirmed(settle_seconds=0), True
-                if time.monotonic() >= deadline:
+                if not windows:
+                    self._signal_session(signal.SIGKILL)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     return False, True
+                time.sleep(min(0.025, remaining))
 
     def wait(self, timeout: float | None) -> int | None:
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -222,30 +222,20 @@ class ProcessHandle:
                 return None
             time.sleep(0.025 if deadline is None else min(0.025, max(0, deadline - time.monotonic())))
 
-    def shutdown_confirmed(self, settle_seconds: float = 2.0) -> bool:
-        """True only when the owned member boundary is confirmed empty."""
-        if self.poll() is None:
-            return False
-        deadline = time.monotonic() + settle_seconds
-        while time.monotonic() < deadline:
-            if not self.group_alive():
-                self.poll()
-                if self.job is not None:
-                    try:
-                        self.job.close(confirmed=True)
-                    except OSError:
-                        return False
-                return True
-            time.sleep(0.025)
-        stopped = not self.group_alive()
-        if stopped:
-            self.poll()
-        if stopped and self.job is not None:
+    def _close_confirmed_job(self) -> bool:
+        if self.job is not None:
             try:
                 self.job.close(confirmed=True)
             except OSError:
                 return False
-        return stopped
+        return True
+
+    def shutdown_confirmed(self, settle_seconds: float = 2.0) -> bool:
+        """An exited root and complete consecutive empty member scans are required."""
+        with self.stop_lock:
+            if self._wait_for_session(settle_seconds):
+                return self._close_confirmed_job()
+            return False
 
 
 def open_logs(paths: dict) -> tuple[int, int]:

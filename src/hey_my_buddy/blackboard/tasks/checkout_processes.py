@@ -55,20 +55,18 @@ def require_idle_checkout(checkout: Path, *, first_execution_at: float | None = 
                 if cwd is not None and not Path(cwd).is_relative_to(root):
                     continue
                 executable = process.name()
-                if process_start(process.pid, include_exited=False) != started:
+                after = process_start(process.pid, include_exited=False)
+                if after is None:
+                    continue
+                if after != started:
                     raise OSError("process identity changed during cwd observation")
                 item = {"pid": process.pid, "startedAt": started, "executable": executable}
                 (unreadable if cwd is None else users).append(item)
             except (psutil.NoSuchProcess, ProcessLookupError):
                 continue
-        if users and unreadable:
-            cause = reason("checkout.process-blockers", processes=users, unreadableProcesses=unreadable)
-        elif unreadable:
-            cause = reason("checkout.unreadable-processes", processes=unreadable)
-        elif users:
-            cause = reason("checkout.live-processes", processes=users)
-        else:
+        if not users and not unreadable:
             return
+        cause = reason("checkout.process-blockers", processes=users, unreadableProcesses=unreadable)
     except (OSError, psutil.Error) as error:
         cause = reason("checkout.process-scan-failed")
         raise BoardError("NOT_READY", "The checkout process observation blocks deletion",

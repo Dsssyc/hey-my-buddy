@@ -24,6 +24,15 @@ def main():
     mode, ready = sys.argv[1], Path(sys.argv[2])
     if mode == "leaf":
         leaf(ready)
+    ready.with_suffix(".root").write_text(json.dumps({"pid": os.getpid(),
+        "startedAt": process_start(os.getpid(), include_exited=True)}))
+    if mode == "late":
+        def late_child(sig, frame):
+            if os.fork() == 0:
+                os.setpgid(0, 0)
+                leaf(ready.with_suffix(".late"))
+            os._exit(0)
+        signal.signal(signal.SIGTERM, late_child)
     if mode == "nohup":
         subprocess.Popen(["nohup", sys.executable, __file__, "leaf", str(ready)],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -41,8 +41,7 @@ class LaunchTest(AcpTestCase):
         try:
             process.stdin.close()
             out = process.stdout.read()
-            handle.wait(30)
-            self.assertEqual(0, process.returncode)
+            self.assertEqual(0, handle.wait(30))
         finally:
             handle.wait(5)
             # A reaped Windows venv launcher can precede its Job becoming empty.
@@ -69,9 +68,8 @@ class LaunchTest(AcpTestCase):
         else:
             self.assertFalse(error.evidence["shutdownConfirmed"], error.evidence)
             self.assertEqual("unknown", error.evidence["groupObserved"])
-            # Re-observe only the test-owned unreaped child with the real reader.
-            handle = ProcessHandle(error.process, own_group=True, log_paths={}, stop_channel="signal")
-            self.assertTrue(handle.terminate(grace_seconds=0)[0])
+            # The held Popen can stop/reap its root without inventing member evidence.
+            self.assertIsNotNone(error.process.wait(timeout=5))
 
     def test_connection_construction_failure_stops_child_and_retains_evidence(self):
         with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.AcpConnection",

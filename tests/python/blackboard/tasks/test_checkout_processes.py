@@ -46,8 +46,8 @@ class CheckoutProcessTests(unittest.TestCase):
             for cwd in (root, root / "subdir"):
                 with self.subTest(cwd=cwd):
                     cause = self.blocked(alias, [self.process(str(cwd))])
-                    self.assertEqual(cause, {"code": "checkout.live-processes", "params": {
-                        "processes": [{"pid": 321, "startedAt": 456, "executable": "python"}]}})
+                    self.assertEqual(cause, {"code": "checkout.process-blockers", "params": {
+                        "processes": [{"pid": 321, "startedAt": 456, "executable": "python"}], "unreadableProcesses": []}})
             self.observe(root, [self.process(str(root) + "-other")])
 
     def test_unopenable_cwd_outside_checkout_does_not_block_or_get_opened(self):
@@ -69,8 +69,8 @@ class CheckoutProcessTests(unittest.TestCase):
                 with self.subTest(first_execution_at=first_execution_at):
                     cause = self.blocked(root, [self.process(psutil.AccessDenied())],
                                          first_execution_at=first_execution_at)
-                    self.assertEqual(cause, {"code": "checkout.unreadable-processes", "params": {
-                        "processes": [{"pid": 321, "startedAt": 456, "executable": "python"}]}})
+                    self.assertEqual(cause, {"code": "checkout.process-blockers", "params": {
+                        "processes": [], "unreadableProcesses": [{"pid": 321, "startedAt": 456, "executable": "python"}]}})
 
     def test_live_and_unreadable_processes_have_distinct_facts_without_private_data(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -96,3 +96,10 @@ class CheckoutProcessTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as caught:
                         guard.require_idle_checkout(root)
                 self.assertEqual(caught.exception.details["reason"]["code"], "checkout.process-scan-failed")
+
+    def test_exit_during_cwd_scan_does_not_block_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.object(guard, "process_start", side_effect=[456, None]), \
+                 patch.object(guard, "_processes", return_value=([self.process(str(root))], True)):
+                guard.require_idle_checkout(root)

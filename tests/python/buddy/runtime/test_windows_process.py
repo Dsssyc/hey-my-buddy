@@ -132,7 +132,7 @@ class WindowsProcessTests(unittest.TestCase):
                         side_effect=OSError("identity unavailable")), \
              mock.patch.object(ProcessHandle, "terminate", side_effect=OSError("stop unknown")):
             with self.assertRaises(RuntimeError) as caught:
-                ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+                ProcessHandle(process, log_paths={}, stop_channel="signal")
         self.assertTrue(caught.exception.owned_popen_evidence.created)
         self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
         self.assertIs(caught.exception.execution_handle.process, process)
@@ -160,11 +160,8 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertEqual(len(children), 1)
         self.assertTrue(caught.exception.owned_popen_evidence.created)
         self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
-        self.assertIsNone(children[0].poll())
-        # The test still owns this unreaped child; restore real observation for
-        # its cleanup after removing the injected creation-read failure.
-        handle = ProcessHandle(children[0], own_group=True, log_paths={}, stop_channel="signal")
-        self.assertTrue(handle.terminate(grace_seconds=0)[0])
+        self.assertIsNotNone(children[0].wait(timeout=5))
+        self.assertFalse(caught.exception.execution_handle.shutdown_confirmed(settle_seconds=0))
 
     def launch(self, api, process):
         with mock.patch("hey_my_buddy.protocol.owned_process.subprocess.Popen", return_value=process) as popen:
@@ -306,7 +303,7 @@ class WindowsProcessTests(unittest.TestCase):
         api = FakeAPI(process)
         child = self.launch(api, process)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(child, log_paths={}, stop_channel="signal")
         process.returncode = 0  # The leader exited; a child is still active.
         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         api.fail_at = "active"
@@ -321,7 +318,7 @@ class WindowsProcessTests(unittest.TestCase):
         api = FakeAPI(process)
         child = self.launch(api, process)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(child, log_paths={}, stop_channel="signal")
         with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg",
                         side_effect=AssertionError("PID signaling"), create=True) as kill_group:
             handle.terminate(grace_seconds=0)
@@ -334,7 +331,7 @@ class WindowsProcessTests(unittest.TestCase):
         if os.name == "nt":
             self.skipTest("POSIX only")
         process = owned_popen([sys.executable, "-c", "pass"], start_new_session=True)
-        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         self.assertEqual(handle.wait(timeout=5), 0)
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=1))
 
@@ -361,14 +358,14 @@ class WindowsProcessTests(unittest.TestCase):
         api, process, child, job = self.suspended_root()
         transfer_job_to_child(child, job)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(child, log_paths={}, stop_channel="signal")
         api.events.clear()
         process.returncode = 0  # The created root exited; its descendants remain.
         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         self.assertIn(("open", FakeAPI.ROOT_NAME), api.events)
         self.assertIn(("active", 88), api.events)
         api.fail_at = "open"
-        self.assertTrue(handle.group_alive())  # An unobservable Job is not proven gone.
+        self.assertTrue(handle.session_alive())  # An unobservable Job is not proven gone.
         api.fail_at = None
         with mock.patch.object(child, "kill", side_effect=AssertionError("PID kill")):
             handle.terminate(grace_seconds=0)
@@ -376,7 +373,7 @@ class WindowsProcessTests(unittest.TestCase):
         api.events.clear()
         api.job_gone = True  # The last lifetime copy closed with the created process.
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
-        self.assertEqual(api.events, [("open", FakeAPI.ROOT_NAME)])
+        self.assertEqual(api.events, [])  # The original empty observation already closed the Job.
 
     def test_confirmed_transferred_job_never_reopens_its_name(self):
         api = mock.Mock()

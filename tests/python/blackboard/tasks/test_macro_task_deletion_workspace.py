@@ -35,7 +35,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
             self.assertTrue(handle.terminate(grace_seconds=0)[0])
             with self.assertRaises(BoardError) as caught:
                 self.delete(manifest)
-            self.assertEqual(caught.exception.details["reason"]["code"], "checkout.live-processes")
+            self.assertEqual(caught.exception.details["reason"]["code"], "checkout.process-blockers")
             processes = caught.exception.details["reason"]["params"]["processes"]
             self.assertIn(member["pid"], [process["pid"] for process in processes])
             self.assertTrue(checkout.exists())

@@ -36,12 +36,14 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             with self.assertRaises(BoardError) as caught:
                 self.reclaim(board, before)
             blocked = caught.exception.details["reclaim"]
-            self.assertEqual(blocked["reasons"], ["checkout.live-processes"])
+            self.assertEqual(blocked["reasons"], ["checkout.process-blockers"])
             processes = blocked["reason"]["params"]["processes"]
             self.assertIn(member["pid"], [process["pid"] for process in processes])
             self.assertTrue(all(set(process) == {"pid", "startedAt", "executable"} for process in processes))
             after = self.view(board, submitted["runId"])
-            self.assertEqual(before, after)
+            self.assertEqual(after["state"], before["state"])
+            self.assertEqual(after["cleanup"]["state"], "planned")
+            # No applying cleanup fence may hide the concrete process reason.
             self.assertTrue(checkout.exists())
         result = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(result["removed"])

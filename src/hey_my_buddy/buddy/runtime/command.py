@@ -69,7 +69,7 @@ class CommandAdapter(Adapter):
         finally:
             os.close(stdout)
             os.close(stderr)
-        handle = ProcessHandle(process, stop_channel="signal", own_group=True, log_paths=log_paths)
+        handle = ProcessHandle(process, stop_channel="signal", log_paths=log_paths)
         handle.deadline = (math.inf if context.timeout_seconds is None
                            else time.monotonic() + context.timeout_seconds)
         return handle
@@ -90,7 +90,7 @@ class CommandAdapter(Adapter):
             "mode": "command",
             "argv": list(context.spec.get("argv", [])),
             "exitCode": exit_code,
-            "signal": _signal_name(handle.process),
+            "signal": _signal_name(exit_code),
             "elapsedSeconds": None,
             "logPaths": {"stdout": str(stdout_path), "stderr": str(stderr_path)},
             "finalText": _head(stdout_path),
@@ -108,7 +108,7 @@ class CommandAdapter(Adapter):
             result=result,
             error=error,
             exit_code=exit_code,
-            signal=_signal_name(handle.process),
+            signal=_signal_name(exit_code),
             shutdown_confirmed=shutdown_confirmed,
             artifacts=_artifacts(handle, context),
         )
@@ -150,8 +150,7 @@ def _artifacts(handle: ProcessHandle, context: ExecutionContext) -> list[dict]:
     return artifacts
 
 
-def _signal_name(process: subprocess.Popen) -> str | None:
-    code = process.returncode
+def _signal_name(code: int | None) -> str | None:
     if code is None or code >= 0:
         return None
     import signal as signal_module

@@ -164,7 +164,7 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
             else:
                 # No membership was admitted during the injected failure. The
                 # fixture owns a single child; a fresh handle reads its identity.
-                handle = ProcessHandle(state["process"], own_group=True, log_paths=state["paths"], stop_channel="signal")
+                handle = ProcessHandle(state["process"], log_paths=state["paths"], stop_channel="signal")
                 handle.terminate(grace_seconds=0)
         for descriptor in state["descriptors"]:
             if descriptor not in state["closed"]:
@@ -278,7 +278,7 @@ class LaunchControllerTests(unittest.TestCase):
         handle = launch_controller(prepare=lambda: ([sys.executable, "-c", CHILD_SOURCE],
                                                     str(self.root), dict(os.environ)),
                                    log_paths=self.log_paths, timeout_seconds=30, stop_channel="stdin")
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.session_alive() else None)
         self.assertIsNotNone(handle.wait(10))
         self.assertEqual(native_path(Path(self.log_paths["stdout"])).read_text(encoding="utf-8").strip(), "controller-out")
         self.assertEqual(native_path(Path(self.log_paths["stderr"])).read_text(encoding="utf-8"), "")
@@ -316,7 +316,6 @@ class LaunchControllerTests(unittest.TestCase):
             with self.assertRaises(OSError, msg=role):
                 os.fstat(keyword[role])
         self.assertIs(handle.process, process)
-        self.assertTrue(handle.own_group)
         self.assertEqual(handle.log_paths, self.log_paths)
 
     def test_positive_timeout_stamps_now_plus_timeout_and_grace(self):
@@ -617,8 +616,8 @@ class RealStopTests(unittest.TestCase):
         handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
                                                     str(temporary.name), dict(os.environ)),
                                    log_paths=log_paths, stop_channel="stdin")
-        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        self.assertTrue(handle.group_alive())
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.session_alive() else None)
+        self.assertTrue(handle.session_alive())
         self.assertFalse(stop_confirmed({"processState": {"shutdownConfirmed": True}}, handle.shutdown_confirmed),
                          "a live group is never stopped while it is observable")
         handle.terminate(grace_seconds=2)
@@ -642,7 +641,7 @@ class ObservationErrorStopTests(unittest.TestCase):
                     with self.subTest(error=type(error).__name__), \
                          mock.patch.object(handle._members, "snapshot", side_effect=error):
                         self.assertIsNotNone(handle.wait(5))
-                        self.assertTrue(handle.group_alive())
+                        self.assertTrue(handle.session_alive())
                         self.assertIsNone(handle.process.returncode)
                         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
                         collection = collect_controller(handle, read=lambda _path: None,
@@ -662,7 +661,7 @@ class CollectControllerTests(unittest.TestCase):
     def test_collection_carries_payload_exit_code_and_stop_together(self):
         stdout = self.root / "stdout"
         stdout.write_text(json.dumps({"status": "cancelled", "processState": {"shutdownConfirmed": True}}), encoding="utf-8", newline="\n")
-        handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(-15),
+        handle = SimpleNamespace(log_paths={"stdout": str(stdout)}, process=FakeProcess(None), poll=lambda: -15,
                                  shutdown_confirmed=lambda: True)
         collection = collect_controller(handle, read=read_strict_result, stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
         self.assertIsInstance(collection, ControllerCollection)
@@ -679,7 +678,7 @@ class CollectControllerTests(unittest.TestCase):
 
     def test_an_unreadable_result_keeps_the_attempt_unconfirmed(self):
         handle = SimpleNamespace(log_paths={"stdout": str(self.root / "missing")},
-                                 process=FakeProcess(1), shutdown_confirmed=lambda: True)
+                                 process=FakeProcess(None), poll=lambda: 1, shutdown_confirmed=lambda: True)
         collection = collect_controller(handle, read=read_strict_result, stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
         self.assertIsNone(collection.payload)
         self.assertIs(collection.stop_confirmed, False)

@@ -126,7 +126,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
     def test_controller_native_false_after_outer_stop_keeps_native_child_alive(self):
         native = owned_popen([sys.executable, '-c', 'import time; time.sleep(60)'],
                              cwd=str(self.directory), env=dict(os.environ), start_new_session=True)
-        handle = ProcessHandle(native, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(native, log_paths={}, stop_channel="signal")
         try:
             with controller_log_close_failure(receipt=NATIVE_UNKNOWN) as state:
                 with self.assertRaises(OSError) as caught:
@@ -136,7 +136,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                 self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
                 self.assertIsNotNone(state['process'].poll())
                 self.assertIsNone(native.poll())
-                self.assertTrue(handle.group_alive())
+                self.assertTrue(handle.session_alive())
                 self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
                 self.assertEqual(state['observations'], 1)
         finally:

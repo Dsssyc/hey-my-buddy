@@ -37,6 +37,17 @@ describe("the program reason catalog", () => {
     }
   });
 
+  for (const language of ["zh", "en"] as const) it(`shows executable and PID without kernel start counters in ${language}`, () => {
+    setLanguageChoice(language);
+    const text = reasonText({ code: "checkout.process-blockers", params: {
+      processes: [{ pid: 321, startedAt: 9876543210, executable: "python" }],
+      unreadableProcesses: [{ pid: 654, startedAt: 9876543211, executable: "node" }],
+    } });
+    expect(text).toContain(language === "zh" ? "python（321）" : "python (321)");
+    expect(text).toContain(language === "zh" ? "node（654）" : "node (654)");
+    expect(text).not.toMatch(/987654321|startedAt|\{|\}/);
+  });
+
   it("formats every current candidate bound in both languages", () => {
     const bounds = ["identity-changed", "disabled", "unavailable", "constraints", "capability-missing",
       "excluded", "not-pinned", "harness-unavailable", "quota-exhausted", "not-a-candidate"];

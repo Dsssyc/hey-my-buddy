@@ -4699,17 +4699,6 @@ class WorkflowCoordinator:
             if run_row is None:
                 return {"removed": False, "reasons": ["run-not-found"]}
             revision = self._run_row(connection, owner_run_id)["revision"]
-            manifest = json.loads(run_row["workspace_manifest_json"])
-            allocation = workspace_module().resolve_allocation(
-                self.board.directory, manifest, self._allocation_provenance(connection, run_row))
-            from .checkout_processes import first_execution_time
-            first_execution_at = first_execution_time(connection, manifest)
-        if allocation is not None and Path(allocation["path"]).exists():
-            from .checkout_processes import require_idle_checkout
-            try:
-                require_idle_checkout(Path(allocation["path"]), first_execution_at=first_execution_at)
-            except BoardError as error:
-                return {"removed": False, "path": allocation["path"], **error.details}
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
         control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if key in control}
         params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
@@ -5576,6 +5565,8 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"])
             retained = self._allocation_provenance(connection, run_row)
+            from .checkout_processes import first_execution_time
+            first_execution_at = first_execution_time(connection, manifest)
             allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
             sealed = self._latest_handoff(connection, run_row, manifest)
             # Board eligibility proves the whole owned lineage stopped. Reclaim
@@ -5615,6 +5606,9 @@ class WorkflowCoordinator:
                 if inspection.get("attachedBranch") is not None:
                     details["attachedBranch"] = inspection["attachedBranch"]
                 refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
+            if not blocked and (path.exists() or path.is_symlink()):
+                from .checkout_processes import require_idle_checkout
+                require_idle_checkout(path, first_execution_at=first_execution_at)
             now = self.now()
             with self.db.write() as connection:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
@@ -5661,11 +5655,7 @@ class WorkflowCoordinator:
             raise refusal
         removed = None
         if path.exists() or path.is_symlink():
-            from .checkout_processes import first_execution_time
-            with self.db.read() as connection:
-                first_execution_at = first_execution_time(connection, manifest)
-            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume,
-                                                        first_execution_at=first_execution_at)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume)
         from ... import private_dirs
         for micro_task_id, attempt_ids in failed_attempts.items():
             for adapter in private_dirs.ADAPTERS:

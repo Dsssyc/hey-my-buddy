@@ -89,6 +89,16 @@ class ProcessIdentityTests(unittest.TestCase):
         source.group = False
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "identity-absent")
 
+    def test_unreadable_boot_breaks_consecutive_empty_scans(self):
+        source = Source(started_at=None)
+        source.group = False
+        members = identity._posix_members(RECORD, source)
+        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
+        with mock.patch.object(source, "boot_id", side_effect=OSError):
+            self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
+        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "unknown")
+        self.assertEqual(identity.inspect_process_identity(RECORD, source=source, members=members), "identity-absent")
+
     def test_reused_pid_with_surviving_group_is_unknown_and_never_signalled(self):
         source = Source()
         source.start = 220
@@ -98,9 +108,10 @@ class ProcessIdentityTests(unittest.TestCase):
 
     def test_reaped_root_with_newly_seen_session_members_is_unknown(self):
         source = Source(started_at=None)
+        source.snapshot = lambda: {302: ProcessMember(302, 106, 1, 301, True)}
         self.assertEqual(identity.inspect_process_identity(RECORD, source=source), "unknown")
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
-        identity.kill_verified_process_group(RECORD, source=source)
+        identity.kill_verified_process_session(RECORD, source=source)
         self.assertEqual(source.signals, [])
 
     def test_caller_proven_orphan_is_reverified_and_stopped(self):
@@ -109,11 +120,17 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "orphan-stopped")
         self.assertEqual(source.signals, [(301, signal.SIGTERM)])
 
-    def test_unknown_observation_does_not_authorize_signal(self):
+    def test_failed_scan_keeps_verified_root_stoppable_but_never_confirms(self):
         source = Source()
-        with mock.patch.object(source, "snapshot", side_effect=PermissionError):
-            self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
-        self.assertEqual(source.signals, [])
+        def send(pid, sig):
+            source.signals.append((pid, sig))
+            if sig == signal.SIGKILL:
+                source.start = None
+        source.signal_process = send
+        with mock.patch.object(source, "snapshot", side_effect=PermissionError), \
+             mock.patch.object(identity, "COMMAND_STOP_GRACE_SECONDS", 0):
+            self.assertEqual(identity.stop_orphan_process(RECORD, source=source, settle_seconds=0), "unknown")
+        self.assertEqual(source.signals, [(301, signal.SIGTERM), (301, signal.SIGKILL)])
 
     def test_denied_process_group_and_job_observations_remain_unknown(self):
         for record, method in ((RECORD, 'creation_time'), (RECORD, 'snapshot'), (WINDOWS_RECORD, 'open_job')):
@@ -123,7 +140,7 @@ class ProcessIdentityTests(unittest.TestCase):
                     with mock.patch.object(source, method, side_effect=failure):
                         self.assertEqual(identity.inspect_process_identity(record, source=source), 'unknown')
                         self.assertEqual(identity.stop_orphan_process(record, source=source, settle_seconds=0), 'unknown')
-                    self.assertEqual(source.signals, [])
+                    self.assertEqual(source.signals, [(301, signal.SIGTERM)] if method == 'snapshot' else [])
 
     def test_hard_stop_reverifies_identity_including_reuse_and_observation_failure(self):
         for failure in ("reused", "group-unreadable", "boot-changed", "absent"):
@@ -137,14 +154,14 @@ class ProcessIdentityTests(unittest.TestCase):
             else:
                 source.start, source.group = None, False
             with self.subTest(failure=failure):
-                identity.kill_verified_process_group(RECORD, source=source)
-                self.assertEqual(source.signals, [])
+                identity.kill_verified_process_session(RECORD, source=source)
+                self.assertEqual(source.signals, [(301, signal.SIGKILL)] if failure == "group-unreadable" else [])
         if os.name != "nt":
             source = Source()
-            identity.kill_verified_process_group(RECORD, source=source)
+            identity.kill_verified_process_session(RECORD, source=source)
             self.assertEqual(source.signals, [(301, signal.SIGKILL)])
         windows = Source(started_at=WINDOWS_RECORD["startedAt"])
-        identity.kill_verified_process_group(WINDOWS_RECORD, source=windows)
+        identity.kill_verified_process_session(WINDOWS_RECORD, source=windows)
         self.assertEqual(windows.signals, [("job", WINDOWS_RECORD["jobName"])])
 
     def test_windows_job_presence_absence_and_reverified_stop(self):
@@ -176,7 +193,7 @@ class ProcessIdentityTests(unittest.TestCase):
                      mock.patch.object(identity._SystemSource, "started_at",
                                        side_effect=[WINDOWS_RECORD["startedAt"], None]):
                     if hard_stop:
-                        identity.kill_verified_process_group(WINDOWS_RECORD)
+                        identity.kill_verified_process_session(WINDOWS_RECORD)
                     else:
                         self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD), "orphan-stopped")
                 self.assertEqual(api.mock_calls, [mock.call.open_job(WINDOWS_RECORD["jobName"]),
@@ -265,7 +282,7 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_real_owned_process_identity_and_orphan_stop(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                                    start_new_session=True)
-        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+        handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
         try:
             record = handle.identity()
             self.assertEqual(set(record), set(RECORD))
@@ -284,7 +301,7 @@ class ProcessIdentityTests(unittest.TestCase):
         process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         try:
             wait_for_unreaped_child(process.pid)
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
             record = identity.capture_process_identity(handle)
             self.assertIs(identity.validate_process_identity(record), record)
             self.assertEqual(record["bootId"], identity.boot_id())

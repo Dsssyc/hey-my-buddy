@@ -205,7 +205,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertEqual(report["terminationReason"], "harness-error")
                 self.assertIn("owned child shutdown is unconfirmed", report["error"])
                 self.assertFalse(report["shutdownConfirmed"])
-                self.assertIsNone(children[0].returncode)
+                self.assertEqual(children[0].returncode, 0)
             finally:
                 for child in children:
                     if child.poll() is None:

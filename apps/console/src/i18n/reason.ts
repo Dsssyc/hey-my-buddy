@@ -6,12 +6,17 @@ import { formatCoolingTime, formatDateTime, formatList, formatNumber } from "./f
 
 function parameter(value: unknown, key: string): string {
   if (isReason(value)) return reasonText(value);
-  if (Array.isArray(value)) return formatList(value.map(item => parameter(item, key)));
+  if (Array.isArray(value)) {
+    if (!value.length && (key === "processes" || key === "unreadableProcesses")) return i18n.t("shell:reasonNoProcesses");
+    return formatList(value.map(item => parameter(item, key)));
+  }
   if (typeof value === "number") return formatNumber(value);
   if (typeof value === "boolean") return i18n.t(`shell:reasonValue.${value ? "yes" : "no"}`);
   if (value === null) return i18n.t("shell:actor.unrecorded");
   if (typeof value === "object") {
     const row = value as Record<string, unknown>;
+    if ((key === "processes" || key === "unreadableProcesses") && "pid" in row && "executable" in row)
+      return i18n.t("shell:reasonProcess", { executable: row.executable, pid: String(row.pid) });
     if ("model" in row) return [row.harness, row.provider, row.model, row.effort].join(" / ");
     if ("runId" in row) return `${row.runId} (${i18n.t(`shell:reasonValue.state.${row.state}`)})`;
     return JSON.stringify(value);

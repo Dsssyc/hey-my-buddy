@@ -24,7 +24,7 @@ from hey_my_buddy.paths import native_path
 from hey_my_buddy.install import launcher, runtime, upgrade
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
-from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_group
+from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
 from hey_my_buddy.protocol.transport import _call_service
 
 
@@ -378,7 +378,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 recovery_fixture.PrivateExecutionRecoveryTests.resume_execution(self, identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)

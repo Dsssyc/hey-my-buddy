@@ -18,8 +18,9 @@ from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
 from ...protocol.execution import (BUDGET, execution_directory,
                                   launch_execution, read_execution_endpoint)
-from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_group,
+from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_session,
                                           verify_job_member)
+from ...protocol import process_identity as process_identities
 from ...protocol.run_identity import RunIdentity
 
 
@@ -436,15 +437,21 @@ class ExecutionScheduler:
         retry_at = None
         delay = 0.1
         settled = False
+        members = (handle._members if handle.process is not None else
+                   process_identities._posix_members(identity, process_identities._SystemSource())) if identity["jobName"] is None else None
         try:
             while not self._stopping.is_set():
                 # A notification during any read/call below must prevent sleep.
                 with self._condition:
                     revision = observer.revision
                 next_deadline = None
+                observation = "unknown"
                 try:
                     if handle.process is not None:
-                        handle.poll()  # Retain the PID until its admitted members are empty.
+                        _, state = handle.observe()
+                        observation = {"gone": "identity-absent", "empty": "unknown"}.get(state, state)
+                    else:
+                        observation = inspect_process_identity(identity, members=members)
                     if observer.watch is not None and observer.watch.error is not None:
                         self._unknown(attempt_id, observer.watch.error)
                         self.live_registry.unbind(attempt_id, client)
@@ -458,7 +465,6 @@ class ExecutionScheduler:
                     pending_stop = (view.get("cancelRequested") or
                                     (view.get("selectedAttempt") or {}).get("forceRequestedAt") is not None)
                     if client is None and (pending_stop or retry_at is None or time.monotonic() >= retry_at):
-                        observation = inspect_process_identity(identity)
                         if observation in ("identity-absent", "boot-changed"):
                             if self._recover_if_gone(attempt_id, identity, observation):
                                 settled = True
@@ -505,14 +511,14 @@ class ExecutionScheduler:
                 if forced_at is not None and (
                         time.monotonic() >= (force_retry_at or forced_at + self.STOP_GRACE_SECONDS)):
                     try:
-                        self._force_if_required(identity)
+                        self._force_if_required(identity, members=members)
                     except Exception as error:
                         self._issue(attempt_id, "force-stop", error)
                     force_retry_at = time.monotonic() + force_delay
                     force_delay = min(force_delay * 2, self.TICK_SECONDS)
                 if client is None:
                     try:
-                        if self._recover_if_gone(attempt_id, identity):
+                        if self._recover_if_gone(attempt_id, identity, observation):
                             settled = True
                             return
                     except Exception as error:
@@ -645,7 +651,7 @@ class ExecutionScheduler:
         return "forced-stop"
 
     @staticmethod
-    def _force_if_required(identity: dict) -> None:
-        kill_verified_process_group(identity)
+    def _force_if_required(identity: dict, *, members=None) -> None:
+        kill_verified_process_session(identity, members=members)
         # Only the ordinary stop observation can finish recovery; keep retrying
         # while the root or any owned member may still be present.

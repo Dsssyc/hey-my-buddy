@@ -19,7 +19,7 @@ def descendant_case(case, directory, mode, *, cwd=None):
     root = subprocess.Popen([sys.executable, str(fixture), mode, str(ready)],
                             cwd=cwd, start_new_session=True, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    handle = ProcessHandle(root, own_group=True, log_paths={}, stop_channel="signal")
+    handle = ProcessHandle(root, log_paths={}, stop_channel="signal")
     member = None
     try:
         deadline = time.monotonic() + 8

@@ -319,7 +319,7 @@ class RuntimeVersionTests(unittest.TestCase):
     def claude_main_close_failure(self, *, stopped, stop_error=False):
         for operation in (self.execute, self.discover):
             with self.subTest(seam=operation.__name__), self.harness("claude") as (case, module):
-                create, close, halt = module.owned_popen, os.close, module._halt_owned_group
+                create, close, halt = module.owned_popen, os.close, module._halt_owned_session
                 children, failed_fds = [], []
                 fault = OSError(errno.EIO, "synthetic post-create stderr close failed")
                 halt_fault = OSError(errno.EIO, "synthetic stop observation failed")
@@ -329,7 +329,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     nonlocal pending_fd
                     child = create(*args, **kwargs)
                     pending_fd = kwargs["stderr"]
-                    children.append((child, module.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")))
+                    children.append((child, module.ProcessHandle(child, log_paths={}, stop_channel="signal")))
                     return child
 
                 def close_failed(fd):
@@ -357,7 +357,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     with mock.patch.object(module, "probe_version", wraps=version.probe_version) as shared, \
                             mock.patch.object(module, "owned_popen", side_effect=held_create) as main, \
                             mock.patch.object(module.os, "close", side_effect=close_failed), \
-                            mock.patch.object(module, "_halt_owned_group", side_effect=halt_observed) as stop, \
+                            mock.patch.object(module, "_halt_owned_session", side_effect=halt_observed) as stop, \
                             mock.patch.object(module, "Connection") as connection:
                         if operation == self.execute:
                             result = operation("claude", case, module)
@@ -438,7 +438,7 @@ class RuntimeVersionTests(unittest.TestCase):
                             mock.patch.object(module, "owned_popen", side_effect=producer) as main, \
                             mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
                             mock.patch.object(module, "Connection") as connection, \
-                            mock.patch.object(module, "_halt_owned_group") as stop:
+                            mock.patch.object(module, "_halt_owned_session") as stop:
                         if not created:
                             failure = mock.patch.object(api, "create_job", side_effect=OSError("synthetic job creation refused"))
                         elif not stopped:

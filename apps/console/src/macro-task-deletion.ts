@@ -45,8 +45,6 @@ export type MacroTaskDeletionResult = DeletionReceipt & (
   | { state: "deleted"; deletedAt: string; skipped?: DeletionSkipped[] }
   | { state: "deleting"; deletedAt: null;
       reason: { code: "macro-task-deletion.physical-failed"; params: { errorCode: string } }
-        | { code: "checkout.live-processes" | "checkout.unreadable-processes";
-            params: { processes: { pid: number; startedAt: number; executable: string }[] } }
         | { code: "checkout.process-blockers"; params: {
             processes: { pid: number; startedAt: number; executable: string }[];
             unreadableProcesses: { pid: number; startedAt: number; executable: string }[] } }
@@ -110,7 +108,7 @@ function skipped(value: unknown): boolean {
 }
 
 function processIdentities(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0
+  return Array.isArray(value)
     && value.every(process => record(process) && keys(process, ["pid", "startedAt", "executable"])
       && count(process.pid) && process.pid > 0 && count(process.startedAt) && process.startedAt > 0 && text(process.executable));
 }
@@ -121,8 +119,7 @@ function physicalFailureReason(value: unknown): boolean {
   if (value.code === "macro-task-deletion.physical-failed") return keys(value.params, ["errorCode"]) && text(value.params.errorCode);
   if (value.code === "checkout.process-blockers") return keys(value.params, ["processes", "unreadableProcesses"])
     && processIdentities(value.params.processes) && processIdentities(value.params.unreadableProcesses);
-  return ["checkout.live-processes", "checkout.unreadable-processes"].includes(value.code as string)
-    && keys(value.params, ["processes"]) && processIdentities(value.params.processes);
+  return false;
 }
 
 export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeletion, value: unknown): MacroTaskDeletionResult {

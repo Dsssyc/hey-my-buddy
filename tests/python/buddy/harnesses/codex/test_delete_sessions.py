@@ -94,11 +94,11 @@ class DeleteSessionTests(unittest.TestCase):
         self.assertFalse(self.trace.exists())
 
     def test_native_stop_failure_is_not_success_after_delete(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
         def unconfirmed(*args):
             _stopped, signalled = halt(*args)
             return False, signalled
-        with patch.object(native_run, "_halt_owned_group", side_effect=unconfirmed), self.assertRaises(CodexProtocolError) as caught:
+        with patch.object(native_run, "_halt_owned_session", side_effect=unconfirmed), self.assertRaises(CodexProtocolError) as caught:
             self.native_delete(["owned"])
         self.assertEqual(caught.exception.code, "native-shutdown-failed")
         self.assertFalse(caught.exception.discovery_shutdown_confirmed)
