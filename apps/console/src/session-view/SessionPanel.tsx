@@ -9,6 +9,7 @@ import { reasonText } from "../i18n/reason";
 import { sessionBlocks } from "./blocks";
 import { SessionBlocks } from "./SessionBlocks";
 import { useSession } from "./use-session";
+import { SessionCoverage } from "./SessionCoverage";
 import type { SessionClient } from "./use-session";
 
 export type SessionPanelProps = {
@@ -80,8 +81,7 @@ export default function SessionPanel({ routingMode, taskText, checkoutRoot, clie
   const failure = errors.find(code => error instanceof ApiError && code === error.code) ?? "SESSION_UNREADABLE";
   return <section ref={panel} data-slot="session-view" aria-label={t("sessionView.title")} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="shrink-0 border-b bg-card px-6 py-3">
-        <p className="flex flex-wrap items-baseline gap-x-3 text-xs text-ink2"><span className="font-mono wrap-anywhere">{harness}</span>{data && <span className={data.state === "running" ? "text-ink state-breathe" : "text-ink2"}>{t(`sessionView.state.${data.state}`)}</span>}</p>
-        {data && data.omitted.length > 0 && <p className="mt-2 text-xs leading-relaxed text-ink2">{t("sessionView.omitted", { content: data.omitted.map(reasonText).join(t("sessionView.separator")) })}</p>}
+        <p className="flex flex-wrap items-baseline gap-x-3 text-xs text-ink2"><span className="font-mono wrap-anywhere">{harness}</span>{data && <span className={data.state === "running" ? "text-ink state-breathe" : "text-ink2"}>{t(`sessionView.state.${data.state}`)}</span>}{data && <SessionCoverage harness={harness} coverage={data.coverage}/>}</p>
       </header>
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>

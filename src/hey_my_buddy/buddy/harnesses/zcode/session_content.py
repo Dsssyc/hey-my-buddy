@@ -10,7 +10,7 @@ travels in the ``model.streaming`` ``tool_call`` frame — the scheduled
 ``result`` frames, and the final response in ``turn.completed``.
 ``message.upserted`` and ``part.*`` events never appeared in those streams, so
 neither is projected; the kinds no evidence shows stay named in this package's
-``session_omitted.py``.
+``session_coverage.py``.
 """
 from __future__ import annotations
 

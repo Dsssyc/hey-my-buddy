@@ -162,8 +162,6 @@ class ProjectorTests(unittest.TestCase):
         self.assertEqual([value for value in rendered.values() if value and value != "[reasoning]"],
                          ["Read the fixture file first.", "Fixture final answer: the bounded work is done."])
         self.assertFalse(any(e["sessionUpdate"] == "agent_thought_chunk" for e in self.record.events))
-        from hey_my_buddy.buddy.harnesses.claude.session_omitted import OMITTED
-        self.assertEqual(OMITTED, ())
 
 
 class RunRecordTests(NativeRunCase):

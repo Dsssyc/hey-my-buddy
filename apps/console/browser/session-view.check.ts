@@ -1,3 +1,4 @@
+import { fixtureCoverage } from "../src/session-view/test-fixtures";
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -52,7 +53,19 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(sessionTab(page, language)).toHaveAttribute("aria-selected", "true");
       await expect(panel(page).getByText(language === "zh" ? "已结束" : "Ended", { exact: true })).toBeVisible();
-      await expect(panel(page).getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
+      await panel(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true }).click();
+      const coverage = page.getByRole("table", { name: language === "zh" ? "会话内容" : "Session content" });
+      await expect(coverage.getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
+      await expect(coverage.getByRole("row")).toHaveCount(5);
+      await expect(coverage.getByText(language === "zh" ? "有证据" : "Evidence available", { exact: true })).toBeVisible();
+      await expect(coverage.getByText(language === "zh" ? "未核实" : "Unverified", { exact: true })).toHaveCount(3);
+      if (language === "zh" && width === 1440) {
+        const directory = fileURLToPath(new URL("../../../tmp/session-coverage-c1/", import.meta.url));
+        mkdirSync(directory, { recursive: true });
+        await page.locator('[data-slot="popover-content"]').screenshot({ path: `${directory}coverage-${theme}.png` });
+      }
+      await page.keyboard.press("Escape");
+      await expect(coverage).not.toBeVisible();
       await expect(row(page, "calls").first()).toBeAttached();
       await expect(tool(page, "tool-long")).toBeAttached();
       await expect(tool(page, "codex-failed-command")).toHaveCount(0);
@@ -134,7 +147,7 @@ test.describe("session content and navigation", () => {
       // the earlier page arrives without any scrolling. Later polls add nothing.
       const events = opening ? [message("短会话最新一条。"), message("短会话倒数第二条。")]
         : earlier ? [message("更早第三条。"), message("更早第二条。"), message("更早第一条。")] : [];
-      await route.fulfill({ json: { state: "ended", stopped: null, omitted: [], before: opening ? 60 : 0, after: opening ? 62 : 60, hasEarlier: opening, events } });
+      await route.fulfill({ json: { state: "ended", stopped: null, coverage: fixtureCoverage, before: opening ? 60 : 0, after: opening ? 62 : 60, hasEarlier: opening, events } });
     });
     await openSession(page, long);
     await expect(panel(page).getByText("更早第一条。")).toBeAttached();
@@ -293,7 +306,7 @@ test.describe("session content and navigation", () => {
         ? { sessionUpdate: "tool_call", toolCallId: "stream-tool", title: "Synthetic streaming output", kind: "execute", status: "in_progress", content: [{ type: "content", content: { type: "text", text: "Initial output line\n".repeat(120) } }], _meta: { nativeItemId: "stream-tool", contentSegment: "stdout" } }
         : { sessionUpdate: "tool_call_update", toolCallId: "stream-tool", content: [{ type: "content", content: { type: "text", text: `stream-tail-${++next}\n` } }], _meta: { nativeItemId: "stream-tool", contentSegment: "stdout" } };
       const before = after === null ? 61 : Number(after);
-      await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before, after: before + 1, hasEarlier: false, events: [{ sessionId: "att-a1-2", update }] } });
+      await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before, after: before + 1, hasEarlier: false, events: [{ sessionId: "att-a1-2", update }] } });
     });
     await openSession(page, long);
     const call = await expandTool(page, "stream-tool");
@@ -429,7 +442,7 @@ for (const [opening, growth, height] of [[1, 40, 600], [6, 31, 480]] as const) t
         : grown ? [] : Array.from({ length: growth }, (_, index) => row(opening + index + 1));
       if (!starts) grown = true;
       const after = starts ? opening : opening + growth;
-      await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before: 0, after, hasEarlier: false, events } });
+      await route.fulfill({ json: { state: "running", stopped: null, coverage: fixtureCoverage, before: 0, after, hasEarlier: false, events } });
     });
     await openSession(page, session("preview-run-a3", 3));
     await expect(panel(page).getByText(opening === 1 ? "运行中的唯一一行。" : "运行中的第 1 行。")).toBeVisible();

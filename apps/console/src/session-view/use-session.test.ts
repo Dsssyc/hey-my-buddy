@@ -1,8 +1,9 @@
+import { fixtureCoverage } from "./test-fixtures";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "./use-session";
 
-const page = (before: number, count: number) => ({ state: "running", stopped: null, omitted: [], before, after: before + count, hasEarlier: before > 10, events: Array.from({ length: count }, (_, index) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${before + index}` } } })) });
+const page = (before: number, count: number) => ({ state: "running", stopped: null, coverage: fixtureCoverage, before, after: before + count, hasEarlier: before > 10, events: Array.from({ length: count }, (_, index) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${before + index}` } } })) });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 async function flush() { await act(async () => { await Promise.resolve(); }); }
 

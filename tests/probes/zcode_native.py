@@ -189,8 +189,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertNotIn("turn", first.result)
         self.assertFalse(failed.turn_output_file().exists())
         self.assertTrue(any(request["missingRequestRejected"] for request in self.requests))
-        root = Path(failed_handle.role_run_control["nativeRoot"])
-        previous = next(json.loads(path.read_text())["sessionId"] for path in root.glob("*.json"))
+        previous = failed_handle.result.native_identity.session_id
         self.omit_first_request = False
         recovered = self.context(index=2, mode="reconstructed-new-session", effort="high", timeout=30)
         recovered.spec["model"] = "GLM-5.3-Flash"
@@ -224,7 +223,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertEqual(discovered["providers"], [])
         self.assertEqual(discovered["discoveries"],
                          [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
-        self.assertTrue(any("empty" in warning for warning in discovered["warnings"]))
+        self.assertEqual(discovered["warnings"], [])
         self.assertEqual(self.requests, [], "discovery must never call the model")
 
 
