@@ -5,11 +5,12 @@ import os
 from pathlib import Path
 import stat
 from types import SimpleNamespace
-from unittest import mock
+from unittest import mock, skipIf
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy import private_dirs, locking
 from hey_my_buddy.blackboard.tasks import storage
 from support import BoardTestCase
+from process_observation_fakes import process, processes
 
 class StorageTests(BoardTestCase):
     def test_session_record_inventory_is_disjoint_protected_and_does_not_follow_links(self):
@@ -671,56 +672,137 @@ class StorageTests(BoardTestCase):
 
 
 class ProcessInventoryServiceTests(BoardTestCase):
-    """The real inventory recognizes current package service modules.
-
-    Only the ``ps`` data source is replaced: the simulated listing is literal
-    text spelled independently of the shared entry table, so a misspelling in
-    that table cannot fake its own inputs. The daemon's lock file and the
-    execution startup path identify a foreign board.
-    """
+    """Literal argv fixtures identify services independently of the entry table."""
 
     def test_real_inventory_recognizes_current_service_modules(self):
         state = self.directory / 'state'
         state.mkdir()
-        foreign = self.directory / 'another-board'
+        foreign = self.directory / '另一个 board'
         foreign.mkdir()
-        runtime = self.directory / 'runtime' / ('a' * 32)
-        listing = '\n'.join([
-            f' 101 /usr/bin/python3 -P -m buddy.daemon --state-dir {foreign}',
-            f' 102 /usr/bin/python3 -m buddy.worker.supervisor --worker-id old-0 --state-dir {foreign}',
-            f' 103 {runtime}/venv/bin/python -P -m hey_my_buddy.blackboard.service.daemon',
-            f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.execution --startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json',
-            f' 201 /usr/bin/python3 -m buddy.daemonization --state-dir {foreign}',
-            f' 202 /usr/bin/python3 -m xbuddy.daemon --state-dir {foreign}',
-            f' 203 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.supervisord --state-dir {foreign}',
-            f' 204 /usr/bin/python3 -m hey_my_buddy.blackboard.service.daemonware --state-dir {foreign}',
-            f' 205 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.executionish --startup {foreign}/harnesses/dsh/attempts/a/execution-start.json',
-            f' 206 /usr/bin/python3 -m buddy.client --state-dir {foreign}',
-        ])
-        with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing) as ps, \
-                mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
-                           return_value=SimpleNamespace(stdout=f'n{foreign}/board-owner.lock\n')):
+        runtime = self.directory / '路径 with spaces' / 'runtime' / ('a' * 32)
+        python = str(runtime / 'venv/bin/python')
+        fixtures = [
+            process(101, ['/usr/bin/python3', '-P', '-m', 'buddy.daemon', '--state-dir', str(foreign)]),
+            process(102, ['/usr/bin/python3', '-m', 'buddy.worker.supervisor', '--worker-id', 'old-0', '--state-dir', str(foreign)]),
+            process(103, [python, '-P', '-m', 'hey_my_buddy.blackboard.service.daemon'],
+                    files=[foreign / 'board-owner.lock']),
+            process(104, [python, '-m', 'hey_my_buddy.buddy.runtime.execution', '--startup',
+                          str(foreign / 'harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json')]),
+            *[process(pid, ['/usr/bin/python3', '-m', module, '--state-dir', str(foreign)])
+              for pid, module in enumerate([
+                  'buddy.daemonization', 'xbuddy.daemon', 'hey_my_buddy.buddy.runtime.supervisord',
+                  'hey_my_buddy.blackboard.service.daemonware', 'hey_my_buddy.buddy.runtime.executionish',
+                  'buddy.client'], 201)],
+        ]
+        with processes(*fixtures):
             orphans, commands, known = storage.process_inventory(state)
-        ps.assert_called_once()
         self.assertTrue(known)
         self.assertEqual({row['pid']: row for row in orphans}, {
             103: {'pid': 103, 'kind': 'daemon', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
             104: {'pid': 104, 'kind': 'execution', 'stateDir': str(foreign), 'runtimeDir': str(runtime)},
         })
-        # Every simulated process stays observable, including the near misses.
         self.assertEqual(len(commands), 10)
         self.assertIn(f'/usr/bin/python3 -m buddy.daemonization --state-dir {foreign}', commands)
 
     def test_execution_startup_path_with_spaces_identifies_its_board(self):
         state = self.directory / 'observed board'
         state.mkdir()
-        foreign = self.directory / 'another execution-start.json board'
+        foreign = self.directory / '另一个 execution-start.json board'
         foreign.mkdir()
-        listing = (f' 104 /usr/bin/python3 -m hey_my_buddy.buddy.runtime.execution '
-                   f'--startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json')
-        with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing), \
-                mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
-                           side_effect=AssertionError('open-file inspection was reached')):
+        execution = process(104, ['/usr/bin/python3', '-m', 'hey_my_buddy.buddy.runtime.execution',
+                                  '--startup', str(foreign / 'harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json')])
+        with processes(execution):
             orphans, _, known = storage.process_inventory(state)
+        execution.open_files.assert_not_called()
         self.assertTrue(known)
         self.assertEqual(orphans[0]['stateDir'], str(foreign))
+
+    def test_an_argument_containing_module_syntax_is_not_a_service(self):
+        fixture = process(104, ['python', '-c', 'print(" -m hey_my_buddy.blackboard.service.daemon")'])
+        with processes(fixture):
+            orphans, _, known = storage.process_inventory(self.directory)
+        self.assertEqual(orphans, [])
+        self.assertTrue(known)
+
+    def test_unreadable_or_changed_processes_keep_runtime_status_unknown(self):
+        for error in (storage.psutil.AccessDenied(104), storage.psutil.NoSuchProcess(104),
+                      storage.psutil.ZombieProcess(104), AttributeError('cmdline missing')):
+            with self.subTest(error=type(error).__name__):
+                fixture = process(104, ['python'])
+                fixture.cmdline.side_effect = error
+                with processes(fixture):
+                    _, commands, known = storage.process_inventory(self.directory)
+                self.assertFalse(known)
+                self.assertEqual(storage.runtime_usage(self.directory, commands, known),
+                                 ['process-inspection-unavailable'])
+        fixture = process(104, ['python'])
+        fixture.is_running.return_value = False  # Same PID now names another process.
+        with processes(fixture):
+            self.assertFalse(storage.process_inventory(self.directory)[2])
+
+    def test_missing_cmdline_and_unreadable_identity_are_unknown(self):
+        for attribute, result in (('cmdline', None), ('create_time', None)):
+            with self.subTest(attribute=attribute):
+                fixture = process(104)
+                getattr(fixture, attribute).return_value = result
+                with processes(fixture):
+                    self.assertFalse(storage.process_inventory(self.directory)[2])
+        with mock.patch.object(storage.psutil, 'pids', return_value=[104]), \
+             mock.patch.object(storage.psutil, 'Process', side_effect=storage.psutil.NoSuchProcess(104)):
+            self.assertFalse(storage.process_inventory(self.directory)[2])
+
+    def test_unreadable_service_files_keep_state_and_runtime_usage_unknown(self):
+        fixture = process(104, ['python', '-m', 'hey_my_buddy.blackboard.service.daemon'])
+        fixture.open_files.side_effect = storage.psutil.AccessDenied(104)
+        with processes(fixture):
+            orphans, _, known = storage.process_inventory(self.directory)
+        self.assertFalse(known)
+        self.assertIsNone(orphans[0]['stateDir'])
+
+    @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
+    def test_runtime_references_from_cwd_mappings_and_deleted_descriptors(self):
+        runtime = self.directory / '运行时 with spaces'
+        for channel in ('cwd', 'mappings', 'deleted-file', 'directory-fd'):
+            with self.subTest(channel=channel):
+                fixture = process(104, cwd=str(runtime) if channel == 'cwd' else '/',
+                                  mappings=[runtime / 'library.so'] if channel == 'mappings' else [])
+                opened = (f'p104\nn{runtime}/unlinked (deleted)\n' if channel == 'deleted-file' else
+                          f'p104\nn{runtime}\n' if channel == 'directory-fd' else '')
+                with (processes(fixture),
+                      mock.patch.object(storage.psutil, 'WINDOWS', False),
+                      mock.patch.object(storage.psutil, 'LINUX', True),
+                      mock.patch.object(storage.shutil, 'which', return_value='lsof'),
+                      mock.patch.object(storage.subprocess, 'run',
+                                        return_value=SimpleNamespace(stdout=opened, stderr='', returncode=0)) as native):
+                    self.assertEqual(storage.runtime_usage(runtime, [], True), ['runtime-in-use'])
+                self.assertIn('^cwd,^mem,^DEL,^txt', native.call_args.args[0])
+                fixture.open_files.assert_not_called()  # Native descriptors are the one channel.
+
+    @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
+    def test_incomplete_path_observation_never_releases_a_runtime(self):
+        for attribute in ('cwd', 'memory_maps', 'uids', 'is_running'):
+            with self.subTest(attribute=attribute):
+                fixture = process(104)
+                getattr(fixture, attribute).side_effect = storage.psutil.AccessDenied(104)
+                with (processes(fixture),
+                      mock.patch.object(storage.psutil, 'WINDOWS', False),
+                      mock.patch.object(storage.psutil, 'LINUX', True),
+                      mock.patch.object(storage.shutil, 'which', return_value='lsof'),
+                      mock.patch.object(storage.subprocess, 'run',
+                                        return_value=SimpleNamespace(stdout='', stderr='', returncode=0))):
+                    self.assertEqual(storage.runtime_usage(self.directory, [], True),
+                                     ['process-inspection-unavailable'])
+
+    @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
+    def test_complete_unreferenced_runtime_and_incomplete_native_channels(self):
+        for native, expected in ((SimpleNamespace(stdout='', stderr='', returncode=0), []),
+                                 (SimpleNamespace(stdout='', stderr='permission denied', returncode=0),
+                                  ['process-inspection-unavailable']),
+                                 (SimpleNamespace(stdout='', stderr='', returncode=1),
+                                  ['process-inspection-unavailable'])):
+            with self.subTest(native=native), processes(process(104)), \
+                 mock.patch.object(storage.psutil, 'WINDOWS', False), \
+                 mock.patch.object(storage.psutil, 'LINUX', True), \
+                 mock.patch.object(storage.shutil, 'which', return_value='lsof'), \
+                 mock.patch.object(storage.subprocess, 'run', return_value=native):
+                self.assertEqual(storage.runtime_usage(self.directory, [], True), expected)

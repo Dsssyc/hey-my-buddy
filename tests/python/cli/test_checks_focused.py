@@ -11,6 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.cli import checks
+from hey_my_buddy.blackboard.tasks import storage
+from process_observation_fakes import process, processes
 
 
 class FocusedChecksTests(unittest.TestCase):
@@ -51,6 +53,9 @@ class FocusedChecksTests(unittest.TestCase):
         unreachable.write_text("", encoding="utf-8", newline="\n")
 
     def invoke(self, arguments, *, process_table=()):
+        observer = (patch.object(storage.psutil, "pids", side_effect=storage.psutil.AccessDenied())
+                    if process_table is None else
+                    processes(*(process(pid, argv) for pid, argv in process_table)))
         output = io.StringIO()
         errors = io.StringIO()
         with (
@@ -58,7 +63,7 @@ class FocusedChecksTests(unittest.TestCase):
             patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.temporary),
                                     "HMB_RUNTIME": "/fixture/pinned-runtime",
                                     "HMB_AGENT_CREDENTIAL_FD": "17"}),
-            patch.object(checks, "_ps_argv_table", return_value=process_table),
+            observer,
             patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),
         ):
@@ -154,7 +159,7 @@ class FocusedChecksTests(unittest.TestCase):
         retained, = self.temporary.iterdir()
         self.assertEqual(int((retained / checks.CREATOR_FILE_NAME).read_text(encoding="utf-8")), os.getpid())
         evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("ps process enumeration failed", evidence["observation"]["problems"][0])
+        self.assertIn("psutil process enumeration incomplete", evidence["observation"]["problems"][0])
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
@@ -180,8 +185,10 @@ class SweepTests(unittest.TestCase):
         return root
 
     def sweep(self, table):
+        observer = (patch.object(storage.psutil, "pids", side_effect=storage.psutil.AccessDenied())
+                    if table is None else processes(*(process(pid, argv) for pid, argv in table)))
         output = io.StringIO()
-        with (patch.object(checks, "_ps_argv_table", return_value=table),
+        with (observer,
               patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
               patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.directory)}),
               contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO())):
@@ -205,7 +212,7 @@ class SweepTests(unittest.TestCase):
         # The drain keeps its existing behavior; a surviving owner is still residue.
         with (patch.object(checks, "request_cooperative_stop", return_value=[]),
               patch.object(checks, "lock_is_held", side_effect=lambda path: path == lock)):
-            code, output = self.sweep([(os.getpid(), "checks creator")])
+            code, output = self.sweep([(os.getpid(), ["checks", "creator"])])
         self.assertEqual(code, 3, output)
         self.assertTrue(active.exists())
         self.assertFalse(clean.exists())
@@ -243,7 +250,7 @@ class SweepTests(unittest.TestCase):
         code, output = self.sweep(None)
         self.assertEqual(code, 3, output)
         report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("ps process enumeration failed", report["observation"]["problems"][0])
+        self.assertIn("psutil process enumeration incomplete", report["observation"]["problems"][0])
 
     def test_unreadable_creator_record_is_retained(self):
         root = self.abandoned()

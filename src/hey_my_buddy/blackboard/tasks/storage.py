@@ -11,10 +11,13 @@ import locale
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import time
 import uuid
+
+import psutil
 
 from ... import private_dirs, private_files
 from ...private_dirs import directory_mode
@@ -22,7 +25,7 @@ from ...protocol import schemas
 from ..store.db import utc_now
 from . import host_conclusions
 from ...errors import BoardError
-from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock
+from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock, runtime_root
 
 GRACE_SECONDS = 3 * 86400
 _RUNTIME_ID = r'[0-9a-f]{32}'
@@ -56,64 +59,208 @@ def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[i
     return size, digest.hexdigest(), safe
 
 
-def _service_process_patterns() -> list[tuple[re.Pattern[str], str]]:
-    """Exact ``-m`` patterns for the current runtime's service modules."""
+_INSPECTION_ERRORS = (psutil.Error, OSError, AttributeError, NotImplementedError)
+
+
+def _require_running(process: psutil.Process) -> None:
+    # is_running compares creation identities as well as PIDs. These are local
+    # observations, never substitutes for the execution's durable stop identity.
+    if not process.is_running():
+        raise psutil.NoSuchProcess(process.pid)
+
+
+def _processes() -> tuple[list[psutil.Process], bool]:
+    """A fresh PID snapshot; a lost or unreadable entry makes it incomplete."""
+    try:
+        pids = psutil.pids()
+        if pids is None:
+            raise AttributeError('process list unavailable')
+    except _INSPECTION_ERRORS:
+        return [], False
+    processes = []
+    known = True
+    # process_iter silently skips disappearing processes and caches identities.
+    # Explicit construction lets this boundary retain those races as unknown.
+    for pid in pids:
+        try:
+            process = psutil.Process(pid)
+            if process.create_time() is None:
+                raise AttributeError('process creation time unavailable')
+            processes.append(process)
+        except _INSPECTION_ERRORS:
+            known = False
+    return processes, known
+
+
+def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], bool]:
+    """Shared read-only argv observation, preserving native argument boundaries."""
+    processes, known = _processes()
+    rows = []
+    for process in processes:
+        try:
+            argv = process.cmdline()
+            if argv is None:
+                raise AttributeError('process command line unavailable')
+            _require_running(process)
+            rows.append((process, argv))
+        except _INSPECTION_ERRORS:
+            known = False
+    return rows, known
+
+
+def _open_file_paths(process: psutil.Process) -> set[str]:
+    opened = process.open_files()
+    if opened is None:
+        raise AttributeError('process files unavailable')
+    paths = {item.path for item in opened}
+    if any(not isinstance(path, str) for path in paths):
+        raise AttributeError('process file path unavailable')
+    return paths
+
+
+def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], str | None, bool]:
+    """Path references, observation failure, and channel availability.
+
+    psutil supplies cwd and Linux/Windows mappings. POSIX descriptor references
+    still need lsof (or the checks runner's existing Linux fd channel):
+    open_files omits directories and Linux deleted-but-open files. macOS has no
+    psutil memory_maps, so lsof also retains mappings there. No class of reference
+    is observed through both channels. Windows open_files is positive evidence
+    only: the API can silently miss handles, even after a successful call.
+    """
+    processes, known = _processes()
+    problems = [] if known else ['psutil process enumeration incomplete']
+    paths: dict[int, set[str]] = {}
+    selected = []
+    for process in processes:
+        try:
+            if not psutil.WINDOWS:
+                uids = process.uids()
+                uid = uids.effective if psutil.LINUX else uids.real
+                if uid != os.getuid():
+                    continue  # Match the existing lsof user scope.
+            selected.append(process)
+            observed = paths.setdefault(process.pid, set())
+            cwd = process.cwd()
+            if cwd is None:
+                raise AttributeError('process cwd unavailable')
+            observed.add(cwd)
+            if psutil.LINUX or psutil.WINDOWS:
+                mappings = process.memory_maps()
+                if mappings is None:
+                    raise AttributeError('process mappings unavailable')
+                observed.update(item.path for item in mappings)
+            if psutil.WINDOWS:
+                observed.update(_open_file_paths(process))
+            missing = {path for path in observed if not isinstance(path, str)}
+            if missing:
+                observed.difference_update(missing)
+                raise AttributeError('process path unavailable')
+        except _INSPECTION_ERRORS as error:
+            problems.append(f'psutil path observation failed: {type(error).__name__}')
+    available = True
+    if psutil.WINDOWS:
+        problems.append('Windows open-file observation is incomplete: psutil can omit handles')
+    else:
+        binary = shutil.which('lsof')
+        if binary is not None:
+            # Linux memory_maps includes program text and deleted mappings.
+            excluded = '^cwd,^mem,^DEL,^txt' if psutil.LINUX else '^cwd'
+            try:
+                result = subprocess.run(
+                    [binary, '-nP', '-a', '-u', str(os.getuid()),
+                     '-p', ','.join(str(process.pid) for process in selected),
+                     '-d', excluded, '-Fpn'],
+                    capture_output=True, text=True, encoding=locale.getencoding(), timeout=120,
+                    check=False)
+            except (OSError, subprocess.SubprocessError) as error:
+                problems.append(f'lsof failed: {type(error).__name__}')
+            else:
+                if result.returncode or result.stderr.strip():
+                    problems.append(f'lsof observation incomplete (exit {result.returncode})')
+                current_pid = None
+                selected_pids = {process.pid for process in selected}
+                for line in result.stdout.splitlines():
+                    if line.startswith('p'):
+                        current_pid = int(line[1:]) if line[1:].isdigit() else None
+                        if current_pid not in selected_pids:
+                            problems.append('lsof process identity was not observed')
+                    elif line.startswith('n') and current_pid is not None:
+                        paths.setdefault(current_pid, set()).add(line[1:])
+        elif proc_fds and psutil.LINUX:
+            # psutil.open_files filters out deleted/non-regular fd targets. Keep
+            # only the existing fd observation here, with psutil supplying PIDs,
+            # cwd and mappings; failures can no longer disappear into a continue.
+            for process in selected:
+                try:
+                    for handle in (Path('/proc') / str(process.pid) / 'fd').iterdir():
+                        paths[process.pid].add(os.readlink(handle))
+                except OSError as error:
+                    problems.append(f'/proc fd observation failed: {type(error).__name__}')
+        else:
+            available = False
+    for process in selected:
+        try:
+            _require_running(process)
+        except _INSPECTION_ERRORS as error:
+            problems.append(f'psutil process identity changed: {type(error).__name__}')
+    normalized = {pid: {path.removesuffix(' (deleted)') for path in values if isinstance(path, str)}
+                  for pid, values in paths.items()}
+    return normalized, '; '.join(dict.fromkeys(problems)) or None, available
+
+
+def _service_process_modules() -> dict[str, str]:
+    """Exact ``-m`` modules for the current runtime's services."""
     from ...install.entrypoints import ENTRY_MODULES, SERVICE_ROLES
-    return [(re.compile(rf' -m {re.escape(modules[role])}(?: |$)'), role)
-            for modules in ENTRY_MODULES.values() for role in SERVICE_ROLES]
+    return {modules[role]: role for modules in ENTRY_MODULES.values() for role in SERVICE_ROLES}
 
 
 def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     """Only observations. Commands and unrelated process details never escape."""
-    try:
-        # ps/lsof display native argv and filenames using the process locale.
-        listing = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True,
-                                          encoding=locale.getencoding(), timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return [], [], False
-    services = _service_process_patterns()
+    rows, known = observe_process_argv()
+    services = _service_process_modules()
     orphans, commands = [], []
-    for line in listing.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) != 2:
-            continue
-        pid, command = parts
+    for process, argv in rows:
+        pid = process.pid
+        command = ' '.join(argv)
         commands.append(command)
-        kind = next((role for pattern, role in services if pattern.search(command)), None)
+        kind = next((services[argv[index + 1]] for index, token in enumerate(argv[:-1])
+                     if token == '-m' and argv[index + 1] in services), None)
         if kind is None:
             continue
         observed_state = None
         if kind == 'execution':
-            startup = re.search(r'--startup\s+(.+execution-start\.json)$', command)
+            startup = next((argv[index + 1] for index, token in enumerate(argv[:-1])
+                            if token == '--startup'), None)
             if startup:
-                path = Path(startup.group(1))
+                path = Path(startup)
                 observed_state = next((str(parent.parent) for parent in path.parents
                                        if parent.name == 'harnesses'), None)
         # Daemon argv can omit its state root. Control identity provides one exact
         # positive match, but no missing PID is interpreted as stopped.
         try:
             current = json.loads(private_files.read_text(state / 'control.json'))
-            if int(pid) == current.get('pid'):
+            if pid == current.get('pid'):
                 observed_state = str(state)
         except (OSError, ValueError, BoardError):
             pass
         if observed_state is None:
             try:
-                opened = subprocess.run(['lsof','-nP','-p',pid,'-Fn'], capture_output=True, text=True,
-                                        encoding=locale.getencoding(), timeout=5)
-                roots = {str(Path(line[1:].removesuffix(' (deleted)')).parent) for line in opened.stdout.splitlines()
-                         if line.startswith('n/') and line.removesuffix(' (deleted)').endswith(('/board-owner.lock','/control-daemon.lock'))}
+                roots = {str(Path(path).parent) for path in _open_file_paths(process)
+                         if Path(path).name in {'board-owner.lock', 'control-daemon.lock'}}
+                _require_running(process)
                 if len(roots) == 1:
                     observed_state = roots.pop()
-            except (OSError, subprocess.SubprocessError):
-                pass
-        runtime_match = re.search(r'(/\S+/runtime/[^/ ]+)/', command)
+            except _INSPECTION_ERRORS:
+                known = False
+        runtime = next((str(parent) for parent in Path(argv[0]).parents
+                        if parent.parent.name == 'runtime'), None)
         if observed_state is not None:
             observed_state = str(Path(observed_state).resolve())
         if observed_state != str(state):
-            orphans.append({'pid': int(pid), 'kind': kind, 'stateDir': observed_state,
-                            'runtimeDir': runtime_match.group(1) if runtime_match else None})
-    return orphans, commands, True
+            orphans.append({'pid': pid, 'kind': kind, 'stateDir': observed_state,
+                            'runtimeDir': runtime})
+    return orphans, commands, known
 
 
 def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str]:
@@ -121,16 +268,11 @@ def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str
         return ['process-inspection-unavailable']
     if any(str(directory) in command for command in commands):
         return ['runtime-in-use']
-    # argv alone misses mapped/open files and working directories. Inspect this
-    # user's file table; any incomplete observation retains the runtime.
-    try:
-        result = subprocess.run(['lsof', '-nP', '-u', str(os.getuid()), '-Fn'], capture_output=True,
-                                text=True, encoding=locale.getencoding(), timeout=30)
-    except (OSError, subprocess.SubprocessError):
+    opened, error, available = observe_open_paths()
+    if error or not available:
         return ['process-inspection-unavailable']
-    if result.returncode or result.stderr.strip():
-        return ['process-inspection-unavailable']
-    if any(line.startswith('n' + str(directory) + '/') or line == 'n' + str(directory) for line in result.stdout.splitlines()):
+    if any(path == str(directory) or path.startswith(str(directory) + os.sep)
+           for paths in opened.values() for path in paths):
         return ['runtime-in-use']
     return []
 
@@ -521,21 +663,21 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         path = Path(orphan.pop('path'))
         orphan.pop('allocationRequestId', None)
         add('workspaces', path, reasons, **orphan)
-    runtime_root = Path(os.environ.get('HMB_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+    runtimes = runtime_root().absolute()
     from ...home import default_state_dir
-    foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
+    foreign_default_root = (runtimes.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
                             and state != default_state_dir().resolve())
     try:
         keep = json.loads(private_files.read_text(state / 'runtime-retention.json'))
         retained_ids = {keep['current'], keep['previous']}
     except (OSError, KeyError, ValueError, BoardError):
         retained_ids = None
-    if private_dirs.linked(runtime_root):
-        add('runtimes', runtime_root, ['linked-path'])
-    elif runtime_root.exists() and not runtime_root.is_dir():
-        add('runtimes', runtime_root, ['runtime-format-unsupported'])
-    elif runtime_root.exists():
-        for path in sorted(runtime_root.iterdir()):
+    if private_dirs.linked(runtimes):
+        add('runtimes', runtimes, ['linked-path'])
+    elif runtimes.exists() and not runtimes.is_dir():
+        add('runtimes', runtimes, ['runtime-format-unsupported'])
+    elif runtimes.exists():
+        for path in sorted(runtimes.iterdir()):
             if path.name == INSTALL_LOCK:
                 continue  # Root-lifetime coordination file, never a reclamation candidate.
             if private_dirs.linked(path):
@@ -596,7 +738,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])
     for path in sorted(state.iterdir()):
-        if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtime_root:
+        if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtimes:
             continue
         add('durable', path, ['durable-record'])
     if harnesses.exists():
@@ -664,7 +806,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
     root = Path(state).absolute()
     if category == 'runtimes':
-        allowed_parent = Path(os.environ.get('HMB_RUNTIME_ROOT') or DEFAULT_RUNTIME_ROOT).expanduser().absolute()
+        allowed_parent = runtime_root().absolute()
         allowed = original.parent == allowed_parent
     elif category == 'zcode':
         allowed = original.parent == root / 'harnesses' / 'zcode'
