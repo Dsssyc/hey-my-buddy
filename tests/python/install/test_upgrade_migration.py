@@ -10,6 +10,7 @@ from support import BoardTestCase, InProcessBoard
 from blackboard.store.test_migrations import rows, schema_shape, DELIVERED
 from blackboard.store.upgrade_fixture import load_fixture
 from blackboard.tasks import test_workspace_identity as identity_fixtures
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.store import backup, migrations
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION, canonical_json
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -80,9 +81,12 @@ class UpgradeMigrationTests(BoardTestCase):
             historical_turns = sorted(connection.execute('SELECT ' + ','.join(turn_columns) + ' FROM workflow_turns').fetchall(), key=repr)
             self.assertEqual(historical_turns, old['workflow_turns'])
             cap_index = [row[1] for row in connection.execute('PRAGMA table_info(evaluation_profiles)')].index('capabilities_json')
+            adapter_index = [row[1] for row in connection.execute('PRAGMA table_info(evaluation_profiles)')].index('adapter')
             for original_profile, migrated_profile in zip(old['evaluation_profiles'], migrated['evaluation_profiles']):
                 self.assertEqual(migrated_profile[:cap_index] + migrated_profile[cap_index + 1:], original_profile[:cap_index] + original_profile[cap_index + 1:])
-                self.assertEqual(set(json.loads(migrated_profile[cap_index])), set(json.loads(original_profile[cap_index])) | {'permission:read', 'permission:write'})
+                self.assertEqual(set(json.loads(migrated_profile[cap_index])),
+                                 {cap for cap in json.loads(original_profile[cap_index]) if not cap.startswith('permission:')}
+                                 | set(permission_capabilities(original_profile[adapter_index])))
             self.assertTrue(all(row[0] in ('read', 'write') and row[1] is None
                                 for row in connection.execute('SELECT access,access_reason FROM workflow_turns')))
         identity, expected = migrate_workspace_identity(self.state, expected)
