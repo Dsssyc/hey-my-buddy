@@ -6,6 +6,7 @@ calls a model or publishes an evaluation card.
 """
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -100,7 +101,7 @@ def coordinate_catalog_reread(directory: Path | str, harness: str, *, reader: Ca
         timeout = CATALOG_REREAD_JOIN_SECONDS
     key = (str(directory), harness)
     with _catalog_reread_gate:
-        with Database(directory).write() as db:
+        with closing(Database(directory)) as database, database.write() as db:
             flight = _catalog_reread_flights.get(key)
             joined = flight is not None
             if flight is None:
@@ -531,7 +532,7 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
 
     def judge():
         """One judgment over the currently recorded catalog state."""
-        with Database(directory).read() as db:
+        with closing(Database(directory)) as database, database.read() as db:
             health = read_health(db, selected["harness"])
             recorded = catalog_store.current(db)
             read_at = catalog_read_at(db, selected["harness"])

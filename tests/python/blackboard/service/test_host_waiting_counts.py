@@ -1,5 +1,6 @@
 """Host reply counts share the history filters and follow completed mutations."""
 import json
+import sys
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 import blackboard.tasks.workspace_lifecycle_case as lifecycle
@@ -132,7 +133,7 @@ class PrivateServiceWaitingCountsTests(RealWorkspaceTestCase):
             self.assertNotIn('waitingForHost', self.invoke('list', {}))
             seeded = self.submit_execution(**{
                 'requestId': 'no-model-command', 'task': 'Run a private command',
-                'cwd': str(self.workdir('command')), 'adapter': 'command', 'argv': ['/bin/echo', 'done'],
+                'cwd': str(self.workdir('command')), 'adapter': 'command', 'argv': [sys.executable, '-c', "print('done')"],
             })['task']
             command = self.invoke('status', {'runId': seeded['runId']})
             self.assertNotIn('waitingForHost', command)

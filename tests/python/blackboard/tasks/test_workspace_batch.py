@@ -12,8 +12,8 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+from temporary import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,7 +37,7 @@ PAYLOADS = (
 
 class BatchedObjectTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-batch-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-batch-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"
@@ -48,9 +48,8 @@ class BatchedObjectTests(unittest.TestCase):
         self.git("config", "user.email", "batch@example.invalid")
 
     def git(self, *args, cwd=None, data=None, check=True):
-        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        result = subprocess.run(["git", "-C", str(cwd or self.repo), *args], input=data,
-                                capture_output=True, env=env, timeout=120)
+        command, git_env = workspace._git_command(cwd or self.repo, *args)
+        result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=120)
         if check:
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         return result.stdout

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, run_seam
 from hey_my_buddy.buddy.harnesses import run_contract as rc
@@ -251,9 +252,9 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.assertIsNotNone(result.usage)
         self.assertIsNotNone(result.last_assistant_message)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        value = json.loads(Path(ref.location).read_text(encoding="utf-8"))
+        value = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))
         value["nativeTurnId"] = "foreign-turn"
-        Path(ref.location).write_text(json.dumps(value), encoding="utf-8", newline="\n")
+        native_path(Path(ref.location)).write_text(json.dumps(value), encoding="utf-8", newline="\n")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "failed")
         self.assertTrue(outcome.shutdown_confirmed)
@@ -279,7 +280,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
         path = Path(reference.location)
-        path.write_bytes(path.read_bytes() + b" ")
+        native_path(path).write_bytes(native_path(path).read_bytes() + b" ")
         with mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unverified seal")):
             refused = self.adapter.collect(handle, context)
         self.assertEqual(refused.result["code"], "invalid-role-result")
@@ -296,7 +297,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
                 result = handle.result
                 reference = next(ref for ref in result.evidence_refs if ref.kind == kind)
                 path = Path(reference.location)
-                path.write_bytes(path.read_bytes() + b" ")
+                native_path(path).write_bytes(native_path(path).read_bytes() + b" ")
                 with mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unverified seal")):
                     refused = self.adapter.collect(handle, context)
                 self.assertEqual(refused.status, "failed")

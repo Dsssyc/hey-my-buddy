@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 from ... import private_dirs
+from ...paths import native_path
 from ...errors import BoardError
 from ...protocol.reasons import reason
 from . import workspace
@@ -309,6 +310,9 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
             if workspace._path_present(tomb):
                 skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))
                 continue
-            directory.rename(tomb)
-            private_dirs.remove_tree(tomb)
+        # Windows cannot rename a directory while its descendant .lock is open.
+        # The caller still holds the storage lock and the durable deletion mark
+        # fences new workspace operations after the allocation proof above.
+        native_path(directory).rename(native_path(tomb))
+        private_dirs.remove_tree(tomb)
     return skipped

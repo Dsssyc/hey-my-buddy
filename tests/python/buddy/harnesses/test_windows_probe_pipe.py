@@ -70,7 +70,7 @@ class WindowsProbePipeTests(unittest.TestCase):
 
     def fake_probe(self, error, **kwargs):
         with self.probe_fixture(error, **kwargs) as fixture:
-            result = discovery._probe_windows(fixture.process, 1, fixture.handle)
+            result = discovery._probe_windows(fixture.process, 1, fixture.handle, None)
             fixture.peek.assert_called_with(456, 0)
             fixture.api.terminate.assert_called_once_with(77)
             if result[2]:
@@ -93,6 +93,15 @@ class WindowsProbePipeTests(unittest.TestCase):
         self.assertEqual(result, ('timeout', b'', True))
         process.kill.assert_not_called()
 
+    def test_scan_deadline_classifies_both_pipe_and_exit_wait_timeouts(self):
+        for eof in (False, True):
+            with self.subTest(eof=eof), self.probe_fixture(wait_expires=True) as fixture:
+                if not eof:
+                    fixture.peek.side_effect = None
+                    fixture.peek.return_value = (b'', 0, 0)
+                result = discovery._probe_windows(fixture.process, 0.1, fixture.handle, 0.1)
+                self.assertEqual(result, ('scan-timeout', b'', True))
+
     def test_output_limit_still_requires_verified_shutdown(self):
         with mock.patch.object(discovery, '_MAX_OUTPUT', 3):
             result, process = self.fake_probe(109)
@@ -104,7 +113,7 @@ class WindowsProbePipeTests(unittest.TestCase):
         with self.probe_fixture(exited=True) as fixture:
             fixture.peek.side_effect = None
             fixture.peek.return_value = (b'', 0, 0)
-            result = discovery._probe_windows(fixture.process, 0.1, fixture.handle)
+            result = discovery._probe_windows(fixture.process, 0.1, fixture.handle, None)
             self.assertEqual(result, ('timeout', b'', True))
             fixture.peek.assert_called_with(456, 0)
             fixture.read.assert_not_called()
@@ -167,7 +176,7 @@ class WindowsProbePipeTests(unittest.TestCase):
             failure = OSError('pipe read failed')
             fixture.read.side_effect = failure
             with self.assertRaises(OSError) as caught:
-                discovery._probe_windows(fixture.process, 1, fixture.handle)
+                discovery._probe_windows(fixture.process, 1, fixture.handle, None)
             self.assertIs(caught.exception, failure)
             self.assertTrue(failure.discovery_shutdown_confirmed)
             fixture.api.terminate.assert_called_once_with(77)
@@ -196,7 +205,7 @@ class WindowsProbePipeTests(unittest.TestCase):
                               stderr=subprocess.DEVNULL)
         handle = ProcessHandle(process, own_group=True, log_paths={})
         try:
-            result = discovery._probe_windows(process, time.monotonic() + 3, handle)
+            result = discovery._probe_windows(process, time.monotonic() + 3, handle, None)
             self.assertEqual(result, (None, b'fixture 1.2.3\n', True))
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.2))
         finally:

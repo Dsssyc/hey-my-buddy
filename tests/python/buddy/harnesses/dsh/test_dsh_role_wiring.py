@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam, worker_format
 from hey_my_buddy.private_dirs import context_root
@@ -299,10 +300,10 @@ class WorkerRegisteredRunTests(DshRoleCase):
                          "the answered question no longer blocks the completed finish")
         result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
-        report = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+        report = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
         self.assertEqual(report["answered"], 1)
         journal = Path(control["inquiry"]["resultsPath"])
-        states = [json.loads(line).get("state") for line in journal.read_text(encoding="utf-8").splitlines()
+        states = [json.loads(line).get("state") for line in native_path(journal).read_text(encoding="utf-8").splitlines()
                   if line.strip() and json.loads(line).get("inquiryId")]
         self.assertIn("delivered", states)
         self.assertEqual(states[-1], "answered")
@@ -323,9 +324,9 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertEqual(original.status, "ok", original.to_report())
         result = handle.result
         reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        value = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+        value = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
         value["receiptVerified"] = False
-        Path(reference.location).write_text(json.dumps(value), encoding="utf-8", newline="\n")
+        native_path(Path(reference.location)).write_text(json.dumps(value), encoding="utf-8", newline="\n")
         refused = worker_executor("dsh").collect(handle, context)
         self.assertEqual(refused.status, "failed")
         self.assertTrue(refused.shutdown_confirmed)
@@ -343,7 +344,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 result = handle.result
                 reference = next(ref for ref in result.evidence_refs if ref.kind == kind)
                 path = Path(reference.location)
-                path.write_bytes(path.read_bytes() + b" ")
+                native_path(path).write_bytes(native_path(path).read_bytes() + b" ")
                 refused = worker_executor("dsh").collect(handle, context)
                 self.assertEqual(refused.status, "failed")
                 self.assertTrue(refused.shutdown_confirmed)

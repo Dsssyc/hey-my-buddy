@@ -8,6 +8,7 @@ Git-backed workspace module, the real C-Two/CLI path and the real console
 command route.
 """
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 from admission import admit_board, admit_store
 
 import json
@@ -202,7 +203,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertNotIn("sidecarWritten", activity_meta)
             attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
             self.assertFalse((attempt_directory / "activity.json").exists())
-            bindings = [json.loads(line) for log in self.directory.rglob("fixture-agent.log")
+            bindings = [json.loads(line) for log in native_path(self.directory).rglob("fixture-agent.log")
                         for line in log.read_text(encoding="utf-8").splitlines() if '"workflow-binding"' in line]
             self.assertEqual(len(bindings), 1)
             self.assertEqual(bindings[0]["launcherEnvKeys"], [])
@@ -343,17 +344,17 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             # A fixture harness reads the role prompt and launches its command
             # with a fresh environment, as a native harness may do.
             fixture_harness = (
-                "import json,subprocess,sys; prompt=sys.stdin.read(); "
+                "import json,os,subprocess,sys; prompt=sys.stdin.read(); "
                 "path=json.loads(prompt.split('Credential file path: ',1)[1]"
                 ".split('\\n',1)[0]); "
                 "command=subprocess.run([sys.executable,'-c',sys.argv[1],sys.argv[2]],"
-                "env={'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True,encoding='utf-8'); "
+                "env={**{k:v for k,v in os.environ.items() if k.upper() in ('SYSTEMROOT','WINDIR')},'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True); "
                 "sys.stdout.write(command.stdout); sys.stderr.write(command.stderr); "
                 "sys.exit(command.returncode)"
             )
             command = subprocess.run([sys.executable, "-c", fixture_harness, bootstrap, json.dumps(child_request)],
                                      cwd=Path(__file__).resolve().parents[4] / "src", env=environment,
-                                     input=prompt, capture_output=True, text=True, timeout=30, encoding="utf-8")
+                                     input=prompt, capture_output=True, text=True, timeout=30)
             self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
             owned = json.loads(command.stdout)
             self.assertIsNone(owned["hostId"])

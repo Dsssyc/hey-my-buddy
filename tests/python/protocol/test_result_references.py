@@ -8,6 +8,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES
+from hey_my_buddy.paths import native_path
 
 
 class ResultReferenceTests(BoardTestCase):
@@ -20,7 +21,7 @@ class ResultReferenceTests(BoardTestCase):
         self.claim = admit_execution(self.board_fixture.client(), self.nonce, task_id=task["runId"])["claim"]
         self.attempt = self.claim["attempt"]
         self.receipt_dir = execution_directory(self.claim, self.board_fixture.directory)
-        self.receipt_dir.mkdir(parents=True, mode=0o700)
+        native_path(self.receipt_dir).mkdir(parents=True, mode=0o700)
         self.client = BoardClient(self.board_fixture.directory, call=self.board_fixture.call)
 
     def publish(self, report):
@@ -39,7 +40,7 @@ class ResultReferenceTests(BoardTestCase):
             "workspaceSeal": {"changedPaths": paths, "snapshot": {"changedPaths": paths},
                               "diffPath": "/private/output.patch"}}}
         reference = self.publish(report)
-        self.assertGreater((self.receipt_dir / RECEIPT).stat().st_size, MAX_MESSAGE_BYTES)
+        self.assertGreater(native_path(self.receipt_dir / RECEIPT).stat().st_size, MAX_MESSAGE_BYTES)
         with mock.patch.object(self.board_fixture.service, "execution_result",
                                wraps=self.board_fixture.service.execution_result) as called:
             first = self.submit(reference)
@@ -69,12 +70,12 @@ class ResultReferenceTests(BoardTestCase):
 
     def test_digest_and_envelope_binding_must_match(self):
         reference = self.publish({"status": "ok", "shutdownConfirmed": True})
-        with (self.receipt_dir / RECEIPT).open("ab") as stream:
+        with native_path(self.receipt_dir / RECEIPT).open("ab") as stream:
             stream.write(b"\n")
         with self.assertRaises(BoardError) as caught:
             self.submit(reference)
         self.assertEqual(caught.exception.code, "RECEIPT_MISMATCH")
-        receipt = json.loads((self.receipt_dir / RECEIPT).read_bytes())
+        receipt = json.loads(native_path(self.receipt_dir / RECEIPT).read_bytes())
         receipt["generation"] += 1
         fsync_json(self.receipt_dir / RECEIPT, receipt)
         with self.assertRaises(BoardError) as caught:
@@ -84,13 +85,13 @@ class ResultReferenceTests(BoardTestCase):
     def test_foreign_and_linked_files_are_rejected(self):
         reference = self.publish({"status": "ok", "shutdownConfirmed": True})
         outside = self.receipt_dir.parent / "foreign.json"
-        outside.write_bytes((self.receipt_dir / RECEIPT).read_bytes())
+        native_path(outside).write_bytes(native_path(self.receipt_dir / RECEIPT).read_bytes())
         with self.assertRaises(BoardError) as caught:
             self.submit({**reference, "path": str(outside)})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        (self.receipt_dir / RECEIPT).unlink()
+        native_path(self.receipt_dir / RECEIPT).unlink()
         try:
-            (self.receipt_dir / RECEIPT).symlink_to(outside)
+            native_path(self.receipt_dir / RECEIPT).symlink_to(outside)
         except OSError as error:
             self.skipTest(str(error))
         with self.assertRaises(BoardError):

@@ -10,6 +10,7 @@ from support import request_private_service_stop
 class MicroTaskServiceStopTests(WorkflowTestCase):
     def stop_daemon(self, note="test stop"):
         daemon = Daemon(self.directory)
+        self.addCleanup(daemon.store.db.close)
         return daemon.on_stop({"note": note, "drainSeconds": 0})
 
     def test_queued_micro_task_is_fenced_but_passive_host_request_is_preserved(self):

@@ -60,7 +60,7 @@ def emit_fixtures(directory: Path) -> dict:
     """Run the preview script's emit mode and return its manifest."""
     result = subprocess.run(
         [sys.executable, str(PREVIEW), "--emit-fixtures", str(directory)],
-        cwd=str(ROOT), env=child_environment(), capture_output=True, text=True, timeout=180, encoding="utf-8",
+        cwd=str(ROOT), env=child_environment(), capture_output=True, text=True, timeout=180,
     )
     if result.returncode != 0:
         raise AssertionError(f"--emit-fixtures failed ({result.returncode}): {result.stdout}{result.stderr}")
@@ -83,7 +83,7 @@ class PreviewFixtureTest(unittest.TestCase):
     def test_preview_self_check_passes(self) -> None:
         result = subprocess.run(
             [sys.executable, str(PREVIEW), "--check"],
-            cwd=str(ROOT), env=child_environment(), capture_output=True, text=True, timeout=180, encoding="utf-8",
+            cwd=str(ROOT), env=child_environment(), capture_output=True, text=True, timeout=180,
         )
         self.assertEqual(0, result.returncode, f"preview --check failed:\n{result.stdout}\n{result.stderr}")
         self.assertIn("CHECK OK", result.stdout)

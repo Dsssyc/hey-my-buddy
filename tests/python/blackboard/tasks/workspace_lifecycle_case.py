@@ -158,10 +158,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         git(self.directory, "clone", "-q", str(self.repo), str(target))
         before = git(target, "rev-parse", "HEAD").strip()
         for item in (*previous, artifact):
-            completed = subprocess.run(
-                ["git", "-C", str(target), "apply", "--binary", item["diffPath"]],
-                env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
-            )
+            command, git_env = workspace_module._git_command(target, "apply", "--index", "--binary", item["diffPath"])
+            completed = subprocess.run(command, env={**git_env, **GIT_ENV},
+                                       capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
         git(target, "add", ".")
         git(target, "commit", "-qm", "integrate")
@@ -224,7 +223,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for base in (manifest["inputCommit"], original):
             cumulative = workspace_module.cumulative_patch(manifest, sealed, base)
             self.assertEqual(cumulative["changedPaths"], expected)
-            self.assertEqual(Path(cumulative["path"]).read_bytes(), Path(sealed["diffPath"]).read_bytes())
+            self.assertEqual(native_path(Path(cumulative["path"])).read_bytes(), native_path(Path(sealed["diffPath"])).read_bytes())
         sealed["cumulativePatch"] = cumulative
         report = workspace_module.integration_verify(
             sealed, original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD",
@@ -355,12 +354,12 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         failed_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, attempt['attemptId']))
         credential = failed_root / 'agent-credential.json'
-        credential.write_text('private credential fixture', encoding="utf-8", newline="\n")
+        native_path(credential).write_text('private credential fixture', encoding="utf-8", newline="\n")
         refs = [str(failed_root / name) for name in ('unknown-events.json', 'thread-notifications.json')]
         for ref in refs:
-            Path(ref).write_text('failure evidence', encoding="utf-8", newline="\n")
+            native_path(Path(ref)).write_text('failure evidence', encoding="utf-8", newline="\n")
         native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', run_id))
-        (native / 'session.json').write_text('native continuation state', encoding="utf-8", newline="\n")
+        native_path(native / 'session.json').write_text('native continuation state', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, attempt['attemptId'])
         result = {'status': 'ok' if import_failure else 'invalid-result', 'evidenceRefs': refs,
                   'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}}
@@ -371,7 +370,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # creator stop proof that enters the service-owned cleanup path.
         board.store.recover_executions(attempt['attemptId'],
                                       stopped_evidence={'kind': 'creator-reaped', 'exitCode': 1})
-        self.assertFalse(credential.exists())
+        self.assertFalse(native_path(credential).exists())
         receipt = board.call('task_result', {'runId': run_id})
         recorded = receipt['result']
         self.assertEqual(recorded['evidenceRefs'], refs)
@@ -409,10 +408,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         accepted = self.accept(board, delivered, artifact, target=target)
         self.assertEqual(accepted['state'], 'accepted')
         self.assertFalse(checkout.exists())
-        self.assertFalse(native.exists())
-        self.assertFalse(successful_root.exists())
-        self.assertFalse(credential.exists())
-        self.assertEqual([Path(ref).read_text(encoding="utf-8") for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
+        self.assertFalse(native_path(native).exists())
+        self.assertFalse(native_path(successful_root).exists())
+        self.assertFalse(native_path(credential).exists())
+        self.assertEqual([native_path(Path(ref)).read_text(encoding="utf-8") for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
         with board.store.db.write() as connection:
             stored = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                                    (attempt['attemptId'],)).fetchone()['result_json'])

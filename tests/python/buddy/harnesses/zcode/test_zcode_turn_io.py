@@ -10,6 +10,7 @@ import unittest
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from protocol.fixtures import native_turn
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.roles import turn_io
 from private_acl import assert_private_path
 
@@ -20,19 +21,19 @@ class SharedTurnIOTests(ZcodeFixtureCase):
         context.turn_input["version"] = 3
         context.turn_input["context"] = {"evidence": "汉" * 100000, "tail": "complete-input"}
         turn_io.prepare_turn(context)
-        self.assertGreater(context.turn_input_file().stat().st_size, 256 * 1024)
-        self.assertEqual(json.loads(context.turn_input_file().read_text()), context.turn_input)
+        self.assertGreater(native_path(context.turn_input_file()).stat().st_size, 256 * 1024)
+        self.assertEqual(json.loads(native_path(context.turn_input_file()).read_text(encoding="utf-8")), context.turn_input)
 
     def test_canonical_input_and_scoped_credential_are_distinct_private_files(self):
         context = self.context()
         context.spec.update(adapter="zcode", harness="zcode")
         context.agent_credential = "private-agent-token"
         turn_io.prepare_turn(context)
-        self.assertEqual(hashlib.sha256(context.turn_input_file().read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
-        self.assertNotIn(context.agent_credential, context.turn_input_file().read_text(encoding="utf-8"))
+        self.assertEqual(hashlib.sha256(native_path(context.turn_input_file()).read_bytes()).hexdigest(), turn_io.input_hash(context.turn_input))
+        self.assertNotIn(context.agent_credential, native_path(context.turn_input_file()).read_text(encoding="utf-8"))
         assert_private_path(self, context.credential_file(), 0o600)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
-        self.assertEqual(json.loads(context.credential_file().read_text(encoding="utf-8"))["stateDir"],
+        self.assertEqual(json.loads(native_path(context.credential_file()).read_text(encoding="utf-8"))["stateDir"],
                          context.environment["HMB_STATE_DIR"])
         from hey_my_buddy.private_dirs import context_root
         self.assertEqual(context.credential_file().parent, context_root(context, "zcode"))

@@ -21,6 +21,7 @@ from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTes
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class ScopeRecoveryTestCase(RealWorkspaceTestCase):
@@ -628,7 +629,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/feature.py"])
-        self.assertTrue(Path(cumulative["path"]).is_file())
+        self.assertTrue(native_path(Path(cumulative["path"])).is_file())
         self.assertIsNone(resolved["nextBoundaryRequestId"])
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
@@ -690,7 +691,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         cumulative = adopted["artifact"]["cumulativePatch"]
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertIn("outside.txt", cumulative["changedPaths"])
-        self.assertTrue(Path(cumulative["path"]).is_file())
+        self.assertTrue(native_path(Path(cumulative["path"])).is_file())
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
 

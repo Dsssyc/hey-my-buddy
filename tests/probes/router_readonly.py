@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+from hey_my_buddy.private_dirs import directory_mode
 from pathlib import Path
 import re
 import signal
@@ -253,10 +254,10 @@ def run(args):
     root = args.output_root.expanduser().resolve()
     if root.exists():
         raise ValueError("output-root 必须是全新私有目录；保留先前证据，不覆盖或续跑。")
-    root.mkdir(mode=0o700, parents=True)
+    root.mkdir(mode=directory_mode(), parents=True)
     root.chmod(0o700)
     frozen = root / "frozen"
-    frozen.mkdir(mode=0o700)
+    frozen.mkdir(mode=directory_mode())
     marker = uuid.uuid4().hex
     (frozen / "marker.txt").write_text(marker + "\n")
     # Ordinary OS permissions allow writes, so a refusal must come from the
@@ -327,7 +328,7 @@ def run(args):
             activity = context.directory / "activity.json"
             if activity.is_file() and not activity.is_symlink():
                 try:
-                    report["activity"] = json.loads(activity.read_text())
+                    report["activity"] = json.loads(activity.read_text(encoding='utf-8'))
                 except (ValueError, OSError):
                     report["activity"] = None
             evaluate(report, result, handle.shutdown_confirmed(), marker, before, input_hashes(frozen),

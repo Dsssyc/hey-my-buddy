@@ -1,6 +1,8 @@
+from hey_my_buddy.paths import native_path
 """Real daemon/Worker/CLI quota recovery with an offline harness, never a paid rerun."""
 import json
 import subprocess
+from hey_my_buddy.blackboard.tasks.workspace import _git_command
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
 
@@ -78,11 +80,13 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             final = next(item for item in delivered["artifacts"] if item["artifactId"] == delivered["finalArtifactId"])
             self.assertIn("tracked.txt", final["cumulativePatch"]["changedPaths"])
             self.assertNotIn("tracked.txt", final["changedPaths"])
-            self.assertTrue(Path(final["cumulativePatch"]["path"]).is_file())
+            self.assertTrue(native_path(Path(final["cumulativePatch"]["path"])).is_file())
             # The cumulative patch applies independently to the original micro task input.
             target = self.directory / "integration"
-            subprocess.run(["git", "clone", "-q", str(self.repo), str(target)], check=True)
-            subprocess.run(["git", "-C", str(target), "apply", "--binary", final["cumulativePatch"]["path"]], check=True)
+            command, git_env = _git_command(self.repo, "clone", "-q", str(self.repo), str(target))
+            subprocess.run(command, env=git_env, check=True)
+            command, git_env = _git_command(target, "apply", "--binary", final["cumulativePatch"]["path"])
+            subprocess.run(command, env=git_env, check=True)
             self.assertEqual((target / "tracked.txt").read_text(encoding="utf-8"), "partial work preserved after quota failure\n")
             self.assertTrue((target / "mock-output.txt").is_file())
 
@@ -121,7 +125,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             # partial artifact, ref and manifest stay exactly as they were.
             self.assertNotEqual(concluded["partialArtifactId"], partial["artifactId"])
             self.assertTrue(Path(partial["diffPath"]).is_file())
-            self.assertTrue(Path(partial["cumulativePatch"]["path"]).is_file())
+            self.assertTrue(native_path(Path(partial["cumulativePatch"]["path"])).is_file())
             sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
             artifacts = {row["artifactId"]: row for row in sealed["artifacts"]}
             self.assertIn(partial["artifactId"], artifacts)

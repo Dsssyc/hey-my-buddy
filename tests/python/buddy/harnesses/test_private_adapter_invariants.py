@@ -98,7 +98,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         self.assertEqual(handle.evidence_retention_failure, diagnostic)
         self.assertEqual(diagnostic["privateRoot"], str(handle.no_tool_evidence.private_root))
         self.assertEqual(diagnostic["evidenceRoot"], str(handle.no_tool_evidence.evidence_root))
-        self.assertTrue(handle.no_tool_evidence.private_root.exists())
+        self.assertTrue(native_path(handle.no_tool_evidence.private_root).exists())
         self.assert_sentinels()
 
     def test_control_edits_and_control_links_cannot_rebind_paths_request_or_identity(self):
@@ -111,9 +111,9 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                              "noToolRequest": {"prompt": "malicious replacement"}}
                 control_path = Path(handle.role_run_control["privateRoot"]) / "role-run-control.json"
                 if replace_with_link:
-                    control_path.unlink(missing_ok=True)
-                    control_path.symlink_to(self.outside / "control.json")
-                control_path.write_text(json.dumps(malicious), encoding="utf-8", newline="\n")
+                    native_path(control_path).unlink(missing_ok=True)
+                    native_path(control_path).symlink_to(self.outside / "control.json")
+                native_path(control_path).write_text(json.dumps(malicious), encoding="utf-8", newline="\n")
                 request.output_schema["properties"] = {"mutated": {"type": "string"}}
                 context.task_id, context.attempt_id, context.generation = "changed", "changed", 999
                 context.directory = self.outside
@@ -121,7 +121,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                     binding.evidence_root = self.outside
                 outcome = read_only.collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                retained = json.loads((binding.evidence_root / "call-1/request.json").read_text(encoding="utf-8"))
+                retained = json.loads(native_path(binding.evidence_root / "call-1/request.json").read_text(encoding="utf-8"))
                 self.assertEqual(retained["prompt"], "frozen original prompt")
                 self.assertEqual(retained["outputSchema"], {"type": "object"})
                 self.assertEqual((binding.task_id, binding.attempt_id, binding.generation, binding.directory), original_identity)
@@ -441,7 +441,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 journal_path = native_process_journal_path(
                     receipt_directory(state, harness, task_id, attempt_id), root_identity)
                 binding = {"taskId": task_id, "attemptId": attempt_id, "generation": 1}
-                self.assertTrue(journal_path.is_file(), journal_path)
+                self.assertTrue(native_path(journal_path).is_file(), journal_path)
                 native = read_native_process_journal(journal_path, binding)
                 self.assertIsNotNone(native)
                 self.assertEqual(native["pending"], 0, native)

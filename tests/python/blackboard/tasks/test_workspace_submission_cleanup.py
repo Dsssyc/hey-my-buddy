@@ -10,6 +10,7 @@ from blackboard.tasks import test_workflow as workflow_tests
 from blackboard.tasks import test_workflow_preparation as preparation_tests
 from hey_my_buddy.blackboard.tasks import storage, workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
@@ -67,7 +68,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         failed_harness = first['claim']['task']['spec']['adapter']
         failed_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, failed_harness, run_id, failed_id))
-        (failed_root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
+        native_path(failed_root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
         self.finish_turn(board, first, runner_status='failed', exit_code=1)
         board.store.recover_executions(failed_id, stopped_evidence={'kind': 'creator-reaped', 'exitCode': 1})
         self.assertFalse((failed_root / 'agent-credential.json').exists())
@@ -95,27 +96,27 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
                 if attempt_id == success_id:
-                    (root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
-                (root / 'unknown-events.json').write_text('failure evidence fixture', encoding="utf-8", newline="\n")
+                    native_path(root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
+                native_path(root / 'unknown-events.json').write_text('failure evidence fixture', encoding="utf-8", newline="\n")
                 if attempt_id == success_id:
-                    (root / 'config.toml').write_text('native configuration fixture', encoding="utf-8", newline="\n")
+                    native_path(root / 'config.toml').write_text('native configuration fixture', encoding="utf-8", newline="\n")
             native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, adapter, run_id))
-            (native / 'session.json').write_text('native binding fixture', encoding="utf-8", newline="\n")
+            native_path(native / 'session.json').write_text('native binding fixture', encoding="utf-8", newline="\n")
             unknown = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown'))
-            (unknown / 'unknown-record').write_text('not a known attempt', encoding="utf-8", newline="\n")
+            native_path(unknown / 'unknown-record').write_text('not a known attempt', encoding="utf-8", newline="\n")
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)
-                self.assertFalse((root / 'agent-credential.json').exists())
+                self.assertFalse(native_path(root / 'agent-credential.json').exists())
                 if attempt_id == success_id:
-                    self.assertFalse(root.exists())
+                    self.assertFalse(native_path(root).exists())
                 else:
-                    self.assertEqual((root / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence fixture')
-            self.assertFalse(private_dirs.native_root(board.directory, adapter, run_id).exists())
-            self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown').exists())
+                    self.assertEqual(native_path(root / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence fixture')
+            self.assertFalse(native_path(private_dirs.native_root(board.directory, adapter, run_id)).exists())
+            self.assertFalse(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown')).exists())
         for attempt_id in (failed_id, success_id):
             self.assertEqual(private_dirs.session_record_path(board.directory, group_id, attempt_id).read_bytes(),
                              records[attempt_id])
@@ -148,11 +149,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         for adapter in ('dsh', 'zcode', 'claude'):
             root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
             if adapter == 'dsh':
-                (root / 'unrelated-link').symlink_to(outside)
+                native_path(root / 'unrelated-link').symlink_to(outside)
             elif adapter == 'zcode':
-                (root / 'unrelated-directory').mkdir()
-                (root / 'unrelated-directory/unrelated.txt').write_text('not a record', encoding="utf-8", newline="\n")
-            (root / 'settings.json').write_text('configuration fixture', encoding="utf-8", newline="\n")
+                native_path(root / 'unrelated-directory').mkdir()
+                native_path(root / 'unrelated-directory/unrelated.txt').write_text('not a record', encoding="utf-8", newline="\n")
+            native_path(root / 'settings.json').write_text('configuration fixture', encoding="utf-8", newline="\n")
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])

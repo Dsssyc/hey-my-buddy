@@ -13,6 +13,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION
 from hey_my_buddy.install.runtime import resource_path
+from hey_my_buddy.json_codec import canonical_json
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -110,7 +111,7 @@ class RolePromptTests(unittest.TestCase):
                     if authority:
                         self.assertTrue(request.input_text.startswith(role + "\n" + lead))
                         self.assertGreater(request.input_text.index(task), request.input_text.index(lead) + len(lead))
-                        self.assertIn(str(root / "agent-credential.json"), request.input_text)
+                        self.assertIn(canonical_json(str(root / "agent-credential.json")), request.input_text)
                         self.assertIn("HMB_AGENT_CREDENTIAL_FILE", request.input_text)
                     else:
                         self.assertNotIn(str(root / "agent-credential.json"), request.input_text)

@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
 
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.codex.tool_evidence import CodexToolEventProjector
@@ -316,7 +317,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({"type": "function_call_output", "call_id": "call-1",
                                             "output": "secret output body"}))
         package = projector.finish(True)
-        encoded = json.dumps(package) + Path(package["calls"]["path"]).read_text(encoding="utf-8")
+        encoded = json.dumps(package) + native_path(Path(package["calls"]["path"])).read_text(encoding="utf-8")
         self.assertNotIn("tok- inside", encoded)
         self.assertNotIn("secret output body", encoded)
 
