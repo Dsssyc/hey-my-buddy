@@ -51,7 +51,7 @@ class ProviderRejected(Exception):
     def __init__(self, native_code: str, resets_at: object, *, classification: str = "quota-exceeded",
                  source: str = "claude/stream-json-rate-limit-event"):
         super().__init__("the Claude provider quota rejected this execution" if classification == "quota-exceeded"
-                         else "the Claude provider model is at capacity")
+                         else "the Claude provider model service is overloaded")
         self.native_code = native_code
         self.classification = classification
         self.resets_at = resets_at
@@ -384,8 +384,8 @@ class TurnEvidence:
             # The CLI's error assistant is infrastructure output, not model work.
             # Only a root structured code can reject this root turn.
             if root_session and frame.get("error") == "overloaded":
-                from ....protocol.usage import classify_quota_code
-                raise ProviderRejected("overloaded", None, classification=classify_quota_code("overloaded"),
+                from ....protocol.usage import classify_provider_rejection_code
+                raise ProviderRejected("overloaded", None, classification=classify_provider_rejection_code("overloaded"),
                                        source="claude/stream-json-assistant-error")
             self.model_messages += 1
             self._observe_assistant(frame)

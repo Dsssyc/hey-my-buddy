@@ -259,7 +259,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
                 "cumulativePatch": seal.get("cumulativePatch"),
             }
         )
-    from ..blackboard.evaluation.native_observations import failure_view
+    from ..blackboard.evaluation.native_observations import provider_rejection_view
     final_text = result.get("finalText")
     disposition = outcome.get("disposition")
     return {
@@ -267,7 +267,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         "terminationReason": full.get("terminationReason"),
         "interruptionEvidence": result.get("interruptionEvidence"),
         "tokenUsage": full.get("tokenUsage"),
-        "quotaFailure": failure_view(result),
+        "providerRejection": provider_rejection_view(result),
         "turn": None
         if turn is None
         else {

@@ -22,7 +22,7 @@
                      "coverage": "native-root-thread", "completeness": "complete", "nativeRecords": 2},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
-    "microTaskQuotaFailure": {
+    "microTaskProviderRejection": {
       "status": "error",
       "mode": "codex",
       "harnessVersion": "0.157.0",
@@ -33,7 +33,7 @@
       "modelStarted": true,
       "sessionId": "thread-fixture-0001",
       "nativeIdentity": {"sessionId": "thread-fixture-0001", "turnId": "turn-fixture-0002"},
-      "quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/app-server-turn-error",
+      "providerRejection": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/app-server-turn-error",
                        "observedAt": "2026-01-01T00:05:00Z", "resetsAt": null,
                        "rejectionPhase": "during-model"},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}

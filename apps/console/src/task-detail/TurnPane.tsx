@@ -118,7 +118,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
   const running = step.outcome === "running";
   const failed = step.outcome === "failed";
   const rejected = turn?.state === "rejected";
-  const refusal = turn?.quotaFailure?.code;
+  const rejectionCode = turn?.providerRejection?.code;
   const unknown = step.outcome === "unknown";
   const reminders = { overdue: attempt?.overdue === true, possiblyStuck: attempt?.possiblyStuck === true };
   const expected = turn?.expectedSeconds ?? null;
@@ -131,9 +131,9 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
-  const note = rejected ? [refusal ? t(`quota.${refusal}`) : t("turn.providerRefused"), t("turn.rerouted")].join(" · ")
+  const note = rejected ? [rejectionCode ? t(`providerRejection.${rejectionCode}`) : t("turn.providerRefused"), t("turn.rerouted")].join(" · ")
     : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null,
-      attempt?.ending ? endingText(attempt.ending, t) : refusal ? t(`quota.${refusal}`) : null,
+      attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
       failed && span.error ? span.error : null].filter(Boolean).join(" · ");
   return <Pane footer={running ? <Live activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
     <PaneTitle title={t("step.turn", { n: index })}

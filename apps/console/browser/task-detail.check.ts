@@ -446,14 +446,14 @@ test.describe("the detail of a micro task in the dark theme", () => {
 });
 
 for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
-  test.describe(`model capacity ${locale} ${width}px`, () => {
+  test.describe(`model service overload ${locale} ${width}px`, () => {
     test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
     test("shows the structured overload on its micro task", async ({ page }) => {
       await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
       await page.route("**/api/tasks/preview-run-b2", async route => {
         const response = await route.fetch();
         const task = await response.json();
-        task.quotaFailure = { code: "model-overloaded", nativeCode: "serverOverloaded", rejectionPhase: "during-model" };
+        task.providerRejection = { code: "overloaded", nativeCode: "serverOverloaded", rejectionPhase: "during-model" };
         await route.fulfill({ response, json: task });
       });
       await page.route("**/api/command", async route => {
@@ -462,12 +462,12 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
         const response = await route.fetch();
         const reply = await response.json();
         for (const turn of [...(reply.result.turns ?? []), ...(reply.result.audit?.turns ?? [])]) {
-          if (turn.state === "rejected") turn.quotaFailure = { code: "model-overloaded", nativeCode: "serverOverloaded" };
+          if (turn.state === "rejected") turn.providerRejection = { code: "overloaded", nativeCode: "serverOverloaded" };
         }
         await route.fulfill({ response, json: reply });
       });
       await open(page, "#tasks/macro-22222222-2222-4222-8222-222222222222/preview-run-b2");
-      const label = locale === "zh-CN" ? "模型满载" : "Model at capacity";
+      const label = locale === "zh-CN" ? "模型服务满载" : "Model service overloaded";
       await expect(pane(page)).toContainText(label);
       await expectNoSidewaysScroll(page);
       await expectTextUncut(pane(page).getByText(label, { exact: false }));

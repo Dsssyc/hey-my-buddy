@@ -94,7 +94,7 @@ describe("the compact collaboration record", () => {
       constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "排除低强度" }] } } }), "m1");
     expect(parsed.currentTurn).toMatchObject({ summary: null, remaining: [] });
     expect(parsed.routing?.basis).toEqual({ constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
-      excluded: [{ buddy: { harness: "dsh", provider: "p", model: "m", effort: "off" }, note: "排除低强度" }], coolingCount: null, cooling: [], preferences: [] });
+      excluded: [{ buddy: { harness: "dsh", provider: "p", model: "m", effort: "off" }, note: "排除低强度" }], overloadedModelServices: [], cooling: [], preferences: [] });
   });
 
   it("refuses a Host conclusion without its actor, and an actor that is not one", () => {
@@ -165,21 +165,21 @@ describe("the audit", () => {
 
 describe("what a decision was bound by", () => {
   const decision = { decisionId: "d1", constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"],
-    routingBasis: { candidateCount: 1, excludedCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "提交时排除低推理强度" }],
-      coolingCount: 2, coolingBuddies: [{ harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high", coolingUntil: "2026-09-26T11:00:00Z" }] },
+    routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "提交时排除低推理强度" }],
+      coolingBuddies: [{ harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high", coolingUntil: "2026-09-26T11:00:00Z" }] },
     output: { programSelection: { preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }] } } };
 
   it("keeps the constraints, the capabilities, the exclusions with their notes and the preferences the program applied", () => {
     expect(parseBasis({ decision }, "d1")).toEqual({
       constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
       excluded: [{ buddy: { harness: "dsh", provider: "p", model: "m", effort: "off" }, note: "提交时排除低推理强度" }],
-      coolingCount: 2, cooling: [{ buddy: { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" }, coolingUntil: "2026-09-26T11:00:00Z" }],
+      overloadedModelServices: [], cooling: [{ buddy: { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" }, coolingUntil: "2026-09-26T11:00:00Z" }],
       preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }],
     });
   });
 
   it("is empty for a decision that recorded none of it, and refuses another decision's record or a mode that does not exist", () => {
-    expect(parseBasis({ decision: { decisionId: "d1" } }, "d1")).toEqual({ constraints: {}, requiredCapabilities: [], candidateCount: null, excluded: [], coolingCount: null, cooling: [], preferences: [] });
+    expect(parseBasis({ decision: { decisionId: "d1" } }, "d1")).toEqual({ constraints: {}, requiredCapabilities: [], candidateCount: null, excluded: [], overloadedModelServices: [], cooling: [], preferences: [] });
     expect(() => parseBasis({ decision }, "d2")).toThrow(ApiError);
     expect(() => parseBasis({ decision: { ...decision, output: { programSelection: { preferences: [{ buddyId: "x", mode: "like", note: null }] } } } }, "d1")).toThrow(ApiError);
   });
@@ -288,15 +288,15 @@ describe("the task view", () => {
     expect(parseTask(task(), "m1").attempt!.ending).toBeNull();
     const stopped = parseTask(task({ state: "cancelled", cancellation: { actor: { role: "host", id: "codex-desktop" }, note: "不再需要" },
       selectedAttempt: attempt({ stopInitiator: "host", result: { terminationReason: "forced-stop" } }) }), "m1").attempt!.ending;
-    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", quota: null });
-    const limited = parseTask(task({ state: "failed", quotaFailure: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
-    expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, quota: "rate-limited" });
-    const overloaded = parseTask(task({ state: "failed", quotaFailure: { code: "model-overloaded", nativeCode: "serverOverloaded" },
+    expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", rejectionCode: null });
+    const limited = parseTask(task({ state: "failed", providerRejection: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
+    expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, rejectionCode: "rate-limited" });
+    const overloaded = parseTask(task({ state: "failed", providerRejection: { code: "overloaded", nativeCode: "serverOverloaded" },
       selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
-    expect(overloaded).toMatchObject({ cause: "harness-error", quota: "model-overloaded" });
+    expect(overloaded).toMatchObject({ cause: "harness-error", rejectionCode: "overloaded" });
     // A stop with no recorded initiator is unknown, never a person.
     expect(parseTask(task({ state: "cancelled", selectedAttempt: attempt({ result: { terminationReason: "unknown-stop" } }) }), "m1").attempt!.ending).toMatchObject({ stoppedBy: "unknown" });
-    expect(() => parseTask(task({ state: "failed", quotaFailure: { code: "blocked" } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ state: "failed", providerRejection: { code: "blocked" } }), "m1")).toThrow(ApiError);
   });
 
   it("reads where the native session is kept and whether it can be resumed", () => {

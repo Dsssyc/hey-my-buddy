@@ -278,7 +278,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                                        else 'Execution was interrupted')),
                   'exitCode': None, 'signal': None, 'shutdownConfirmed': confirmed, 'artifacts': [],
                   'terminationReason': reason if confirmed or not stopped else None,
-                  'logPaths': json.loads(attempt['log_paths']), 'runtimeIdentity': attempt['runtime_identity']}
+                  'logPaths': {}, 'runtimeIdentity': attempt['runtime_identity']}
         return board.execution_result({**report, 'attemptId': attempt['attempt_id']},
             stop_evidence={**(stopped_evidence or {}), 'kind': kind, 'execution': observed})
     finally:

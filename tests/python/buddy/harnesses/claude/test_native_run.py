@@ -469,7 +469,7 @@ class Batch4FactsTests(NativeRunCase):
                     self.assertEqual(result.end.status, "unknown")
                     self.assertEqual(result.end.reason_code, "native-terminal-unread")
                     self.assertIsNone(result.end.message)
-                    self.assertIsNone(result.native_failure)
+                    self.assertIsNone(result.provider_rejection)
                     self.assertIsNone(result.completion_evidence)
                     self.assertNotIn("native-turn-facts", [ref.kind for ref in result.evidence_refs])
                     self.assertTrue(result.tool_evidence.value["streamComplete"])
@@ -888,7 +888,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-error")
         self.assertEqual(result.end.message, "the Claude provider quota rejected this execution")
-        failure = result.native_failure.value
+        failure = result.provider_rejection.value
         self.assertEqual(failure["nativeCode"], "five_hour")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "claude/stream-json-rate-limit-event")
@@ -900,14 +900,14 @@ class SettlementGuardTests(NativeRunCase):
         # travels in the common native-failure package.
         observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                             if ref.kind == "native-observations")).read_bytes())
-        self.assertNotIn("quotaFailure", observations)
+        self.assertNotIn("providerRejection", observations)
         self.assertIs(observations["nativeInterruptRequested"], True)
         self.assertIs(observations["nativeInterruptAcknowledged"], True)
         self.fixture_case("ok")
         clean = self.execute(self.request())
         observations = json.loads(Path(next(ref.location for ref in clean.evidence_refs
                                             if ref.kind == "native-observations")).read_bytes())
-        self.assertNotIn("quotaFailure", observations)
+        self.assertNotIn("providerRejection", observations)
         self.assertNotIn("nativeInterruptRequested", observations)
         self.assertNotIn("nativeInterruptAcknowledged", observations)
 
@@ -919,27 +919,27 @@ class SettlementGuardTests(NativeRunCase):
                 with self.subTest(case=case, scope=scope):
                     result = self.execute(self.request(scope=scope, schema=schema, timeout=20))
                     self.assertEqual(result.end.reason_code, "harness-error")
-                    failure = _worker_facts(result)["quotaFailure"]
-                    self.assertEqual(failure["code"], "model-overloaded")
+                    failure = _worker_facts(result)["providerRejection"]
+                    self.assertEqual(failure["code"], "overloaded")
                     self.assertEqual(failure["nativeCode"], "overloaded")
                     self.assertEqual(failure["rejectionPhase"], phase)
 
-    def test_quota_failure_uses_the_common_package_on_worker_and_router_carriers(self):
+    def test_provider_rejection_uses_the_common_package_on_worker_and_router_carriers(self):
         self.fixture_case("quota-rejected")
         for scope, schema in (("write", WORKER_SCHEMA), ("read", READ_SCHEMA)):
             with self.subTest(scope=scope):
                 result = self.execute(self.request(scope=scope, schema=schema, timeout=20))
                 self.assertEqual(result.end.reason_code, "harness-error")
-                self.assertEqual(result.native_failure.value["rejectionPhase"], "before-model")
-                self.assertEqual(result.native_failure.value["nativeCode"], "five_hour")
+                self.assertEqual(result.provider_rejection.value["rejectionPhase"], "before-model")
+                self.assertEqual(result.provider_rejection.value["nativeCode"], "five_hour")
 
     def test_result_quota_rejection_survives_a_corrupt_trailing_frame_as_unknown_phase(self):
         self.fixture_case("result-quota-bad-tail")
         result = self.execute(self.request(timeout=20))
         self.assertEqual(result.end.reason_code, "invalid-protocol")
-        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
-        self.assertEqual(result.native_failure.value["source"], "claude/stream-json-result")
-        self.assertEqual(result.native_failure.value["rejectionPhase"], "unknown")
+        self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")
+        self.assertEqual(result.provider_rejection.value["source"], "claude/stream-json-result")
+        self.assertEqual(result.provider_rejection.value["rejectionPhase"], "unknown")
 
     def test_cancellation_interrupts_the_native_run(self):
         self.fixture_case("hang")

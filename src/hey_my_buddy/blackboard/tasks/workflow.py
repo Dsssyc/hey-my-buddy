@@ -318,12 +318,12 @@ class WorkflowCoordinator:
             # This turn's own frozen shared-stash observation, taken before the turn
             # started; never re-derived, and absent for turns that predate it.
             "sharedStash": _frozen_turn_shared_stash(context, compact=compact),
-            "tokenUsage": (json.loads(row["token_usage_json"]) if row["token_usage_json"] else None),
+            "tokenUsage": (payload.get("result") or {}).get("tokenUsage") if payload else None,
         }
-        from ..evaluation.native_observations import failure_view
-        failure = failure_view(result)
+        from ..evaluation.native_observations import provider_rejection_view
+        failure = provider_rejection_view(result)
         if failure is not None:
-            view["quotaFailure"] = failure
+            view["providerRejection"] = failure
         if compact:
             # The default view is an index: the full input/outcome/provenance is in audit.
             return view
@@ -658,7 +658,7 @@ class WorkflowCoordinator:
         ).fetchone()
         host_conclusion = host_conclusions.current(connection, run_row)
         turns = connection.execute(
-            "SELECT t.*,a.result_json,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
+            "SELECT t.*,a.result_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
             (run_row["run_id"], MAX_ACTIVE_TURNS_VIEW),
         ).fetchall()
         requests = connection.execute(
@@ -795,8 +795,8 @@ class WorkflowCoordinator:
             "task": self._task_summary(connection, task_row),
         }
         view.update(task_fixes.view(connection, run_row["run_id"]))
-        if view["task"].get("quotaFailure") is not None:
-            view["quotaFailure"] = view["task"]["quotaFailure"]
+        if view["task"].get("providerRejection") is not None:
+            view["providerRejection"] = view["task"]["providerRejection"]
         if (current_scope() or {}).get("kind") != AGENT_KIND:
             view.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
         return view
@@ -840,7 +840,7 @@ class WorkflowCoordinator:
             "activeAttemptId": decorated["activeAttemptId"],
             "resultAvailable": decorated["resultAvailable"],
             "tokenUsage": decorated.get("tokenUsage"),
-            "quotaFailure": decorated.get("quotaFailure"),
+            "providerRejection": decorated.get("providerRejection"),
             "shutdownConfirmed": decorated["shutdownConfirmed"],
             "terminationReason": decorated["terminationReason"],
             "interruptionEvidence": decorated.get("interruptionEvidence"),
@@ -1387,7 +1387,7 @@ class WorkflowCoordinator:
         response = self.board.decisions.route_workflow(
             connection, run_id=run_id, sequence=sequence, spec=micro_task,
             manifest=json.loads(run["workspace_manifest_json"]),
-            excluded_model_services=self._overloaded_model_services(connection, run_id),
+            overloaded_model_services=self._overloaded_model_services(connection, run_id),
         )
         decision_id = response["decisionId"]
         connection.execute(
@@ -2055,7 +2055,7 @@ class WorkflowCoordinator:
 
     def _audit(self, connection, run_row) -> dict:
         turns = connection.execute(
-            "SELECT t.*,a.result_json,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
+            "SELECT t.*,a.result_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
         ).fetchall()
         requests = connection.execute(
             "SELECT * FROM workflow_requests WHERE run_id=? ORDER BY created_at", (run_row["run_id"],)
@@ -6829,26 +6829,27 @@ class WorkflowCoordinator:
         Consecutive pre-model rejections belong to the same routing recovery;
         keep their exclusions so two overloaded services cannot route in a loop.
         A later effective turn ends that recovery, even when it failed otherwise.
+        Its own overload still supplies the next manual reroute's evidence.
         """
-        from ..evaluation.native_observations import failure_view
+        from ..evaluation.native_observations import provider_rejection_view
         excluded = {}
         for turn in connection.execute(
                 "SELECT t.turn_id,t.state,a.model_harness,a.model_provider,a.model_model,a.result_json"
                 " FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
                 " WHERE t.run_id=? ORDER BY t.turn_index DESC", (run_id,)):
-            failure = failure_view(self.result_payload(json.loads(turn["result_json"]) if turn["result_json"] else None))
-            if failure is not None and failure["code"] == "model-overloaded":
+            failure = provider_rejection_view(self.result_payload(json.loads(turn["result_json"]) if turn["result_json"] else None))
+            if failure is not None and failure["code"] == "overloaded":
                 identity = (turn["model_harness"], turn["model_provider"], turn["model_model"])
                 excluded.setdefault(identity, dict(zip(("harness", "provider", "model"), identity)) | {
-                    "reason": "model-overloaded", "nativeCode": failure["nativeCode"], "turnId": turn["turn_id"]})
+                    "nativeCode": failure["nativeCode"], "turnId": turn["turn_id"]})
             if turn["state"] != "rejected":
                 break
         return list(excluded.values())
 
-    def _quota_reroutable(self, connection, run, turn, attempt, payload):
-        failure = self.result_payload(payload).get("quotaFailure")
+    def _provider_rejection_reroutable(self, connection, run, turn, attempt, payload):
+        failure = self.result_payload(payload).get("providerRejection")
         routing = json.loads(turn["input_json"])["context"]["routing"]
-        if (not failure or failure["code"] not in ("quota-exceeded", "model-overloaded") or failure.get("rejectionPhase") != "before-model"
+        if (not failure or failure["code"] not in ("quota-exceeded", "overloaded") or failure.get("rejectionPhase") != "before-model"
                 or not attempt["shutdown_confirmed"] or attempt["cancel_requested_at"] is not None
                 or run["state"] != "executing" or run["buddy_locked"]
                 or run["current_turn_id"] != turn["turn_id"] or run["current_attempt_id"] != attempt["attempt_id"]
@@ -6942,7 +6943,7 @@ class WorkflowCoordinator:
                                          payload=facts)
                 return {"accepted": False, "disposition": None, "state": "executing", "autoContinued": True,
                         "sharedStash": self._shared_refs_summary(shared_refs)}
-            if task_state == "failed" and self._quota_reroutable(connection, run_row, turn_row, attempt, payload):
+            if task_state == "failed" and self._provider_rejection_reroutable(connection, run_row, turn_row, attempt, payload):
                 continuation = connection.execute(
                     "SELECT continuation_id FROM workflow_continuations WHERE turn_id=? AND state='consumed'",
                     (turn_row["turn_id"],),
@@ -6959,7 +6960,7 @@ class WorkflowCoordinator:
                 previous_decision_id = run_row["current_routing_id"]
                 self._start_routing(connection, run_row["run_id"], now)
                 refreshed = self._run_row(connection, run_row["run_id"])
-                facts = {"turnId": turn_row["turn_id"], "reason": self.result_payload(payload)["quotaFailure"]["code"],
+                facts = {"turnId": turn_row["turn_id"], "reason": self.result_payload(payload)["providerRejection"]["code"],
                          "previousDecisionId": previous_decision_id, "decisionId": refreshed["current_routing_id"],
                          "continuationId": continuation["continuation_id"] if continuation is not None else None,
                          "autoContinued": True}

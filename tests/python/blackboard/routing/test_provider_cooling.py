@@ -18,7 +18,7 @@ def moment(seconds):
 
 
 def failure(*, phase="before-model", reset=None, code="quota-exceeded"):
-    return {"code": code, "nativeCode": "serverOverloaded" if code == "model-overloaded" else "usageLimitExceeded", "source": "synthetic/turn-error",
+    return {"code": code, "nativeCode": "serverOverloaded" if code == "overloaded" else "usageLimitExceeded", "source": "synthetic/turn-error",
             "observedAt": T0, "resetsAt": reset, "rejectionPhase": phase}
 
 
@@ -135,7 +135,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         return run
 
     def reject_turn(self, claimed, *, phase="before-model", shutdown=True, code="quota-exceeded"):
-        result = {"code": "harness-error", "quotaFailure": failure(phase=phase, code=code)}
+        result = {"code": "harness-error", "providerRejection": failure(phase=phase, code=code)}
         attempt = claimed["claim"]["attempt"]
         return self.board_.call("execution_result", {"attemptId": attempt["attemptId"],
             "generation": attempt["generation"], "nonce": NONCE, "status": "failed", "result": result,
@@ -168,7 +168,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertEqual(done["task"]["state"], "completed")
         final = self.board_.call("workflow_get", {"runId": run["runId"], "includeAudit": True})
         self.assertEqual(final["state"], "delivered")
-        self.assertNotIn("quotaFailure", final)
+        self.assertNotIn("providerRejection", final)
         self.assertEqual(final["counts"]["turns"], 2)
         self.assertEqual([t["state"] for t in final["audit"]["turns"]], ["rejected", "returned"])
         timeline = self.board_.call("macro_task_timeline", {"macroTaskId": f"run:{run['runId']}"})
@@ -238,29 +238,29 @@ class CoolingWorkflowTests(WorkflowTestCase):
         run = self.routed()
         first = self.claim(self.board_, run_id=run["runId"])
         self.enable(1)
-        settled = self.reject_turn(first, code="model-overloaded")
+        settled = self.reject_turn(first, code="overloaded")
         self.assertTrue(settled["workflow"]["autoContinued"])
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(current["buddy"], self.identities[1])
         self.assertEqual(current["workspace"], run["workspace"])
-        self.assertEqual(current["turns"][0]["quotaFailure"]["code"], "model-overloaded")
-        self.assertEqual(current["routing"]["routingBasis"]["excludedBuddies"], [{
-            "buddyId": self.ids[0], **self.identities[0], "note": None,
-            "reason": "model-overloaded", "nativeCode": "serverOverloaded",
+        self.assertEqual(current["turns"][0]["providerRejection"]["code"], "overloaded")
+        self.assertEqual(current["routing"]["routingBasis"]["overloadedModelServices"], [{
+            **{key: self.identities[0][key] for key in ("harness", "provider", "model")}, "nativeCode": "serverOverloaded",
             "turnId": first["claim"]["turn"]["turnId"]}])
+        self.assertEqual(current["routing"]["routingBasis"]["excludedBuddies"], [])
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0], 0)
             event = json.loads(db.execute("SELECT payload_json FROM events WHERE kind='workflow.auto_continued'").fetchone()[0])
-            self.assertEqual(event["reason"], "model-overloaded")
+            self.assertEqual(event["reason"], "overloaded")
         second = self.claim(self.board_, run_id=run["runId"])
         self.assertEqual(second["claim"]["turn"]["resumeMode"], "initial")
         self.finish_turn(self.board_, second)
         delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertNotIn("quotaFailure", delivered)
+        self.assertNotIn("providerRejection", delivered)
         pending = self.continue_run(self.board_, delivered, reroute=True)
         self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         after = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(after["routing"]["routingBasis"]["excludedCount"], 0)
+        self.assertEqual(after["routing"]["routingBasis"]["overloadedModelServices"], [])
         self.assertEqual(after["routing"]["routingBasis"]["candidateCount"], 2)
 
     def test_all_overloaded_services_reach_host_instead_of_routing_in_a_loop(self):
@@ -269,53 +269,58 @@ class CoolingWorkflowTests(WorkflowTestCase):
             turn = self.claim(self.board_, run_id=run["runId"])
             if index < 2:
                 self.enable(index + 1)
-            self.reject_turn(turn, code="model-overloaded")
+            self.reject_turn(turn, code="overloaded")
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(current["routing"]["status"], "needs-host")
         basis = current["routing"]["routingBasis"]
-        self.assertEqual((basis["candidateCount"], basis["excludedCount"], basis["coolingCount"]), (0, 3, 0))
-        self.assertTrue(all(item["reason"] == "model-overloaded" for item in basis["excludedBuddies"]))
+        self.assertEqual((basis["candidateCount"], len(basis["overloadedModelServices"]), len(basis["coolingBuddies"])), (0, 3, 0))
+        self.assertEqual(basis["excludedBuddies"], [])
 
     def test_during_model_overload_is_visible_and_manual_reroute_excludes_all_efforts(self):
-        run = self.assert_host_failure(phase="during-model", code="model-overloaded")
+        run = self.assert_host_failure(phase="during-model", code="overloaded")
         failed = self.board_.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(failed["quotaFailure"]["code"], "model-overloaded")
-        self.assertEqual(failed["quotaFailure"]["nativeCode"], "serverOverloaded")
+        self.assertEqual(failed["providerRejection"]["code"], "overloaded")
+        self.assertEqual(failed["providerRejection"]["nativeCode"], "serverOverloaded")
         provider = self.identities[0]["provider"]
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [{"harness": "dsh", "provider": provider,
             "efforts": ["off", "max"], "models": [{"id": self.identities[0]["model"]}, {"id": "spare"}]}]})
         self.board_.call("model_catalog_refresh", {"requestId": "extra-efforts"})
         extra = [f"dsh:{provider}:{self.identities[0]['model']}:max", f"dsh:{provider}:spare:off"]
         self.board_.console_call("user_policy_publish", {"commandId": "enable-extra",
-            "buddySettings": [{"buddyId": buddy_id, "enabled": True} for buddy_id in extra]})
+            "buddySettings": [{"buddyId": buddy_id, "enabled": True} for buddy_id in extra],
+            "preferenceChanges": [{"buddyId": self.ids[0], "mode": "exclude", "note": "also excluded by user"}]})
         pending = self.continue_run(self.board_, failed, reroute=True)
         self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
         current = self.board_.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare"})
-        excluded = current["routing"]["routingBasis"]["excludedBuddies"]
-        self.assertEqual({item["effort"] for item in excluded}, {"off", "max"})
+        basis = current["routing"]["routingBasis"]
+        excluded = basis["overloadedModelServices"]
+        self.assertEqual(len(excluded), 1)
+        self.assertNotIn("effort", excluded[0])
+        self.assertEqual(basis["excludedBuddies"], [{"buddyId": self.ids[0], **self.identities[0], "note": "also excluded by user"}])
         from hey_my_buddy.blackboard.routing.candidate import candidate_bound
         with self.board_.store.db.read() as db:
             other_harness = dict(db.execute("SELECT * FROM buddies WHERE buddy_id=?", (self.ids[0],)).fetchone())
             other_harness["harness"] = "codex"
-            self.assertIsNone(candidate_bound(db, other_harness, {"excludedModelServices": excluded}, T0,
+            self.assertIsNone(candidate_bound(db, other_harness, {"routingBasis": {"overloadedModelServices": excluded}}, T0,
                                              require_health=False, apply_preferences=False, check_cooling=False))
         # A fresh request has no task-local exclusion, even on the same provider.
         fresh = self.board_.call("selection_request", {"requestId": "fresh-request", "task": "choose"})
         fresh_basis = self.board_.call("selection_get", {"decisionId": fresh["decisionId"]})["decision"]["routingBasis"]
-        self.assertEqual((fresh_basis["candidateCount"], fresh_basis["excludedCount"]), (3, 0))
+        self.assertEqual((fresh_basis["candidateCount"], len(fresh_basis["excludedBuddies"])), (2, 1))
+        self.assertEqual(fresh_basis["overloadedModelServices"], [])
 
     def test_overload_does_not_override_explicit_buddy(self):
-        self.assert_host_failure(code="model-overloaded", explicit=True)
+        self.assert_host_failure(code="overloaded", explicit=True)
 
     def test_overload_does_not_override_locked_buddy(self):
-        self.assert_host_failure(code="model-overloaded", locked=True)
+        self.assert_host_failure(code="overloaded", locked=True)
 
     def test_overload_with_unknown_phase_stays_with_host(self):
-        self.assert_host_failure(code="model-overloaded", phase="unknown")
+        self.assert_host_failure(code="overloaded", phase="unknown")
 
     def test_cancelled_overload_does_not_reroute(self):
-        self.assert_host_failure(code="model-overloaded", cancel=True)
+        self.assert_host_failure(code="overloaded", cancel=True)
 
     def test_unconfirmed_stop_retains_the_turn_without_publishing_cooling(self):
         run = self.routed()
@@ -374,7 +379,7 @@ class CoolingWorkflowTests(WorkflowTestCase):
         view = self.board_.call("selection_get", {"decisionId": selected["decisionId"]})["decision"]
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["reason"], {"code": "all-candidates-cooling", "params": {"retryAt": moment(180)}})
-        self.assertEqual(view["routingBasis"]["coolingCount"], 3)
+        self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 3)
         self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 3)
         self.assertEqual(view["routingBasis"]["coolingBuddies"][0]["coolingUntil"], moment(300))
         self.assertNotIn("quotaRetryBuddyIds", view["routingBasis"])

@@ -66,7 +66,7 @@ from ..run_contract import (
     InterruptEvidence,
     LastAssistantMessagePackage,
     NativeEvidence,
-    NativeFailurePackage,
+    ProviderRejectionPackage,
     PolicyFact,
     ResultBuddy,
     RunBuddy,
@@ -1434,7 +1434,7 @@ def _drain_late(pump: _Pump | None, state: _RunState, fold, notify) -> bool:
 _json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
 _dsh_tool_package = shape_guard(ToolEvidencePackage)
 _usage_package = shape_guard(UsagePackage)
-_quota_package = shape_guard(NativeFailurePackage)
+_provider_rejection_package = shape_guard(ProviderRejectionPackage)
 _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
 
@@ -1521,9 +1521,9 @@ def _build_result(request: RunRequest, *, state: _RunState,
     value, completion = _value_and_completion(evidence, raw_answer,
                                               correction_count, stream_complete)
     record_failure = record.get("failure") if record else None
-    from ....protocol.usage import classify_quota_code
+    from ....protocol.usage import classify_provider_rejection_code
     failure_code = record_failure.get("code") if record_failure else None
-    classification = classify_quota_code(failure_code) if failure_code else "unknown"
+    classification = classify_provider_rejection_code(failure_code) if failure_code else "unknown"
     incomplete = (drained is not True or bool(record and record.get("truncated"))
                   or state.reason in ("invalid-native-result", "invalid-protocol", "transport-error")
                   )
@@ -1549,7 +1549,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
         tool_evidence=_dsh_tool_package(tool_package),
         effective_policy=_effective_policy(request, state),
         usage=_usage_package(record.get("usage")) if record else None,
-        native_failure=(_quota_package({"code": classification, "nativeCode": failure_code,
+        provider_rejection=(_provider_rejection_package({"code": classification, "nativeCode": failure_code,
                                         "source": "dsh/session-turn-end", "observedAt": utc_now(),
                                         "resetsAt": None, "rejectionPhase": rejection_phase})
                         if classification != "unknown" else None),

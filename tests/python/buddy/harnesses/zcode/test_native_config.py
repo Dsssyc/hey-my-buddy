@@ -245,8 +245,8 @@ class FinalMessageUsageTests(NativeRunCase):
                 result = self.execute_rounds(case)
                 self.assertEqual(result.end.reason_code, "native-turn-failed", result)
                 self.assertEqual(result.native_error.value["attribution"]["providerErrorCode"], "1310")
-                self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
-                self.assertEqual(result.native_failure.value["nativeCode"], "1310")
+                self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")
+                self.assertEqual(result.provider_rejection.value["nativeCode"], "1310")
                 self.assertEqual(result.usage.value["inputTokens"], 12 * rounds)
                 self.assertNotIn("private-test-secret", str(result.native_error))
 

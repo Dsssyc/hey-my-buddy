@@ -47,7 +47,7 @@ class BackupTests(BoardTestCase):
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(backup.verify(current)['schema'], fixture['schemaVersion'])
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], 29)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -154,13 +154,13 @@ class BackupTests(BoardTestCase):
         payload_path.write_bytes(original_payload)
         manifest_path.write_text(json.dumps(original_manifest), encoding="utf-8", newline="\n")
 
-    def test_verify_refuses_unsupported_schema(self):
+    def test_verify_refuses_invalid_schema_marker(self):
         board = self.board()
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for version in (21, 23, 24, 25, 26, 27, 28, 30):
+        for version in (None, True, 0, -1, "30"):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")

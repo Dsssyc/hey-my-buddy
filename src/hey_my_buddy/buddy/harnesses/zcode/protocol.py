@@ -32,9 +32,9 @@ NATIVE_METADATA_TIMEOUT_SECONDS = 2.0
 USAGE_DELTA_COUNTERS = ("inputTokens", "outputTokens", "totalTokens", "reasoningTokens",
                         "cacheReadTokens", "cacheWriteTokens")
 
-#: Native structured fields carrying a quota cause, most specific first.
-QUOTA_FAILURE_CODE_FIELDS = ("code", "errorType")
-QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
+#: Native structured fields carrying a provider rejection cause, most specific first.
+PROVIDER_REJECTION_CODE_FIELDS = ("code", "errorType")
+PROVIDER_REJECTION_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 
 _WINDOWS_PIPE = os.name == "nt"
 
@@ -275,23 +275,23 @@ def native_turn_failure(payload: object) -> NativeError:
     return NativeError("native-turn-failed", f"the native root turn failed{detail}", failure=failure)
 
 
-def quota_failure(failure: dict) -> dict | None:
-    """Classify native rate-limit attribution before code-only quota errors.
+def provider_rejection(failure: dict) -> dict | None:
+    """Classify native rate-limit attribution before code-only provider rejections.
 
     Only an explicit non-retryable rate limit means exhaustion. The provider's
     code keeps its identity; summaries and provider prose never decide quota.
     """
-    from ....protocol.usage import classify_quota_code
+    from ....protocol.usage import classify_provider_rejection_code
     attribution = failure.get("attribution") if isinstance(failure.get("attribution"), dict) else {}
     if attribution.get("reason") == "rate_limited":
         native_code = attribution.get("providerErrorCode") or failure.get("code") or "rate_limited"
         return {"code": "quota-exceeded" if attribution.get("retryable") is False else "rate-limited",
                 "nativeCode": native_code}
-    candidates = [failure.get(key) for key in QUOTA_FAILURE_CODE_FIELDS]
-    candidates.extend(attribution.get(key) for key in QUOTA_FAILURE_ATTRIBUTION_FIELDS)
+    candidates = [failure.get(key) for key in PROVIDER_REJECTION_CODE_FIELDS]
+    candidates.extend(attribution.get(key) for key in PROVIDER_REJECTION_ATTRIBUTION_FIELDS)
     for candidate in candidates:
         if isinstance(candidate, str) and candidate:
-            classification = classify_quota_code(candidate)
+            classification = classify_provider_rejection_code(candidate)
             if classification != "unknown":
                 return {"code": classification, "nativeCode": candidate}
     return None

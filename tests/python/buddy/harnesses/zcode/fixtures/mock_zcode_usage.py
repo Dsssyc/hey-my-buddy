@@ -117,7 +117,7 @@ def run_turn(params):
     event("turn.started", {"inputId": prompt_input_id, "resultType": None})
     if case == "usage-quota":
         emit_deltas()
-        failure = FIXTURE["quotaFailureTurn"]
+        failure = FIXTURE["providerRejectionTurn"]
         event("turn.failed", {"error": failure["error"], "turnPhase": failure["turnPhase"],
                               "inputId": prompt_input_id})
         return

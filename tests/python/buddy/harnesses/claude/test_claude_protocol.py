@@ -79,7 +79,7 @@ class TurnEvidenceTests(unittest.TestCase):
             with self.assertRaises(ProviderRejected) as caught:
                 evidence.observe({"type": "assistant", "session_id": "session-1", "error": "overloaded",
                                   "message": {"content": [{"type": "text", "text": "provider failure"}]}})
-            self.assertEqual(caught.exception.classification, "model-overloaded")
+            self.assertEqual(caught.exception.classification, "overloaded")
             self.assertEqual(caught.exception.native_code, "overloaded")
             self.assertEqual(evidence.rejection_phase(), "during-model" if active else "before-model")
             if not active:

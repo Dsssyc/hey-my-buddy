@@ -210,7 +210,7 @@ class FastSeamTests(NativeRunCase):
                          services=None, cancelled=lambda: False)
         final.assert_not_called()
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+        self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")
         self.assertEqual(result.usage.value["completeness"], "partial")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
@@ -225,7 +225,7 @@ class FastSeamTests(NativeRunCase):
                 result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
                              services=None, cancelled=lambda: False)
                 self.assertEqual(result.end.reason_code, "native-turn-failed")
-                failure = result.native_failure.value
+                failure = result.provider_rejection.value
                 self.assertEqual(failure["rejectionPhase"], expected)
                 self.assertEqual(failure["code"], "quota-exceeded")
                 self.assertEqual(failure["nativeCode"], "1310")
@@ -621,7 +621,7 @@ class WorkerSeamTests(MockNativeCase):
                 result = run(request, observer=worker_observer, services=services,
                              cancelled=lambda: False)
                 self.assertEqual(result.end.reason_code, "native-turn-failed")
-                failure = result.native_failure.value
+                failure = result.provider_rejection.value
                 self.assertEqual(failure["rejectionPhase"], expected)
                 self.assertEqual(failure["code"], "quota-exceeded")
                 self.assertEqual(failure["nativeCode"], "1308")

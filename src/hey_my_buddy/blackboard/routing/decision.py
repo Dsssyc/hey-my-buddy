@@ -120,11 +120,11 @@ class DecisionCoordinator:
 
     # -- request-time policy -------------------------------------------------
     @staticmethod
-    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, now: str | None = None, excluded_model_services: list[dict] | None = None) -> tuple[list[sqlite3.Row], list[dict]]:
+    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, now: str | None = None, overloaded_model_services: list[dict] | None = None) -> tuple[list[sqlite3.Row], list[dict]]:
         """Freeze eligible candidates and the otherwise eligible buddies cooling down."""
         from .quota_routing import cooling
         request = {"requiredCapabilities": required_capabilities, "constraints": constraints or {},
-                   "codingOnly": coding_only, "excludedModelServices": excluded_model_services or []}
+                   "codingOnly": coding_only, "routingBasis": {"overloadedModelServices": overloaded_model_services or []}}
         selected, cooling_buddies = [], []
         has_pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone() is not None
         for row in connection.execute(
@@ -146,45 +146,21 @@ class DecisionCoordinator:
             return make_reason("all-candidates-cooling", retryAt=min(item["coolingUntil"] for item in cooling_buddies))
         return make_reason("no-legal-candidate")
 
-    def _excluded_buddies(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None, excluded_model_services: list[dict] | None = None) -> tuple[list[dict], int]:
-        """User and task-local overload exclusions inside these hard bounds.
-
-        These are the exclusions that narrowed this request's candidate set: each
-        buddy passes every hard bound (enabled, available, healthy, complete
-        coding tuple, required capabilities, fixed fields) and is removed by a
-        user preference or this task's overload evidence. Pins are not considered,
-        because a pin narrows the set without excluding anything.
-        """
+    def _excluded_buddies(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> list[dict]:
+        """The user's exclusions inside this request's other hard bounds."""
         request = {"requiredCapabilities": required_capabilities, "constraints": constraints or {}}
-        overloads = {tuple(item[key] for key in ("harness", "provider", "model")): item
-                     for item in excluded_model_services or []}
-        entries = []
-        for row in connection.execute(
-            "SELECT p.*, f.note AS preference_note,f.mode AS preference_mode FROM buddies p"
-            " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id ORDER BY p.rowid"):
-            overload = overloads.get(tuple(row[key] for key in ("harness", "provider", "model")))
-            if row["preference_mode"] != "exclude" and overload is None:
-                continue
-            if candidate_bound(connection, row, request, self._now(), apply_preferences=False, check_cooling=False) is not None:
-                continue
-            entries.append({"buddyId": row["buddy_id"], **{key: row[key] for key in schemas.BUDDY_FIELDS},
-                            "note": row["preference_note"],
-                            **({key: overload[key] for key in ("reason", "nativeCode", "turnId")} if overload else {})})
-        return entries, len(entries)
+        return [{"buddyId": row["buddy_id"], **{key: row[key] for key in schemas.BUDDY_FIELDS},
+                 "note": row["preference_note"]}
+                for row in connection.execute(
+                    "SELECT p.*, f.note AS preference_note FROM buddies p"
+                    " JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE f.mode='exclude' ORDER BY p.rowid")
+                if candidate_bound(connection, row, request, self._now(), apply_preferences=False, check_cooling=False) is None]
 
-    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, cooling_buddies: list[dict], excluded_model_services: list[dict] | None = None) -> dict:
-        """Submission-time routing facts: the frozen candidate count and exclusions.
-
-        The basis is recorded once with the request and never recomputed, so a
-        later preference change cannot rewrite why an earlier route had few or
-        no candidates. The submission's hard constraints stay in the request
-        itself; this object carries what the constraints alone cannot show.
-        """
-        excluded, excluded_count = self._excluded_buddies(
-            connection, required_capabilities=required_capabilities, constraints=constraints,
-            excluded_model_services=excluded_model_services)
-        return {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedBuddies": excluded,
-                "coolingCount": len(cooling_buddies), "coolingBuddies": cooling_buddies}
+    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, cooling_buddies: list[dict], overloaded_model_services: list[dict] | None = None) -> dict:
+        """Keep submission-time facts; a retry records its own frozen basis."""
+        return {"candidateCount": len(candidates), "excludedBuddies": self._excluded_buddies(
+                    connection, required_capabilities=required_capabilities, constraints=constraints),
+                "coolingBuddies": cooling_buddies, "overloadedModelServices": overloaded_model_services or []}
 
     # -- bounded model input -------------------------------------------------
     def _buddy_input(self, row: sqlite3.Row) -> dict:
@@ -289,12 +265,12 @@ class DecisionCoordinator:
             candidates, cooling_buddies = self._scan_candidates(
                 connection, request.get("requiredCapabilities", []),
                 constraints=request.get("constraints"), coding_only=True, now=now,
-                excluded_model_services=request.get("excludedModelServices"))
+                overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
             request["routingBasis"] = self._freeze_routing_basis(
                 connection, candidates=candidates,
                 required_capabilities=request.get("requiredCapabilities", []),
                 constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
-                excluded_model_services=request.get("excludedModelServices"))
+                overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
             status = "queued"
             # New decisions are always selection requests; there is no internal
             # maintenance request path left on the blackboard.
@@ -406,7 +382,7 @@ class DecisionCoordinator:
             self.board._notify(head)
         return self._request_response(connection=None if owns_transaction else connection, row=row, duplicate=False)
 
-    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None, excluded_model_services: list[dict] | None = None) -> dict:
+    def route_workflow(self, connection, *, run_id: str, sequence: int, spec: dict, manifest: dict | None = None, overloaded_model_services: list[dict] | None = None) -> dict:
         """Admit a fixed-selector task with the Micro task in its existing transaction.
 
         The selector itself is always the configured decision buddy. Only the
@@ -429,7 +405,7 @@ class DecisionCoordinator:
             "requiredCapabilities": required_capabilities,
             "constraints": schemas.buddy_constraints(spec),
             "workflowRouting": True,
-            "excludedModelServices": excluded_model_services or [],
+            "routingBasis": {"overloadedModelServices": overloaded_model_services or []},
         }
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection)
 
@@ -877,11 +853,11 @@ class DecisionCoordinator:
         request["selectionRetry"] = True
         candidates, cooling_buddies = self._scan_candidates(
             connection, request.get("requiredCapabilities", []), constraints=request.get("constraints"),
-            coding_only=True, now=now, excluded_model_services=request.get("excludedModelServices"))
+            coding_only=True, now=now, overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
         request["routingBasis"] = self._freeze_routing_basis(
             connection, candidates=candidates, required_capabilities=request.get("requiredCapabilities", []),
             constraints=request.get("constraints"), cooling_buddies=cooling_buddies,
-            excluded_model_services=request.get("excludedModelServices"))
+            overloaded_model_services=request.get("routingBasis", {}).get("overloadedModelServices"))
         self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
             next_round = connection.execute("SELECT MAX(round)+1 FROM router_requests WHERE decision_id=?",

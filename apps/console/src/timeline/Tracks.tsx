@@ -297,6 +297,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     {owned.map(entry => <line key={entry.wait.startMs} data-slot="owned-wait" x1={entry.start} x2={entry.end} y1={middle} y2={middle} strokeWidth={entry.wait.open ? 2 : 1.5} strokeDasharray={entry.wait.open ? "5 4" : undefined} className={entry.wait.open ? "stroke-hand-mark" : "stroke-ink3"}/>)}
     {positioned.map(({ span, start, end, execution, outcome }) => {
       const selection = spanSelection(start, end);
+      const tail = tails.find(entry => entry.item.span === span);
       return <Hint key={span.spanId} text={span.kind === "execution" ? identity(span) : spanReadout(span, nowMs, buddies, row)}><g role="button" tabIndex={tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
       onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
@@ -310,6 +311,12 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       {span.kind === "execution" && ["failed", "unknown", "cancelled"].includes(outcome) && <IsolatedStatusMark slot="execution-status-outline"
         d={`M${start - 2.5} ${middle - 13.5}h${Math.max(1, end - start) + 5}v27h${-Math.max(1, end - start) - 5}Z`}
         paper={paper} stroke={outcome === "failed" ? "stroke-fail" : outcome === "unknown" ? "stroke-hand-mark" : "stroke-ink3"} dashed={outcome !== "failed"}/>}
+      {tail && <rect pointerEvents="none" data-slot="silent-tail" x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} className="fill-hand-wash"/>}
+      {span.kind === "execution" && outcome === "running" && <g pointerEvents="none">
+        <defs><linearGradient id={`${pattern}-breath-${span.spanId}`}><stop stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)} stopOpacity={0}/><stop offset="1" stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/></linearGradient></defs>
+        <rect x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={runningBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/>
+        <rect data-slot="execution-breath" data-span-id={span.spanId} x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={`url(#${pattern}-breath-${span.spanId})`} className="execution-breathe"/>
+      </g>}
       {span.kind === "execution" && <>
         <rect data-slot="execution-buddy-paper" pointerEvents="none" x={start + 2} y={middle - 9} width={18} height={18} className={surface === "card" ? "fill-card" : "fill-background"}/>
         <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 4} y={middle - 7} width={14} height={14} className="overflow-visible text-foreground"><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>
@@ -320,12 +327,6 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       <rect aria-hidden="true" data-slot="fragment-focus" x={Math.max(-6, start - 5)} y={middle - 17} width={Math.max(12, end - start + 10)} height={34} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(`span:${span.spanId}`) && "group-focus/fragment:opacity-100")}/>
     </g></Hint>;
     })}
-    {tails.map(tail => <rect key={tail.item.span.spanId} pointerEvents="none" data-slot="silent-tail" x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} className="fill-hand-wash"/>)}
-    {positioned.filter(item => item.span.kind === "execution" && item.outcome === "running").map(({ span, start, end }) => <g key={span.spanId} pointerEvents="none">
-      <defs><linearGradient id={`${pattern}-breath-${span.spanId}`}><stop stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)} stopOpacity={0}/><stop offset="1" stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/></linearGradient></defs>
-      <rect x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={runningBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/>
-      <rect data-slot="execution-breath" data-span-id={span.spanId} x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={`url(#${pattern}-breath-${span.spanId})`} className="execution-breathe"/>
-    </g>)}
     {/* Status strokes sit above the moving edge, so motion cannot erase their paper. */}
     {tails.map(tail => <IsolatedStatusMark key={tail.item.span.spanId} slot="silent-tail-outline" d={`M${tail.x} ${middle - 10.25}h${Math.max(0, tail.item.end - tail.x)}v20.5h${-Math.max(0, tail.item.end - tail.x)}Z`} paper={paper} stroke="stroke-hand-mark" width={1.5}/>)}
     {acceptance && acceptanceOpen && <path pointerEvents="none" data-slot="waiting-diamond" d={diamond(acceptance.start, middle)} className="fill-hand-mark"/>}

@@ -47,8 +47,8 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             self.assertIsNone(decision[absent], absent)
         self.assertIs(decision["routerCalled"], False)
         self.assertEqual(decision["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": [],
-                          "coolingCount": 0, "coolingBuddies": []})
+                         {"candidateCount": 1, "excludedBuddies": [],
+                          "coolingBuddies": [], "overloadedModelServices": []})
         self.assertEqual(decision["output"]["programSelection"]["code"], "single-candidate")
         self.assertEqual(decision["policyCheck"],
                          {"hardConstraints": {}, "userPreference": "none"})
@@ -142,7 +142,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
         self.assertEqual(decision["routingBasis"]["candidateCount"], 1)
-        self.assertEqual(decision["routingBasis"]["excludedCount"], 1)
+        self.assertEqual(len(decision["routingBasis"]["excludedBuddies"]), 1)
         [excluded] = decision["routingBasis"]["excludedBuddies"]
         self.assertEqual(excluded["buddyId"], SECOND_BUDDY_ID)
         self.assertEqual(excluded["note"], "excluded for this test")
@@ -217,8 +217,8 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(routing["taskId"])
         self.assertIsNone(routing["attemptId"])
         self.assertEqual(routing["routingBasis"],
-                         {"candidateCount": 1, "excludedCount": 0, "excludedBuddies": [],
-                          "coolingCount": 0, "coolingBuddies": []})
+                         {"candidateCount": 1, "excludedBuddies": [],
+                          "coolingBuddies": [], "overloadedModelServices": []})
         self.assertEqual(submitted["buddy"],
                          {key: SECOND_BUDDY[key] for key in BUDDY})
         self.assertEqual(submitted["counts"]["turns"], 0)
@@ -315,7 +315,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(continued["routing"]["reason"]["code"], "no-legal-candidate")
         basis = continued["routing"]["routingBasis"]
         self.assertEqual(basis["candidateCount"], 0)
-        self.assertEqual(basis["excludedCount"], 1)
+        self.assertEqual(len(basis["excludedBuddies"]), 1)
         self.assertEqual(basis["excludedBuddies"][0]["buddyId"], SECOND_BUDDY_ID)
         # The earlier program selection stays completed, and the history keeps
         # each route's own recorded source.

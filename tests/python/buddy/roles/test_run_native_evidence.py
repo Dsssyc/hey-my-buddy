@@ -23,7 +23,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
 
     def result(self, harness="zcode", *, evidence=None, status="ok"):
         return full_result().model_copy(update={
-            "harness": harness, "native_evidence": evidence, "native_failure": None,
+            "harness": harness, "native_evidence": evidence, "provider_rejection": None,
             "end": rc.RunEnd(status=status, reason_code="native-end-unread" if status == "unknown" else None),
             "value": rc.RunValue(schema_status="valid", raw='{"answer":"value"}')})
 

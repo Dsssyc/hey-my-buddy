@@ -169,7 +169,7 @@ def router_trials(connection, row, *, now):
                           and event["kind"] in ("router.no_answer", "router.answered")]
             outcome_event = own_events[-1] if own_events else None
             trial.update(attemptId=attempt["attempt_id"], phase="runtime", code=None,
-                         usage=deepcopy(output.get("usage") or _json(attempt["token_usage_json"])),
+                         usage=deepcopy(output.get("usage") or output.get("tokenUsage")),
                          nativeIdentity=deepcopy(output.get("nativeIdentity")))
             outer_stopped = attempt["execution_state"] == "finished" and attempt["shutdown_confirmed"] == 1
             stop = output.get("stopEvidence") or {}

@@ -17,7 +17,7 @@ completion evidence, never as an ordinary tool call.
 
 The driver owns protocol integrity only: the preallocated session identity,
 the message boundary, the explicit terminal result criteria, background-task
-settling, quota and token usage, the observed model set and costs, and the
+settling, provider rejections and token usage, the observed model set and costs, and the
 conservative stop evidence. Unknown stays ``None``/``unknown``, a spawned
 process is never a started model, and a handshake never counts as a model
 start. Role material — the micro task prompt, the completion rules, the outcome
@@ -250,7 +250,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    quota_failure: dict | None = None
+    provider_rejection: dict | None = None
     catalog_checked: bool = False
     catalog: dict | None = None
     provider: str | None = None
@@ -838,7 +838,7 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     return observations
 
 
-def _incomplete_result_quota_failure(collector: _TurnCollector | None,
+def _incomplete_result_provider_rejection(collector: _TurnCollector | None,
                                      preparation: _Preparation | None) -> dict | None:
     """Retain a confirmed root result rejection when collection fails after it."""
     evidence = collector.evidence if collector is not None else None
@@ -920,7 +920,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     from ....protocol.activity import normalize_activity
     from ....protocol.usage import (
         normalize_last_assistant_message,
-        normalize_quota_failure,
+        normalize_provider_rejection,
         normalize_token_usage)
     from ..run_contract import _validated_tool_evidence
 
@@ -1045,7 +1045,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             activity=_usable(normalize_activity,
                              collector.last_activity) if collector is not None and packages else None,
             usage=_usable(normalize_token_usage, state.token_usage) if packages else None,
-            native_failure=_usable(normalize_quota_failure, state.quota_failure) if packages else None,
+            provider_rejection=_usable(normalize_provider_rejection, state.provider_rejection) if packages else None,
             native_error=None,
             last_assistant_message=_usable(normalize_last_assistant_message,
                                            state.last_assistant_message) if packages else None,
@@ -1166,11 +1166,11 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.reason = "observer-interrupt"
             request_interrupt()
         except ProviderRejected as error:
-            # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
+            # Provider rejection is infrastructure unavailability: no retry, no outcome.
             state.status = "error"
             state.reason = "harness-error"
             state.error_text = str(error)
-            state.quota_failure = {"code": error.classification, "nativeCode": error.native_code,
+            state.provider_rejection = {"code": error.classification, "nativeCode": error.native_code,
                                    "source": error.source, "observedAt": utc_now(),
                                    "resetsAt": error.resets_at,
                                    "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
@@ -1184,7 +1184,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             # during the drain. Its activity history is then incomplete, but the
             # rejection itself remains a native fact.
             if state.status == "error":
-                state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
+                state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
             if error.code in ("user-cancel", "deadline"):
                 request_interrupt()
         except ClaudeUnavailable as error:
@@ -1199,7 +1199,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "error"
             state.reason = "invalid-native-result"
             state.error_text = "the native execution returned invalid or incomplete data"
-            state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
+            state.provider_rejection = _incomplete_result_provider_rejection(collector, preparation)
         finally:
             if inquiry_bridge is not None:
                 inquiry_bridge.close()

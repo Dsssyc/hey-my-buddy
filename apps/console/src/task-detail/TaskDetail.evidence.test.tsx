@@ -128,19 +128,19 @@ describe("a route", () => {
   });
 
   it("keeps overload exclusions distinct from user preferences in the frozen bounds", async () => {
-    const bounds: Basis = { ...NO_BASIS, candidateCount: 1, excluded: [{ buddy: CODEX,
-      note: null, reason: "model-overloaded" }] };
+    const bounds: Basis = { ...NO_BASIS, candidateCount: 1, overloadedModelServices: [{ harness: CODEX.harness, provider: CODEX.provider, model: CODEX.model,
+      nativeCode: "serverOverloaded", turnId: "turn-1" }] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "single-candidate" })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledWith("decision-1"));
     await f.user.click(await within(pane()).findByRole("button", { name: "提交时的约束" }));
-    expect(pane().textContent).toContain("因模型满载排除 1 个");
+    expect(pane().textContent).toContain("因模型服务满载排除 1 个");
     expect(pane().textContent).not.toContain("用户排除");
   });
 
   it("says the program chose when it did, shows the bounds it chose within, and names no Router and no mode", async () => {
     const bounds: Basis = { constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 0,
-      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], coolingCount: null, cooling: [], preferences: [] };
+      excluded: [{ buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" }, note: "提交时排除低推理强度" }], overloadedModelServices: [], cooling: [], preferences: [] };
     const f = open({ step: 2, replies: { routing: [routing({ source: "no-candidate", routerBuddy: null, routingMode: null })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(pane().textContent).toContain("没有合法候选"));

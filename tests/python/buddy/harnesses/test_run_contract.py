@@ -97,7 +97,7 @@ def full_result() -> rc.RunResult:
         usage=rc.FrozenJson({"version": 1, "inputTokens": 10, "cachedInputTokens": 4, "outputTokens": 2,
                              "inputBasis": "includes-cached", "source": "fixture", "scope": "attempt",
                              "completeness": "complete", "nativeRecords": 1}),
-        native_failure=rc.FrozenJson({"code": "quota-exceeded", "nativeCode": "QUOTA",
+        provider_rejection=rc.FrozenJson({"code": "quota-exceeded", "nativeCode": "QUOTA",
                                       "source": "fixture", "observedAt": "2026-01-01T00:00:00Z",
                                       "rejectionPhase": "before-model"}),
         last_assistant_message=rc.FrozenJson({
@@ -638,11 +638,11 @@ class InterfaceSurfaceTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.RunResult.from_payload(payload)
 
-    def test_native_failure_requires_explicit_rejection_phase(self):
+    def test_provider_rejection_requires_explicit_rejection_phase(self):
         payload = full_result().to_payload()
-        failure = dict(payload["nativeFailure"])
+        failure = dict(payload["providerRejection"])
         failure.pop("rejectionPhase")
-        payload["nativeFailure"] = failure
+        payload["providerRejection"] = failure
         with self.assertRaises(BoardError):
             rc.RunResult.from_payload(payload)
 

@@ -105,7 +105,7 @@
     "records": 2,
     "completeness": "complete"
   },
-  "quotaFailureTurn": {
+  "providerRejectionTurn": {
     "error": {
       "message": "provider wording that must never be retained",
       "codexErrorInfo": "usageLimitExceeded"

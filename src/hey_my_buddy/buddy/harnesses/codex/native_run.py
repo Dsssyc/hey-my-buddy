@@ -86,7 +86,7 @@ from ..run_contract import (
     MAX_SCHEMA_BYTES,
     MAX_VALUE_BYTES,
     NativeEvidence,
-    NativeFailurePackage,
+    ProviderRejectionPackage,
     NativeErrorRecord,
     OptionalFrozenJsonAt,
     PolicyFact,
@@ -368,7 +368,7 @@ class _RunState:
     binding_path: Path | None = None
     token_usage: dict | None = None
     usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
-    quota_failure: dict | None = None
+    provider_rejection: dict | None = None
     native_error: dict | None = None
     capture: dict | None = None
     native_turn_facts: dict | None = None
@@ -1191,7 +1191,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
             _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
         if session is not None:
             session.record.project(session.close)
-        _collect_quota_failure(state, stream_truncated=chain.truncated)
+        _collect_provider_rejection(state, stream_truncated=chain.truncated)
         return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
             update={"session_record_failure": SessionRecordFailure(**session_record.failure)
                     if session_record is not None and session_record.failure is not None
@@ -1598,7 +1598,7 @@ def _save_binding(request: RunRequest, prep: _Preparation,
 _tool_evidence_package = shape_guard(ToolEvidencePackage)
 _json_package = shape_guard(OptionalFrozenJsonAt(MAX_SCHEMA_BYTES))
 _usage_package = shape_guard(UsagePackage)
-_quota_package = shape_guard(NativeFailurePackage)
+_provider_rejection_package = shape_guard(ProviderRejectionPackage)
 _native_error_package = shape_guard(NativeErrorRecord)
 _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package = shape_guard(ActivityPackage)
@@ -1660,9 +1660,9 @@ def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_
             state.native_error["nativeTurnId"] = turn_id
 
 
-def _collect_quota_failure(state: _RunState, *, stream_truncated: bool) -> None:
+def _collect_provider_rejection(state: _RunState, *, stream_truncated: bool) -> None:
     """Classify the current root turn for every carrier from structured errors."""
-    from ....protocol.usage import classify_quota_code
+    from ....protocol.usage import classify_provider_rejection_code
     evidence = state.turn_evidence
     if evidence is None:
         return
@@ -1673,9 +1673,9 @@ def _collect_quota_failure(state: _RunState, *, stream_truncated: bool) -> None:
         failure_code = turn_failure_code({"error": state.native_error["error"]})
     if failure_code is None:
         return
-    classification = classify_quota_code(failure_code)
+    classification = classify_provider_rejection_code(failure_code)
     if classification != "unknown":
-        state.quota_failure = {"code": classification, "nativeCode": failure_code,
+        state.provider_rejection = {"code": classification, "nativeCode": failure_code,
                                "source": "codex/app-server-turn-error", "observedAt": utc_now(),
                                "resetsAt": None, "rejectionPhase": evidence.rejection_phase}
 
@@ -1855,7 +1855,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         effective_policy=_effective_policy(state, mode),
         activity=_activity_package(activity.last_payload),
         usage=_usage_package(state.token_usage),
-        native_failure=_quota_package(state.quota_failure),
+        provider_rejection=_provider_rejection_package(state.provider_rejection),
         native_error=_native_error_package(state.native_error),
         last_assistant_message=_message_package(_last_assistant_message(state.checkpoint)),
         continuation=_continuation_facts(state, mode),

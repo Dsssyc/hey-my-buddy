@@ -240,16 +240,20 @@ def populate(args):
                                "response": {"reason": response.get("reason")}})
             return response["claim"]
 
-        def report(claim, nonce, *, status, result, error=None):
+        def report(claim, nonce, *, status, result, error=None, signal=None, log_paths=None):
             attempt = claim["attempt"]
             if claim.get("turn") is not None:
                 result = {"workspaceManifest": claim["turn"]["input"]["executionWorkspace"], **result}
             directory = execution_directory(claim, work / "state")
             ensure_private_dir(directory)
+            for path in (log_paths or {}).values():
+                Path(path).write_text("Synthetic execution log; no native execution.\n", encoding="utf-8")
             fsync_json(directory / RECEIPT, {"taskId": claim["task"]["taskId"],
                 "attemptId": attempt["attemptId"], "generation": attempt["generation"], "createdAt": AT,
                 "report": {"status": status, "shutdownConfirmed": True,
                            "exitCode": 0 if status == "ok" else 1, "result": result,
+                           **({"signal": signal} if signal is not None else {}),
+                           **({"logPaths": log_paths} if log_paths is not None else {}),
                            **({"error": error} if error is not None else {})}})
             if claim["sessionRecordPath"] is not None:
                 record = SessionRecord(Path(claim["sessionRecordPath"]), attempt["attemptId"])
@@ -298,7 +302,9 @@ def populate(args):
                           "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
                       "decision": {"buddyId": selected_buddy, "note": "fixture routing answer", "evidence": []}}
             if outcome == "no_answer":
-                result.update(status="error", code="fixture-router-no-answer")
+                result.update(status="error", code="fixture-router-no-answer", quotaFailure={
+                    "code": "rate-limited", "nativeCode": "rateLimitExceeded", "source": "fixture/turn-error",
+                    "observedAt": AT, "resetsAt": None, "rejectionPhase": "during-model"})
             report(claim, nonce, status="ok" if outcome == "answered" else "failed", result=result)
 
         call("harness_set", {"harness": "codex", "path": None})
@@ -410,7 +416,13 @@ def populate(args):
                     raise AssertionError("Expected a scope failure")
                 report(claim, nonce, status="failed", result={"status": "error", "code": "fixture-failed",
                                                               "modelStarted": True,
-                                                              "quotaFailure": {"code": "quota-exceeded", "provider": "openai"},
+                                                              "tokenUsage": {"inputTokens": 100, "cachedInputTokens": 20,
+                                                                  "outputTokens": 3, "inputBasis": "includes-cached",
+                                                                  "source": "fixture/native-usage", "scope": "attempt",
+                                                                  "completeness": "complete", "nativeRecords": 1},
+                                                              "quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded",
+                                                                  "source": "fixture/turn-error", "observedAt": AT,
+                                                                  "resetsAt": None, "rejectionPhase": "during-model"},
                                                               "stopEvidence": {"shutdownConfirmed": True}})
                 view = call("workflow_get", {"runId": run_id})
                 assert view["state"] == "awaiting-host", view
@@ -888,6 +900,12 @@ def populate(args):
                     ("fixture " + label + " change\n").encode("utf-8"))
             edge_stock[label] = {"runId": submitted["runId"], "attemptId": attempt["attemptId"],
                                  "turnId": turn["turnId"]}
+            rejection = {"code": {"partial-failed": "quota-exceeded", "rejected-turn": "rate-limited",
+                                   "rejected-seal": "model-overloaded"}.get(label),
+                         "nativeCode": {"partial-failed": "usageLimitExceeded", "rejected-turn": "rateLimitExceeded",
+                                        "rejected-seal": "serverOverloaded"}.get(label),
+                         "source": "fixture/turn-error", "observedAt": AT, "resetsAt": None,
+                         "rejectionPhase": "during-model"}
             if label == "partial-interrupted":
                 identity = {"bootId": "macos:00000000-0000-0000-0000-000000000000",
                             "pid": 2147483646, "startedAt": 1, "processGroupId": 2147483646,
@@ -908,10 +926,13 @@ def populate(args):
                 record = completed_record(claim, label)
                 record["inputSha256"] = "b" * 64
                 report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                    "quotaFailure": rejection,
                     "processState": {"shutdownConfirmed": True}})
             else:
                 record = completed_record(claim, label)
-                report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                report(claim, nonce, status="ok", signal="SIGTERM", log_paths={"stderr": str(
+                    execution_directory(claim, work / "state") / "fixture-stderr.log")}, result={"status": "ok", "turn": record,
+                    "quotaFailure": rejection,
                     "workspaceSeal": {"manifestSha256": "not-a-hash"},
                     "processState": {"shutdownConfirmed": True}})
             with store.db.read() as connection:
@@ -928,6 +949,40 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # The first overload implementation was never installed at the upgrade
+        # base. Supply its structured projection at the old writer's basis seam;
+        # the base still owns row creation, request hashes, events and snapshots.
+        from hey_my_buddy.blackboard.routing import router as base_router
+        with store.db.read() as connection:
+            saved_preferences = [dict(row) for row in connection.execute("SELECT buddy_id,mode,note FROM evaluation_preferences")]
+            saved_configuration = base_router.configuration(connection)
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": None},
+                                   {"buddyId": PROFILES[1], "mode": "exclude", "note": "known user exclusion"},
+                                   {"buddyId": THIRD_CANDIDATE, "mode": None}],
+                configuration={"routerBuddyIds": []})
+        overload = {"harness": "codex", "provider": "openai", "model": "fixture-alpha",
+                    "reason": "model-overloaded", "nativeCode": "serverOverloaded",
+                    "turnId": edge_stock["rejected-seal"]["turnId"]}
+        freeze_basis = store.decisions._freeze_routing_basis
+
+        def first_overload_basis(*args, **kwargs):
+            basis = freeze_basis(*args, **kwargs)
+            basis["excludedBuddies"].append({"buddyId": PROFILES[0], "effort": "high", "note": None, **overload})
+            basis["excludedCount"] = len(basis["excludedBuddies"])
+            return basis
+
+        with store.db.write() as connection, patch.object(store.decisions, "_freeze_routing_basis", side_effect=first_overload_basis):
+            legacy_route = store.decisions._create("fixture-overload-exclusion", {
+                "kind": "select", "task": "Synthetic first-round overload exclusion form",
+                "requiredCapabilities": [], "excludedModelServices": [overload]}, connection=connection)
+            store._append_event(connection, "workflow.auto_continued", task_id=edge_stock["rejected-seal"]["runId"],
+                attempt_id=edge_stock["rejected-seal"]["attemptId"], payload={
+                    "turnId": overload["turnId"], "reason": "model-overloaded", "decisionId": legacy_route["decisionId"],
+                    "autoContinued": True})
+        rejection_stock = {key: edge_stock[key] for key in ("partial-failed", "rejected-turn", "rejected-seal")}
+        rejection_stock["routeDecisionId"] = legacy_route["decisionId"]
+        publish(preferenceChanges=[{"buddyId": item["buddy_id"], "mode": item["mode"], "note": item["note"]}
+                                   for item in saved_preferences], configuration=saved_configuration)
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -969,11 +1024,12 @@ def populate(args):
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
             "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
+            "providerRejectionStock": rejection_stock,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or row rewrites; the not-installed first-round overload projection is supplied synthetically at the routing-basis seam. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",

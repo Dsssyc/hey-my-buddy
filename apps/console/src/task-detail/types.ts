@@ -1,6 +1,6 @@
 import type { Reason } from "../reason";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
-import type { Actor, ActivityPhase, QuotaFailure, RoutingMode, Task, TokenUsage } from "../types";
+import type { Actor, ActivityPhase, ProviderRejection, RoutingMode, Task, TokenUsage } from "../types";
 
 /** One buddy as the board records it: harness, provider, model and reasoning effort. */
 export type Buddy = { harness: string; provider: string; model: string; effort: string };
@@ -21,7 +21,7 @@ export type Turn = {
   /** The frozen route of this turn; null when it was not recorded. A null decision is a Host's own pick. */
   routing: { decisionId: string | null; buddyRevision: number } | null;
   tokenUsage: TokenUsage | null;
-  quotaFailure?: QuotaFailure;
+  providerRejection?: ProviderRejection;
 };
 
 /** A turn with its result; `summary` is null while the turn has returned nothing. */
@@ -167,9 +167,8 @@ export type Basis = {
   requiredCapabilities: string[];
   /** How many candidates were legal; null when it was not recorded. */
   candidateCount: number | null;
-  excluded: { buddy: Partial<Buddy>; note: string | null; reason?: "model-overloaded" }[];
-  /** The full count may exceed the frozen list's display limit. */
-  coolingCount: number | null;
+  excluded: { buddy: Partial<Buddy>; note: string | null }[];
+  overloadedModelServices: { harness: string; provider: string; model: string; nativeCode: string; turnId: string }[];
   cooling: { buddy: Partial<Buddy>; coolingUntil: string | null }[];
   /** The preferences the program applied when it chose the only candidate. */
   preferences: { buddyId: string; mode: "prefer" | "pin" | "exclude"; note: string | null }[];
@@ -219,7 +218,7 @@ export type Ending = {
   stoppedBy: "host" | "lead" | "console" | "service" | "unknown" | null;
   actor: Actor | null;
   note: string | null;
-  quota: "quota-exceeded" | "rate-limited" | "model-overloaded" | null;
+  rejectionCode: "quota-exceeded" | "rate-limited" | "overloaded" | null;
 };
 
 /** Where an execution's native session lives, in the receipt's own words. */

@@ -1,8 +1,8 @@
-"""Native attempt facts update token usage and provider cooling on a private board."""
+"""Native usage projection and provider cooling on a private board."""
 import json
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
+from hey_my_buddy.blackboard.evaluation.native_observations import provider_rejection_view, persist
 from hey_my_buddy.blackboard.routing.quota_routing import cooling, provider_state
 from hey_my_buddy.blackboard.service.harness_health import read_health
 from support import BoardTestCase, FakeClock
@@ -21,10 +21,10 @@ def denial(*, observed_at=T0, resets_at=None, phase="before-model"):
 class NativeCoolingTests(BoardTestCase):
     def test_only_structured_failure_is_projected(self):
         failure = denial()
-        self.assertEqual(failure_view({"quotaFailure": failure}), failure)
-        self.assertIsNone(failure_view({"code": "quota-rejected"}))
-        self.assertIsNone(failure_view({"quotaFailure": {"rateLimitType": "five_hour", "resetsAt": 1790467200}}))
-        self.assertIsNone(failure_view({"error": "quota exhausted"}))
+        self.assertEqual(provider_rejection_view({"providerRejection": failure}), failure)
+        self.assertIsNone(provider_rejection_view({"code": "quota-rejected"}))
+        self.assertIsNone(provider_rejection_view({"providerRejection": {"rateLimitType": "five_hour", "resetsAt": 1790467200}}))
+        self.assertIsNone(provider_rejection_view({"error": "quota exhausted"}))
 
     def test_denial_records_provider_cooling_without_usage_or_native_window(self):
         board = self.board()
@@ -32,7 +32,7 @@ class NativeCoolingTests(BoardTestCase):
                    "model_harness": "codex", "model_provider": "openai",
                    "started_at": "2026-09-29T09:59:00.000Z"}
         with board.store.db.write() as db:
-            persist(db, attempt, {"quotaFailure": denial()}, status="failed",
+            persist(db, attempt, {"providerRejection": denial()}, status="failed",
                     shutdown_confirmed=True, now=T0)
             self.assertEqual(provider_state(db, "codex", "openai"), {
                 "provider": "openai", "coolingUntil": "2026-09-29T10:30:00.000Z",
@@ -50,7 +50,7 @@ class NativeCoolingTests(BoardTestCase):
                    "model_harness": "codex", "model_provider": "openai",
                    "started_at": "2026-09-29T09:59:00.000Z"}
         with board.store.db.write() as db:
-            persist(db, attempt, {"quotaFailure": denial()}, status="failed",
+            persist(db, attempt, {"providerRejection": denial()}, status="failed",
                     shutdown_confirmed=True, now=T0)
             persist(db, attempt, {}, status="ok", shutdown_confirmed=True,
                     now="2026-09-29T10:01:00.000Z")
@@ -62,6 +62,22 @@ class NativeCoolingTests(BoardTestCase):
 
 class NativeReceiptTests(WorkflowTestCase):
     """Token counters cross the actual execution receipt and read-model boundary."""
+
+    def test_attempt_without_result_has_empty_result_projections(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="pending-usage", cwd=str(self.workdir("pending-usage")))
+        self.claim(board, run_id=submitted["runId"])
+        task = board.call("task_get", {"runId": submitted["runId"]})["task"]
+        attempt = task["selectedAttempt"]
+        self.assertIsNone(task["tokenUsage"])
+        self.assertEqual(task["logPaths"], {})
+        self.assertEqual(attempt["logPaths"], {})
+        self.assertIsNone(attempt["tokenUsage"])
+        self.assertIsNone(attempt["exitCode"])
+        self.assertIsNone(attempt["signal"])
+        with board.store.db.read() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(attempts)")}
+        self.assertTrue({"token_usage_json", "exit_code", "signal", "log_paths"}.isdisjoint(columns))
 
     def test_native_token_receipt_persists_once(self):
         from hey_my_buddy.protocol.usage import normalize_token_usage
@@ -93,8 +109,20 @@ class NativeReceiptTests(WorkflowTestCase):
         self.assertEqual(view["currentTurn"]["tokenUsage"], expected)
         self.assertEqual(view["task"]["tokenUsage"], expected)
         self.assertEqual(view["audit"]["turns"][0]["tokenUsage"], expected)
+        selected = board.call("task_get", {"runId": submitted["runId"]})["task"]["selectedAttempt"]
+        self.assertEqual(selected["result"]["result"]["tokenUsage"], expected)
+        self.assertEqual(selected["exitCode"], 0)
+        self.assertIsNone(selected["signal"])
+        self.assertEqual(selected["logPaths"], {})
+        replay = board.store._commit_execution_result({
+            "attemptId": attempt["attemptId"], "status": "ok", "result": captured,
+            "artifacts": [], "shutdownConfirmed": True, "exitCode": 0, "signal": None,
+            "error": None, "logPaths": None, "runtimeIdentity": None,
+            "terminationReason": None,
+        }, seal_stash=None)
+        self.assertTrue(replay["duplicate"])
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], event_count)
-            stored = db.execute("SELECT token_usage_json FROM attempts WHERE attempt_id=?",
+            stored = db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                 (attempt["attemptId"],)).fetchone()[0]
-            self.assertEqual(json.loads(stored), expected)
+            self.assertEqual(json.loads(stored)["result"]["tokenUsage"], expected)
