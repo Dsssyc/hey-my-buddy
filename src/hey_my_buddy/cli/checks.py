@@ -84,6 +84,11 @@ def test_environment(root: Path) -> dict:
     # Test isolation is independent of the product's native configuration:
     # inherited ownership, credentials and harness flags cannot select a fixture.
     values = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES and not key.startswith(("BUDDY_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
+    # Resolve uv's caller cache before child_environment replaces the native home.
+    if "UV_CACHE_DIR" not in values:
+        values["UV_CACHE_DIR"] = subprocess.run(
+            ["uv", "cache", "dir"], env=values, capture_output=True, text=True, check=True,
+        ).stdout.strip()
     source = str(root / "src")
     tests = str(root / "tests" / "python")
     inherited = values.get("PYTHONPATH")
