@@ -57,6 +57,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     createdAt: "2026-09-26T01:12:00Z",
     state: "delivered",
     status: "completed",
+    conclusionStatus: null,
     category: "ended",
     shutdownConfirmed: true,
     depth: 0,

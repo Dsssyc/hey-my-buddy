@@ -105,6 +105,7 @@ export function event(seq: number, kind: string, when: string, overrides: Partia
 
 export function row(overrides: Partial<TimelineRow> = {}): TimelineRow {
   return { runId: "m1", parentRunId: null, rootRunId: "m1", title: "微任务详情", titleSource: "title", taskSummary: null, summary: null,
+    conclusionStatus: null,
     createdAt: at("10:00"), state: "delivered", status: "completed", category: "review", shutdownConfirmed: true, depth: 0, kind: "micro-task",
     rootLeadRunId: null, delegationAuthority: false, buddy: tb(OPUS), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null, ...overrides };
 }
