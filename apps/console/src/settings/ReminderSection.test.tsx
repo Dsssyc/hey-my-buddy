@@ -20,6 +20,9 @@ function setup(settings = initial) {
 
 it("saves valid minutes and refreshes the snapshot", async () => {
   const { input, command, refresh, user, save } = setup();
+  const description = screen.getByText("一次执行这么久没有任何进展，时间轴与微任务里标为可能卡住。");
+  expect(description.tagName).toBe("P");
+  expect(input.getAttribute("aria-describedby")).toBe(description.id);
   await user.clear(input); await user.type(input, "20");
   expect(screen.getByRole("img", { name: "未保存" })).toBeTruthy();
   await user.click(save());

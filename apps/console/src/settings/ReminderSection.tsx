@@ -48,18 +48,21 @@ export function ReminderSection({ api, csrfToken, settings, refresh, unavailable
   }
   return <Section title={t("reminders.title")}>
     <div className="min-w-0 space-y-3" aria-busy={busy}>
-      {current ? <div className="flex flex-wrap items-center gap-3">
-        <Hint text={t("reminders.description")}><label htmlFor={inputId} tabIndex={0} className="inline-flex items-center gap-2">{t("reminders.possiblyStuck")}{changed && <UnsavedMark label={t("reminders.unsaved")} />}</label></Hint>
+      {current ? <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor={inputId} className="inline-flex items-center gap-2">{t("reminders.possiblyStuck")}{changed && <UnsavedMark label={t("reminders.unsaved")} />}</label>
         <div className="flex flex-wrap items-center gap-3">
         <Hint text={unavailable ? t("reminders.disconnected") : busy ? t("reminders.busy") : t("reminders.range")}>
           <Input id={inputId} className="h-8 w-16 text-sm tabular-nums" type="number" inputMode="numeric" min="1" max="1440" step="1" value={draft}
-            readOnly={unavailable || busy} aria-disabled={unavailable || busy || undefined} aria-label={t("reminders.silenceMinutes")}
+            readOnly={unavailable || busy} aria-disabled={unavailable || busy || undefined} aria-label={t("reminders.silenceMinutes")} aria-describedby={`${inputId}-description`}
             aria-invalid={draft.length > 0 && !valid || undefined}
             onChange={event => { if (unavailable || busy) return; setDraft(event.target.value); setError(""); setNote(false); }} />
         </Hint>
         <span>{t("reminders.minutesWithoutProgress")}</span>
         <Hint text={reason}><Button variant="outline" aria-disabled={!!reason || undefined} onClick={() => void save()}>{t(busy ? "reminders.saving" : "reminders.save")}</Button></Hint>
         </div>
+        </div>
+        <p id={`${inputId}-description`} className="max-w-[560px] text-xs leading-relaxed text-ink2">{t("reminders.description")}</p>
       </div> : <p className="text-xs text-ink2">{t("reminders.unavailable")}</p>}
       {current && current.silenceSeconds % 60 !== 0 && <p className="flex items-center gap-2 text-xs text-hand" role="status"><StateMark kind="hand" />{t("reminders.currentSeconds", { n: formatNumber(current.silenceSeconds) })}</p>}
       {note && <p className="flex items-center gap-2 text-xs text-ink2" role="status"><StateMark kind="done" />{t("reminders.saved")}</p>}

@@ -3,8 +3,8 @@ import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, set
 import { settingsFixture } from "./settings-fixtures";
 
 const words = {
-  "zh-CN": { sections: ["主题", "语言", "提醒", "访问", "版本", "存储"], theme: "主题", dark: "深色", language: "语言", english: "English", input: "静默提醒阈值（分钟）", check: "检查占用", reclaim: "回收…", details: "详细信息", current: "撤销当前浏览器", cancel: "取消" },
-  "en-US": { sections: ["Theme", "Language", "Reminders", "Access", "Version", "Storage"], theme: "Theme", dark: "Dark", language: "Language", english: "English", input: "Silence reminder threshold (minutes)", check: "Check usage", reclaim: "Reclaim…", details: "Details", current: "Revoke current browser", cancel: "Cancel" },
+  "zh-CN": { sections: ["主题", "语言", "提醒", "访问", "版本", "存储"], theme: "主题", dark: "深色", language: "语言", english: "English", input: "静默提醒阈值（分钟）", description: "一次执行这么久没有任何进展，时间轴与微任务里标为可能卡住。", check: "检查占用", reclaim: "回收…", details: "详细信息", current: "撤销当前浏览器", cancel: "取消" },
+  "en-US": { sections: ["Theme", "Language", "Reminders", "Access", "Version", "Storage"], theme: "Theme", dark: "Dark", language: "Language", english: "English", input: "Silence reminder threshold (minutes)", description: "An execution without progress for this long is marked as possibly stuck in the timeline and micro task.", check: "Check usage", reclaim: "Reclaim…", details: "Details", current: "Revoke current browser", cancel: "Cancel" },
 };
 for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 800, 390]) for (const theme of ["light", "dark"] as const) {
   test.describe(`settings ${locale} ${width}px ${theme}`, () => {
@@ -17,6 +17,10 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 800
       const settings = page.locator("[data-slot=settings-page]");
       await expect(settings.getByRole("heading", { level: 2 })).toHaveText(w.sections);
       await expect(settings.getByRole("spinbutton", { name: w.input })).toHaveValue("15");
+      await expect(settings.locator("p").filter({ hasText: w.description })).toBeVisible();
+      const language = settings.getByRole("radiogroup", { name: w.language, exact: true });
+      await expect(language.getByRole("radio", { name: "中文", exact: true })).toBeVisible();
+      await expect(language.getByRole("radio", { name: "English", exact: true })).toBeVisible();
       await expectTextUncut(settings.locator("h2, button:not([role=switch]), label"));
       for (const group of await settings.getByRole("radiogroup").all()) await expectWholeAndApart(group, group.getByRole("radio"));
       await settings.getByRole("button", { name: w.check, exact: true }).click();
@@ -50,7 +54,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 800
       await expectWholeAndApart(page.locator("body"), page.getByRole("dialog"));
       await page.keyboard.press("Escape");
       await expectNoSidewaysScroll(page);
-      if (locale === "en-US") expect(await settings.innerText()).not.toMatch(/[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/);
+      if (locale === "en-US") expect((await settings.innerText()).replace("中文", "")).not.toMatch(/[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/);
       const controls = await settings.locator("button[data-slot=button], [role=radiogroup], input").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().height)));
       expect(controls.every(height => height === 28 || height === 32), JSON.stringify(controls)).toBe(true);
       expect(await settings.locator("[title], [disabled]").count()).toBe(0);

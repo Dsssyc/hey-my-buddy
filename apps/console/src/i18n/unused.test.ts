@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import zhBuddies from "./zh/buddies";
 import zhSettings from "./zh/settings";
+import enSettings from "./en/settings";
 import zhStorage from "./zh/settings-storage";
 import zhTaskDetail from "./zh/taskDetail";
 
@@ -47,10 +48,16 @@ describe("the copy of the pages", () => {
     expect(unused(zhTaskDetail, sourceOf(pages.taskDetail))).toEqual([]);
   });
 
-  it("has no Chinese text or full-width punctuation in any English namespace", () => {
+  it("uses language autonyms and has no other Chinese text or full-width punctuation in English namespaces", () => {
+    for (const settings of [zhSettings, enSettings]) expect([settings.chinese, settings.english]).toEqual(["中文", "English"]);
     const chinese = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
     const words = (node: unknown): string[] => node !== null && typeof node === "object" ? Object.values(node).flatMap(words) : [String(node)];
-    const english = import.meta.glob("./en/*.ts", { eager: true });
-    expect(words(english).filter(word => chinese.test(word))).toEqual([]);
+    const english = import.meta.glob<{ default: Record<string, unknown> }>("./en/*.ts", { eager: true });
+    const translated = Object.entries(english).map(([path, module]) => {
+      if (path !== "./en/settings.ts") return module.default;
+      const { chinese: _autonym, ...copy } = module.default;
+      return copy;
+    });
+    expect(words(translated).filter(word => chinese.test(word))).toEqual([]);
   });
 });
