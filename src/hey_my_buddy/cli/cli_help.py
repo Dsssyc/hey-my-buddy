@@ -1161,7 +1161,10 @@ class _Extractor:
         if helper == "reject_unknown":
             if len(node.args) > 1:
                 values, unknown = self.index._string_set(node.args[1], module, local_sets)
-                facts.allowed.setdefault(owner, set()).update(values)
+                if not unknown:
+                    # The request boundary owns this object's fields. A later
+                    # validator of its projected spec cannot expand that contract.
+                    facts.allowed.setdefault(owner, set(values))
                 for text in unknown:
                     facts.add_opaque(f"allowed fields are computed at runtime from {text}")
                 for value in sorted(values):
@@ -1674,6 +1677,9 @@ class _Extractor:
 
     # -- assembling ------------------------------------------------------
     def _absorb(self, facts: _Facts) -> tuple[list[Parameter], list[str], list[str], list[str], list[str]]:
+        for owner, allowed in facts.allowed.items():
+            parameters = facts.parameters if owner is None else facts.children.get(owner, [])
+            parameters[:] = [parameter for parameter in parameters if parameter.name.split('.')[0] in allowed]
         nested = [parameter for parameter in facts.parameters if "." in parameter.name]
         if nested:
             facts.parameters[:] = [parameter for parameter in facts.parameters if "." not in parameter.name]

@@ -8,7 +8,7 @@ task text with its own logic, publishes an artifact and reports the result.
 
 Submit a task for it first:
 
-    hey-my-buddy submit '{"requestId":"ext-1","task":"summarize the repository","cwd":"/abs/path","adapter":"external"}'
+    hey-my-buddy execution-submit '{"requestId":"ext-1","task":"summarize the repository","cwd":"/abs/path","adapter":"external"}'
 """
 from __future__ import annotations
 

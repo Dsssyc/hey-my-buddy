@@ -1,4 +1,4 @@
-"""Deadline and native-silence facts, independent of harness/model execution."""
+"""Expected-duration facts for every execution and native-silence facts for harnesses."""
 from contextlib import contextmanager
 from support import BoardTestCase, FakeClock
 import uuid
@@ -14,10 +14,26 @@ class ReminderFacts(BoardTestCase):
         self.store = self.fixture.store
         self.client = self.fixture.client()
 
-    def claim(self, expected=10):
+    def claim(self, expected=10, adapter='command'):
         self.task = self.client.submit(requestId='reminder', task='observe', cwd=str(self.workdir()),
-                                       adapter='command', argv=['echo', 'test'], expectedSeconds=expected)['task']
-        self.client.register_worker('w-reminder', adapter='command', capabilities=['command'])
+                                       adapter=adapter, **({'argv': ['echo', 'test']} if adapter == 'command' else {}),
+                                       expectedSeconds=expected)['task']
+        self.client.register_worker('w-reminder', adapter=adapter, capabilities=[adapter])
+        self.nonce = 'n' * 32
+        self.attempt = self.client.claim('w-reminder', 'claim-reminder', self.nonce)['claim']['attempt']
+
+    def claim_native(self, expected=100):
+        from hey_my_buddy.blackboard.tasks import workflow
+        from mock_workspace import MockWorkspace
+
+        self.catalog_fixture()
+        self.enterContext(patch.object(workflow, '_workspace_module', MockWorkspace(self.directory)))
+        submitted = self.client.workflow_submit(
+            requestId='reminder', hostId='reminder-host', task='observe', cwd=str(self.workdir()),
+            harness='dsh', provider='deepseek-official', model='deepseek-flash', effort='off',
+            executionWorkspace={'kind': 'existing', 'access': 'read'}, expectedSeconds=expected)
+        self.task = submitted['task']
+        self.client.register_worker('w-reminder', adapter='dsh', capabilities=['dsh'])
         self.nonce = 'n' * 32
         self.attempt = self.client.claim('w-reminder', 'claim-reminder', self.nonce)['claim']['attempt']
 
@@ -60,6 +76,26 @@ class ReminderFacts(BoardTestCase):
             self.assertEqual(reminders.collect(self.store), 10)
         self.assertEqual(self.records(), [])
 
+    def _assert_no_native_silence(self, adapter):
+        self.claim(adapter=adapter)
+        with self.store.db.write() as db:
+            db.execute('UPDATE reminder_settings SET silence_seconds=5 WHERE id=1')
+        self.assertEqual(reminders.collect(self.store), 10)
+        self.clock.advance(5)
+        self.assertEqual(reminders.collect(self.store), 5)
+        self.assertEqual(self.records(), [])
+        self.assertFalse(self.client.get(runId=self.task['runId'])['selectedAttempt']['reminders']['possiblyStuck'])
+        self.clock.advance(5)
+        self.assertEqual(reminders.collect(self.store), 10)
+        self.assertEqual([record['kind'] for record in self.records()], ['expected-duration'])
+        self.assertEqual(self.consume()['reminder']['expectedMultiple'], 1)
+
+    def test_command_attempt_has_duration_but_no_native_silence_deadline(self):
+        self._assert_no_native_silence('command')
+
+    def test_external_attempt_has_duration_but_no_native_silence_deadline(self):
+        self._assert_no_native_silence('external')
+
     def test_due_reminder_is_rechecked_after_a_concurrent_completion(self):
         self.claim()
         self.clock.advance(10)
@@ -78,7 +114,7 @@ class ReminderFacts(BoardTestCase):
         self.assertEqual(self.records(), [])
 
     def test_silence_keeps_native_timestamp_tool_fact_and_ignores_renewal(self):
-        self.claim(expected=100)
+        self.claim_native()
         with self.store.db.write() as db:
             db.execute('UPDATE reminder_settings SET silence_seconds=5 WHERE id=1')
         self.activity(1, 'tool-running')
@@ -127,7 +163,7 @@ class ReminderFacts(BoardTestCase):
         self.assertEqual(self.consume()['reminder']['expectedMultiple'], 2)
 
     def test_prompt_observation_does_not_reset_silence_or_invent_a_native_event(self):
-        self.claim(expected=100)
+        self.claim_native()
         with self.store.db.write() as db:
             db.execute('UPDATE reminder_settings SET silence_seconds=5 WHERE id=1')
         self.clock.advance(3)
@@ -152,7 +188,7 @@ class ReminderFacts(BoardTestCase):
         self.assertFalse(view['shutdownConfirmed'])
 
     def test_observed_time_and_sequence_only_receipts_count_as_native_activity(self):
-        self.claim(expected=100)
+        self.claim_native()
         with self.store.db.write() as db:
             db.execute('UPDATE reminder_settings SET silence_seconds=5 WHERE id=1')
         for sequence, observed in ((1, True), (2, False)):

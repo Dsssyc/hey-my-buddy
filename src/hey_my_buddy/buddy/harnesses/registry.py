@@ -222,8 +222,7 @@ def capability_report() -> dict:
 def require_permission(buddy: dict | None, access: str) -> None:
     """Reject an explicit Worker route that cannot run at the requested access.
 
-    An unresolved route is checked after selection. Command and external workers
-    retain their existing caller-owned read/write contract.
+    An unresolved route is checked after selection.
     """
     if buddy is None:
         return

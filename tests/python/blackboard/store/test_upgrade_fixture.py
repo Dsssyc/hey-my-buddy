@@ -77,6 +77,43 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(json.loads(connection.execute(
             'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0]), current)
 
+    def test_migrated_execution_rows_remain_readable_with_no_buddy(self):
+        from hey_my_buddy.cli.cli_views import list_brief, micro_task_brief, task_brief
+
+        fixture, connection = self.restored('read-old-executions')
+        selections = self.insert_native_selections(fixture, connection)
+        turns = {}
+        for run_id, (adapter, _seq, _buddy, _event) in selections.items():
+            for row in connection.execute('SELECT turn_id,input_json FROM workflow_turns WHERE run_id=?', (run_id,)).fetchall():
+                payload = json.loads(row['input_json'])
+                payload['context']['buddy'] = {'adapter': adapter}
+                raw = json.dumps(payload)
+                turns[row['turn_id']] = raw
+                connection.execute('UPDATE workflow_turns SET input_json=?,input_sha256=? WHERE turn_id=?',
+                                   (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
+        self.assertTrue(turns)
+        connection.commit()
+        board_upgrade.migrate(fixture['state'])
+        store = BoardStore(fixture['state'])
+        store.initialize()
+        self.addCleanup(store.db.close)
+        listed = store.task_list({})
+        brief_rows = {row['runId']: row for row in list_brief(listed)['runs']}
+        for run_id, (adapter, _seq, _buddy, _event) in selections.items():
+            with self.subTest(adapter=adapter):
+                workflow = store.workflow.get({'runId': run_id, 'includeAudit': True})
+                task = store.task_get({'runId': run_id})['task']
+                for view in (workflow, micro_task_brief(workflow), task_brief(task), brief_rows[run_id]):
+                    self.assertIsNone(view['buddy'])
+                    self.assertEqual(view['adapter'], adapter)
+                self.assertIsNone(task['lineage']['buddy'])
+                self.assertEqual(task['adapter'], adapter)
+                self.assertIsNone(workflow['currentTurn']['buddy'])
+                for turn in [*workflow['turns'], *workflow['audit']['turns']]:
+                    self.assertIsNone(turn['buddy'])
+        self.assertEqual(dict(connection.execute('SELECT turn_id,input_json FROM workflow_turns WHERE turn_id IN ('
+                                                + ','.join('?' for _ in turns) + ')', list(turns))), turns)
+
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
         fixture, connection = self.restored()
         self.assertEqual(fixture['sourceCommit'], 'f620f1e2719ccd170e6183e89c3f9eb04d084f32')
@@ -539,10 +576,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         _git(repository, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
              'commit', '--allow-empty', '-m', 'Private test input')
         current = {'requestId': 'post-upgrade-submit', 'hostId': 'current-host',
-                   'adapter': 'external', 'task': 'New schema-21 submission', 'cwd': str(repository),
+                   'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off',
+                   'task': 'New schema-21 submission', 'cwd': str(repository),
                    'executionWorkspace': {'kind': 'existing', 'access': 'read'}}
-        first = store.workflow.submit(current)
-        replay = store.workflow.submit(current)
+        with mock.patch('hey_my_buddy.blackboard.catalog.catalog.validate_buddy', side_effect=lambda buddy, **_: buddy):
+            first = store.workflow.submit(current)
+            replay = store.workflow.submit(current)
         self.assertIsNotNone(first['requestFingerprint'])
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['runId'], first['runId'])

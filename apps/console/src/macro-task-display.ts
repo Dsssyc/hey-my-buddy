@@ -1,5 +1,4 @@
 import i18n from "i18next";
-import { executionTypeText } from "./console-data";
 import { actorRoleText } from "./actor";
 /**
  * Pure display vocabulary for the work macro task timeline. Everything here is
@@ -336,11 +335,6 @@ export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: re
   return (buddies ? buddyNamer(buddies) : defaultNamer)(buddy).text;
 }
 
-/** The attempt adapter, rather than a buddy-shaped marker, names infrastructure executions. */
-export function executionLabel(span: Pick<TimelineSpan, "adapter" | "buddy">, buddies?: readonly FriendlyBuddy[] | null): string {
-  return executionTypeText(span.adapter) ?? buddyLabel(span.buddy, buddies);
-}
-
 /** The raw identity line for tooltips. */
 export function buddyRawLabel(buddy: TimelineBuddy | null | undefined): string {
   return defaultNamer(buddy).title;
@@ -503,7 +497,7 @@ export function spanFacts(
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
   }
-  if (span.kind === "execution") parts.push(executionLabel(span));
+  if (span.kind === "execution" && span.buddy) parts.push(buddyLabel(span.buddy));
   if (span.kind === "host" && span.summary) parts.push(span.summary);
   // A terminal span without a recorded end never borrows "now": it says the
   // end time is missing, exactly like a missing start.

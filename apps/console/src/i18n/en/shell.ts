@@ -2,7 +2,6 @@ import type zh from "../zh/shell";
 
 export default {
   identifier: { copy: "Copy identifier {{value}}", copied: "Copied", failed: "Copy failed; try again" },
-  execution: { command: "Command execution", external: "External execution", buddy: "Execution buddy", pendingBuddy: "Execution buddy pending", unrecordedBuddy: "Buddy not recorded", type: "Execution type" },
   actor: {
     delegator: "Delegated by: {{source}}", originalDelegator: "Originally delegated by", unrecordedDelegator: "Delegator not recorded",
     currentOwner: "Current owner",

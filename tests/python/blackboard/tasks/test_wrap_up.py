@@ -250,22 +250,22 @@ class WrapUpStopTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": run["runId"]})
         self.assertNotEqual(view["currentTurn"]["state"], "returned")
 
-    def test_get_exposes_command_stop_reason_origin_and_absent_grace(self):
+    def test_get_exposes_stop_reason_origin_and_grace(self):
         board = self.board()
         self.register(board)
-        run = self.submit(board, adapter="command", argv=["true"])
+        run = self.submit(board)
         claim = self.claim(board)
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
         view = board.call("workflow_get", {"runId": run["runId"]})
         self.assertEqual(view["task"]["stopInitiator"], "host")
-        self.assertIsNone(view["task"]["graceDeadline"])
+        self.assertIsNotNone(view["task"]["graceDeadline"])
         self.assertIsNone(view["task"]["terminationReason"])
-        receipt = self.result(board, claim, reason="forced-stop")
+        receipt = self.result(board, claim, reason="wrap-up")
         view = board.call("workflow_get", {"runId": run["runId"]})
-        self.assertEqual(view["task"]["terminationReason"], "forced-stop")
+        self.assertEqual(view["task"]["terminationReason"], "wrap-up")
         self.assertEqual(view["task"]["stopInitiator"], "host")
-        self.assertIsNone(view["task"]["graceDeadline"])
-        self.assertEqual(receipt["attempt"]["result"]["terminationReason"], "forced-stop")
+        self.assertIsNotNone(view["task"]["graceDeadline"])
+        self.assertEqual(receipt["attempt"]["result"]["terminationReason"], "wrap-up")
 
     def test_console_and_service_stops_keep_their_distinct_causes(self):
         board = self.board()

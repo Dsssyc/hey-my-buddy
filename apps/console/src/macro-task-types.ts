@@ -68,8 +68,6 @@ export type TimelineRow = {
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
   kind: "micro-task" | "helper";
-  /** Recorded task adapter, including while no attempt has started. */
-  adapter?: string;
   /** The micro task this row repairs; absent when this is not a repair. */
   fixes?: string;
   /** Micro tasks that directly repair this row; absent when there are none. */
@@ -86,8 +84,6 @@ export type TimelineRow = {
 };
 export type TimelineSpan = {
   spanId: string; runId: string; kind: "queue" | "routing" | "execution" | "host";
-  /** Recorded attempt adapter, independent of its optional model buddy. */
-  adapter?: string;
   startAt: string | null; endAt: string | null;
   /**
    * queue: queued (open) or claimed; execution/routing: the attempt's execution state

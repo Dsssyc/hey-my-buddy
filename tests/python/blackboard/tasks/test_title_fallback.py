@@ -146,8 +146,10 @@ class TitleFallbackTests(WorkflowTestCase):
                 self.assertEqual(board.store.workflow.task_extension(connection, task)["resultSummary"], "second result")
             finally:
                 connection.set_trace_callback(None)
-        reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+        reads = [sql for sql in statements if sql.lstrip().upper().startswith("SELECT")
+                 and "WORKFLOW_TURNS" in sql.upper()]
         self.assertEqual(len(reads), 1, "Title projection must share the existing workflow-row read")
+        self.assertIn("FROM workflow_runs r", reads[0])
 
     def test_selection_follows_turn_index_not_clock_timestamps(self):
         board = self.board(max_concurrent=1)

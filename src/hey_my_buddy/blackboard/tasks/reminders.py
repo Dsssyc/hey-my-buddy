@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime
 import threading
 
+from ...protocol.schemas import CODING_HARNESSES
+
 
 def _seconds(value: str) -> float:
     return datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
@@ -101,16 +103,17 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
                for multiple in range(previous + 1, int(elapsed // attempt['expected_seconds']) + 1)]
         next_expected = started + (max(previous, int(elapsed // attempt['expected_seconds'])) + 1) * attempt['expected_seconds']
         deadlines = [next_expected]
-        silent = connection.execute(
-            "SELECT 1 FROM attempt_reminders WHERE attempt_id=? AND kind='native-silence' AND silence_started_at=?",
-            (attempt['attempt_id'], silence_at),
-        ).fetchone()
-        if silent is None:
-            silence_deadline = _seconds(silence_at) + silence_seconds
-            if instant >= silence_deadline:
-                due.append(('native-silence', None, silence_at))
-            else:
-                deadlines.append(silence_deadline)
+        if attempt['adapter'] in CODING_HARNESSES:
+            silent = connection.execute(
+                "SELECT 1 FROM attempt_reminders WHERE attempt_id=? AND kind='native-silence' AND silence_started_at=?",
+                (attempt['attempt_id'], silence_at),
+            ).fetchone()
+            if silent is None:
+                silence_deadline = _seconds(silence_at) + silence_seconds
+                if instant >= silence_deadline:
+                    due.append(('native-silence', None, silence_at))
+                else:
+                    deadlines.append(silence_deadline)
         if due:
             changed = True
         if record:

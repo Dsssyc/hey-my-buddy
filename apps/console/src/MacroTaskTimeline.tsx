@@ -9,7 +9,6 @@ import {
   buildChronology, clockTime, buddyNamer, displayTitle, durationShort, eventClusterGlyph,
   eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
   eventItem, toMs, buddyPalette, acceptanceWaitMs, acceptanceWaitText, titleLineTooltip,
-  executionLabel,
 } from "./macro-task-display";
 import { MacroTaskChronology } from "./MacroTaskChronology";
 import { MicroTaskStrip, MacroTaskOverview } from "./MacroTaskOverview";
@@ -18,7 +17,6 @@ import { MarkerPopover, type MarkerClusterView } from "./MarkerPopover";
 import { Popover } from "./Popover";
 import { idleReadout, TimelineReadout } from "./TimelineReadout";
 import { buildInspectorCard, type InspectorCard, type InspectorSelection } from "./inspector-card";
-import { executionTypeText } from "./console-data";
 
 /** Markers closer than this many actual track pixels merge into one numbered marker. */
 const MARKER_MERGE_PX = 14;
@@ -787,7 +785,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
     }
     // The bar label uses the friendly name (0.16 0.3); the raw identity stays
     // in the aria label and tooltip.
-    const shortModel = executionLabel(span, props.buddies);
+    const shortModel = namer(span.buddy).text;
     const label = textPx >= 150
       ? `第${span.turnIndex ?? "?"}轮 · ${shortModel}${facts.outcome !== "finished" ? " · " + outcomeLabel(span, facts.outcome) : ""}`
       : textPx >= 72 ? `第${span.turnIndex ?? "?"}轮` : textPx >= 30 ? String(span.turnIndex ?? "·") : "";
@@ -948,8 +946,8 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
                     style={{ "--depth": row.depth } as CSSProperties}
                     data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
-                    title={[titleLineTooltip(title), fixesText, fixedByText, fixesText && (executionTypeText(row.adapter) ?? namer(row.buddy).title)].filter(Boolean).join(" · ")}
-                    aria-label={[itemAria(label), fixesText, fixedByText, fixesText && (executionTypeText(row.adapter) ?? namer(row.buddy).text)].filter(Boolean).join(" · ")}
+                    title={[titleLineTooltip(title), fixesText, fixedByText, fixesText && namer(row.buddy).title].filter(Boolean).join(" · ")}
+                    aria-label={[itemAria(label), fixesText, fixedByText, fixesText && namer(row.buddy).text].filter(Boolean).join(" · ")}
                     data-fixes={row.fixes} data-fixed-by={row.fixedBy?.join(" ")}
                     onFocus={() => { setFocusKey(label.key); setFocusedKey(label.key); }}
                     onClick={() => props.onSelectRun(row.runId)}
@@ -962,10 +960,10 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
                       {fixedByText && <span className="fix-target-mark" aria-hidden="true" title={fixedByText}><span className="fix-backlink">↩</span>{row.fixedBy!.length}</span>}
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub" title={fixesText ? `${fixesText} · ${executionTypeText(row.adapter) ?? namer(row.buddy).title}` : executionTypeText(row.adapter) ?? namer(row.buddy).title}>
+                    <span className="lbl-sub" title={fixesText ? `${fixesText} · ${namer(row.buddy).title}` : namer(row.buddy).title}>
                       {fixesText
                         ? <><span className="lbl-state">{state.label}</span><span className="fix-source" title={`${t("timelineFix.target")}: ${fixedTitle}`}><span className="fix-arrow" aria-hidden="true">↪</span><span className="fix-source-text">{fixesText}</span></span></>
-                        : <>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{executionTypeText(row.adapter) ?? namer(row.buddy).text}</>}
+                        : <>{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{namer(row.buddy).text}</>}
                     </span>
                     {unplaced > 0 && <span className="trunc-chip" title="片段时间缺失或异常，未定位">⚠ {unplaced} 段时间缺失</span>}
                   </button>

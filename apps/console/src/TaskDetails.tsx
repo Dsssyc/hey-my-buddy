@@ -7,7 +7,7 @@ import { errorText, readVerificationText } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { TimelineRow } from "./macro-task-types";
 import { WorkflowPanel } from "./WorkflowPanel";
-import { hasModelBuddy, taskExecutor, taskHost, taskProject } from "./console-data";
+import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { excerpt, resultText, taskStatus, taskTitle, titleTooltip, TASK_TITLE_SOURCE_LABEL } from "./task-state";
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
@@ -102,7 +102,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const delegationAuthority = task.delegationAuthority ?? task.lineage?.delegationAuthority;
   const assignedBuddy = task.lineage?.buddy;
   const recordedExecutor = taskExecutor(task);
-  const executor = recordedExecutor && hasModelBuddy(task) && delegationAuthority && assignedBuddy
+  const executor = recordedExecutor && delegationAuthority && assignedBuddy
     ? `${assignedBuddy.harness} · ${assignedBuddy.provider} · ${assignedBuddy.model} / ${effortText(assignedBuddy.effort)}`
     : recordedExecutor;
   // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
@@ -133,7 +133,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       {error && <p role="alert" className="error-message">{error}
         <button type="button" className="button small-button" disabled={!active || busy} onClick={() => { void readTask(); }}>重试读取</button></p>}
       <p className="assignment-line"><span title={taskHost(task)}>{i18n.t("shell:actor.delegator", { source: taskHost(task) })}</span>
-        {executor && (task.workflow && hasModelBuddy(task) ? <button className="routing-link" aria-label="查看选择依据" title={executor} onClick={() => setRoutingRequest(n => n + 1)}>
+        {executor && (task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={executor} onClick={() => setRoutingRequest(n => n + 1)}>
           <span>→ {executor}</span><span>查看选择依据</span></button> : <span title={executor}>→ {executor}</span>)}
         {delegationAuthority && <span>带委派权</span>}</p>
     </header>

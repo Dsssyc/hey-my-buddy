@@ -167,9 +167,6 @@ class CatalogTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
         require_permission({"harness": "dsh"}, "full")
         require_permission({"harness": "zcode"}, "full")
-        from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
-        WorkflowCoordinator._require_execution_permission({"adapter": "external"}, "read")
-        WorkflowCoordinator._require_execution_permission({"adapter": "command"}, "write")
         with patch.dict(_WORKER_PERMISSIONS, {"claude": {
                 level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
@@ -177,10 +174,6 @@ class CatalogTests(unittest.TestCase):
                 require_permission({"harness": "claude"}, "full")
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
             self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
-        with self.assertRaises(BoardError) as caught:
-            WorkflowCoordinator._require_execution_permission({"adapter": "external"}, "full")
-        self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
-        self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
 
     def test_native_ids_with_context_suffixes_keep_legal_distinct_buddy_ids(self):
         payload = {"source": "claude-native-fixture", "providers": [{

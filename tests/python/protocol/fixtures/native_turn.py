@@ -112,8 +112,7 @@ def claim_record(claim: dict, *, outcome: dict, session_id: str | None = None,
     attempt, turn = claim["attempt"], claim["turn"]
     turn_input = turn.get("input") or {}
     return micro_task_record(
-        harness=(attempt["adapter"] if attempt["adapter"] in ("command", "external")
-                 else claim["task"]["spec"]["harness"]),
+        harness=claim["task"]["spec"]["harness"],
         task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
         generation=attempt["generation"], turn_id=turn["turnId"],
         resume_mode=turn["resumeMode"],

@@ -37,6 +37,7 @@ from ...protocol import schemas
 from ...protocol.stop import WRAP_UP_INITIATORS
 from . import fixes as task_fixes
 from . import host_conclusions
+from .micro_task import _complete_buddy
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -307,7 +308,7 @@ class WorkflowCoordinator:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             # This turn's own frozen buddy, never the current run's.
-            "buddy": context.get("buddy"),
+            "buddy": _complete_buddy(context.get("buddy")),
             # This turn's own frozen routing identity. An older turn input that
             # predates the binding stays null: it is never inferred from the current
             # run, wall-clock timestamps or a matching model name.
@@ -1293,8 +1294,6 @@ class WorkflowCoordinator:
 
     def _validated_buddy(self, spec: dict) -> dict | None:
         """Inspect native buddy only outside a database write transaction."""
-        if spec.get("adapter") in ("command", "external"):
-            return None
         constraints = schemas.buddy_constraints(spec)
         if len(constraints) != len(schemas.BUDDY_FIELDS):
             return None
@@ -1306,17 +1305,6 @@ class WorkflowCoordinator:
     def _require_permission(buddy: dict | None, access: str) -> None:
         from ...buddy.harnesses.registry import require_permission
         require_permission(buddy, access)
-
-    @classmethod
-    def _require_execution_permission(cls, spec: dict, access: str) -> None:
-        adapter = spec.get("adapter")
-        if adapter in ("command", "external"):
-            if access == "full":
-                raise BoardError("UNSUPPORTED_CAPABILITY", "This adapter does not support the requested Worker permission",
-                                 adapter=adapter, access=access, requiredCapability=f"permission:{access}",
-                                 missingCapabilities=[f"permission:{access}"])
-            return
-        cls._require_permission(schemas.buddy_constraints(spec) or None, access)
 
     @staticmethod
     def _execution_adapter(name: str):
@@ -1696,10 +1684,7 @@ class WorkflowCoordinator:
                 source_task_id=None,
                 now=now,
             )
-        if task_row["adapter"] in ("command", "external"):
-            self.board._append_event(connection, "workflow.execution_selected", task_id=run_id,
-                                     payload={"source": "original-explicit", "adapter": task_row["adapter"]})
-        elif buddy is None:
+        if buddy is None:
             self._start_routing(connection, run_id, now)
         else:
             connection.execute("UPDATE workflow_runs SET buddy_json=?,buddy_revision=1,validated_buddy_revision=1 WHERE run_id=?",
@@ -1779,7 +1764,7 @@ class WorkflowCoordinator:
                     response["controlAvailable"] = False
                 return response
 
-        self._require_execution_permission(spec, normalized["executionWorkspace"]["access"])
+        self._require_permission(schemas.buddy_constraints(spec) or None, normalized["executionWorkspace"]["access"])
         buddy = self._validated_buddy(spec)
         self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
         with self._submission_preparation(request_id, normalized["executionWorkspace"]) as prepared:
@@ -2394,7 +2379,7 @@ class WorkflowCoordinator:
             shared_locks = (locks, set())
             try:
                 for helper in helpers:
-                    self._require_execution_permission(helper["spec"], helper["executionWorkspace"]["access"])
+                    self._require_permission(schemas.buddy_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
                     buddy = self._validated_buddy(helper["spec"])
                     self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                     allocation = preparations.enter_context(self._submission_preparation(
@@ -2695,10 +2680,7 @@ class WorkflowCoordinator:
                     now,
                 ),
             )
-            if item["spec"].get("adapter") in ("command", "external"):
-                self.board._append_event(connection, "workflow.execution_selected", task_id=helper_task_id,
-                                         payload={"source": "original-explicit", "adapter": item["spec"]["adapter"]})
-            elif item["buddy"] is None:
+            if item["buddy"] is None:
                 self._start_routing(connection, helper_task_id, now)
             else:
                 connection.execute("UPDATE workflow_runs SET buddy_json=?,buddy_revision=1,validated_buddy_revision=1 WHERE run_id=?",
@@ -2929,14 +2911,6 @@ class WorkflowCoordinator:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
-            target_adapter = connection.execute("SELECT adapter FROM tasks WHERE task_id=?",
-                                                (target_snapshot["run_id"],)).fetchone()["adapter"]
-            if target_adapter in ("command", "external") and (supplied_buddy is not None or reroute):
-                raise BoardError("INVALID_ARGUMENT", "Command and external micro tasks cannot select a buddy or reroute")
-            if target_adapter in ("command", "external"):
-                self._require_execution_permission({"adapter": target_adapter},
-                                                   access_selection[0] if access_selection else
-                                                   json.loads(target_snapshot["execution_workspace_json"])["access"])
             self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
             if target_snapshot["delegation_authority"]:
@@ -2976,7 +2950,7 @@ class WorkflowCoordinator:
                 raise BoardError("CONFLICT", "This micro task's checkout is being cleaned or has been removed")
             self._require_routing_stopped(connection, run_id)
             routing = self._routing_view(connection, run_row)
-            if task["adapter"] not in ("command", "external") and buddy is None and not reroute and (
+            if buddy is None and not reroute and (
                     self._buddy(run_row) is None or routing["status"] in ("needs-host", "fenced")):
                 raise BoardError(
                     "BUDDY_REQUIRED",
@@ -3741,7 +3715,7 @@ class WorkflowCoordinator:
             if attempt["cancel_requested_at"] is not None and initiator in WRAP_UP_INITIATORS:
                 continue
             deadline = attempt["grace_deadline"]
-            if (wrap_up and initiator in WRAP_UP_INITIATORS and attempt["adapter"] != "external"
+            if (wrap_up and initiator in WRAP_UP_INITIATORS
                     and self._execution_adapter(attempt["adapter"]).interrupted_resume
                     and attempt["execution_state"] in ("starting", "executing")):
                 deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
@@ -5920,9 +5894,9 @@ class WorkflowCoordinator:
             return f"workflow-ancestor-{ancestor['state']}"
         if run_row["state"] == "executing":
             buddy = self._buddy(run_row)
-            if task_row["adapter"] not in ("command", "external") and buddy is None:
+            if buddy is None:
                 return "awaiting-model-selection"
-            if task_row["adapter"] not in ("command", "external") and run_row["validated_buddy_revision"] != run_row["buddy_revision"]:
+            if run_row["validated_buddy_revision"] != run_row["buddy_revision"]:
                 return "awaiting-buddy-validation"
             if any(not self._stop_proven(connection, task) for task in self._routing_tasks(connection, run_row["run_id"])):
                 return "awaiting-routing-shutdown"

@@ -93,17 +93,12 @@ export function taskHost(task: Task) {
   const lead = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId;
   return lead ? actorText({ role: "lead", id: lead }) : i18n.t("shell:actor.unrecordedDelegator");
 }
-/** Infrastructure adapters identify the execution, and carry no model buddy. */
-export function executionTypeText(adapter: string | null | undefined): string | null {
-  if (adapter === "command" || adapter === "external") return i18n.t(`shell:execution.${adapter}`);
-  return null;
-}
-export function hasModelBuddy(task: Pick<Task, "adapter">) {
-  return task.adapter !== "command" && task.adapter !== "external";
+/** Legacy command and external records have no model buddy. */
+export function hasModelBuddy(task: Task) {
+  return task.spec?.adapter !== "command" && task.spec?.adapter !== "external";
 }
 export function taskExecutor(task: Task) {
   const buddy = task.lineage?.buddy;
-  const executionType = executionTypeText(task.adapter);
-  if (executionType) return executionType;
-  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : i18n.t("shell:execution.pendingBuddy");
+  if (!hasModelBuddy(task)) return null;
+  return buddy ? `${buddy.harness} · ${buddy.model} / ${effortText(buddy.effort)}` : "执行 buddy 待确定";
 }

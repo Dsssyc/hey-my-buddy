@@ -7,7 +7,6 @@ import type { Snapshot, Task } from "./types";
 import type { IntegrationRecord } from "./workflow-types";
 import type { TimelineRow } from "./macro-task-types";
 import { useWorkflow } from "./use-workflow";
-import { executionTypeText } from "./console-data";
 import { RoutingPanel } from "./RoutingPanel";
 import { Status } from "./ui";
 import { displayWorkflowState, excerpt } from "./task-state";
@@ -130,10 +129,8 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
               <dt>接续次数</dt><dd>{value.continuationCount}</dd>
               <dt>已记录回合</dt><dd>{value.counts?.turns == null ? "未记录" : `共 ${value.counts.turns} 个回合`}</dd>
               <dt>接续方式</dt><dd>{value.currentTurn?.resumeMode === "native-session" ? "恢复原生会话" : value.currentTurn?.resumeMode === "reconstructed-new-session" ? "新会话，从持久上下文重建" : "首次执行"}</dd>
-              {executionTypeText(value.adapter) ? <Fragment>
-                <dt>{i18n.t("shell:execution.type")}</dt><dd>{executionTypeText(value.adapter)}</dd>
-              </Fragment> : value.buddy && <Fragment>
-                <dt>{i18n.t("shell:execution.buddy")}</dt><dd>{
+              {value.buddy && <Fragment>
+                <dt>执行 buddy</dt><dd>{
                   `${value.buddy.harness} · ${value.buddy.model} / ${value.buddy.effort}`
                   + (lockText ? `｜${lockText}` : "｜buddy 来源未记录")
                 }</dd></Fragment>}
@@ -240,7 +237,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
             const buddy = turn.buddy;
             return <li key={turn.turnId}>
               <span className="turn-label">第 {turn.turnIndex} 回合</span>
-              <span className="small muted">{executionTypeText(value.adapter) ?? (buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : i18n.t("shell:execution.unrecordedBuddy"))}</span>
+              <span className="small muted">{buddy ? `${buddy.harness} · ${buddy.model} / ${buddy.effort}` : "buddy 未记录"}</span>
               <span className="turn-usage" title={usage.title}>{usage.text}</span>
               <span className="small muted">来源 {turn.tokenUsage?.source || "未记录"}</span>
             </li>;

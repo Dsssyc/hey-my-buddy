@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import sqlite3
 import subprocess
 import sys
 import unittest
@@ -90,46 +89,22 @@ class MicroTaskWorkerTestCase(BoardTestCase):
 
 
 class RealWorkerTurnTests(MicroTaskWorkerTestCase):
-    def test_command_execution_has_no_buddy_or_model_selection(self):
+    def test_execution_record_fields_are_rejected_by_micro_task_submission(self):
         with self.daemon(env=self.env()):
-            code, submitted = self.cli("submit", json.dumps({
-                "requestId": "command-no-buddy", "hostId": "host-1", "task": "run a local command",
-                "adapter": "command", "argv": [sys.executable, "-c", "print('command-complete')"],
-                "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"},
-            }), env=self.env())
-            self.assertEqual(code, 0, submitted)
-            run_id = submitted["runId"]
-            self.assertIsNone(submitted["buddy"])
-            self.assertEqual(submitted["adapter"], "command")
-
-            def finished():
-                code, view = self.cli("get", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
-                self.assertEqual(code, 0, view)
-                return view if view["task"]["state"] in ("completed", "failed", "cancelled") else None
-
-            view = wait_for(finished, timeout=90)
-            self.assertIsNotNone(view)
-            self.assertIsNone(view["buddy"])
-            self.assertEqual(view["adapter"], "command")
-            for method in ("get", "status"):
-                code, projected = self.cli(method, json.dumps({"runId": run_id}), env=self.env())
-                self.assertEqual(code, 0, projected)
-                self.assertIsNone(projected["buddy"])
-                self.assertEqual(projected["adapter"], "command")
-            code, listing = self.cli("list", json.dumps({}), env=self.env())
+            for index, fields in enumerate(({'adapter': 'command', 'argv': ['true']},
+                                             {'adapter': 'external'}, {'argv': ['true']})):
+                with self.subTest(fields=fields):
+                    code, response = self.cli('submit', json.dumps({
+                        'requestId': f'execution-record-{index}', 'hostId': 'host-1', 'task': 'separate execution',
+                        'cwd': str(self.repo), 'executionWorkspace': {'kind': 'existing', 'access': 'write'},
+                        **fields,
+                    }), env=self.env())
+                    self.assertNotEqual(code, 0, response)
+                    self.assertEqual(response['error']['code'], 'INVALID_ARGUMENT')
+                    self.assertIn('execution-submit', response['error']['message'])
+            code, listing = self.cli('list', '{}', env=self.env())
             self.assertEqual(code, 0, listing)
-            row = next(row for row in listing["runs"] if row["runId"] == run_id)
-            self.assertIsNone(row["buddy"])
-            self.assertEqual(row["adapter"], "command")
-            with sqlite3.connect((self.directory / "board.sqlite3").as_uri() + "?mode=ro", uri=True) as connection:
-                self.assertIsNone(connection.execute(
-                    "SELECT buddy_json FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()[0])
-                self.assertEqual(connection.execute(
-                    "SELECT COUNT(*) FROM events WHERE task_id=? AND kind='workflow.buddy_selected'", (run_id,)).fetchone()[0], 0)
-                self.assertEqual(json.loads(connection.execute(
-                    "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.execution_selected'",
-                    (run_id,)).fetchone()[0]), {'source': 'original-explicit', 'adapter': 'command'})
-            self.assertEqual(view["state"], "delivered", self.execution_diagnostics(run_id, view))
+            self.assertEqual(listing['runs'], [])
 
     def execution_diagnostics(self, run_id: str, view: dict) -> str:
         code, receipt = self.cli("result", json.dumps({"runId": run_id}), env=self.env())

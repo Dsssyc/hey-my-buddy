@@ -98,8 +98,11 @@ TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
-WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"harness", "executionWorkspace", "integrator", "role"}
+WORKFLOW_SPEC_FIELDS = frozenset({
+    "requestId", "task", "cwd", *BUDDY_FIELDS, "expectedSeconds", "owner", "requiredCapabilities", "exclusiveResources",
+})
+WORKFLOW_SUBMIT_FIELDS = WORKFLOW_SPEC_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
+WORKFLOW_HELPER_FIELDS = WORKFLOW_SPEC_FIELDS | {"executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
 RETIRED_SPEC_KEYS = ("spec", "routingPreferences", "routingMode", "allowRoutingFallback", "inheritRoutingPreferences")
@@ -458,7 +461,7 @@ def _spec_fields(params: dict) -> dict:
             field="spec",
         )
     spec_params: dict = {}
-    for key in SUBMIT_FIELDS | {"harness"}:
+    for key in WORKFLOW_SPEC_FIELDS:
         if key in params:
             spec_params[key] = params[key]
     return spec_params
@@ -526,6 +529,13 @@ def _reject_retired_spec_keys(params: dict) -> None:
             "spec is a retired duplicate spelling; give the ordinary spec fields flat, at the top level",
             field="spec",
         )
+    if "adapter" in params:
+        raise BoardError("INVALID_ARGUMENT",
+                         "Micro tasks do not accept adapter; name a buddy with harness, "
+                         "or use execution-submit for command and external execution records", field="adapter")
+    if "argv" in params:
+        raise BoardError("INVALID_ARGUMENT",
+                         "Micro tasks do not accept argv; use execution-submit for command execution records", field="argv")
     if "inheritRoutingPreferences" in params:
         raise BoardError(
             "INVALID_ARGUMENT",
@@ -591,26 +601,12 @@ def normalize_workflow_spec(params: dict) -> dict:
     micro task preserves exactly the harness/provider/model/effort constraints the
     caller supplied, and ADR-021 decision 5 allows only the two complete
     expressions: the whole quadruple (delegated directly, no Router) or none of
-    it (the Router chooses). The ``command`` and ``external`` infrastructure
-    adapters are the minimal special case: they name no buddy, carry no
-    provider/model/effort and pass their own adapter field through unchanged.
+    it (the Router chooses). Command and external execution records use the
+    separate ordinary execution submission contract.
     """
     _reject_retired_spec_keys(params)
     supplied = [key for key in BUDDY_FIELDS if params.get(key) is not None]
-    adapter = params.get("adapter")
-    if adapter in ("command", "external"):
-        # Minimal special case: this infrastructure names no buddy, so naming
-        # provider/model/effort alongside it is a partial tuple in disguise.
-        inapplicable = [key for key in BUDDY_FIELDS if params.get(key) is not None]
-        if inapplicable:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                f"the {adapter} adapter names no buddy; {inapplicable[0]} does not apply to it; " + PARTIAL_BUDDY_HINT,
-                field=inapplicable[0],
-            )
-    elif adapter is not None:
-        raise BoardError("INVALID_ARGUMENT", "A coding buddy names its harness", field="adapter")
-    elif supplied and len(supplied) != len(BUDDY_FIELDS):
+    if supplied and len(supplied) != len(BUDDY_FIELDS):
         missing = [key for key in BUDDY_FIELDS if key not in supplied]
         raise BoardError(
             "INVALID_ARGUMENT",
@@ -627,14 +623,12 @@ def normalize_workflow_spec(params: dict) -> dict:
     spec = normalize_spec(native_params)
     if params.get("harness") is not None:
         spec["harness"] = spec.pop("adapter")
-    elif params.get("adapter") is None:
-        spec.pop("adapter", None)
+    else:
+        spec.pop("adapter")
     return spec
 
 
 def buddy_constraints(spec: dict) -> dict:
-    if spec.get("adapter") in ("command", "external"):
-        return {}
     return {key: spec[key] for key in BUDDY_FIELDS if key in spec}
 
 

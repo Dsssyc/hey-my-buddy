@@ -17,9 +17,7 @@ import {
   clockTime, buddyLabel, buddyRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
   acceptanceWaitText, titleLineTooltip, type FriendlyBuddy,
-  executionLabel,
 } from "./macro-task-display";
-import { executionTypeText } from "./console-data";
 import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./macro-task-metrics";
 
 export type InspectorSelection =
@@ -118,9 +116,7 @@ function rollupFields(rollup: RunRollup, buddies?: readonly FriendlyBuddy[] | nu
     value: rounds ? `共 ${rounds} 轮` : scopeLimited ? "已记录范围内没有执行片段" : "没有已记录的执行片段",
     tone: rounds ? undefined : "muted",
   });
-  fields.push(executionTypeText(row.adapter)
-    ? { label: i18n.t("shell:execution.type"), value: executionTypeText(row.adapter)! }
-    : { label: "buddy", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
+  fields.push({ label: "buddy", value: buddyLabel(row.buddy, buddies), title: buddyRawLabel(row.buddy) });
   const starts = rollup.executions.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
   const ends = rollup.executions.map(span => toMs(span.endAt)).filter((value): value is number => value !== null);
   const pending = rollup.pending.map(span => toMs(span.startAt)).filter((value): value is number => value !== null);
@@ -218,9 +214,11 @@ export function buildInspectorCard(
         label: "回合",
         value: span.turnIndex !== null && span.turnIndex !== undefined ? `第 ${span.turnIndex} 轮` : UNRECORDED,
       });
-      fields.push(executionTypeText(span.adapter)
-        ? { label: i18n.t("shell:execution.type"), value: executionLabel(span) }
-        : { label: "buddy", value: buddyLabel(span.buddy, buddies), title: buddyRawLabel(span.buddy) });
+      fields.push({
+        label: "buddy",
+        value: buddyLabel(span.buddy, buddies),
+        title: buddyRawLabel(span.buddy),
+      });
       fields.push(spanTimingValue(span, observedAtMs), spanResultValue(span, outcome));
     }
     return {
