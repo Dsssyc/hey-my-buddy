@@ -12,7 +12,7 @@ export default {
   refresh: { label: "重新读取", verified: "核对时间 {{time}}", unverified: "核对时间未记录" },
   header: { started: "开始", elapsed: "历时", turns: "回合" },
   state: { stopping: "正在停止", running: "进行中", unknown: "结束未确认", queued: "排队", host: "等待 Host", lead: "等待 Lead", failedHost: "失败，等待 Host", cancelledHost: "已取消，等待 Host", failedLead: "失败，等待 Lead", cancelledLead: "已取消，等待 Lead", review: "等待验收", accepted: "已验收", done: "已完成", ended: "已结束", failed: "失败" },
-  wait: { queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
+  wait: { since: "起", queue: "排队", host: "等待 Host", lead: "等待 Lead", acceptance: "等待验收" },
   strip: { label: "这个微任务的各步", position: "步骤 {{current}} / {{total}}", previous: "上一步", next: "下一步", focusItem: "在步骤条中选中{{item}} · {{time}}", truncated: "读取不完整，没有这个微任务的一行；这里只列出委派。" },
   step: {
     delegation: "委派", routing: "路由", turn: "回合 {{n}}", handoff: "换手", decision: "决定", continue: "继续",
@@ -20,9 +20,10 @@ export default {
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },
-  turn: { expected: "预期 {{time}}", rejected: "模型开始前被拒绝", rerouted: "已改派" },
+  turn: { requestNext: "已向 Host 提交请求，见下一步。", expected: "预期 {{time}}", rejected: "模型开始前被拒绝", rerouted: "已改派" },
   origin: { host: "Host 指定", locked: "用户锁定", single: "唯一候选", unrecorded: "未记录路由" },
   usage: {
+    name: "用量",
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",
     input: "输入 {{n}}", inputWithCache: "输入 {{n}}（含缓存 {{cached}}）", output: "输出 {{n}}", source: "来源 {{source}}",
     partial: "只含已报告的部分", partialRecord: "部分记录", unrecorded: "用量未记录",
@@ -56,20 +57,11 @@ export default {
   },
   session: {
     name: "会话", unrecorded: "未记录", resumed: "恢复", fresh: "新会话",
-    storageUnknown: "存储位置未记录", visibilityUnknown: "是否可见未记录",
-    storage: {
-      "task-private": "Buddy 私有存储", "task-private-sessions": "Buddy 私有会话目录", "harness-user-store": "Harness 用户存储",
-    },
-    owner: { "hey-my-buddy-attempt": "由 Hey my buddy 的执行持有", "hey-my-buddy-micro-task": "由 Hey my buddy 的微任务持有", "harness-user-store": "由 Harness 的用户目录持有" },
-    visibility: { "not-listed-in-native-app": "原生应用里看不到", "listed-in-native-app": "原生应用里列出" },
-    resumable: "可恢复", notResumable: "不可恢复", bound: "私有绑定存在", unbound: "私有绑定不存在",
   },
   activity: {
     unknown: "进展未知", starting: "正在启动", "waiting-model": "等待模型", "streaming-model": "模型输出中",
     "tool-running": "工具执行中", "waiting-external": "等待外部结果", "waiting-host": "等待 Host", finishing: "正在结束",
     reported: "上报 {{when}}", notReported: "没有上报", modelTurns: "模型回合 {{n}}", toolCalls: "工具调用 {{n}}",
-    basis: { tool: "收到工具活动", native: "收到原生活动", phase: "仅有阶段，没有原生活动", unknown: "活动依据未知" },
-    lastTool: "最近工具活动 {{when}}", lastNative: "最近原生活动 {{when}}", event: "事件序号 {{n}}",
   },
   inquiry: {
     head: "问询", queued: "排队", queuedCheckpoint: "在 Worker 下次检查点时送达，现在尚未送达。", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
@@ -93,6 +85,7 @@ export default {
     overloaded: "因模型服务满载排除 {{n}} 个：{{list}}", excluded: "用户排除 {{n}} 个：{{list}}", cooling: "冷却中的候选 {{n}} 个：{{list}}", coolingBuddy: "{{buddy}}（至 {{time}}）", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
   },
   routing: {
+    reason: "理由",
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",
     domainNode: "领域节点", unclassified: "未归类", taskType: "任务类型",
     taskTypes: { create: "新建", change: "改造", debug: "排错", verify: "验证", review: "审查", research: "调研", write: "撰写" },
@@ -103,7 +96,7 @@ export default {
     },
   },
   delegation: {
-    task: "任务", source: "来源", originalDelegator: "原始委派方", currentOwner: "当前负责方", project: "项目", unknownProject: "未记录项目", id: "微任务 ID",
+    task: "任务", source: "来源", originalDelegator: "原始委派方", currentOwner: "当前负责方", project: "项目", unknownProject: "未记录项目",
     parent: "上级微任务", cwd: "执行位置", authority: "委派权", authorityYes: "带委派权", helpers: "协助任务",
     fixes: "修正", fixesTarget: "被修正的微任务", fixedBy: "被修正 {{n}} 次",
     inquiries: "问询",
@@ -113,14 +106,13 @@ export default {
       assistance: "协助请求", attention: "需要决定", routing: "路由边界", "helper-attention": "协助任务的请求",
       "helper-report": "协助任务的报告", other: "需要决定",
     },
-    summary: "摘要", attempted: "已尝试", needed: "需要完成", acceptance: "验收条件", expected: "期望的产物",
-    source: "来源", child: "打开协助任务", more: "另有 {{n}} 项待决定", continuation: "继续",
-    decided: "决定", what: "决定", who: "谁", when: "时刻", reason: "理由",
+    attempted: "已尝试", needed: "需要完成", acceptance: "验收条件", expected: "期望的产物",
+    child: "打开协助任务", more: "另有 {{n}} 项待决定",
     state: { approved: "批准", declined: "拒绝", superseded: "已被取代", cancelled: "已取消" },
   },
   event: { value: {"approve": "批准", "decline": "拒绝", "approved": "已批准", "declined": "已拒绝", "accepted": "验收通过", "rejected": "验收问题", "concluded": "已作结论", "completed": "已完成", "failed": "失败", "cancelled": "已取消", "queued": "排队", "running": "执行中", "executing": "执行中", "delivered": "待验收", "awaiting-host": "等待 Host", "superseded": "已被取代", "merge": "合并", "cherry-pick": "摘取提交", "patch": "应用补丁", "not-required": "无需整合", "verified": "已验证"}, facts: "记录", from: "原 buddy", to: "新 buddy", stoppedBy: "停止发起", details: "详情" },
   acceptance: {
-    artifact: "产物", files: "文件", integration: "整合", state: "状态", verified: "已验证", notRequired: "无需整合", why: "原因",
+    artifact: "产物", integration: "整合", verified: "已验证", notRequired: "无需整合",
     strategy: "方式", target: "目标", commits: "提交", recordedBy: "记录人", noIntegration: "整合证明未记录",
     hostPaths: "Host 补充的改动 {{n}}", rejection: "打回", rejected: "已打回", note: "说明",
     conclusion: "Host 的结论", outcome: "微任务结果", notCounted: "不计入验收", version: "微任务版本", attempt: "被审查的执行",

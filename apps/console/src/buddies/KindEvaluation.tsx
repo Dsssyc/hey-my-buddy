@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "cn";
-import { Hint } from "@/components/hint";
+import { Fold } from "../task-detail/parts";
 import { formatCompact, formatDuration, formatNumber } from "../i18n/format";
 import { locale } from "../i18n";
 import { tasksHash } from "../task-detail/location";
@@ -104,7 +104,7 @@ export function KindEvaluation({ evaluation, domains, onOpenTask }: {
         <div className="grid min-w-0 gap-5 min-[900px]:grid-cols-2">
         <section aria-label={t("evaluation.summary")} className="min-w-0">
           <h4 className="mb-1.5 text-xs font-medium text-ink2">{t("evaluation.summary")}</h4>
-          {evaluation.summary?.text ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{evaluation.summary.text}</p>
+          {evaluation.summary?.text ? <Fold text={evaluation.summary.text} />
             : <p className="text-xs text-ink3">{t("evaluation.noSummary")}</p>}
           {!!evaluation.summary?.citations.length && <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
             <span className="text-ink3">{t("evaluation.citedTasks")}</span>
@@ -134,14 +134,14 @@ export function KindEvaluation({ evaluation, domains, onOpenTask }: {
                 <tbody>{rows.map(({ node, depth, children }) => <tr key={node.nodeId} className="border-b border-line/70 align-top">
                   <th scope="row" className="sticky left-0 z-10 bg-card py-2 pr-3 text-left font-normal">
                     <div className="flex items-start gap-1" style={{ paddingInlineStart: `${depth * 1.1}rem` }}>
-                      {children ? <Hint text={t(collapsed.has(node.nodeId) ? "evaluation.unfoldDomain" : "evaluation.foldDomain", { name: node.name })}><button type="button" aria-expanded={!collapsed.has(node.nodeId)} aria-label={node.name}
+                      {children ? <button type="button" aria-expanded={!collapsed.has(node.nodeId)} aria-label={node.name}
                         onClick={() => setCollapsed(previous => {
                           const next = new Set(previous);
                           if (next.has(node.nodeId)) next.delete(node.nodeId); else next.add(node.nodeId);
                           return next;
                         })} className="flex size-7 shrink-0 items-center justify-center rounded-sm text-ink2 outline-none hover:bg-sunk focus-visible:ring-2 focus-visible:ring-ring transition-colors duration-150 motion-reduce:transition-none">
                         <ChevronRight className={cn("size-3.5 transition-transform motion-reduce:transition-none", !collapsed.has(node.nodeId) && "rotate-90")} aria-hidden="true" />
-                      </button></Hint> : <span className="w-7 shrink-0" />}
+                      </button> : <span className="w-7 shrink-0" />}
                       <span className="min-w-0 break-words">{node.name}</span>
                       {evaluation.statistics.byDomain[node.nodeId]?.samples ? <span className="ml-auto text-ink3 tabular-nums">{formatNumber(evaluation.statistics.byDomain[node.nodeId].samples)}</span> : null}
                     </div>

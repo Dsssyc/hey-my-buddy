@@ -173,14 +173,13 @@ describe("a route", () => {
     expect(pane().textContent).toContain("提交时冻结候选 0 个");
   });
 
-  it("shows the bounds beside the only candidate, in a hint on the word that says so, with the preference the program applied", async () => {
+  it("opens the frozen bounds below the result, with the preference the program applied", async () => {
     const bounds: Basis = { ...NO_BASIS, constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
       excluded: [{ buddy: { model: "m" }, note: "提交时排除低推理强度" }], preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }] };
     const f = open({ step: 3, replies: { routing: [routing({ source: "single-candidate" })], bases: { "decision-1": bounds } } });
     await ready();
     await waitFor(() => expect(f.reads.basis).toHaveBeenCalledWith("decision-1"));
-    await waitFor(() => expect(within(band()).getByText("唯一候选").getAttribute("tabindex")).toBe("0"));
-    await f.user.hover(within(band()).getByText("唯一候选"));
+    await f.user.click(within(pane()).getByRole("button", { name: "提交时的约束" }));
     const tip = (await screen.findAllByText(/硬约束：dsh/))[0]!.closest("ul")!.textContent!;
     expect(tip).toContain("所需能力：execution:dsh");
     expect(tip).toMatch(/用户排除 1 个：m \(提交时排除低推理强度\)/);
@@ -492,29 +491,26 @@ describe("the seal of a turn", () => {
 });
 
 describe("what a turn says of its session, its usage and its buddy's origin", () => {
-  it("says in the hint of the session where it is kept, who holds it, whether the app lists it, whether it can be resumed, whether it is bound, and the harness's own note", async () => {
-    const sessioned = task({ selectedAttempt: { result: { terminationReason: "completed", result: { nativeSession: { storageScope: "harness-user-store", storageOwner: "harness-user-store",
-      nativeAppVisibility: "listed-in-native-app", resumable: true, bindingPresent: false, note: "Codex owns the native thread" } } } } });
-    open({ step: 7, replies: { task: sessioned } });
+  it("does not attach session storage explanations to the copy action", async () => {
+    open({ step: 7 });
     await ready();
-    await userEvent.setup().hover(within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ }));
-    expect((await screen.findAllByText(/Harness 用户存储 · 由 Harness 的用户目录持有 · 原生应用里列出 · 可恢复 · 私有绑定不存在 · Codex owns the native thread/))[0]).toBeTruthy();
+    const copy = within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ });
+    await userEvent.setup().hover(copy);
+    expect(screen.queryByText(/存储位置未记录/)).toBeNull();
   });
 
-  it("says in the hint of the usage whose it is, where it came from, that it is partial, and that the cache is counted apart when its basis says so", async () => {
+  it("labels execution usage with its source, completeness and cache accounting without a tooltip", async () => {
     const usage = (extra: object) => ({ inputTokens: 100, cachedInputTokens: 60, outputTokens: 7, source: "codex-native", scope: "attempt" as const, ...extra });
     const withUsage = (tokenUsage: ReturnType<typeof usage>) => { const found = workflow(); found.turns = [found.turns[0]!, { ...found.turns[1]!, tokenUsage }]; return found; };
     const f = open({ step: 3, replies: { workflow: withUsage(usage({ completeness: "partial" })) } });
     await ready();
-    await f.user.hover(within(band()).getByText(/输入 100/));
-    const tip = (await screen.findAllByText(/来源 codex-native/))[0]!.textContent!;
+    const tip = within(band()).getByLabelText(/来源 codex-native/).getAttribute("aria-label")!;
     expect(tip).toContain("输入 100（含缓存 60）");
     expect(tip).toContain("只含已报告的部分");
     cleanup();
     const apart = open({ step: 3, replies: { workflow: withUsage(usage({ inputBasis: "excludes-cached", inputTokens: 40 })) } });
     await ready();
-    await apart.user.hover(within(band()).getByText(/输入 40/));
-    expect((await screen.findAllByText(/输入 40（缓存 60 另计）/))[0]!.textContent).toContain("缓存不在输入之内");
+    expect(within(band()).getByLabelText(/输入 40（缓存 60 另计）/).getAttribute("aria-label")).toContain("缓存不在输入之内");
   });
 
   it("shows the bounds beside a buddy the Host chose, for the turn that runs under that choice", async () => {
@@ -523,7 +519,7 @@ describe("what a turn says of its session, its usage and its buddy's origin", ()
     found.routing = { status: "explicit", decisionId: null, source: "host-override", basis: bounds };
     open({ step: 7, replies: { workflow: found } });
     await ready();
-    await userEvent.setup().hover(within(band()).getByText("Host 指定"));
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: "提交时的约束" }));
     expect((await screen.findAllByText(/硬约束：claude \/ claude-opus-5-5/))[0]).toBeTruthy();
   });
 });

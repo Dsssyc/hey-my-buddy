@@ -16,10 +16,10 @@ export function StepWaits({ step, steps, ctx }: { step: Step; steps: Steps; ctx:
     const start = wait.spanId === null ? acceptanceInterval(ctx.row!, spans, ctx.nowMs)?.startMs
       : spans.find(span => span.spanId === wait.spanId)!.startAt;
     const label = t(`wait.${wait.kind}`);
-    return <DetailItem key={itemKey} itemKey={itemKey} label={label} className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-b px-6 py-3 text-xs text-ink2">
-      <span>{label}</span>
-      <Moment at={start} itemKey={itemKey} label={label}/>
-      {wait.ms !== null && <span className="ml-auto tabular-nums">{formatDuration(wait.ms, "fine")}</span>}
+    return <DetailItem key={itemKey} itemKey={itemKey} label={label} className="flex shrink-0 flex-wrap items-baseline gap-x-2 gap-y-1 px-6 pb-2 text-xs text-ink3">
+      <i aria-hidden="true" className={wait.kind === "queue" ? "w-4 border-t border-dashed border-ink3" : "w-4 border-t border-dashed border-hand"}/>
+      <span>{label} {wait.ms !== null && <span className="tabular-nums">{formatDuration(wait.ms, "fine")}</span>}</span>
+      <span>· <Moment at={start} itemKey={itemKey} label={label}/> {t("wait.since")}</span>
     </DetailItem>;
   });
 }

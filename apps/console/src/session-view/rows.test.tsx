@@ -8,6 +8,7 @@ import en from "../i18n/en/taskDetail";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { MessageScrollerProvider } from "../components/ui/message-scroller";
 import { SessionBlocks, CallSummary } from "./SessionBlocks";
+import { Answer } from "./Answer";
 import { MessageResponse } from "./Markdown";
 import { HighlightedCode } from "./MarkdownCode";
 import { parseSession, records } from "./types";
@@ -218,4 +219,16 @@ it("leaves session soft line breaks to the Markdown renderer without enabling go
   expect(container.textContent).toContain("会话第一行");
   expect(container.textContent).toContain("会话第二行");
   expect(container.querySelector("br")).toBeNull();
+});
+
+
+it("renders Router note and evidence as Markdown while preserving literal product fields", () => {
+  const { container } = render(<Answer routing id="router" copyText="raw" content={{ format: "fields", value: {
+    domainNodeId: "**literal-domain**", taskType: "research", buddyId: "buddy:chosen",
+    note: "## Router 说明\n\n- 先读 `contracts.ts`", evidence: ["**已核对** `types.ts`"],
+  } }} />);
+  expect(screen.getByRole("heading", { name: "Router 说明" })).toBeTruthy();
+  expect(screen.getByText("**literal-domain**")).toBeTruthy();
+  expect([...container.querySelectorAll("code")].map(node => node.textContent)).toEqual(["contracts.ts", "types.ts"]);
+  expect(container.querySelector("strong")?.textContent).toBe("已核对");
 });

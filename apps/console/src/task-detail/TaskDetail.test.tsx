@@ -249,17 +249,15 @@ describe("the delegation", () => {
     const f = open({ step: 1, timeline: withFixes, replies: { task: task({ task: long, lineage: { ...task().lineage, parentRunId: "m0" } }), workflow: helper } });
     await ready();
     const text = pane().textContent!;
-    expect(text).toContain("原始委派方");
+    expect(text).not.toContain("原始委派方");
+    expect(text).not.toContain("当前负责方");
     expect(text).toContain("codex-desktop");
     expect(text).toContain("hey-my-buddy");
     expect(text).toContain("/work/m1");
     expect(text).toContain("带委派权");
-    // A long task is folded and unfolds.
-    expect(text).not.toContain(long);
-    await f.user.click(within(pane()).getByRole("button", { name: "展开" }));
-    await waitFor(() => expect(pane().textContent).toContain(long));
-    // The id copies; the other micro tasks open at their own detail.
-    expect(within(pane()).getByRole("button", { name: /复制标识 m1/ })).toBeTruthy();
+    // Height folding keeps the complete Markdown tree; geometry is checked in the browser.
+    expect(text).toContain(long);
+    expect(within(pane()).queryByRole("button", { name: /复制标识 m1/ })).toBeNull();
     await f.user.click(within(pane()).getByRole("button", { name: "协助查路径" }));
     expect(f.onOpenRun).toHaveBeenLastCalledWith("h1");
     expect(within(pane()).queryByRole("button", { name: "路由计算" })).toBeNull();
@@ -390,10 +388,10 @@ describe("a turn", () => {
     expect((await screen.findAllByText("没有可接收问询的活动代理。"))[0]).toBeTruthy();
   });
 
-  it("begins a later turn with what the Host gave it to continue, and keeps each turn's own result", async () => {
+  it("keeps a later turn's own result without repeating continuation input", async () => {
     open({ step: 7 });
     await ready();
-    expect(pane().textContent).toContain("继续。读取样例目录已获批准");
+    expect(pane().textContent).not.toContain("继续。读取样例目录已获批准");
     expect(pane().textContent).not.toContain("实现微任务详情，左边是步骤");
     expect(pane().textContent).toContain("第二轮：详情页已经按回合重做。");
     expect(pane().textContent).toContain("浏览器检查还要补两项");
@@ -440,10 +438,7 @@ describe("a turn", () => {
     expect(band.textContent).toContain("输入 23.4k");
     expect(band.textContent).toContain("输出 3.1k");
     expect(band.textContent).toContain("缓存 18.0k");
-    const user = userEvent.setup();
-    await user.hover(within(band).getByText(/输入 23\.4k/));
-    expect((await screen.findAllByText(/输入 23,400（含缓存 18,000）/))[0]).toBeTruthy();
-    expect(screen.getAllByText(/单次执行/)[0]).toBeTruthy();
+    expect(within(band).getByLabelText(/输入 23,400（含缓存 18,000）/)).toBeTruthy();
     cleanup();
     const unknown = workflow();
     unknown.turns = [{ ...unknown.turns[0]!, tokenUsage: null }, { ...unknown.turns[1]!, tokenUsage: { inputTokens: null, cachedInputTokens: null, outputTokens: 4200, source: "zcode-native", scope: "attempt" } }];
@@ -456,10 +451,10 @@ describe("a turn", () => {
     cleanup();
     open({ step: 7, replies: { workflow: { ...unknown, currentTurn: { ...unknown.currentTurn!, tokenUsage: null } } } });
     await ready();
-    expect(pane().querySelector("[data-slot=detail-band]")!.textContent).toMatch(/输入 未知.*输出 未知.*缓存 未知/);
+    expect(pane().querySelector("[data-slot=detail-band]")!.textContent).toContain("用量未记录");
   });
 
-  it("writes the session short, copyable, with whether it was resumed, and where it is stored in the hint", async () => {
+  it("writes the session short and copyable with whether it was resumed", async () => {
     const sessioned = task({ selectedAttempt: { attemptId: "att-2", result: { terminationReason: "completed", result: { nativeSession: {
       storageScope: "task-private", storageOwner: "hey-my-buddy-attempt", nativeAppVisibility: "not-listed-in-native-app" } } } } });
     open({ step: 7, replies: { task: sessioned } });
@@ -468,14 +463,12 @@ describe("a turn", () => {
     expect(band.textContent).toContain("恢复");
     const copy = within(band).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ });
     expect(copy.textContent).toContain("…");
-    await userEvent.setup().hover(copy);
-    expect((await screen.findAllByText(/Buddy 私有存储 · 由 Hey my buddy 的执行持有 · 原生应用里看不到/))[0]).toBeTruthy();
+    expect(copy.getAttribute("aria-label")).toContain("01a2f7c4-2e31");
     cleanup();
     open({ step: 3 });
     await ready();
     expect(pane().querySelector("[data-slot=detail-band]")!.textContent).toContain("新会话");
-    await userEvent.setup().hover(within(pane()).getByRole("button", { name: /复制标识/ }));
-    expect((await screen.findAllByText(/存储位置未记录 · 是否可见未记录/))[0]).toBeTruthy();
+    expect(within(pane()).getByRole("button", { name: /复制标识/ })).toBeTruthy();
   });
 
   it("writes why an execution did not end as it should: the cause, who cancelled it and why, a native limit", async () => {
@@ -667,16 +660,22 @@ describe("the acceptance", () => {
     expect(text).toContain("已验收");
     expect(text).toContain("f6dfd59c11");
     expect(text).toContain("14");
-    expect(text).toContain("5f0c81d2…e2a1");
-    expect(text).toContain("已验证");
-    expect(text).toContain("merge");
-    expect(text).toContain("~/projects/hey-my-buddy @ socu/console");
-    expect(text).toContain("b7285470 → f6dfd59c");
-    expect(text).toContain("Host 补充的改动 2");
-    expect(text).toContain("apps/console/src/tokens.css");
-    expect(text).toContain("codex-desktop");
+    expect(text).not.toContain(artifact.manifestSha256);
+    expect(text).not.toContain(verified.target!.path);
+    const user = userEvent.setup();
+    await user.click(within(pane()).getByRole("button", { name: /f6dfd59c11.*文件 14/ }));
+    await user.click(within(pane()).getByRole("button", { name: /已验证.*socu\/console/ }));
+    const evidence = pane().textContent!;
+    expect(evidence).toContain(artifact.manifestSha256);
+    expect(evidence).toContain("已验证");
+    expect(evidence).toContain("merge");
+    expect(evidence).toContain("~/projects/hey-my-buddy @ socu/console");
+    expect(evidence).toContain("b7285470 → f6dfd59c");
+    expect(evidence).toContain("Host 补充的改动 2");
+    expect(evidence).toContain("apps/console/src/tokens.css");
+    expect(evidence).toContain("codex-desktop");
     // Nothing exceptional: no stop is unconfirmed and the ending was normal.
-    expect(text).not.toContain("例外");
+    expect(evidence).not.toContain("例外");
   });
 
   it("writes that an integration was not required with its reason, and that none was recorded as it is", async () => {
@@ -684,6 +683,7 @@ describe("the acceptance", () => {
     open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [notRequired] }) } });
     await ready();
     expect(pane().textContent).toContain("无需整合");
+    await userEvent.setup().click(within(pane()).getByRole("button", { name: "无需整合" }));
     expect(pane().textContent).toContain("只改了文档");
     cleanup();
     open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [] }) } });

@@ -521,7 +521,7 @@ export function parseTask(value: unknown, runId: string): TaskView {
   str(workflow.state, "task.workflow.state");
   for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
   return {
-    task: task as unknown as Task, updatedAt: task.updatedAt as string, attempt: parseAttempt(task),
+    task: task as unknown as Task, updatedAt: task.updatedAt as string, acceptanceNote: strOrNull(task.acceptanceNote, "task.acceptanceNote"), attempt: parseAttempt(task),
     lead: (lineage.rootLeadRunId ?? null) !== null,
   };
 }

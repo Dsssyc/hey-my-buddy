@@ -259,6 +259,7 @@ export type TaskView = {
   /** For the presentation helpers the list shares; the detail reads its own facts from the fields beside it. */
   task: Task;
   updatedAt: string;
+  acceptanceNote: string | null;
   attempt: Attempt | null;
   /** The micro task belongs to a Lead, whose decision it waits for. */
   lead: boolean;

@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { cn } from "cn";
 import type { ComponentProps, ReactNode } from "react";
 import { Streamdown } from "streamdown";
 import { MarkdownCode } from "./MarkdownCode";
@@ -32,9 +33,9 @@ function SafeLink(props: ComponentProps<"a"> | Record<string, unknown>) {
   return <a href={safe} target="_blank" rel="noopener noreferrer" className="font-medium underline">{children as ReactNode}</a>;
 }
 
-export const MessageResponse = memo(function MessageResponse({ children, remarkPlugins }: { children: string; remarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"] }) {
+export const MessageResponse = memo(function MessageResponse({ children, remarkPlugins, className }: { children: string; remarkPlugins?: ComponentProps<typeof Streamdown>["remarkPlugins"]; className?: string }) {
   return <Streamdown
-    className="min-w-0 break-words"
+    className={cn("min-w-0 break-words", className)}
     mode="static"
     controls={false}
     remarkPlugins={remarkPlugins}

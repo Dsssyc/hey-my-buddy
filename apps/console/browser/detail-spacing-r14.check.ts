@@ -19,8 +19,8 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     await expect(title).toHaveText("回合 2");
     const [headBox, stripBox, tabsBox, titleBox] = await Promise.all([header.boundingBox(), strip.boundingBox(), tabs.boundingBox(), title.boundingBox()]);
     expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
-    expect(tabsBox!.y - stripBox!.y - stripBox!.height).toBeCloseTo(13, 0);
-    expect(titleBox!.y - tabsBox!.y - tabsBox!.height).toBeCloseTo(24, 0);
+    expect(titleBox!.y).toBeGreaterThan(stripBox!.y + stripBox!.height);
+    expect(tabsBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
     for (const group of [header, strip, tabs]) await expect(group).toHaveCSS("border-bottom-width", "0px");
     await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     const paper = await page.evaluate(() => {

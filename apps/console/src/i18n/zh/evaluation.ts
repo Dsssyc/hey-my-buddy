@@ -21,8 +21,6 @@ export default {
   domain: "领域",
   noDomains: "还没有领域节点。",
   noSample: "无样本",
-  foldDomain: "收起 {{name}} 的子领域",
-  unfoldDomain: "展开 {{name}} 的子领域",
   cell: "{{samples}} 个样本 · 一次通过 {{rate}} · 返工 {{rework}} 轮",
   taskTypes: {
     create: "新建",

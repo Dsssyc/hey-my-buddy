@@ -13,7 +13,7 @@ export default {
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
   state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
-  wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
+  wait: { since: "onward", queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
@@ -21,9 +21,10 @@ export default {
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
-  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", rerouted: "Rerouted" },
+  turn: { requestNext: "A request was returned to the Host; see the next step.", expected: "Expected {{time}}", rejected: "Rejected before the model started", rerouted: "Rerouted" },
   origin: { host: "Chosen by Host", locked: "Locked by user", single: "Only candidate", unrecorded: "Route not recorded" },
   usage: {
+    name: "Usage",
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",
     input: "Input {{n}}", inputWithCache: "Input {{n}} (including cache {{cached}})", output: "Output {{n}}", source: "Source {{source}}",
     partial: "Only the part that was reported", partialRecord: "Partial record", unrecorded: "Usage not recorded",
@@ -57,20 +58,11 @@ export default {
   },
   session: {
     name: "Session", unrecorded: "not recorded", resumed: "resumed", fresh: "new session",
-    storageUnknown: "Storage location not recorded", visibilityUnknown: "Visibility not recorded",
-    storage: {
-      "task-private": "Buddy-private storage", "task-private-sessions": "Buddy-private session directory", "harness-user-store": "Harness user storage",
-    },
-    owner: { "hey-my-buddy-attempt": "Held by the Hey my buddy execution", "hey-my-buddy-micro-task": "Held by the Hey my buddy micro task", "harness-user-store": "Held by the harness user directory" },
-    visibility: { "not-listed-in-native-app": "Not listed in the native app", "listed-in-native-app": "Listed in the native app" },
-    resumable: "Resumable", notResumable: "Not resumable", bound: "Private binding present", unbound: "No private binding",
   },
   activity: {
     unknown: "Progress unknown", starting: "Starting", "waiting-model": "Waiting for the model", "streaming-model": "Model writing",
     "tool-running": "Running a tool", "waiting-external": "Waiting for an outside result", "waiting-host": "Waiting for Host", finishing: "Finishing",
     reported: "Reported {{when}}", notReported: "No report", modelTurns: "Model turns: {{n}}", toolCalls: "Tool calls: {{n}}",
-    basis: { tool: "Tool activity received", native: "Native activity received", phase: "Only the phase, no native activity", unknown: "Basis of the activity unknown" },
-    lastTool: "Last tool activity {{when}}", lastNative: "Last native activity {{when}}", event: "Event number {{n}}",
   },
   inquiry: {
     head: "Inquiry", queued: "Queued", queuedCheckpoint: "Will be delivered at the Worker's next checkpoint; not delivered yet.", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
@@ -94,6 +86,7 @@ export default {
     overloaded: "Excluded for model service overload: {{n}}; {{list}}", excluded: "Excluded by the user: {{n}}; {{list}}", cooling: "Cooling down: {{n}}; {{list}}", coolingBuddy: "{{buddy}} (until {{time}})", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
   },
   routing: {
+    reason: "Reason",
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",
     domainNode: "Domain", unclassified: "Unclassified", taskType: "Task type",
     taskTypes: { create: "Create", change: "Change", debug: "Debug", verify: "Verify", review: "Review", research: "Research", write: "Write" },
@@ -104,7 +97,7 @@ export default {
     },
   },
   delegation: {
-    task: "Task", source: "Source", originalDelegator: "Originally delegated by", currentOwner: "Current owner", project: "Project", unknownProject: "Project not recorded", id: "Micro task ID",
+    task: "Task", source: "Source", originalDelegator: "Originally delegated by", currentOwner: "Current owner", project: "Project", unknownProject: "Project not recorded",
     parent: "Parent micro task", cwd: "Working directory", authority: "Delegation authority", authorityYes: "Has delegation authority", helpers: "Helpers",
     fixes: "Fixes", fixesTarget: "Micro task being fixed", fixedBy: "Fixed by: {{n}}",
     inquiries: "Inquiries",
@@ -114,14 +107,13 @@ export default {
       assistance: "Assistance request", attention: "Decision needed", routing: "Routing bounds", "helper-attention": "Helper's request",
       "helper-report": "Helper's report", other: "Decision needed",
     },
-    summary: "Summary", attempted: "Attempted", needed: "Needed", acceptance: "Acceptance criteria", expected: "Expected artifacts",
-    source: "Source", child: "Open the helper", more: "Other open requests: {{n}}", continuation: "Continue",
-    decided: "Decision", what: "Decision", who: "By", when: "Time", reason: "Reason",
+    attempted: "Attempted", needed: "Needed", acceptance: "Acceptance criteria", expected: "Expected artifacts",
+    child: "Open the helper", more: "Other open requests: {{n}}",
     state: { approved: "Approved", declined: "Declined", superseded: "Superseded", cancelled: "Cancelled" },
   },
   event: { value: {"approve": "Approved", "decline": "Declined", "approved": "Approved", "declined": "Declined", "accepted": "Accepted", "rejected": "Rejected", "concluded": "Concluded", "completed": "Completed", "failed": "Failed", "cancelled": "Cancelled", "queued": "Queued", "running": "Running", "executing": "Executing", "delivered": "Awaiting acceptance", "awaiting-host": "Awaiting Host", "superseded": "Superseded", "merge": "Merge", "cherry-pick": "Cherry-pick", "patch": "Apply patch", "not-required": "Not required", "verified": "Verified"}, facts: "Record", from: "Earlier buddy", to: "New buddy", stoppedBy: "Stopped by", details: "Details" },
   acceptance: {
-    artifact: "Artifact", files: "Files", integration: "Integration", state: "State", verified: "Verified", notRequired: "Not required", why: "Reason",
+    artifact: "Artifact", integration: "Integration", verified: "Verified", notRequired: "Not required",
     strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "Integration evidence not recorded",
     hostPaths: "Changes added by Host: {{n}}", rejection: "Sent back", rejected: "Sent back", note: "Note",
     conclusion: "Host's conclusion", outcome: "Micro task outcome", notCounted: "not counted as accepted", version: "Micro task version", attempt: "Reviewed execution",

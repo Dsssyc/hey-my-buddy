@@ -20,7 +20,7 @@ async function expectInquiryWhole(page: Page, inquiryId: string, text: string) {
   const label = inquiry.getByText(text, { exact: true });
   await expect(label).toBeVisible();
   await expectTextUncut(inquiry.locator("span:visible"));
-  const header = inquiry.locator(".bg-sunk > div").first();
+  const header = inquiry.locator("[data-slot=request-quote] > div").first();
   await expectWholeAndApart(header, header.locator(":scope > span"));
   const timeLines = await header.locator("time").evaluate(element => {
     const range = document.createRange();
@@ -89,7 +89,7 @@ for (const words of labels) for (const width of [390, 1440]) for (const theme of
         });
       }
       if (width === 390) {
-        const starts = await page.locator('[data-slot=detail-pane] [data-item-key^="inquiry:"] .bg-sunk > div > span:last-child')
+        const starts = await page.locator('[data-slot=detail-pane] [data-item-key^="inquiry:"] [data-slot=request-quote] > div > span:last-child')
           .evaluateAll(nodes => nodes.map(node => {
             const state = node.getBoundingClientRect();
             const time = node.parentElement!.querySelector("time")!.getBoundingClientRect();

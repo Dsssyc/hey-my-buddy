@@ -1,41 +1,31 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { Fold, Moment, MomentRange } from "./parts";
+import { Fold, Lines, Paths, Moment, MomentRange } from "./parts";
 
 afterEach(cleanup);
 
-describe("a text that may be long", () => {
-  const text = "这是一段很长的原文。".repeat(60);
-
-  it("is shown whole, with nothing to press, when it is short", () => {
-    render(<Fold text="短文" />);
-    expect(screen.getByText("短文")).toBeTruthy();
-    expect(screen.queryByRole("button")).toBeNull();
+describe("model-authored Markdown", () => {
+  it("renders headings, lists and inline code without cutting the source tree", () => {
+    const text = "# 任务书\n\n- 验证 `layout.tsx`\n- **核对**结果\n\n" + "长文完整保留。".repeat(120);
+    const { container } = render(<Fold text={text} />);
+    expect(screen.getByRole("heading", { name: "任务书" })).toBeTruthy();
+    expect(container.querySelector("li code")?.textContent).toBe("layout.tsx");
+    expect(container.querySelector("strong")?.textContent).toBe("核对");
+    expect(container.querySelector("[data-slot=fold-body]")?.textContent).toContain("长文完整保留。".repeat(120));
   });
 
-  it("is folded after its head, unfolds in the same paragraph, folds again, and starts folded on a new text", async () => {
-    const user = userEvent.setup();
-    const view = render(<Fold text={text} limit={100} />);
-    const paragraph = () => view.container.querySelectorAll("p");
-    expect(paragraph()).toHaveLength(1);
-    expect(paragraph()[0]!.textContent).toBe(text.slice(0, 100) + "…");
-    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("false");
-    await user.click(screen.getByRole("button", { name: "展开" }));
-    expect(paragraph()).toHaveLength(1);
-    expect(paragraph()[0]!.textContent).toBe(text);
-    expect(screen.getByRole("button", { name: "收起" }).getAttribute("aria-expanded")).toBe("true");
-    await user.click(screen.getByRole("button", { name: "收起" }));
-    expect(paragraph()[0]!.textContent).toBe(text.slice(0, 100) + "…");
-    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("false");
+  it("renders inline Markdown in model lists while product paths stay literal", () => {
+    const { container } = render(<><Lines items={["修复 `a.ts`，**核对**改动"]} /><Paths items={["**literal**/a[1].ts"]} /></>);
+    expect(container.querySelector("li code")?.textContent).toBe("a.ts");
+    expect(container.querySelectorAll("strong")).toHaveLength(1);
+    expect(screen.getByText("**literal**/a[1].ts")).toBeTruthy();
   });
 
-  it("is cut at a line or a word that ends, not in the middle of one, and the cut loses nothing when unfolded", async () => {
-    const lines = "第一行说了一件事\n第二行说了另一件事\n第三行说了第三件事";
-    const view = render(<Fold text={lines} limit={14} />);
-    expect(view.container.querySelector("p")!.textContent).toBe("第一行说了一件事…");
-    await userEvent.setup().click(screen.getByRole("button", { name: "展开" }));
-    expect(view.container.querySelector("p")!.textContent).toBe(lines);
+  it("keeps the shared Markdown link and image safety rules", () => {
+    const { container } = render(<Fold text="[web](https://example.com) [local](file:///private) [loopback](http://127.0.0.1/private) ![remote](https://example.com/pixel.png) <b>raw</b>" />);
+    expect(screen.getByRole("link", { name: "web" }).getAttribute("rel")).toBe("noopener noreferrer");
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+    expect(container.querySelector("img,b")).toBeNull();
   });
 });
 
