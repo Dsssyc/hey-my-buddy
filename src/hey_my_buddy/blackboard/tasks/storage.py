@@ -191,11 +191,6 @@ def _workspace_reference_rows(connection):
             yield table, row
 
 
-def allocation_references(connection, manifest: dict, request_id: str | None = None) -> list[str]:
-    """An unregistered allocation has no retained board reference of any state."""
-    return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id)
-
-
 def submission_references(connection, manifest: dict, request_id: str, directory: Path) -> list[str]:
     """Prove the new logical allocation is unregistered, including retained uses.
 
@@ -207,11 +202,7 @@ def submission_references(connection, manifest: dict, request_id: str, directory
                                       directories=[str(directory)])[0]
 
 
-def _allocation_reference_reasons(rows, manifest, request_id):
-    return _allocation_reference_sets(rows, [(manifest, request_id)])[0]
-
-
-def _allocation_reference_sets(rows, allocations, *, directories=None):
+def _allocation_reference_sets(rows, allocations, *, directories=None, on_reference=None):
     """One streaming pass, one parse per structured field, bounded by a row.
 
     Exact tokens and normalized ancestor paths match every candidate together.
@@ -263,118 +254,17 @@ def _allocation_reference_sets(rows, allocations, *, directories=None):
             referenced.update(matches(value))
         for index in referenced:
             reasons[index].add(table + '-reference')
+            if on_reference is not None:
+                on_reference(index, table, row)
         if unproven:
-            for item in reasons:
+            for index, item in enumerate(reasons):
                 item.add(table + '-reference-unproven')
+                if on_reference is not None and index not in referenced:
+                    on_reference(index, table, row)
     return [sorted(item) for item in reasons]
 
 
-def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict:
-    """Only the original allocation record can prove an orphan's exact checkout."""
-    from . import workspace
-    state = store.directory.resolve()
-    path = directory / 'checkout'
-    result = {'path': str(path), 'orphan': True, 'runId': None, 'reasons': [],
-              'manifest': None, 'allocationFacts': None}
-    try:
-        manifest = _read_storage_json(directory / 'manifest.json')
-        request = _read_storage_json(directory / 'request.json')
-        pinned = _read_storage_json(directory / 'input.json')
-        workspace._validate_manifest(manifest)
-        if (not isinstance(request.get('requestId'), str) or not request['requestId']
-                or not isinstance(request.get('intent'), dict) or not isinstance(pinned.get('snapshot'), dict)):
-            raise BoardError('STORAGE_UNSAFE', 'Original allocation records have invalid fields')
-        expected_id = 'ws-' + workspace._sha(workspace._json([str(state), request['requestId']]))[:32]
-        if (directory.parent != state / 'workspaces' or directory.name != expected_id
-                or manifest['workspaceId'] != directory.name or manifest['kind'] != 'worktree'
-                or manifest['checkoutRoot'] != str(path) or str(path.resolve()) != str(path)
-                or type(request.get('version')) is not int or request['version'] not in (1, 2, 3)
-                or request['version'] != manifest['version']
-                or request.get('intent', {}).get('kind') != 'worktree'
-                or pinned.get('inputCommit') != manifest['inputCommit']
-                or pinned.get('inputTree') != manifest['inputTree']
-                or pinned.get('snapshot', {}).get('stagedCommit') != manifest['snapshot']['stagedCommit']):
-            raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
-        result['manifest'] = manifest
-        result['allocationRequestId'] = request['requestId']
-        refs = {}
-        if git_proof:
-            proof = workspace.cleanup_inspect(state, manifest)
-            result['reasons'].extend(proof['reasons'])
-            result['proof'] = proof
-            repository = Path(manifest['snapshot']['repositoryPath'])
-            for suffix, commit in (('input', manifest['inputCommit']),
-                                   ('staged', manifest['snapshot']['stagedCommit']),
-                                   ('retained/input', manifest['inputCommit']),
-                                   ('retained/staged', manifest['snapshot']['stagedCommit'])):
-                ref = 'refs/hey-my-buddy/workspaces/' + directory.name + '/' + suffix
-                refs[ref] = workspace._line(repository, 'show-ref', '--verify', '--hash', ref)
-                if (suffix in ('input', 'staged') and manifest['snapshot'][suffix + 'Ref'] != ref
-                        or workspace._git(repository, 'symbolic-ref', '-q', ref, allowed=(0, 1)).strip()
-                        or refs[ref] != commit):
-                    result['reasons'].append('fixed-reference-changed')
-            if workspace._git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z'):
-                result['reasons'].append('unsealed-changes')
-        identities = {}
-        for name, item in (('allocation', directory), ('checkout', path), ('lock', directory / '.lock')):
-            identity = item.lstat()
-            if not (stat.S_ISREG(identity.st_mode) if name == 'lock' else stat.S_ISDIR(identity.st_mode)):
-                raise BoardError('STORAGE_UNSAFE', 'Original allocation physical identity is unproven')
-            identities[name] = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
-        result['allocationFacts'] = {'identities': identities, 'refs': refs,
-                                    'manifestSha256': manifest['manifestSha256'],
-                                    'requestSha256': workspace._sha(workspace._json(request)),
-                                    'inputSha256': workspace._sha(workspace._json(pinned))}
-    except (BoardError, OSError, ValueError, TypeError, KeyError) as error:
-        result['reasons'].append('allocation-unproven')
-        if isinstance(error, BoardError):
-            result['reasons'].append(error.code)
-            result['proofError'] = error.payload()
-    result['reasons'] = sorted(set(result['reasons']))
-    return result
-
-
-def _remove_orphan_workspace(store, candidate: dict) -> None:
-    from . import workspace
-    directory = Path(candidate['path']).parent
-    # This is the same lock and order as submission: allocation, then board.
-    # Keep the DB writer fence through removal so admission cannot win between
-    # checking retained facts and deleting a checkout.
-    with workspace._lock(directory):
-        # Git and allocation-record proof precede the writer transaction. The
-        # allocation lock still fences same-request preparation/admission.
-        fresh = _orphan_workspace(store, directory)
-        if not fresh['reasons']:
-            from .checkout_processes import require_idle_checkout
-            require_idle_checkout(Path(candidate['path']))
-        with store.db.write() as connection:
-            if not fresh['reasons']:
-                fresh['reasons'].extend(allocation_references(
-                    connection, fresh['manifest'], fresh['allocationRequestId']))
-            if (fresh['reasons'] or fresh['allocationFacts'] != candidate.get('allocationFacts')
-                    or fresh['manifest'] != candidate.get('manifest')
-                    or tree_info(Path(candidate['path']))[1:] != (candidate['fingerprint'], True)):
-                raise BoardError('STORAGE_CHANGED', 'Orphan allocation changed or acquired a board reference',
-                                 reasons=fresh['reasons'])
-            # Revalidate small physical records after the historical scan too;
-            # moving Git inspection out of the transaction must not widen the
-            # deletion authority to changed request/input records or inodes.
-            for name, item in (('allocation', directory), ('checkout', Path(candidate['path'])),
-                               ('lock', directory / '.lock')):
-                identity = item.lstat()
-                facts = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
-                if facts != fresh['allocationFacts']['identities'][name]:
-                    raise BoardError('STORAGE_CHANGED', 'Orphan physical identity changed')
-            for name, key in (('request.json', 'requestSha256'), ('input.json', 'inputSha256')):
-                record = _read_storage_json(directory / name)
-                if workspace._sha(workspace._json(record)) != fresh['allocationFacts'][key]:
-                    raise BoardError('STORAGE_CHANGED', 'Orphan allocation record changed')
-            if _read_storage_json(directory / 'manifest.json') != fresh['manifest']:
-                raise BoardError('STORAGE_CHANGED', 'Orphan allocation manifest changed')
-            workspace.cleanup_remove(store.directory, fresh['manifest'])
-
-
-def inspect(store, *, git_proof: bool = True) -> dict:
+def inspect(store) -> dict:
     from . import workspace
     state = store.directory.resolve()
     rows = []
@@ -454,30 +344,11 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         except BoardError:
             continue
     workspace_root = state / 'workspaces'
-    orphan_inputs = []
     if workspace_root.is_dir():
-        for directory in sorted(workspace_root.iterdir()):
-            path = directory / 'checkout'
-            if path in seen or path in recognized:
-                continue
-            if not path.exists():
-                add('workspaces', directory, ['owner-unproven', 'checkout-missing'],
-                    orphan=True, runId=None)
-                continue
-            orphan_inputs.append(_orphan_workspace(store, directory, git_proof=git_proof))
-    pending = [item for item in orphan_inputs if not item['reasons']]
-    if pending:
-        with store.db.read() as connection:
-            references = _allocation_reference_sets(
-                _workspace_reference_rows(connection),
-                [(item['manifest'], item['allocationRequestId']) for item in pending])
-        for item, reasons in zip(pending, references):
-            item['reasons'].extend(reasons)
-    for orphan in orphan_inputs:
-        reasons = orphan.pop('reasons')
-        path = Path(orphan.pop('path'))
-        orphan.pop('allocationRequestId', None)
-        add('workspaces', path, reasons, **orphan)
+        directories = [directory for directory in sorted(workspace_root.iterdir())
+                       if directory / 'checkout' not in seen and directory / 'checkout' not in recognized]
+        for item in reclamation.allocation_inventory(store, directories):
+            add('workspaces', item['path'], item['reasons'], orphan=True, runId=None)
     runtimes = runtime_root().absolute()
     from ...home import default_state_dir
     foreign_default_root = (runtimes.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
@@ -696,7 +567,7 @@ def apply(store, params: dict) -> dict:
                 _finish_pending(result, receipt)
         # The plan proved Git state before confirmation. The removal paths prove
         # it again under their own deletion fences, after this board inventory.
-        current = {row['id']: row for row in inspect(store, git_proof=False)['candidates']}
+        current = {row['id']: row for row in inspect(store)['candidates']}
         done = {row['id'] for row in result['removed'] + result['skipped']}
         for candidate in planned['candidates']:
             if candidate['id'] in done:
@@ -714,9 +585,7 @@ def apply(store, params: dict) -> dict:
                     reasons = fresh['reasons'] if fresh and not fresh['eligible'] else ['candidate-changed']
                     result['skipped'].append({'id': candidate['id'], 'path': candidate['path'], 'reasons': reasons})
                     continue
-                if candidate['category'] == 'workspaces':
-                    _remove_orphan_workspace(store, candidate)
-                elif candidate['category'] == 'runtimes':
+                if candidate['category'] == 'runtimes':
                     # Recheck immediately before atomic removal from the live name.
                     original = Path(fresh['path'])
                     with ExitStack() as removal:
@@ -737,8 +606,6 @@ def apply(store, params: dict) -> dict:
                     continue
                 else:
                     raise BoardError('STORAGE_PROTECTED', 'Durable storage cannot be reclaimed')
-                result['removed'].append({'id': fresh['id'], 'path': fresh['path'], 'bytes': fresh['bytes']})
-                result['removedBytes'] += fresh['bytes']
             except (BoardError, OSError) as error:
                 if result.get('pending'):
                     raise BoardError('STORAGE_INCOMPLETE', 'Removal is incomplete; retry the same commandId and planId', planId=plan_id) from error

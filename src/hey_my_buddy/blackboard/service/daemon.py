@@ -161,11 +161,16 @@ class Daemon:
         while not self.stopping.is_set():
             if time.monotonic() >= next_reclaim:
                 try:
-                    self._reclaim_storage()
+                    try:
+                        self._reclaim_storage()
+                    except Exception as error:
+                        self.store.record_service_issue("storage-reclamation", error)
+                    else:
+                        self.store.clear_service_issue("storage-reclamation")
+                    if (self.store.persistence_error or '').startswith('Storage reclamation bookkeeping:'):
+                        self.store.persistence_error = None
                 except Exception as error:
-                    self.store.record_service_issue("storage-reclamation", error)
-                else:
-                    self.store.clear_service_issue("storage-reclamation")
+                    self.store.persistence_error = f"Storage reclamation bookkeeping: {type(error).__name__}: {error}"
                 next_reclaim = time.monotonic() + 60
             if self.stopping.wait(2):
                 break

@@ -18,8 +18,8 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
     expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
     categories: [
       { id: "harnesses", bytes: 3_500_000_000, reclaimableBytes: 0, count: 71, eligibleCount: 0, reasons: ["continuation-supported", "grace-period"] },
-      { id: "workspaces", bytes: 3_400_000_000, reclaimableBytes: 1_200_000_000, count: 9, eligibleCount: 4, reasons: [] },
-      { id: "runtimes", bytes: 2_100_000_000, reclaimableBytes: 2_100_000_000, count: 30, eligibleCount: 30, reasons: [] },
+      { id: "workspaces", bytes: 2_200_000_000, reclaimableBytes: 0, count: 9, eligibleCount: 0, reasons: [] },
+      { id: "runtimes", bytes: 3_300_000_000, reclaimableBytes: 3_300_000_000, count: 30, eligibleCount: 30, reasons: [] },
       { id: "backup", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
       { id: "durable", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
     ],
@@ -38,7 +38,7 @@ function applyResult(overrides: Partial<StorageApplyResult> = {}): StorageApplyR
   return { planId: "plan-1", removedBytes: 2_700_000_000, complete: true,
     removed: [
       { id: "c1", path: "/private/runtimes/one", bytes: 1_500_000_000 },
-      { id: "c2", path: "/private/workspaces/orphan/checkout", bytes: 1_200_000_000 },
+      { id: "c2", path: "/private/runtimes/two", bytes: 1_200_000_000 },
     ],
     skipped: [{ id: "c3", path: "/private/runtimes/old", reasons: ["candidate-changed"] }], ...overrides };
 }
@@ -156,7 +156,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(panelResult.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(dialog.hasAttribute("inert")).toBe(false);
     expect(dialog.textContent).not.toContain("保留的 Harness 目录：");
-    expect(dialog.textContent).toContain("原生目录由服务自动回收");
+    expect(dialog.textContent).not.toContain("原生目录由服务自动回收");
     expect(dialog.textContent).toContain("黑板、记录和上次升级之前的黑板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     await user.tab({ shift: true });

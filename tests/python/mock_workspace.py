@@ -252,6 +252,10 @@ class MockWorkspace:
     def resolve_allocation(self, state_dir, manifest, retained=None):
         return None
 
+    @contextmanager
+    def integration_target_lock(self, state_dir, path):
+        yield
+
     def allocation_lock_directory(self, state_dir, workspace_id):
         return None
 

@@ -1984,6 +1984,21 @@ def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | Non
     return directory if directory.is_dir() and lock_path.is_file() else None
 
 
+@contextmanager
+def integration_target_lock(state_dir, path):
+    """Keep a managed target alive from integration verification to admission."""
+    state = Path(state_dir).resolve()
+    try:
+        parts = Path(path).resolve().relative_to((state / "workspaces").resolve()).parts
+    except ValueError:
+        parts = ()
+    if len(parts) >= 2 and _workspace_identifier(parts[0]) and parts[1] == "checkout":
+        with _lock(state / "workspaces" / parts[0], create=False):
+            yield
+    else:
+        yield
+
+
 def _attached_branch_report(checkout_root, record) -> dict:
     """Identify an attached branch and the command to detach this checkout's HEAD."""
     ref = record.get("branch") if isinstance(record.get("branch"), str) else ""

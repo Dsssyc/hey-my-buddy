@@ -10,7 +10,7 @@ export default {
   orphans: "Orphan processes {{n}}", orphansHint: "Reclamation does not stop these processes.", process: "pid {{pid}}", daemon: "Service", execution: "Execution process", unknownKind: "Type not recorded",
   removed: "Reclaimed {{bytes}} · Items {{n}}", skipped: "Skipped items {{n}} · data changed", showRemoved: "Show removed items", hideRemoved: "Hide removed items",
   showSkipped: "Show individual reasons", hideSkipped: "Hide individual reasons", item: "{{path}}: {{detail}}", changed: "Data changed or conditions no longer met",
-  confirmTitle: "Reclaim unused data", confirmDetail: "Eligible native directories are reclaimed automatically three days after acceptance or conclusion, with confirmed shutdown. This action rechecks the listed candidates and skips changed items. The blackboard, records and the pre-upgrade blackboard will be kept.",
+  confirmTitle: "Reclaim unused data", confirmDetail: "Each item is checked again and changed items are skipped. The blackboard, records and the pre-upgrade blackboard will be kept.",
   confirmChecked: "Plan checked at: {{time}}", confirmTotal: "Total: {{bytes}}", confirmRow: "{{category}}: {{bytes}}",
   confirmExpired: "The plan expired; close this dialog and check again", cancel: "Cancel", confirm: "Confirm reclamation",
   categories: { "session-records": "Session records", harnesses: "Retained harness directories", workspaces: "Managed checkouts", runtimes: "Runtimes", backup: "Backups", durable: "Blackboard and records" },

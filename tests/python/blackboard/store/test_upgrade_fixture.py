@@ -828,3 +828,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual([tuple(row) for row in upgraded.execute('SELECT plan_id,created_at FROM workspace_cleanup_plans ORDER BY rowid')], stock)
         for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
             self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
+
+    def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        root = Path(__file__).resolve().parents[4]
+        self.assertEqual(metadata['generatorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['baseGeneratorSha256'], 'e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313')
+        self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
+        self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])

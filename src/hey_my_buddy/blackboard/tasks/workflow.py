@@ -17,8 +17,8 @@ What the coordinator adds is durable governance around it:
 
 The workspace module (``hey_my_buddy.blackboard.tasks.workspace``) performs all Git/filesystem work. Preparation and sealing happen outside a database transaction;
 immutable manifests are pinned in authoritative records afterwards. Revoking an
-unregistered allocation holds the database writer fence through final proof and
-exact removal so concurrent admission cannot register a checkout being removed.
+unregistered allocation keeps its original allocation lock through a read-only
+reference proof and exact removal; writers of retained references share that lock.
 """
 from __future__ import annotations
 
@@ -1835,7 +1835,7 @@ class WorkflowCoordinator:
         """Revoke this invocation's new allocation without replacing admission errors.
 
         The original preparation lock stays held through physical inspection,
-        the database writer fence, and removal of the checkout, refs and records.
+        the read-only reference snapshot, and removal of the checkout, refs and records.
         Lock-file and directory removal follows lock release. With three callers
         for the same requestId, a second can lock the unlinked old inode while a
         third recreates and locks a new file, breaking mutual exclusion. This
@@ -1872,12 +1872,12 @@ class WorkflowCoordinator:
         try:
             plan = module.submission_revoke_plan(self.board.directory, manifest)
             directory = plan["directory"]
-            with self.db.write() as connection:
+            with self.db.read() as connection:
                 reasons = storage.submission_references(connection, manifest, request_id, directory)
-                if reasons or plan["reasons"]:
-                    facts["reasons"] = sorted(set(reasons + plan["reasons"]))
-                else:
-                    facts.update(module.revoke_submission(plan))
+            if reasons or plan["reasons"]:
+                facts["reasons"] = sorted(set(reasons + plan["reasons"]))
+            else:
+                facts.update(module.revoke_submission(plan))
         except Exception as error:
             cleanup_error(error)
         if facts["removed"]:
@@ -3894,31 +3894,33 @@ class WorkflowCoordinator:
                     runId=target_id,
                 )
         verification: dict = {}
-        if duplicate is None and not_required is None:
-            original_manifest, final_manifest, manifest = verification_inputs
-            verification = self._accept_verify(
-                manifest, original_input=original_manifest, final_input=final_manifest,
-                target=target, host_paths=host_paths, before_commit=before_commit,
-                adjusted=adjusted, note=note)
-        now = self.now()
-        with self.db.write() as connection:
-            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
-            owner = self._run_row(connection, owner_run_id)
-            actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
-            receipt = self.board._receipt_response(connection, receipt_entry)
-            if receipt is not None:
-                duplicate = {**receipt, "duplicate": True}
-            run_row = self._target_run(connection, owner, target_id)
-            run_id = target_id
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-            if duplicate is None:
-                response, _, _ = self._accept_record(
-                    connection, owner_run_id=owner_run_id, run_row=run_row, task=task, actor=actor, now=now,
-                    artifact_id=artifact_id, note=note, command_id=command_id, request_key=request_key,
-                    verification=verification, not_required=not_required)
-            else:
-                response = duplicate
-            head = self.board._head_of(connection)
+        with ExitStack() as target_ownership:
+            if duplicate is None and not_required is None:
+                target_ownership.enter_context(workspace_module().integration_target_lock(self.board.directory, target["path"]))
+                original_manifest, final_manifest, manifest = verification_inputs
+                verification = self._accept_verify(
+                    manifest, original_input=original_manifest, final_input=final_manifest,
+                    target=target, host_paths=host_paths, before_commit=before_commit,
+                    adjusted=adjusted, note=note)
+            now = self.now()
+            with self.db.write() as connection:
+                receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
+                owner = self._run_row(connection, owner_run_id)
+                actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
+                receipt = self.board._receipt_response(connection, receipt_entry)
+                if receipt is not None:
+                    duplicate = {**receipt, "duplicate": True}
+                run_row = self._target_run(connection, owner, target_id)
+                run_id = target_id
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+                if duplicate is None:
+                    response, _, _ = self._accept_record(
+                        connection, owner_run_id=owner_run_id, run_row=run_row, task=task, actor=actor, now=now,
+                        artifact_id=artifact_id, note=note, command_id=command_id, request_key=request_key,
+                        verification=verification, not_required=not_required)
+                else:
+                    response = duplicate
+                head = self.board._head_of(connection)
         self.board._notify(head)
         response = dict(response)
         if duplicate is not None:

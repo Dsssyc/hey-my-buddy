@@ -176,7 +176,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(native_path(path).read_bytes(), expected)
         self.assertEqual(outside.read_text(encoding="utf-8"), 'untouched target')
 
-    def test_public_integration_during_failed_admission_retains_new_target(self):
+    def test_public_integration_during_failed_admission_reports_target_busy(self):
         board = self.board()
         delivered = self.submit(board, request_id='integration-source', cwd=str(self.repo))
         self.register(board)
@@ -191,23 +191,22 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         original = BoardError('ADMISSION_FAILED', 'Controlled admission refusal after integration')
         def admission(*args, **kwargs):
             manifest = kwargs['micro_task']['manifest']
-            with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
-                accepted = board.call('workflow_accept', {
+            with self.assertRaises(BoardError) as caught:
+                board.call('workflow_accept', {
                     'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
-                    'note': 'Retained private integration target',
+                    'note': 'Managed integration target',
                     'target': {'path': manifest['checkoutRoot'], 'ref': sealed['commit']}, **self.control(view)})
-            self.assertEqual(accepted['integration']['state'], 'verified')
+            self.assertEqual(caught.exception.code, 'WORKSPACE_BUSY')
             raise original
         with patch.object(board.store, 'task_submit', side_effect=admission):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
         self.assertIs(caught.exception, original)
-        self.assertFalse(original.details['submissionCleanup']['removed'])
-        self.assertIn('workflow_integrations-reference', original.details['submissionCleanup']['reasons'])
-        self.assertTrue((self.allocation() / 'checkout').is_dir())
+        self.assertTrue(original.details['submissionCleanup']['removed'])
+        self.assertFalse(self.allocation().exists())
         self.assert_no_registration(board)
 
-    def test_alias_state_directory_retains_public_integration_target(self):
+    def test_alias_state_directory_uses_the_same_integration_target_lock(self):
         canonical = self.directory.resolve()
         if not str(canonical).startswith(('/private/tmp/', '/private/var/')):
             self.skipTest('requires a macOS private-directory alias')
@@ -215,13 +214,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(self.directory.resolve(), canonical)
         with patch.object(storage, 'submission_references', wraps=storage.submission_references) as references, \
                 patch.object(workspace, '_write_once', wraps=workspace._write_once) as write:
-            self.test_public_integration_during_failed_admission_retains_new_target()
+            self.test_public_integration_during_failed_admission_reports_target_busy()
         self.assertEqual(references.call_args.args[3], self.allocation().resolve())
         receipts = [call.args[0] for call in write.call_args_list if call.args[0].name.startswith('submission-cleanup-')]
-        self.assertEqual(len(receipts), 1)
-        self.assertEqual(receipts[0].parent, self.allocation().resolve())
-        self.assertTrue((self.allocation() / 'manifest.json').exists())
-        self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation().name).splitlines()), 4)
+        self.assertEqual(receipts, [])
+        self.assertFalse(self.allocation().exists())
+        self.assertEqual(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation().name), '')
 
     def test_submission_proof_uses_checkout_identity_only_for_worktrees(self):
         board = self.board()
@@ -522,8 +520,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(record['HEAD'], manifest['inputCommit'])
         self.assertEqual(workspace.inspect(str(directory / 'checkout'))['checkoutId'], manifest['checkoutId'])
         self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
-        orphan = storage._orphan_workspace(board, directory)
-        self.assertEqual(orphan['reasons'], [])
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        Reclamation(board.store).run()
+        self.assertFalse(directory.exists())
         self.assert_no_registration(board)
 
     def test_changed_new_checkout_is_retained_after_admission_rejection(self):
@@ -589,17 +588,17 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 captures = []
                 with patch.object(storage, 'process_inventory', return_value=([], [], True)):
                     planned = board.call('storage_plan', {})
-                    candidate = next(row for row in planned['candidates'] if row['path'] == str(checkout))
-                    self.assertTrue(candidate['eligible'], candidate['reasons'])
+                    self.assertFalse(any(row['path'] == str(checkout) for row in planned['candidates']))
                     def cleanup_before_admission(*args, **kwargs):
-                        captures.append(board.call('storage_apply', {'planId': planned['planId'],
-                            'commandId': 'borrowed-admission-cleanup-' + kind, 'confirm': True}))
+                        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+                        Reclamation(board.store).run()
+                        captures.append(checkout.exists())
                         return original_submit(*args, **kwargs)
                     with patch.object(board.store, 'task_submit', side_effect=cleanup_before_admission):
                         submitted = self.submit(board, request_id='reuse-allocation-' + kind, cwd=str(checkout), kind=kind)
                 self.assertTrue(checkout.exists(), 'a borrowed allocation must survive its admission window')
-                self.assertEqual(captures[0]['removed'], [])
-                self.assertTrue(any('WORKSPACE_BUSY' in row['reasons'] for row in captures[0]['skipped']))
+                self.assertEqual(captures, [True])
+                self.assertEqual(board.store.service_issues(), [])
                 with board.store.db.read() as connection:
                     self.assertIsNotNone(connection.execute("SELECT 1 FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
                                                            (submitted['runId'],)).fetchone())
@@ -624,9 +623,11 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 checkout = captures['manifest']['checkoutRoot']
                 planned = board.call('storage_plan', {})
                 candidate = next(row for row in planned['candidates'] if row['path'] == checkout)
-                self.assertTrue(candidate['eligible'], candidate['reasons'])
-                captures['cleanup'] = board.call('storage_apply', {'planId': planned['planId'],
-                    'commandId': 'helper-admission-cleanup', 'confirm': True})
+                self.assertFalse(candidate['eligible'])
+                self.assertEqual(candidate['reasons'], ['WORKSPACE_BUSY'])
+                from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+                Reclamation(board.store).run()
+                captures['cleanup'] = Path(checkout).exists()
             return original_buddy(spec)
         with patch.object(storage, 'process_inventory', return_value=([], [], True)), \
                 patch.object(workspace, '_prepare_locked', side_effect=capture_first), \
@@ -638,8 +639,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                           'executionWorkspace': {'kind': 'worktree', 'writeScope': ['.']}}])
         checkout = Path(captures['manifest']['checkoutRoot'])
         self.assertTrue(checkout.exists(), 'an earlier prepared helper must stay allocated while later helpers prepare')
-        self.assertEqual(captures['cleanup']['removed'], [])
-        self.assertTrue(any('WORKSPACE_BUSY' in row['reasons'] for row in captures['cleanup']['skipped']))
+        self.assertTrue(captures['cleanup'])
+        self.assertEqual(board.store.service_issues(), [])
         self.assertEqual(len(approved['children']), 2)
         with board.store.db.read() as connection:
             for child in approved['children']:

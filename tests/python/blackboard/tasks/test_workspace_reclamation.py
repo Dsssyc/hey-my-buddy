@@ -124,7 +124,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertTrue(all(not root.exists() for root in roots))
 
     def test_abandoned_shell_and_unowned_allocation_are_reclaimed_under_their_locks(self):
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_allocation
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         from unittest.mock import patch
         board = self.board()
         intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
@@ -133,10 +133,10 @@ class ReclamationTests(LifecycleTestCase):
         (shell / '.lock').touch()
         (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 3, 'intent': intent}))
         with workspace._lock(shell, create=False):
-            with self.assertRaises(Exception) as caught:
-                reclaim_allocation(board.store, shell)
-            self.assertEqual(caught.exception.code, 'WORKSPACE_BUSY')
-        reclaim_allocation(board.store, shell)
+            Reclamation(board.store).run()
+            self.assertTrue(shell.exists())
+            self.assertEqual(board.store.service_issues(), [])
+        Reclamation(board.store).run()
         self.assertFalse(shell.exists())
         manifest = workspace.prepare(board.directory, 'abandoned-allocation', intent)
         directory = board.directory / 'workspaces' / manifest['workspaceId']
@@ -144,13 +144,13 @@ class ReclamationTests(LifecycleTestCase):
         (checkout / 'unsealed.txt').write_text('abandoned preparation', encoding='utf-8')
         git(checkout, 'add', '.')
         git(checkout, 'commit', '-qm', 'Preparation committed before admission')
-        reclaim_allocation(board.store, directory)
+        Reclamation(board.store).run()
         self.assertFalse(directory.exists())
         self.assertFalse(git(self.repo, 'for-each-ref', '--format=%(refname)',
                              'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/').strip())
         submitted, _, manifest, checkout, _, view, _ = self.run_worktree(board, request_id='live-allocation')
         directory = board.directory / 'workspaces' / manifest['workspaceId']
-        reclaim_allocation(board.store, directory)
+        Reclamation(board.store).run()
         self.assertTrue(checkout.exists())
         self.assertTrue(directory.exists())
 
@@ -198,19 +198,19 @@ class ReclamationTests(LifecycleTestCase):
                     self.assertIsNone(connection.execute('SELECT 1 FROM workflow_host_conclusions WHERE run_id=?', (child_id,)).fetchone())
 
     def test_shell_with_a_live_request_is_retained_until_its_task_has_gone(self):
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_allocation
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         task = board.submit_execution(requestId='live-shell', adapter='command', task='private fixture',
                                       argv=['unused-fixture-command'], cwd=str(self.repo), expectedSeconds=60)
         _, directory = workspace._workspace_directory(board.directory, 'live-shell')
         (directory / '.lock').touch()
         (directory / 'request.json').write_bytes(workspace._json({'requestId': 'live-shell'}))
-        reclaim_allocation(board.store, directory)
+        Reclamation(board.store).run()
         self.assertTrue(directory.exists())
         with board.store.db.write() as connection:
             connection.execute('DELETE FROM events WHERE task_id=?', (task['task']['runId'],))
             connection.execute('DELETE FROM tasks WHERE task_id=?', (task['task']['runId'],))
-        reclaim_allocation(board.store, directory)
+        Reclamation(board.store).run()
         self.assertFalse(directory.exists())
 
     def test_storage_keeps_live_checkout_inventory_and_excludes_terminal_candidates(self):
@@ -268,7 +268,7 @@ class ReclamationTests(LifecycleTestCase):
                     self.assertFalse(orphan['eligible'])
 
     def test_unregistered_allocation_retained_by_an_independent_integration_is_not_deleted(self):
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_allocation
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         from unittest.mock import patch
         board = self.board()
         _, _, _, _, _, view, artifact = self.run_worktree(board, request_id='integration-owner')
@@ -286,14 +286,14 @@ class ReclamationTests(LifecycleTestCase):
         refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
                    'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/')
         with patch.object(workspace, 'cleanup_remove', side_effect=AssertionError('Referenced target deleted')):
-            reclaim_allocation(board.store, directory)
+            Reclamation(board.store).run()
         self.assertTrue(checkout.exists())
         self.assertEqual(git(checkout, 'rev-parse', 'HEAD').strip(), integration_head)
         self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
                              'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
 
     def test_unproven_allocation_is_retained_without_a_service_issue(self):
-        from hey_my_buddy.blackboard.tasks.reclamation import reclaim
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         directories = []
         for request_id, request in (('unproven-request', {'requestId': 'someone-else'}),
@@ -306,7 +306,7 @@ class ReclamationTests(LifecycleTestCase):
                 (directory / '.lock').touch()
             (directory / 'request.json').write_bytes(workspace._json(request))
             directories.append(directory)
-        reclaim(board.store)
+        Reclamation(board.store).run()
         self.assertTrue(all(directory.exists() for directory in directories))
         self.assertEqual(board.store.service_issues(), [])
 
@@ -343,7 +343,7 @@ class ReclamationTests(LifecycleTestCase):
         def remove(store, directory):
             result = real(store, directory)
             with storage.locked(store):
-                unlocked.append(directory.name)
+                unlocked.append(directory['directory'].name)
             return result
         with patch.object(reclamation, 'reclaim_allocation', side_effect=remove):
             reclamation.Reclamation(board.store).run()
@@ -472,3 +472,121 @@ class ReclamationTests(LifecycleTestCase):
         self.assertTrue(result['removed'])
         self.assertTrue(result['alreadyRemoved'])
         self.assertFalse(checkout.exists())
+
+    def test_allocation_git_process_and_removal_work_never_hold_a_database_transaction(self):
+        import sqlite3
+        from unittest.mock import patch
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.tasks import checkout_processes, macro_task_deletion_workspace, reclamation
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        manifest = workspace.prepare(board.directory, 'transaction-free-orphan', intent)
+        observed = []
+        def outside_transaction(name, operation):
+            def call(*args, **kwargs):
+                with sqlite3.connect(board.store.db.path, timeout=0) as other:
+                    other.execute('BEGIN IMMEDIATE')
+                    other.rollback()
+                observed.append(name)
+                return operation(*args, **kwargs)
+            return call
+        with patch.object(workspace, 'deletion_inspect', side_effect=outside_transaction('git', workspace.deletion_inspect)), \
+             patch.object(checkout_processes, 'require_idle_checkout', side_effect=outside_transaction('process', checkout_processes.require_idle_checkout)), \
+             patch.object(workspace, 'cleanup_remove', side_effect=outside_transaction('checkout', workspace.cleanup_remove)), \
+             patch.object(macro_task_deletion_workspace, '_delete_refs', side_effect=outside_transaction('refs', macro_task_deletion_workspace._delete_refs)), \
+             patch.object(private_dirs, 'remove_tree', side_effect=outside_transaction('records', private_dirs.remove_tree)):
+            reclamation.Reclamation(board.store).run()
+        self.assertEqual(observed, ['git', 'process', 'checkout', 'refs', 'records'])
+        self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())
+
+    def test_unproven_allocations_share_one_scan_and_wait_for_entry_or_related_task_changes(self):
+        import os
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        board = self.board()
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        manifests = [workspace.prepare(board.directory, request, intent) for request in ('blocked-one', 'blocked-two')]
+        for index, manifest in enumerate(manifests):
+            git(Path(manifest['checkoutRoot']), 'switch', '-q', '-c', 'private-branch-' + str(index))
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
+            maintenance.run()
+            self.assertEqual(scan.call_count, 1)
+            maintenance.run()
+            maintenance.changed(['unrelated-task'])
+            maintenance.run()
+            self.assertEqual(scan.call_count, 1)
+            directory = Path(manifests[0]['checkoutRoot']).parent
+            os.utime(directory, None)
+            maintenance.run()
+            self.assertEqual(scan.call_count, 2)
+        self.assertEqual(board.store.service_issues(), [])
+        submitted, _, _, _, _, _, _ = self.run_worktree(board, request_id='reference-source')
+        third = workspace.prepare(board.directory, 'reference-retained', intent)
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO events(kind,task_id,payload_json,created_at) VALUES ('retainer',?,?,?)",
+                (submitted['runId'], json.dumps({'path': third['checkoutRoot']}), board.store.now()))
+        maintenance.run()
+        self.assertTrue(Path(third['checkoutRoot']).exists())
+        with board.store.db.write() as connection:
+            connection.execute("DELETE FROM events WHERE kind='retainer'")
+        maintenance.changed([submitted['runId']])
+        maintenance.run()
+        self.assertFalse(Path(third['checkoutRoot']).parent.exists())
+
+    def test_allocation_internal_git_and_process_errors_are_visible(self):
+        from unittest.mock import patch
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        for operation, failure in (('git', BoardError('WORKSPACE_GIT_UNKNOWN', 'fixture Git unknown')),
+                                   ('git', TypeError('fixture internal defect')),
+                                   ('process', BoardError('NOT_READY', 'fixture scan incomplete',
+                                    reason={'code': 'checkout.process-scan-failed', 'params': {}}))):
+            with self.subTest(operation=operation, failure=str(failure)):
+                board = self.board()
+                manifest = workspace.prepare(board.directory, operation + type(failure).__name__, intent)
+                module, name = (workspace, 'deletion_inspect') if operation == 'git' else (checkout_processes, 'require_idle_checkout')
+                with patch.object(module, name, side_effect=failure):
+                    reclamation.Reclamation(board.store).run()
+                issues = board.store.service_issues()
+                self.assertEqual([(item['stage'], item['code']) for item in issues],
+                                 [('allocation-reclamation', failure.code if isinstance(failure, BoardError) else 'TypeError')])
+                self.assertTrue(Path(manifest['checkoutRoot']).exists())
+
+    def test_unregistered_existing_snapshot_does_not_own_the_borrowed_checkout(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        board = self.board()
+        self.run_worktree(board, request_id='retained-source')
+        intent = {'kind': 'existing', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        manifest = workspace.prepare(board.directory, 'unregistered-existing-snapshot', intent)
+        directory = board.directory / 'workspaces' / manifest['workspaceId']
+        Reclamation(board.store).run()
+        self.assertFalse(directory.exists())
+        self.assertTrue(self.repo.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_disappeared_unproven_allocation_does_not_remain_in_the_pending_inventory(self):
+        from unittest.mock import patch
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        board = self.board()
+        _, directory = workspace._workspace_directory(board.directory, 'disappearing-unproven')
+        (directory / '.lock').touch()
+        (directory / 'request.json').write_text('not a record', encoding='utf-8')
+        maintenance = Reclamation(board.store)
+        maintenance.run()
+        private_dirs.remove_tree(directory)
+        lstat = Path.lstat
+        def no_removed_history(path, *args, **kwargs):
+            if path.is_relative_to(directory):
+                raise AssertionError('Revisited a removed historical allocation')
+            return lstat(path, *args, **kwargs)
+        with patch.object(Path, 'lstat', new=no_removed_history):
+            maintenance.run()
+            maintenance.run()
+        self.assertEqual(board.store.service_issues(), [])

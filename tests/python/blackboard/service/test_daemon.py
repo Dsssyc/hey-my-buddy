@@ -231,3 +231,33 @@ class DaemonAdmissionTests(BoardTestCase):
                 issues = daemon.store.service_issues()
                 self.assertEqual(issues[0]['stage'], 'storage-reclamation')
                 self.assertEqual(issues[0]['message'], str(failure))
+
+    def test_busy_reclamation_bookkeeping_does_not_stop_execution_recovery(self):
+        import sqlite3
+        for operation in ('record_service_issue', 'clear_service_issue'):
+            with self.subTest(operation=operation):
+                daemon = Daemon(self.directory / operation)
+                self.addCleanup(daemon.store.db.close)
+                daemon.store.initialize()
+                clock = [0]
+                daemon.stopping = Mock()
+                daemon.stopping.is_set.side_effect = lambda: clock[0] >= 20
+                def wait(seconds):
+                    clock[0] += seconds
+                    return False
+                daemon.stopping.wait.side_effect = wait
+                reclaim = RuntimeError('reclamation failed') if operation == 'record_service_issue' else None
+                with patch('hey_my_buddy.blackboard.service.daemon.time.monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(daemon, '_reclaim_storage', side_effect=reclaim), \
+                     patch.object(daemon.store, operation, side_effect=sqlite3.OperationalError('database is locked')), \
+                     patch.object(daemon.store, 'recover_executions') as recover:
+                    daemon._maintain()
+                self.assertEqual(recover.call_count, 1)
+                self.assertIn('Storage reclamation bookkeeping: OperationalError: database is locked', daemon.store.persistence_error)
+
+    def test_clearing_an_absent_service_issue_does_not_open_a_writer(self):
+        daemon = Daemon(self.directory / 'empty-service-issues')
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        with patch.object(daemon.store.db, 'write', side_effect=AssertionError('empty issue acquired the writer')):
+            daemon.store.clear_service_issue('storage-reclamation')
