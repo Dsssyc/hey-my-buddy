@@ -527,7 +527,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
   });
 
-  it("keeps browsing, task details, routing and evaluation history readable for any logged-in session", async () => {
+  it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
     const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },

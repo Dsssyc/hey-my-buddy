@@ -242,15 +242,15 @@ describe("local read verification evidence", () => {
     await expect(abortedApi.task("run/a", controller.signal)).rejects.toBe(cancelled);
   });
 
-  it("attaches the command HTTP Date to configuration history without extending the result shape", async () => {
+  it("attaches the command HTTP Date to routing records without extending the result shape", async () => {
     const result = { entries: [{ id: "entry", updatedAt: "2001-01-01T00:00:00Z" }], nextCursor: "older" };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(response({ ok: true, result }, later));
     const api = createApi("", fetcher);
-    const data = await api.command("evaluation_history", { limit: 50 }, "csrf");
+    const data = await api.command("selection_list", { limit: 50 }, "csrf");
     expect(data).toEqual(result);
     expect(api.readVerifiedAt(data)).toBe(Date.parse(later));
     expect(api.readVerifiedAt({ ...result })).toBeNull();
-    expect(fetcher.mock.calls[0][1]?.body).toBe(JSON.stringify({ operation: "evaluation_history", params: { limit: 50 } }));
+    expect(fetcher.mock.calls[0][1]?.body).toBe(JSON.stringify({ operation: "selection_list", params: { limit: 50 } }));
   });
 });
 

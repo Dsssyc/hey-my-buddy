@@ -111,8 +111,6 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["preferences"], [])
         self.assertEqual(snapshot["familyAnnotations"], [])
         self.assertEqual(snapshot["decisions"], [])
-        for name in ("cards", "evidence", "sampleCounts", "pendingEvidence", "gate"):
-            self.assertNotIn(name, snapshot)
         # A no-tool executor can offer selection without a configured Router;
         # fresh settings remain empty until the user chooses each slot.
         self.assertIsInstance(snapshot["capabilities"]["selection"], bool)
@@ -134,10 +132,9 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(snapshot["preferences"][0]["reason"], "cheap and fast")
         self.assertEqual(snapshot["familyAnnotations"][0]["text"], "human context")
 
-    def test_unknown_collection_and_program_fields_are_rejected(self):
+    def test_program_fields_are_rejected(self):
         board = self.board()
         self.seed_profiles(board)
-        self.refused_publish(board, "INVALID_ARGUMENT", cards=[])
         self.refused_publish(board, "INVALID_ARGUMENT",
                              profileSettings=[{"profileId": PROFILE_ID, "enabled": True, "available": True}])
 
@@ -245,7 +242,6 @@ class EvaluationPublishTests(EvaluationTestCase):
                           familyAnnotationChanges=[{**family_key(PROFILE), "text": "visible opinion"}])
         raw = json.dumps(self.snapshot(board))
         self.assertNotIn(board.service.token, raw)
-        self.assertNotIn("writerToken", raw)
         self.assertNotIn("token_verifier", raw)
 
     def test_family_preference_covers_every_effort_and_a_none_override_wins(self):
@@ -328,14 +324,6 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertEqual(self.snapshot(board)["familyAnnotations"], [])
 
 
-# ---------------------------------------------------------------------------
-# Gate: fairness, draining, fencing
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Evidence ledger and cards
-# ---------------------------------------------------------------------------
 class CatalogRefreshTests(EvaluationTestCase):
 
 

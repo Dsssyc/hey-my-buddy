@@ -774,8 +774,14 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 self.assertIn(operation, caps["operations"]["control"])
             for operation in ("evaluation_prepare", "evaluation_history", "evaluation_write_begin"):
                 self.assertNotIn(operation, caps["operations"]["control"])
+            self.assertIn("selectionFallback", caps["limitations"])
+            self.assertIn("not claimed", caps["limitations"]["osIsolation"])
+            code, snapshot = self.cli("console-snapshot", "{}")
+            self.assertEqual(code, 0, snapshot)
+            self.assertEqual(snapshot["tableRevision"], 0)
             code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "cli-cat"}))
             self.assertEqual(code, 0, refreshed)
+            self.assertEqual(refreshed["catalog"]["source"], f"file:{self.directory / 'model-catalog.json'}")
             code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}))
             self.assertEqual(code, 0, opened)
             browser = Browser(opened["url"])
@@ -791,6 +797,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertEqual(code, 0, final)
             self.assertEqual(final["tableRevision"], published["revision"])
             self.assertTrue(next(p for p in final["profiles"] if p["profileId"] == PROFILE_ID)["enabled"])
+            self.assertNotIn("autoMaintain", final["configuration"])
 
 
 class ConsoleDecisionBrowseTests(ConsoleTestCase):

@@ -1,4 +1,4 @@
-"""Real HTTP coverage for one-time entry and single-writer browser sessions."""
+"""Real HTTP coverage for one-time entry and authenticated browser sessions."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor

@@ -376,8 +376,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(decision["routingBasis"]["candidateCount"], 0)
         self.assertIsNone(decision["routerProblem"])
         self.assertIn("legal candidate", decision["reason"])
-        # Maintenance is not a blackboard model call at all any more, so an absent
-        # helper cannot report it as an adapter-unavailable maintenance failure.
+        # The removed Host maintenance capability is absent even during an outage.
         self.assertNotIn("maintenance", capabilities)
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
@@ -419,7 +418,6 @@ class DecisionGateTests(DecisionTestCase):
         self.assertIsNone(decision["attemptId"])
         self.assertEqual(decision["expectedRevision"], revision)
         self.assertEqual(decision["input"]["tableRevision"], revision)
-        self.assertNotIn("cards", decision["input"])
 
 
 
@@ -544,7 +542,6 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(decision["output"]["policyCheck"]["userPreference"], "alternative")
         self.assertNotIn("taskPreference", decision["output"]["policyCheck"])
         self.assertEqual(decision["evidence"], [])
-        self.assertNotIn("cards", decision["input"])
         self.assertEqual(decision["input"]["annotations"], [])
 
     def test_answer_shape_json_and_path_boundaries_keep_one_attempt_each(self):
@@ -916,8 +913,6 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
         snapshot = board.call("console_snapshot", {})
-        self.assertNotIn("cards", snapshot)
-        self.assertNotIn("maintenance", snapshot["capabilities"])
         self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["select"])
         self.assertEqual(self.readonly_start.call_count, 1)
 

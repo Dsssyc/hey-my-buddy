@@ -30,7 +30,7 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-const IDENTITY = new Set(["commandId", "writerId", "generation", "writerToken", "expectedRevision"]);
+const IDENTITY = new Set(["commandId", "expectedRevision"]);
 /** What a publication carries besides who publishes and against which revision. */
 const patchOf = (params: Record<string, any>) => Object.fromEntries(Object.entries(params).filter(([key]) => !IDENTITY.has(key)));
 const interval = 45;
