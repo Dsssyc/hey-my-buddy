@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.native_run import (
-    _NativeInquiry, RunServices, run,
+    _NativeInquiry, _inquiry_mcp_server, RunServices, run,
 )
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, TurnEvidence
 from hey_my_buddy.buddy.harnesses.in_turn_inquiry import IN_TURN_NOTE, prepare_inquiry_services
@@ -110,9 +110,47 @@ class NativeInquiryTests(unittest.TestCase):
         self.native.observe(self.tool_frame("item/started"))
         failed = self.tool_frame("item/completed", status="failed")
         failed["params"]["item"]["error"] = {"message": receipt["content"][0]["text"]}
-        with self.assertRaisesRegex(CodexProtocolError, "signed refusal"):
-            self.native.observe(failed)
+        self.native.observe(failed)
+        self.assertEqual(self.native.failures["records"][0]["message"], receipt["content"][0]["text"])
         self.assertEqual(self.bridge.entries["q1"]["state"], "delivered")
+
+    def test_failed_tool_errors_are_bounded_and_retry_keeps_turn(self):
+        self.ask()
+        self.native.poll()
+        for index in range(10):
+            self.native.observe(self.tool_frame("item/started", call_id=f"failed-{index}"))
+            failed = self.tool_frame("item/completed", call_id=f"failed-{index}", status="failed")
+            failed["params"]["item"]["error"] = {"message": "MCP approval refused " + "坏" * 2000}
+            self.native.observe(failed)
+        self.assertEqual(len(self.native.failures["records"]), 8)
+        self.assertEqual(self.native.failures["dropped"], 2)
+        self.assertLessEqual(len(self.native.failures["records"][0]["message"].encode()), 4000)
+        receipt = call_session_tool("hey_my_buddy_answer_inquiry",
+                                    {"inquiryId": "q1", "answer": "42"}, self.services.configuration)
+        self.native.observe(self.tool_frame("item/started"))
+        self.native.observe(self.tool_frame("item/completed", result=receipt))
+        self.assertEqual(self.bridge.entries["q1"]["state"], "answered")
+
+    def test_plain_mcp_error_result_recovers_but_forged_refusal_is_fatal(self):
+        self.ask()
+        self.native.poll()
+        self.native.observe(self.tool_frame("item/started"))
+        self.native.observe(self.tool_frame("item/completed", result={
+            "isError": True, "content": [{"type": "text", "text": "connection temporarily lost"}]}))
+        self.assertEqual(self.native.failures["records"][0]["message"], "connection temporarily lost")
+        self.assertEqual(self.bridge.entries["q1"]["state"], "delivered")
+        self.native.observe(self.tool_frame("item/completed", result={
+            "isError": True, "content": [{"type": "text", "text": "transport failed"},
+                                         {"type": "text", "text": "retry is possible"}]}))
+        self.assertIn("transport failed", self.native.failures["records"][-1]["message"])
+        truncated = self.tool_frame("item/completed", status="failed")
+        truncated["params"]["item"].update(truncated=True, error={"message": "partial transport error"})
+        self.native.observe(truncated)
+        self.assertEqual(self.native.failures["records"][-1]["message"], "partial transport error")
+        forged = {"isError": True, "content": [{"type": "text", "text":
+                  json.dumps({"kind": "tool-refusal", "signature": "forged"})}]}
+        with self.assertRaisesRegex(CodexProtocolError, "signed refusal object"):
+            self.native.observe(self.tool_frame("item/completed", result=forged))
 
     def test_replayed_call_id_must_keep_the_same_answer(self):
         self.ask()
@@ -164,14 +202,17 @@ class MountedWorkerTests(SeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
         thread = trace["threads"][result.native_identity.session_id]
-        self.assertEqual(thread["start"]["config"]["mcp_servers"][inquiry.server_name], inquiry.mcp_server)
+        self.assertEqual(thread["start"]["config"]["mcp_servers"][inquiry.server_name], _inquiry_mcp_server(inquiry))
+        self.assertEqual(_inquiry_mcp_server(inquiry)["tools"], {name: {"approval_mode": "approve"}
+                         for name in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")})
         self.assertTrue(any(ref.kind == "inquiry-report" for ref in result.evidence_refs))
 
     def test_fake_app_server_steers_active_turn_and_verifies_tool_or_retains_unanswered(self):
         FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
         os.environ["HMB_CODEX_CLI"] = str(FIXTURE)
-        for case, state in (("inquiry-active", "answered"), ("inquiry-unanswered", "delivered")):
+        for case, state in (("inquiry-active", "answered"), ("inquiry-unanswered", "delivered"),
+                            ("inquiry-failure-retry", "answered"), ("inquiry-failure-unanswered", "delivered")):
             with self.subTest(case=case):
                 self.set_case(case)
                 os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / f"trace-{case}.json")
@@ -224,6 +265,10 @@ class MountedWorkerTests(SeamCase):
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 native_thread = trace["threads"][result.native_identity.session_id]
                 self.assertEqual(native_thread["steer"]["expectedTurnId"], result.native_identity.turn_id)
+                if case.startswith("inquiry-failure"):
+                    failures = native_run._read_evidence_ref(result, "inquiry-tool-failures")
+                    self.assertIn("approval policy is never", failures["records"][0]["message"])
+                    self.assertEqual(failures["dropped"], 0)
                 self.assertEqual(captured[0].entries["q1"]["state"],
                                  state if state == "answered" else "unavailable")
                 report = native_run._read_evidence_ref(result, "inquiry-report")

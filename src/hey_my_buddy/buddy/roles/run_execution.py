@@ -281,7 +281,8 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
 def _worker_reports(result, payload: dict) -> bool:
     """Keep each validated report even when another report or delivery fails."""
     invalid = False
-    for kind, key in (("inquiry-report", "inquiry"), ("attention-report", "nativeAttention"),
+    for kind, key in (("inquiry-report", "inquiry"), ("inquiry-tool-failures", "inquiryToolFailures"),
+                      ("attention-report", "nativeAttention"),
                       ("quota-snapshot", "quota"), ("native-checkpoint", "nativeCheckpoint"),
                       ("native-observations", None), ("native-turn-facts", None)):
         try:

@@ -41,7 +41,9 @@ def main() -> None:
         }))
         server = {"command": sys.executable,
                   "args": ["-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config)],
-                  "env": {"PYTHONPATH": str(ROOT / "src")}}
+                  "env": {"PYTHONPATH": str(ROOT / "src")},
+                  "tools": {name: {"approval_mode": "approve"} for name in
+                            ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")}}
         # This lives solely in the private CODEX_HOME. A per-thread mount must
         # add the inquiry server without erasing the user's configured servers.
         (codex_home / "config.toml").write_text(
@@ -90,6 +92,16 @@ def main() -> None:
             thread = started["thread"]
             if thread["turns"]:
                 raise RuntimeError("the probe unexpectedly started a model turn")
+            invalid = {**server, "tools": {"hey_my_buddy_answer_inquiry": {"approval_mode": "invalid-probe"}}}
+            try:
+                call("thread/start", {
+                    "cwd": str(root), "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": True,
+                    "config": {"mcp_servers": {"private_inquiry": invalid}},
+                })
+            except RuntimeError as error:
+                approval_rejection = str(error)
+            else:
+                raise RuntimeError("Codex did not validate per-tool approval_mode")
             names = {}
             for name in ("private_existing", "private_inquiry"):
                 response = call("mcpServerStatus/list", {"threadId": thread["id"], "serverName": name})
@@ -103,7 +115,7 @@ def main() -> None:
                 names[name] = {"runtimeStatus": status, "tools": tools}
             print(json.dumps({"codexVersion": subprocess.check_output([CODEX, "--version"],
                                                                         env=env, text=True).strip(),
-                              "modelTurns": len(thread["turns"]), "servers": names}, sort_keys=True))
+                              "modelTurns": len(thread["turns"]), "inquiryToolApproval": server["tools"], "invalidApprovalRejected": approval_rejection, "servers": names}, sort_keys=True))
         finally:
             try:
                 os.killpg(process.pid, signal.SIGTERM)

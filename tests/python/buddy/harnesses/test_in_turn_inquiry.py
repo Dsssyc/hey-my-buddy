@@ -79,6 +79,16 @@ class InTurnInquiryTests(unittest.TestCase):
                 self.services.accept_tool_result(self.bridge, name, raw, "call")
         self.assertEqual(self.bridge.entries["q"]["state"], "queued")
 
+    def test_unread_native_input_keeps_its_specific_end_reason(self):
+        self.bridge.activate("native-session")
+        self.ask()
+        self.bridge.deliver_native("q", {"sessionId": "native-session"})
+        reason = "the micro task root turn ended before reading this inquiry"
+        self.bridge.close(reason=reason)
+        self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
+        self.assertEqual(self.bridge.entries["q"]["reason"], reason)
+        self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)
+
     def test_native_schema_service_exposes_only_inquiry_tools(self):
         response = respond({"id": 1, "method": "tools/list"}, self.services.configuration)
         self.assertEqual([tool["name"] for tool in response["result"]["tools"]],

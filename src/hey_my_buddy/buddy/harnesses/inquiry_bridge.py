@@ -132,7 +132,7 @@ class InquiryBridge:
                                   error_code=result["error"])
             self.live.settle_request(request.request_id, reply)
 
-    def close(self) -> None:
+    def close(self, *, reason: str = "the micro task root turn ended before this inquiry was answered") -> None:
         """Terminalize the answer window before stopping the owner consumer.
 
         This is no evidence of native process shutdown. The controller owns the
@@ -148,7 +148,7 @@ class InquiryBridge:
                 if entry.get("state") in ANSWERABLE_STATES:
                     self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "unavailable",
                                    "unavailableAt": _now(),
-                                   "reason": "the micro task root turn ended before this inquiry was answered",
+                                   "reason": reason,
                                    "limitation": self.limitation})
             self._publish()
             self._stop.set()

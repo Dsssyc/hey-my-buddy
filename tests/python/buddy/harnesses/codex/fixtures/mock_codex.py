@@ -306,7 +306,7 @@ def main():
                 continue
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
-            if case in ("inquiry-active", "inquiry-unanswered"):
+            if case in ("inquiry-active", "inquiry-unanswered", "inquiry-failure-retry", "inquiry-failure-unanswered"):
                 state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
                 write_state(state)
                 steer = json.loads(sys.stdin.readline())
@@ -316,10 +316,13 @@ def main():
                 state['threads'][thread_id]['steer'] = steer['params']
                 write_state(state)
                 send({"id": steer["id"], "result": {"turnId": turn_id}})
-                if case == "inquiry-active":
+                if case in ("inquiry-active", "inquiry-failure-retry", "inquiry-failure-unanswered"):
                     prompt = steer['params']['input'][0]['text']
                     inquiry_id = json.loads(prompt.splitlines()[-1])['inquiryId']
                     name, server = next(iter(state['threads'][thread_id]['start']['config']['mcp_servers'].items()))
+                    if server.get('tools') != {tool: {"approval_mode": "approve"} for tool in
+                                               ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")}:
+                        raise RuntimeError("the mounted inquiry tools require interactive approval")
                     config = json.loads(Path(server['args'][-1]).read_text())
                     journal = [json.loads(line) for line in Path(config['inquiryJournalPath']).read_text().splitlines()]
                     entry = next(record for record in journal if record['inquiryId'] == inquiry_id)
@@ -334,7 +337,15 @@ def main():
                             "tool": "hey_my_buddy_answer_inquiry", "status": "inProgress", "arguments": {}}
                     send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
                                                                "item": call}})
-                    send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                    if case.startswith("inquiry-failure"):
+                        send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                             "item": {**call, "status": "failed", "error": {"message":
+                                      "MCP tool call requires approval, but approval policy is never"}}}})
+                        call = {**call, "id": "inquiry-call-retry"}
+                        send({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id,
+                             "item": call}})
+                    if case != "inquiry-failure-unanswered":
+                        send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
                                                                  "item": {**call, "status": "completed",
                                                                           "result": {"content": [{"type": "text", "text":
                                                                               json.dumps(receipt, ensure_ascii=False)}]}}}})

@@ -441,9 +441,19 @@ class _TurnCollector:
         self.bridge = bridge
         self._inquiry_calls: dict[str, str] = {}
         self._foreign_inquiry_session = False
+        self.inquiry_inputs_sent = 0
+        self.root_stop_requested = False
+        self.root_unanswered_input = False
+        self.followup_init_observed = False
+        self.followup_messages = 0
+        self.post_root_requests = 0
+        self.inquiry_tool_failures: list[dict] = []
+        self.inquiry_tool_failures_dropped = 0
+        self._native_handle: ProcessHandle | None = None
 
-    def install(self, connection: Connection) -> None:
+    def install(self, connection: Connection, handle: ProcessHandle | None = None) -> None:
         self._connection = connection
+        self._native_handle = handle
         connection.on_message = self.buffer
         connection.on_request = self.on_request
 
@@ -455,6 +465,11 @@ class _TurnCollector:
         self.early_messages.append((self.user_sent, message))
 
     def on_request(self, frame: dict) -> None:
+        if self.root_stop_requested:
+            # The owned group has been stopped at its root result. Never
+            # answer a callback belonging to an unadmitted follow-up query.
+            self.post_root_requests = min(128, self.post_root_requests + 1)
+            return
         request = frame.get("request") or {}
         if request.get("subtype") == "can_use_tool":
             if len(self.denied) >= _MAX_DENIED_REQUESTS:
@@ -510,6 +525,22 @@ class _TurnCollector:
         self.early_messages.clear()
 
     def observe(self, frame: dict) -> None:
+        if self.root_stop_requested and self.evidence.result is not None:
+            if (frame.get("type") == "system" and frame.get("subtype") == "init"
+                    and not frame.get("parent_tool_use_id")
+                    and frame.get("session_id") == self.evidence.session_id
+                    and self.root_unanswered_input
+                    and not self.followup_init_observed):
+                # A queued stream input can produce a second query after the
+                # first result. The process was already stopped before drain;
+                # this init is evidence of that window, never a new turn.
+                self.followup_init_observed = True
+                self.bridge.close(reason="the micro task root turn ended before reading or answering this inquiry; "
+                                         "its queued follow-up was stopped")
+                return
+            if self.followup_init_observed:
+                self.followup_messages = min(128, self.followup_messages + 1)
+                return
         # Projection precedes every check: a frame a later rule rejects keeps
         # its tool facts, and the evidence observation follows the same rule.
         self.tools.observe_frame(frame)
@@ -519,11 +550,22 @@ class _TurnCollector:
             if self.bridge is not None:
                 if not initialized and self.evidence.init_observed:
                     self.bridge.activate(self.evidence.session_id)
+                if self.evidence.result is not None:
+                    self.bridge.deactivate()
+                    if self.inquiry_inputs_sent and not self.root_stop_requested:
+                        # A queued native input must never admit another query.
+                        # Stop synchronously at the first root result, before
+                        # processing any buffered frame from that next query.
+                        self.root_stop_requested = True
+                        self.root_unanswered_input = self.bridge.report()["unansweredDelivered"] > 0
+                        try:
+                            self._connection.process.stdin.close()
+                        except OSError:
+                            pass
+                        self._native_handle.terminate(grace_seconds=1.0)
                 self._observe_inquiry_tool(frame)
                 self.bridge.note_event({"kind": frame.get("type") or "event"},
                                        "finishing" if self.evidence.result is not None else "running")
-                if self.evidence.result is not None:
-                    self.bridge.deactivate()
             if (frame.get("type") == "system" and frame.get("subtype") == "init"
                     and self.expected_permission_mode is not None
                     and self.evidence.permission_mode is not None
@@ -575,20 +617,35 @@ class _TurnCollector:
                 if name is None:
                     continue
                 value = block.get("content")
+                failed = block.get("is_error") is True or block.get("isError") is True
                 if isinstance(value, list):
+                    if failed and (len(value) != 1 or not isinstance(value[0], dict)
+                                   or value[0].get("type") != "text"):
+                        self._retain_inquiry_failure(call_id, name, canonical_json(value))
+                        continue
                     if len(value) != 1 or not isinstance(value[0], dict) or value[0].get("type") != "text":
                         raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool returned no single text receipt")
                     value = value[0].get("text")
                 if not isinstance(value, str):
+                    if failed:
+                        self._retain_inquiry_failure(call_id, name, canonical_json(value))
+                        continue
                     raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool returned no text receipt")
+                if failed and not refusal_shaped(value):
+                    self._retain_inquiry_failure(call_id, name, value)
+                    continue
                 if block.get("truncated") is True or block.get("is_truncated") is True:
                     raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool result was truncated")
-                if (block.get("is_error") is True or block.get("isError") is True) and not refusal_shaped(value):
-                    raise ClaudeProtocolError("invalid-inquiry-evidence", "the inquiry tool reported an unsuccessful result")
                 try:
                     self.inquiry.accept_tool_result(self.bridge, name, value, call_id)
                 except ReceiptError as error:
                     raise ClaudeProtocolError(error.code, str(error)) from None
+
+    def _retain_inquiry_failure(self, call_id: str, name: str, value: str) -> None:
+        self.inquiry_tool_failures.append({"toolCallId": call_id[:256], "toolName": name[:160],
+            "error": value.encode("utf-8", errors="replace")[:4000].decode("utf-8", errors="ignore")})
+        self.inquiry_tool_failures_dropped += max(0, len(self.inquiry_tool_failures) - 8)
+        del self.inquiry_tool_failures[:-8]
 
     def publish_activity(self, phase: str, tool: str | None = None) -> None:
         if self.evidence is None:
@@ -680,6 +737,7 @@ def _send_pending_inquiries(collector: _TurnCollector, connection: Connection, s
                    "then continue the assigned work.")
         connection.send({"type": "user", "message": {"role": "user",
                          "content": [{"type": "text", "text": message}]}})
+        collector.inquiry_inputs_sent += 1
         bridge.deliver_native(inquiry_id, {"sessionId": session_id,
                                            "source": "claude/stream-json-user",
                                            "eventSeq": collector.evidence.event_seq})
@@ -790,6 +848,11 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     if state.interrupt_requested:
         observations["nativeInterruptRequested"] = True
         observations["nativeInterruptAcknowledged"] = state.interrupt_acknowledged is True
+    if collector.root_stop_requested:
+        observations["stoppedAtRootResult"] = True
+        observations["unadmittedFollowupInit"] = collector.followup_init_observed
+        observations["unadmittedFollowupMessages"] = collector.followup_messages
+        observations["postRootControlRequests"] = collector.post_root_requests
     if collector.evidence is not None:
         observations["permissionMode"] = collector.evidence.permission_mode
         observations["permissionModeStatus"] = "confirmed" if collector.evidence.permission_mode is not None else "unread"
@@ -941,6 +1004,9 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     evidence_refs: list[EvidenceRef] = []
     if spawn is not None and collector is not None:
         invocation_root = preparation.invocation_root
+        if collector.inquiry_tool_failures:
+            _retain(evidence_refs, invocation_root, "inquiry-tool-failures", "inquiry-tool-failures.json",
+                    {"records": collector.inquiry_tool_failures, "dropped": collector.inquiry_tool_failures_dropped})
         stderr_path = invocation_root / _NATIVE_STDERR_FILE
         if stderr_path.is_file():
             raw_stderr = stderr_path.read_bytes()
@@ -1091,7 +1157,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                               environment=preparation.environment,
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,
                               cancel=cancel, owned=owned_spawn)
-        collector.install(spawn.connection)
+        collector.install(spawn.connection, spawn.handle)
         catalog = _initialize(spawn)
         state.catalog = catalog
         state.provider = catalog["providers"][0]["provider"]
@@ -1157,7 +1223,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.last_assistant_message = collector.evidence.last_assistant_message()
         if spawn is not None:
             state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
-            if state.status in ("ok", "unknown") and (not state.shutdown or state.exit_code != 0):
+            expected_stop = collector is not None and collector.root_stop_requested
+            if state.status in ("ok", "unknown") and (not state.shutdown or (state.exit_code != 0 and not expected_stop)):
                 state.status = "error"
                 state.reason = "native-shutdown-failed"
                 state.error_text = ("the Claude native process did not exit with confirmed "

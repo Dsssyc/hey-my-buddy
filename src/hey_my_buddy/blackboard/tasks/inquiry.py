@@ -22,7 +22,6 @@ from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveReque
 
 MAX_WAIT_MS = 30000
 MAX_JOURNAL_BYTES = 1024 * 1024
-MAX_REASON_CHARS = 400
 POLL_INTERVAL_SECONDS = 0.3
 
 #: These refusals cannot leave a question queued: either its turn ended or the
@@ -135,15 +134,16 @@ def observe(store: BoardStore, params: dict) -> dict:
         duplicate = bool(posted.get("duplicate"))
 
     terminal = view["state"] in ("completed", "concluded", "failed", "cancelled")
+    attempt_ended = terminal or attempt.get("executionState") == "finished"
     can_ask = inquiry_capable(adapter)
     can_observe = observe_capable(adapter)
     from ...buddy.harnesses.registry import live_binding
 
     extracted_live = live_binding(adapter) is not None
-    channel = None if terminal else _live_channel(store, view)
+    channel = None if attempt_ended else _live_channel(store, view)
     # A restarted service waits for the original holder to attach. Active facts
     # never fall back to files or a directly addressed controller.
-    unbound_live = extracted_live and not terminal and channel is None
+    unbound_live = extracted_live and not attempt_ended and channel is None
     bridge = {"enabled": channel is not None, "observed": False, "reason": None, "error": None,
               "canObserve": can_observe, "canAsk": can_ask}
     live: dict[str, Any] = {
@@ -154,8 +154,8 @@ def observe(store: BoardStore, params: dict) -> dict:
     }
     if not can_observe:
         bridge["reason"] = "this adapter has no observation or inquiry capability"
-    elif terminal:
-        bridge["reason"] = "the attempt is terminal; an idle or finished agent cannot be woken"
+    elif attempt_ended:
+        bridge["reason"] = "the attempt has ended; an idle or finished agent cannot be woken"
     elif inquiry_id is not None and not can_ask:
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
@@ -227,30 +227,26 @@ def observe(store: BoardStore, params: dict) -> dict:
     elif unbound_live:
         journal = {"available": False, "reason": "channel-unbound", "entries": 0}
     else:
-        journal = (read_journal(str(evidence_journal) if evidence_journal else None) if terminal
+        journal = (read_journal(str(evidence_journal) if evidence_journal else None) if attempt_ended
                    else {"available": False, "reason": "no-live-channel", "entries": {}})
-    if inquiry_id is not None and channel is not None:
-        if inquiry_id in rejections:
-            # A record the binding refused under this very question is the
-            # public rejection it always was, never a silent loss.
-            bridge["journalRejected"] = rejections[inquiry_id]
-        elif inquiry_id in projected:
-            record = _journal_record(projected[inquiry_id])
-            mismatch = _journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
-            if mismatch is not None:
-                bridge["journalRejected"] = mismatch
-            else:
-                _apply_journal(store, view["taskId"], inquiry_id, record)
-                bridge["journalImported"] = True
-    elif inquiry_id is not None and not unbound_live and inquiry_id in journal["entries"]:
-        record = journal["entries"][inquiry_id]
+    # Import every existing question's latest source fact even for run-only
+    # observation. message_update refuses unknown ids, so orphan source records
+    # cannot create questions or consume the run's inquiry allowance.
+    records = ({key: _journal_record(entry) for key, entry in projected.items()}
+               if channel is not None else journal["entries"]
+               if isinstance(journal["entries"], dict) else {})
+    if inquiry_id in rejections:
+        bridge["journalRejected"] = rejections[inquiry_id]
+    for question_id, record in records.items():
+        if question_id in rejections:
+            continue
         mismatch = _journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
         if mismatch is not None:
-            # A journal record bound to another task/attempt is transport evidence
-            # for a different execution; it can never answer this run's question.
-            bridge["journalRejected"] = mismatch
-        else:
-            _apply_journal(store, view["taskId"], inquiry_id, record)
+            if question_id == inquiry_id:
+                bridge["journalRejected"] = mismatch
+            continue
+        _apply_journal(store, view["taskId"], question_id, record)
+        if question_id == inquiry_id:
             bridge["journalImported"] = True
 
     if inquiry_id is not None and wait_ms:
@@ -414,7 +410,7 @@ def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: st
                 "inquiryId": inquiry_id,
                 "actor": "live-bridge",
                 "state": "unavailable",
-            "reason": (reason or f"the bridge cannot deliver this question ({code})")[:MAX_REASON_CHARS],
+                "reason": reason or f"the bridge cannot deliver this question ({code})",
             }
         )
     except BoardError:
@@ -462,7 +458,7 @@ def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value
                 # A bridge may report a refusal inside a successful value (the dsh
                 # bridge reports agent-gone/agent-not-running this way). Keep the
                 # honest reason instead of a bare terminal state.
-                patch["reason"] = reason[:200]
+                patch["reason"] = reason
     if isinstance(value.get("delivery"), dict):
         patch["delivery"] = value["delivery"]
     if patch.keys() - {"runId", "inquiryId", "actor"}:
@@ -534,9 +530,9 @@ def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dic
             patch["state"] = record["state"]
             # A terminal refusal carries the bridge's own bounded reason; keep it
             # instead of a generic "unavailable" with no explanation.
-            reason = record.get("limitation") or record.get("reason")
+            reason = record.get("reason") or record.get("limitation")
             if record["state"] == "unavailable" and isinstance(reason, str) and reason.strip():
-                patch["reason"] = reason[:MAX_REASON_CHARS]
+                patch["reason"] = reason
     if patch.keys() - {"runId", "inquiryId", "actor"}:
         try:
             store.message_update(patch)
