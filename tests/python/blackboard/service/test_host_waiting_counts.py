@@ -2,7 +2,7 @@
 import json
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
-import blackboard.tasks.test_workspace_lifecycle as lifecycle
+import blackboard.tasks.workspace_lifecycle_case as lifecycle
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.protocol.client import BoardClient
 

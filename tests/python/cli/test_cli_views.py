@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import blackboard.tasks.test_workspace_lifecycle as lifecycle_tests
+import blackboard.tasks.workspace_lifecycle_case as lifecycle_tests
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 
 from hey_my_buddy.cli import main as cli, cli_views

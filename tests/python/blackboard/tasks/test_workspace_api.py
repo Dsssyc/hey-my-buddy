@@ -11,7 +11,7 @@ from support import InProcessBoard
 from console.test_console import Browser
 from blackboard.tasks.test_workflow_real import RealWorkspaceTestCase
 import blackboard.tasks.test_scope_recovery as scope_recovery_tests
-import blackboard.tasks.test_workspace_lifecycle as lifecycle_tests
+import blackboard.tasks.workspace_lifecycle_case as lifecycle_tests
 
 from hey_my_buddy.cli import main as cli
 from hey_my_buddy.protocol import transport
