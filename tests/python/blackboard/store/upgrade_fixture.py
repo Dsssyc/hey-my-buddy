@@ -75,7 +75,7 @@ def load_fixture(state: Path) -> dict:
     state = state.resolve()
     from hey_my_buddy.private_dirs import ensure_private_dir
     ensure_private_dir(state)
-    fixture_root = state / "fixture-root"
+    fixture_root = state / "f"
     repository = fixture_root / "repository"
     repository.mkdir(parents=True)
     _git(repository, "init", "--quiet")

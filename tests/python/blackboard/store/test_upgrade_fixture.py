@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
@@ -25,7 +25,7 @@ from hey_my_buddy.paths import native_path
 
 class UpgradeFixtureTests(unittest.TestCase):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix='upgrade-floor-fixture-'))
+        self.root = Path(tempfile.mkdtemp(prefix='uf-'))
 
 
     def restored(self, name='state', *, migrate=True):
@@ -317,9 +317,10 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
-        first, c1 = self.restored('first state')
-        name = '第二个 “私有” ' + FIXTURE_ROOT_TOKEN + ' state'
-        second, c2 = self.restored(name)
+        first, c1 = self.restored('first')
+        # Git for Windows limits the UTF-8 gitdir pointer even with longpaths;
+        # leave room for the check runner's private root and keep non-ASCII.
+        second, c2 = self.restored('私 库')
         _, m1, _ = self.sample(first, c1)
         _, m2, _ = self.sample(second, c2)
         self.assertNotEqual(m1['workspaceId'], m2['workspaceId'])
@@ -371,7 +372,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             'SELECT workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()[0])['repositoryId']
         marker_blob = hashlib.sha1(b'blob ' + str(len(old_project_id)).encode() + b'\0'
                                    + old_project_id.encode()).hexdigest()
-        git_root = Path('fixture-root/repository/.git')
+        git_root = fixture['fixtureRoot'].relative_to(state) / 'repository/.git'
         project_files = {git_root / 'refs/hey-my-buddy/project',
                          git_root / 'objects' / marker_blob[:2] / marker_blob[2:]}
 
