@@ -62,8 +62,11 @@ class SessionRecordTests(unittest.TestCase):
     def test_first_error_survives_cleanup_failure_and_is_safe_to_encode(self):
         self.record.append(self.update())
         descriptor = self.record._fd
-        with mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=KeyError("cleanup")):
+        with self.assertLogs("hey_my_buddy.buddy.harnesses.session_record", level="ERROR") as logged, \
+             mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=KeyError("cleanup")):
             self.record.project(mock.Mock(side_effect=ValueError("\ud800" + "文" * 4000)))
+        self.assertEqual(len(logged.records), 1)
+        self.assertIsInstance(logged.records[0].exc_info[1], KeyError)
         # The mocked close did not close the actual descriptor.
         os.close(descriptor)
         failure = self.record.failure
@@ -84,14 +87,21 @@ class SessionRecordTests(unittest.TestCase):
         self.assertEqual(self.record.failure["params"]["category"], "ValueError")
         self.assertIsNone(self.record._fd)
 
-    def test_cleanup_error_does_not_replace_first_failure(self):
+    def test_cleanup_error_is_recorded_once_without_replacing_first_failure(self):
         self.record.append(self.update())
         descriptor = self.record._fd
-        with mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=KeyError("cleanup")):
+        close_error = KeyError("cleanup " + "文" * 10000)
+        with self.assertLogs("hey_my_buddy.buddy.harnesses.session_record", level="ERROR") as logged, \
+             mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=close_error):
             self.record.project(mock.Mock(side_effect=ValueError("first error")))
         os.close(descriptor)
         self.assertEqual(self.record.failure["params"], {
             "category": "ValueError", "message": "first error", "truncated": False})
+        self.assertEqual(len(logged.records), 1)
+        self.assertIs(logged.records[0].exc_info[1], close_error)
+        self.assertIn(str(close_error), logged.output[0])
+        self.record._failed(RuntimeError("later"))
+        self.assertEqual(len(logged.records), 1)
 
     def test_cancellation_is_not_a_projection_failure(self):
         for cancellation in (KeyboardInterrupt(), SystemExit()):

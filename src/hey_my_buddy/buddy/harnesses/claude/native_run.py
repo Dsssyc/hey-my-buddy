@@ -55,7 +55,7 @@ from ....protocol.reasons import reason as make_reason
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
@@ -72,7 +72,6 @@ from ..native_support import (
     utc_now,
     truncate_utf8,
     truncate_text,
-    NATIVE_TOOL_NAME_CHARS,
     NATIVE_ID_CHARS,
     NATIVE_SUMMARY_BYTES,
     INQUIRY_TOOL_NAME_CHARS,
@@ -469,7 +468,7 @@ class _TurnCollector:
                     if isinstance(inputs.get(key), str) and inputs[key]:
                         operation = inputs[key]
                         break
-            name = truncate_text(tool, NATIVE_TOOL_NAME_CHARS) if isinstance(tool, str) and tool else "<unknown>"
+            name = (native_tool_name(tool) if isinstance(tool, str) else None) or "<unknown>"
             summary = "\n".join(filter(None, (self.denied_operation_summary, name + ": " + operation)))
             # The native-input boundary owns the one UTF-8 bound; role code
             # consumes this already-bounded fact without interpreting inputs.
@@ -642,9 +641,10 @@ class _TurnCollector:
                    "nativeSessionId": self.evidence.session_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": self.evidence.model_messages,
                               "toolCalls": self.evidence.tool_calls}}
+        tool = native_tool_name(tool)
         if tool:
             payload["lastToolActivityAt"] = now
-            payload["toolName"] = truncate_text(tool, NATIVE_TOOL_NAME_CHARS)
+            payload["toolName"] = tool
         self.last_activity = payload
         self._publisher.publish(payload)
 
@@ -1343,14 +1343,14 @@ def validate_turn_provenance(record: dict) -> str | None:
     if type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
         return "the Claude result lacks native event evidence"
     usage = p.get("modelUsage")
-    if not isinstance(usage, list) or any(not isinstance(item, str) for item in usage):
+    if not isinstance(usage, list) or any(not isinstance(item, str) or not item for item in usage):
         return "the Claude observed model set is invalid"
-    if type(p.get("permissionDenials")) is not int:
+    if type(p.get("permissionDenials")) is not int or p["permissionDenials"] < 0:
         return "the Claude permission denial count is invalid"
     if p.get("controllerAttention") is True:
         ids = p.get("deniedControlRequestIds")
         bound = bool(isinstance(ids, list) and ids
-                     and all(isinstance(item, str) for item in ids))
+                     and all(isinstance(item, str) and item for item in ids))
         unanswered = p.get("unansweredDeliveredInquiries")
         if not bound and p.get("permissionDenials") <= 0 and not (
                 type(unanswered) is int and unanswered > 0):

@@ -47,7 +47,7 @@ from typing import Any, Callable, Mapping
 from ....errors import BoardError
 from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
@@ -68,8 +68,6 @@ from ..native_support import (
     utc_now,
     bounded_utf8,
     truncate_utf8,
-    truncate_text,
-    NATIVE_TOOL_NAME_CHARS,
     NATIVE_METHOD_BYTES,
     NATIVE_ERROR_DETAIL_BYTES,
     NATIVE_SUMMARY_BYTES,
@@ -427,9 +425,10 @@ class _ActivityWriter:
         if evidence is None:
             return
         state, tick, now = self.state, time.monotonic(), utc_now()
+        tool = native_tool_name(tool)
         if tool:
             state["lastToolActivityAt"] = now
-            state["toolName"] = truncate_text(tool, NATIVE_TOOL_NAME_CHARS)
+            state["toolName"] = tool
         if state.get("phase") == phase and tick - state.get("lastWrite", 0) < 2:
             return
         payload = {"phase": phase, "observedAt": now, "eventSeq": evidence.event_seq,
@@ -528,14 +527,14 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
         page = connection.call("model/list", params)
         entries = page.get("data")
         if not isinstance(entries, list):
-            read_status, read_reason = "unknown", "model-list-shape-unreadable"
+            read_status, read_reason = "unknown", make_reason("model-list-shape-unreadable")
             break
         data.extend(entries)
         cursor = page.get("nextCursor")
         if cursor is None:
             break
         if not isinstance(cursor, str) or not cursor:
-            read_status, read_reason = "unknown", "model-cursor-shape-unreadable"
+            read_status, read_reason = "unknown", make_reason("model-cursor-shape-unreadable")
             break
         if cursor in seen:
             raise CodexProtocolError("invalid-catalog", "Codex model cursor did not advance")
@@ -543,7 +542,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
     models = []
     warnings = []
     if provider is None:
-        read_status, read_reason = "unknown", "config-shape-unreadable"
+        read_status, read_reason = "unknown", make_reason("config-shape-unreadable")
     listed_ids: set[str] = set()
     for item in data if provider is not None else []:
         if not isinstance(item, dict) or item.get("hidden") is True:
@@ -571,7 +570,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
                             if provider is not None else [],
                "warnings": warnings,
                "discoveries": [{"harness": "codex", "status": read_status,
-                                **({"reason": make_reason(read_reason)} if read_reason else {})}]}
+                                **({"reason": read_reason} if read_reason else {})}]}
     return catalog, listed_ids
 
 
@@ -2123,7 +2122,7 @@ def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
             continue
         with guard_private_path(Path(ref.location)).open("rb") as stream:
             raw = stream.read(STRICT_RESULT_BYTES + 1)
-        if len(raw) > STRICT_RESULT_BYTES or ref.size_bytes != len(raw):
+        if len(raw) > STRICT_RESULT_BYTES:
             raise BoardError("INVALID_ARGUMENT", "The native evidence reference no longer matches its content")
         value = decode_strict_json(raw)
         return value if isinstance(value, dict) else None

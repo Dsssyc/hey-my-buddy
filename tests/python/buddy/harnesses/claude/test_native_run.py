@@ -483,10 +483,18 @@ class Batch4FactsTests(NativeRunCase):
         self.assertIsNone(native_run.validate_turn_provenance(record))
         self.assertIsNone(native_run.validate_turn_provenance({**record, "provenance": {
             **provenance, "permissionDenials": 160, "modelUsage": [f"model-{i}" for i in range(40)]}}))
-        for change in ({"resultSubtype": "future"}, {"resultIsError": None}, {"resultIsError": True}):
+        for change in ({"resultSubtype": "future"}, {"resultIsError": None}, {"resultIsError": True},
+                       {"permissionDenials": -1}, {"modelUsage": [""]}):
             with self.subTest(change=change):
                 self.assertIsNotNone(native_run.validate_turn_provenance(
                     {**record, "provenance": {**provenance, **change}}))
+
+        attention = {**record, "outcome": {"disposition": "attention"}, "provenance": {
+            **provenance, "controllerAttention": True, "structuredOutputValidated": False,
+            "permissionDenials": 0, "deniedControlRequestIds": [""]}}
+        self.assertIsNotNone(native_run.validate_turn_provenance(attention))
+        attention["provenance"]["deniedControlRequestIds"] = ["request-" + "x" * 300] * 160
+        self.assertIsNone(native_run.validate_turn_provenance(attention))
 
 
 class WorkerCarrierTests(NativeRunCase):
@@ -546,6 +554,20 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
+
+    def test_long_native_tool_name_returns_the_result_and_stop_evidence(self):
+        self.fixture_case("long-tool-name")
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        activity = [call.args[0] for call in endpoint.publish_activity.call_args_list
+                    if call.args[0].get("toolName")]
+        self.assertTrue(activity)
+        self.assertEqual(activity[0]["toolName"], ("mcp__" + "s" * 60 + "__tool")[:64])
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
         result = self.execute(self.request())

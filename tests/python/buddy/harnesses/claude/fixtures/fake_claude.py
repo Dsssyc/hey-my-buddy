@@ -277,6 +277,13 @@ def run_turn(case):
         send({"type": "rate_limit_event", "rate_limit_info": {
             "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z"}})
     send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case == "long-tool-name":
+        send({"type": "assistant", "session_id": session_id, "message": {
+            "role": "assistant", "content": [{"type": "tool_use", "id": "long-tool-call",
+                "name": "mcp__" + "s" * 60 + "__tool", "input": {}}]}})
+        send({"type": "user", "session_id": session_id, "message": {
+            "role": "user", "content": [{"type": "tool_result", "tool_use_id": "long-tool-call",
+                "content": "done"}]}})
     if case == "session-content":
         # Synthetic display coverage only: this is not evidence that a real
         # CLI version supplies thinking blocks for the configured invocation.
