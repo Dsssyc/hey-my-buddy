@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 
 DEFAULT_MODEL_PROVIDER = "openai"
@@ -18,18 +17,14 @@ def native_provider(configured: dict) -> str:
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
-    env = os.environ if environment is None else environment
-    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_CODEX_CLI")):
-        from ..runtime_selection import command_for
-        from ....errors import BoardError
-        try:
-            return command_for("codex", env)
-        except BoardError as error:
-            raise CodexUnavailable(error.message) from None
-    from ..discovery import EntryUnavailable, _launch_command
-    path = Path(env["HMB_CODEX_CLI"]).expanduser().absolute()
+    from ..runtime_selection import launch_for
+    from ..discovery import EntryUnavailable
+    from ....errors import BoardError
+
     try:
-        return _launch_command(path, env)
+        return launch_for("codex", environment)[0]
+    except BoardError as error:
+        raise CodexUnavailable(error.message) from None
     except EntryUnavailable as error:
         failure = CodexUnavailable(str(error))
         failure.reason = error.reason

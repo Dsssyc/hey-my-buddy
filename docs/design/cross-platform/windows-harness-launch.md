@@ -167,7 +167,7 @@ npm Node shim 是这个描述的一种情形：`node`、`node.exe`、shim 相邻
 
 不带引号的程序或入口、绝对程序或入口路径、多个入口或调用、缺失程序或普通入口、缺失归档、非字面环境值、计算参数、额外 shell 命令和未识别的控制流，均在解析边界拒绝为 `harness.entry-unsupported`。相对路径中出现其他环境或参数表达式也拒绝，不尝试求值。识别范围外的 `.cmd`、`.bat`、`.ps1`、`.com` 与无后缀 Windows 入口继续拒绝，不回退到 cmd.exe 或 PowerShell。
 
-健康记录继续只保存现有的原始入口 `executable` 和最终 `command` 等字段。每次使用已选择的入口时，由同一解析器从 `executable` 推导字面环境，不另存一份可推导的环境映射；跨 controller 的记录文件保留该原始入口。版本及认证探针、原生回合环境、DSH ACP 版本启动和回合启动都携带这些值。Codex 的账户读回使用健康记录中的原始入口。存储形式、Host 字段和服务与执行进程之间的契约形式均未改变，不开启 schema 升级，不增加 fixture 存量，不移动中间号或 `CONTRACT_VERSION`；安装此修复时按 0.x 规则移动补丁号。
+开发态 `HMB_*_CLI` 覆盖统一由 `runtime_selection.launch_for` 解析，Claude、Codex、ZCode、DSH 使用同一规则；各家的 `cli_command` 只取命令并转换各自的错误类型。私有 controller 环境也传递 DSH 的同名覆盖。健康记录继续只保存现有的原始入口 `executable` 和最终 `command` 等字段。每次使用已选择的入口时，由同一解析器从 `executable` 推导字面环境，不另存一份可推导的环境映射；跨 controller 的记录文件保留该原始入口。版本及认证探针、原生回合环境、DSH ACP 版本启动和回合启动都携带这些值。Codex 的账户读回使用健康记录中的原始入口。存储形式、Host 字段和服务与执行进程之间的契约形式均未改变，不开启 schema 升级，不增加 fixture 存量，不移动中间号或 `CONTRACT_VERSION`；安装此修复时按 0.x 规则移动补丁号。
 
 验证使用自行编写的合成启动描述和假原生程序，覆盖 npm、普通文件和归档入口、拒绝形式、探针环境、记录文件传递以及 DSH ACP 假回合的实际子进程环境；没有保存厂商 shim 原文作为测试夹具。真实 Windows 发现与版本观察的结果及原始输出由本任务交付，不能用假协议回合证明真实 DSH 的 ACP 或模型能力。docs/reference 的入口支持、环境传递及验证边界说明由 Host 在验收后同步。
 

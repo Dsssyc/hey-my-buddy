@@ -9,18 +9,14 @@ from .protocol import NativeError
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
-    env = os.environ if environment is None else environment
-    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_ZCODE_CLI")):
-        from ..runtime_selection import command_for
-        from ....errors import BoardError
-        try:
-            return command_for("zcode", env)
-        except BoardError as error:
-            raise NativeError("harness-unavailable", error.message) from None
-    from ..discovery import EntryUnavailable, _launch_command
-    path = Path(env["HMB_ZCODE_CLI"]).expanduser().absolute()
+    from ..runtime_selection import launch_for
+    from ..discovery import EntryUnavailable
+    from ....errors import BoardError
+
     try:
-        return _launch_command(path, env)
+        return launch_for("zcode", environment)[0]
+    except BoardError as error:
+        raise NativeError("harness-unavailable", error.message) from None
     except EntryUnavailable as error:
         failure = NativeError(error.code, str(error))
         failure.reason = error.reason

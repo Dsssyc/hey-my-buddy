@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from ...roles.turn_io import canonical_json
 
@@ -50,18 +49,14 @@ def provider_from_account(account: object) -> str:
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
-    env = os.environ if environment is None else environment
-    if not (os.environ.get("HMB_DEV_SOURCE") == "1" and env.get("HMB_CLAUDE_CLI")):
-        from ..runtime_selection import command_for
-        from ....errors import BoardError
-        try:
-            return command_for("claude", env)
-        except BoardError as error:
-            raise ClaudeUnavailable(error.message) from None
-    from ..discovery import EntryUnavailable, _launch_command
-    path = Path(env["HMB_CLAUDE_CLI"]).expanduser().absolute()
+    from ..runtime_selection import launch_for
+    from ..discovery import EntryUnavailable
+    from ....errors import BoardError
+
     try:
-        return _launch_command(path, env)
+        return launch_for("claude", environment)[0]
+    except BoardError as error:
+        raise ClaudeUnavailable(error.message) from None
     except EntryUnavailable as error:
         failure = ClaudeUnavailable(str(error))
         failure.reason = error.reason

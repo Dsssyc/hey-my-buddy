@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from fake_executable import make_fake_executable
 from support import BoardTestCase, FakeClock, wait_for
 from hey_my_buddy.blackboard.tasks import reminders
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -206,7 +207,8 @@ class ReminderPrivateServiceTests(BoardTestCase):
             "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n")
         private_home = self.directory / "native-home"
         private_home.mkdir()
-        env = {"HOME": str(private_home), "HMB_DSH_CLI": str(wrapper)}
+        entry = make_fake_executable(self.directory / "harness-bin", "dsh", source=wrapper)
+        env = {"HOME": str(private_home), "HMB_DSH_CLI": str(entry)}
         with self.daemon(env=env):
             code, submitted = self.cli("submit", json.dumps({
                 "requestId": "native-reminder-live", "hostId": "reminder-host", "task": "Observe native activity",

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from fake_executable import make_fake_executable
 from support import BoardTestCase, wait_for
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase
@@ -306,7 +307,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             "module.WorkflowAgent=GatedAgent\n"
             "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n"
         )
-        os.chmod(script, 0o700)
+        entry = make_fake_executable(self.directory / "harness-bin", "dsh", source=script)
         self.catalog_fixture()
         store = BoardStore(self.directory)
         try:
@@ -323,7 +324,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 router._write_settings(db, settings)
         finally:
             store.db.close()
-        return script, started, gate, candidate
+        return entry, started, gate, candidate
 
     def test_router_result_after_restart_uses_frozen_decision_and_budget(self):
         script, started, release, candidate = self.offline_router()

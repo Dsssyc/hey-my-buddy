@@ -42,7 +42,7 @@ def launch_for(harness, environment=None):
     """Resolve argv and derive its environment from the same selected entry."""
     from .discovery import discover, shim_environment, _launch_command
     env = os.environ if environment is None else environment
-    override = env.get(f'HMB_{harness.upper()}_CLI') if os.environ.get('HMB_DEV_SOURCE') == '1' and harness in ('claude', 'codex', 'zcode') else None
+    override = env.get(f'HMB_{harness.upper()}_CLI') if os.environ.get('HMB_DEV_SOURCE') == '1' else None
     if override:
         entry = Path(override).expanduser().absolute()
         return _launch_command(entry, env), shim_environment(entry)
@@ -85,7 +85,7 @@ def controller_environment(directory, environment=None, *, read_only=False):
             if key in source:
                 env[key] = source[key]
     if source.get('HMB_DEV_SOURCE') == '1':
-        for key in ('HMB_DEV_SOURCE', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI',
+        for key in ('HMB_DEV_SOURCE', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI', 'HMB_DSH_CLI',
                     'HMB_NODE', 'HMB_CODEX_FIXTURE_CASE', 'HMB_CODEX_FIXTURE_STATE',
                     'HMB_CLAUDE_FIXTURE_CASE', 'HMB_CLAUDE_FIXTURE_STATE',
                     'HMB_ZCODE_TEST_CASE'):

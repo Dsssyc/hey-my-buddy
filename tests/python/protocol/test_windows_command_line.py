@@ -130,7 +130,7 @@ class WindowsCommandLineTests(unittest.TestCase):
         overflow = owned_process.WindowsCommandLineTooLong(32768)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with mock.patch.object(dsh_run, "command_for", return_value=["dsh.exe"]), \
+            with mock.patch.object(dsh_run, "launch_for", return_value=(["dsh.exe"], {})), \
                  mock.patch.object(dsh_run.AcpClient, "start", side_effect=overflow):
                 with self.assertRaises(DshNativeError) as caught:
                     dsh_run._launch_agent(cwd=directory, launch_root=root, invocation_root=root,

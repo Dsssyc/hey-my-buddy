@@ -147,6 +147,21 @@ class LiteralShimTests(unittest.TestCase):
         saved = json.loads(Path(controller[runtime_selection.RECORD_FILE]).read_text(encoding='utf-8'))
         self.assertEqual(saved, records)  # no new stored field
 
+    def test_development_overrides_share_the_parser_and_environment_for_all_harnesses(self):
+        with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1'}), \
+             mock.patch.object(discovery, '_native_command', side_effect=lambda path: [str(path)]), \
+             mock.patch.object(discovery, 'discover') as discover:
+            for name in ('claude', 'codex', 'zcode', 'dsh'):
+                source = {f'HMB_{name.upper()}_CLI': str(self.shim), 'ELECTRON_RUN_AS_NODE': 'parent'}
+                with self.subTest(harness=name):
+                    command, environment = runtime_selection.launch_for(name, source)
+                    self.assertEqual(command, self.record()['command'])
+                    self.assertEqual(environment, {'ELECTRON_RUN_AS_NODE': '1'})
+                    child = runtime_selection.native_environment(source, harness=name)
+                    self.assertEqual(child['ELECTRON_RUN_AS_NODE'], '1')
+                    self.assertNotIn(f'HMB_{name.upper()}_CLI', child)
+            discover.assert_not_called()
+
     def test_dsh_runtime_forwards_literal_environment_to_the_acp_launcher(self):
         root = self.root / 'turn'
         root.mkdir()
