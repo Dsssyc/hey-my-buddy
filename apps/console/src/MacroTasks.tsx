@@ -11,7 +11,7 @@ import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
 
 
 
-import { ListFold } from "./MacroTaskList";
+import { ListFold, MacroListHeading } from "./MacroTaskList";
 import { Hint } from "./components/hint";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./components/ui/dialog";
@@ -116,19 +116,18 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
     window.addEventListener("popstate", changed);
     return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed); };
   }, []);
-  const listNavigation = () => <h2 data-slot="macro-list-heading" className="text-base font-semibold">{t("macro")}</h2>;
   return <MacroTasksWorkspace snapshot={snapshot} api={api} refresh={refresh}
     active={active} authority={authority} writesAvailable={writesAvailable} connectionError={connectionError} verifiedAtMs={verifiedAtMs}
-    location={location} origin={origin} go={go} listNavigation={listNavigation} listCollapsed={listCollapsed}
+    location={location} origin={origin} go={go} listCollapsed={listCollapsed}
     onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />;
 }
 
-function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listNavigation, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
+function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
   authority?: AuthorityLatch; writesAvailable: boolean; connectionError: string; verifiedAtMs: number | null;
   location: TasksLocation; origin: string | null;
   go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
-  listNavigation: () => ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
+  listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
   const { t } = useTranslation(["tasks", "shell", "macroHeader", "taskDetail"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
@@ -240,7 +239,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const listPane = <MacroTaskList
     rows={rows} totals={totals} loading={list.loading} error={list.error}
     nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} sort={sort} selected={selected}
-    active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} listNavigation={listNavigation()} onCollapse={onCollapseList}
+    active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} onCollapse={onCollapseList}
     onSortChange={sort => go({ ...location, sort }, "push", origin)}
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
     onMore={list.more} onApplyReorder={list.applyReorder} />;
@@ -268,7 +267,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     {selected
       ? <div className="flex min-h-0 flex-1 flex-col"><div className="flex min-h-0 min-w-0 flex-1 flex-col [container-type:inline-size]">{timelinePane}</div></div>
       : <>
-        {listCollapsed && <div className="flex gap-3 px-4 py-3.5"><ListFold label={t("expand")} onClick={onExpandList}/>{listNavigation()}</div>}
+        {listCollapsed && <div className="flex gap-3 px-4 py-3.5"><ListFold label={t("expand")} onClick={onExpandList}/><MacroListHeading count={totals.all}/></div>}
         <div data-slot="macro-first-use" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-card px-6 pt-6 pb-26 text-center">{empty && <svg width="40" height="40" viewBox="3 3 58 58" className="fill-ink3 opacity-35" aria-hidden="true"><polygon points="12,13 22,13 22,61 12,54"/><polygon points="22,32 30,28 30,38 22,42"/><polygon points="42,3 52,10 52,51 42,51"/><polygon points="34,26 42,22 42,32 34,36"/><polygon points="30,28 34,26 34,36 30,38"/></svg>}<h2 className="text-base font-semibold">{t(empty ? "emptyTitle" : "choose")}</h2>
           {empty && <><p className="text-sm text-ink2">{t("emptyBody")}</p><div className="mt-4.5 flex flex-wrap justify-center gap-4.5 border-t pt-3.5 text-xs text-ink3 tabular-nums"><span>{t("harnesses", { n: formatNumber((snapshot.harnesses ?? []).filter(h => h.status === "ready").length) })}</span><span>{t("buddies", { n: formatNumber(snapshot.buddies.filter(b => b.enabled).length) })}</span><a href="#buddies" className="text-foreground underline">{t("buddy")}</a></div></>}
         </div>
