@@ -367,6 +367,20 @@ class BoardTestCase(unittest.TestCase):
         self._stack = []
         self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
+        # Local store tests also query harness capabilities in this process.
+        # Unless a fixture supplies its own selection, none is installed.
+        selection = self.directory / "harness-selection.json"
+        selection.write_text(json.dumps({name: {"adapter": name, "status": "missing", "command": [],
+                                              "reasonCode": "not-found"}
+                                        for name in ("dsh", "codex", "claude", "zcode")}))
+        previous_selection = os.environ.get("BUDDY_HARNESS_RECORD_FILE")
+        os.environ["BUDDY_HARNESS_RECORD_FILE"] = str(selection)
+        def restore_selection():
+            if previous_selection is None:
+                os.environ.pop("BUDDY_HARNESS_RECORD_FILE", None)
+            else:
+                os.environ["BUDDY_HARNESS_RECORD_FILE"] = previous_selection
+        self.addCleanup(restore_selection)
         # In-process boards read the source hook from this process environment; pin
         # the same offline fixture path the child environments get, so enabling a
         # model in any test cannot reach the network.

@@ -328,6 +328,7 @@ class Probe:
         patch_path = root / "dsh-launch-patch.json"
         stub_evidence = root / "mcp-stub-evidence.jsonl"
         rows = [{"id": SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
+                {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},
                 *[{"id": name, "disabled": True} for name in ALWAYS_OFF_ROWS]]
         private_json(patch_path, rows, exclusive=True)
         # The same selection check_preparation runs, kept whole so the
@@ -344,6 +345,7 @@ class Probe:
             "attemptId": attempt_id, "attemptRoot": str(root),
             "patchPath": str(patch_path), "patchRowIds": [row["id"] for row in rows],
             "patchSessionRoot": str(sessions_root),
+            "patchStorageRoot": str(sessions_root.parent / "storages"),
             "sourceHome": os.environ.get("DSH_HOME") or str(Path.home() / ".dsh"),
             "launchLog": str(logs / "launches.jsonl"), "frameLog": str(logs / "frames.jsonl"),
             "stubEvidence": str(stub_evidence), "stubServerName": f"r1_{attempt_id}",

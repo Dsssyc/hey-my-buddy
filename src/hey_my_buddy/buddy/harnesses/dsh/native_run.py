@@ -585,13 +585,15 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
                   permission_policy) -> AcpClient:
     """Launch ACP with the user's configuration and a private session root.
 
-    The public patch pins session storage, expresses the existing tool scope,
+    The public patch pins session records and their JSON projection storage,
+    expresses the existing tool scope,
     and disables title generation for sessions with no user-visible title.
     HOME and DSH_HOME are inherited; telemetry follows the user's settings.
     """
     command = command_for("dsh", dict(os.environ))
     argv = [*command, "--profile", "acp"]
     rows = [{"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
+            {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},
             *scope_rows,
             *({"id": name, "disabled": True} for name in _ALWAYS_DISABLED_ROWS)]
     patch_path = invocation_root / "dsh-launch-patch.json"

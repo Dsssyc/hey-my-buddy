@@ -434,14 +434,14 @@ class FastSeamTests(NativeRunCase):
         # source home binds nothing), then the disabled tool rows with
         # plan-mode, then the title suppression row last.
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", *CONFIRMED_NONE_ROWS,
+                         ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
                           native_run.PLAN_MODE_ROW, *native_run._ALWAYS_DISABLED_ROWS])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
         self.assertTrue(pin["config"]["root"].endswith("/sessions"))
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["disabledRows"],
-                         [row["id"] for row in rows[1:]])
+                         [row["id"] for row in rows[2:]])
 
     def test_the_shipped_none_scope_rows_are_the_confirmed_inventory(self):
         self.assertEqual(native_run.NONE_SCOPE_DISABLED_ROWS, CONFIRMED_NONE_ROWS,
@@ -1378,7 +1378,7 @@ class DiscoveryTests(NativeRunCase):
         patch_path = Path(launch["argv"][launch["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", *native_run._ALWAYS_DISABLED_ROWS])
+                         ["session-persistence-jsonl", "storage-json", *native_run._ALWAYS_DISABLED_ROWS])
 
     def discover(self, **kwargs):
         return native_run.run_discovery(
@@ -1502,12 +1502,15 @@ class NativeConfigurationTests(NativeRunCase):
                     self.assertEqual(observed["profilePatch"], "profile-user-patch\n")
                     launch = self.launch_records()[-1]
                     rows = json.loads(Path(launch["argv"][launch["argv"].index("--patch") + 1]).read_text())
-                    expected = (["session-persistence-jsonl"]
+                    expected = (["session-persistence-jsonl", "storage-json"]
                                 + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else [])
                                 + ["session-title-llm"])
                     self.assertEqual([row["id"] for row in rows], expected)
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)
         self.assertFalse((source / "sessions").exists(), "native records remain private")
+        self.assertFalse((source / "storages").exists(), "projection cache stays with private session storage")
+        self.assertTrue(list((self.root / "storages/session_projcache/sessions").glob("*.json")))
+        self.assertTrue(list((self.root / "dsh-home/storages/session_projcache/sessions").glob("*.json")))
         self.assertFalse((self.root / "dsh-home" / "profiles").exists())
 
     def test_an_unset_dsh_home_uses_the_inherited_home_without_a_private_config(self):

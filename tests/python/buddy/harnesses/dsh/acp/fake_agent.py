@@ -247,6 +247,14 @@ class FakeAgent:
         marker = directory / f"{session_id}.fake-session.json"
         marker.write_text(json.dumps({"cwd": session["cwd"], "model": session["model"],
                                       "effort": session["effort"]}))
+        storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
+        if self.patch_path:
+            for row in json.loads(Path(self.patch_path).read_text()):
+                if row.get("id") == "storage-json":
+                    storage = Path(row["config"]["root"])
+        index = storage / "session_projcache" / "sessions"
+        index.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}))
 
     def restore_session(self, session_id):
         """The persisted session state, or ``None`` when no store carries it."""
