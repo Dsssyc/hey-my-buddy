@@ -119,6 +119,7 @@ def worker_sandbox_settings(level: str) -> dict:
         return {"sandbox": {"enabled": False}}
     settings = sandbox_settings()
     if level == "write":
+        settings["permissions"] = {"allow": ["Bash"]}
         settings["sandbox"]["network"] = {
             "strictAllowlist": False,
             "allowedDomains": ["*"],
@@ -159,7 +160,9 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         # auto-approves edits in native working directories; user allow rules
         # can extend access. Any remaining request is denied by the controller.
         # Full access skips native approvals with sandbox.enabled false;
-        # checkout-write keeps sandboxed Bash without unsandboxed fallback.
+        # Checkout-write allows Bash without prompting inside the sandbox,
+        # with no unsandboxed fallback. Requests that still reach the
+        # controller are denied.
         # This CLI mode overrides the user's permissions.defaultMode.
         args += ["--permission-mode", "bypassPermissions" if full_access else "acceptEdits"]
     if effort != DEFAULT_EFFORT:
