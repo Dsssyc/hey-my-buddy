@@ -427,8 +427,6 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     except CodexUnavailable as error:
         raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
     environment = native_environment(incoming)
-    from ..runtime_selection import worker_launcher_environment
-    environment.update(worker_launcher_environment(incoming))
     if mode in ("review", "fast"):
         policy = (tomllib.loads(read_only_config(request.cwd)) if mode == "review"
                   else {"web_search": "disabled", "approval_policy": "never"})

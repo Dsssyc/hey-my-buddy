@@ -153,7 +153,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         cancelled = board.call("workflow_cancel", {
             "runId": root_id, "commandId": "actor-cancel-1", "reason": reason, **self.control(parent),
         })
-        expected = {"actor": "host:host-1", "reason": reason}
+        expected = {"actor": {"role": "host", "id": "host-1"}, "reason": reason}
         self.assertEqual(cancelled["cancellation"], expected)
         self.assertEqual(board.call("workflow_get", {"runId": root_id})["cancellation"], expected)
         self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"], expected)
@@ -180,7 +180,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         before = board.call("task_result", {"runId": root_id})
         stopped = board.store.workflow.cancel({"runId": root_id, "reason": "Stopped from browser"},
                                               console_authority={"sessionId": "browser-1"})
-        expected = {"actor": "console:browser-1", "reason": "Stopped from browser"}
+        expected = {"actor": {"role": "console", "id": "browser-1"}, "reason": "Stopped from browser"}
         self.assertEqual(stopped["cancellation"], expected)
         after = board.call("task_result", {"runId": root_id})
         self.assertEqual(after["result"], before["result"])
@@ -192,7 +192,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.cancel(board, parent)
         with board.store.db.write() as connection:
             connection.execute(
-                "UPDATE events SET payload_json=json_remove(payload_json,'$.actor')"
+                "UPDATE events SET actor_role=NULL,actor_id=NULL"
                 " WHERE seq=(SELECT MIN(seq) FROM events WHERE task_id=? AND kind='workflow.helper_cancelled')",
                 (child,),
             )
@@ -209,13 +209,13 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertIsNone(continued['cancellation'])
         second = board.store.workflow.cancel({'runId': continued['runId'], 'reason': 'second stop'},
                                             console_authority={'sessionId': 'second-browser'})
-        self.assertEqual(second['cancellation'], {'actor': 'console:second-browser', 'reason': 'second stop'})
+        self.assertEqual(second['cancellation'], {'actor': {'role': 'console', 'id': 'second-browser'}, 'reason': 'second stop'})
 
     def test_long_valid_host_id_is_not_truncated_or_mislabelled(self):
         board = self.board()
         submitted = self.submit(board, host_id='h' * 256, owner='private-fixture')
         cancelled = self.cancel(board, submitted)
-        self.assertEqual(cancelled['cancellation']['actor'], 'host:' + 'h' * 256)
+        self.assertEqual(cancelled['cancellation']['actor'], {'role': 'host', 'id': 'h' * 256})
 
     def test_cancellation_traverses_completed_intermediary(self):
         board, root, parent, child = self.parent_and_child(kind="worktree")
@@ -236,8 +236,8 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.continue_run(board, view, helper_policy="cancel")
         self.assert_cancelled_run(board, child)
         self.assert_cancelled_run(board, grandchild)
-        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"]["actor"], "host:host-1")
-        self.assertEqual(board.call("workflow_get", {"runId": grandchild})["cancellation"]["actor"], "host:host-1")
+        self.assertEqual(board.call("workflow_get", {"runId": child})["cancellation"]["actor"], {"role": "host", "id": "host-1"})
+        self.assertEqual(board.call("workflow_get", {"runId": grandchild})["cancellation"]["actor"], {"role": "host", "id": "host-1"})
         self.assertIn((parent["runId"], "held"), self.reservations(board))
         self.assertNotIn((child, "held"), self.reservations(board))
 

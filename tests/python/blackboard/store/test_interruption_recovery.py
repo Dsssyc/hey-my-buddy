@@ -148,25 +148,6 @@ class InterruptionRecoveryTests(BoardTestCase):
             board.store.reconcile_startup()
         self.assertFalse(board.call('task_get', {'runId': task['taskId']})['task']['shutdownConfirmed'])
 
-    def test_explicit_legacy_start_only_settles_before_this_boot(self):
-        for before_boot in (False, True):
-            with self.subTest(before_boot=before_boot):
-                board, client, task, _, actor = self.claimed(identity=False)
-                with board.store.db.write() as connection:
-                    connection.execute('INSERT INTO attempt_legacy_starts VALUES(?,?)',
-                                       (actor['attemptId'], '2026-01-01T00:00:00Z'))
-                with patch.object(interruption.processes, 'boot_started_at', return_value=2_000_000_000 if before_boot else 1):
-                    board.store.reconcile_startup()
-                self.assertEqual(board.call('task_get', {'runId': task['taskId']})['task']['shutdownConfirmed'], before_boot)
-
-    def test_legacy_clock_corrections_within_margin_remain_unknown(self):
-        from datetime import datetime, timezone
-        started = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        for correction in (-1800, 0, 1800, 3599, 3600, 5400):
-            with self.subTest(correction=correction), patch.object(
-                    interruption.processes, 'boot_started_at', return_value=started.timestamp() + correction):
-                self.assertEqual(interruption.legacy_boot_evidence(started.isoformat()), correction > 3600)
-
     def test_idle_worker_does_not_run_settlement_or_native_journal_scan(self):
         board, client, task, _, actor = self.claimed()
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='unknown'):

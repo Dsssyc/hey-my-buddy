@@ -128,10 +128,9 @@ def write_turn_files(context: ExecutionContext) -> None:
         private_json(context.credential_file(), {
             "token": context.agent_credential, "taskId": context.task_id,
             "attemptId": context.attempt_id, "generation": context.generation, "turnId": context.turn_id,
+            "stateDir": context.environment["HMB_STATE_DIR"],
         })
         context.environment["HMB_AGENT_CREDENTIAL_FILE"] = str(context.credential_file())
-        context.environment["HMB_TASK_ID"] = context.task_id
-        context.environment["HMB_ATTEMPT_ID"] = context.attempt_id
 
 
 def workspace_cwd(context: ExecutionContext) -> str:

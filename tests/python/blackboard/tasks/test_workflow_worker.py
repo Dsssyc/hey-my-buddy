@@ -215,7 +215,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, submitted = self.submit("worker-req-2")
             self.assertEqual(code, 0, submitted)
             credential = self.directory / "agent-credential.json"
-            credential.write_text(json.dumps({"token": "not-a-real-credential"}))
+            credential.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}))
             os.chmod(credential, 0o600)
             env = {**self.env(), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             code, refused = self.cli(
@@ -270,6 +270,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
     def test_lead_harness_launcher_reaches_the_private_issuing_board(self):
         from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
+        from hey_my_buddy.buddy.roles.prompts import worker_prompt
         enable_fixture_buddy(self.board().store, BUDDY)
         with self.daemon(env=self.env()):
             # The manual claimant is this test's actor; observe idle automatic
@@ -293,19 +294,61 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 return response['claim'] is not None
             self.assertTrue(wait_for(claim_when_ready, timeout=30), response)
             credential = self.directory / "launcher-credential.json"
-            credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
+            credential.write_text(json.dumps({"token": response["claim"]["agentCredential"],
+                                              "stateDir": str(self.directory)}))
             credential.chmod(0o600)
             incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             controller = controller_environment(self.directory, incoming,
                                                 turn_input=response["claim"]["turn"]["input"])
             environment = child_environment(source=controller)
-            self.assertEqual(environment["HMB_STATE_DIR"], str(self.directory))
-            self.assertEqual(environment["HMB_AGENT_CREDENTIAL_FILE"], str(credential))
-            launcher = Path(__file__).resolve().parents[4] / "src/hey_my_buddy/install/launcher.py"
-            result = subprocess.run([sys.executable, str(launcher), "get", json.dumps({"runId": submitted["runId"], "output": "full"})],
-                                    env=environment, capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(json.loads(result.stdout)["runId"], submitted["runId"])
+            self.assertNotIn("HMB_STATE_DIR", environment)
+            self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", environment)
+            prompt = worker_prompt("Hand out a bounded task", response["claim"]["turn"]["input"],
+                                   delivery=(), credential_file=str(credential))
+            path_text = prompt.split("Your private attempt credential file is ", 1)[1].split(". For every", 1)[0]
+            prompt_path = json.loads(path_text)
+            self.assertEqual(prompt_path, str(credential))
+            self.assertNotIn(response["claim"]["agentCredential"], prompt)
+            # The model-facing native command starts without any Buddy environment.
+            # It sets only the prompt's credential-file path for this launcher call.
+            child_repo = self.directory / "owned-repo"
+            child_repo.mkdir()
+            for arguments in (("init", "-q", "-b", "main"), ("config", "user.email", "buddy@example.invalid"),
+                              ("config", "user.name", "Buddy Test"), ("add", "."),
+                              ("commit", "-q", "-m", "base", "--allow-empty")):
+                prepared = subprocess.run(["git", *arguments], cwd=child_repo, env={**os.environ, **GIT_ENV},
+                                          capture_output=True, text=True)
+                self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            child_request = {**BUDDY, "requestId": "launcher-owned", "task": "Do bounded work",
+                             "output": "full",
+                             "cwd": str(child_repo), "submissionToken": "p" * 32,
+                             "executionWorkspace": {"kind": "existing", "access": "write"}}
+            # Source-check fixture bypasses only installed-runtime selection;
+            # the launcher and CLI run in their own process with no inherited
+            # HMB state, runtime or role variables.
+            bootstrap = ("import json,sys; from unittest import mock; "
+                         "from hey_my_buddy.install import launcher; "
+                         "guard=mock.patch.object(launcher,'selected_runtime',return_value=None); "
+                         "guard.start(); sys.exit(launcher.main(['submit',sys.argv[1]]))")
+            # A fixture harness reads the role prompt and launches its command
+            # with a fresh environment, as a native harness may do.
+            fixture_harness = (
+                "import json,subprocess,sys; prompt=sys.stdin.read(); "
+                "path=json.loads(prompt.split('Your private attempt credential file is ',1)[1]"
+                ".split('. For every',1)[0]); "
+                "command=subprocess.run([sys.executable,'-c',sys.argv[1],sys.argv[2]],"
+                "env={'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True); "
+                "sys.stdout.write(command.stdout); sys.stderr.write(command.stderr); "
+                "sys.exit(command.returncode)"
+            )
+            command = subprocess.run([sys.executable, "-c", fixture_harness, bootstrap, json.dumps(child_request)],
+                                     cwd=Path(__file__).resolve().parents[4] / "src", env=environment,
+                                     input=prompt, capture_output=True, text=True, timeout=30)
+            self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
+            owned = json.loads(command.stdout)
+            self.assertIsNone(owned["hostId"])
+            self.assertEqual(owned["leadOwnership"]["leadRunId"], submitted["runId"])
+            self.assertEqual(owned["leadOwnership"]["leadTurnId"], response["claim"]["turn"]["turnId"])
 
 
 class ConsoleWorkflowRouteTests(MicroTaskWorkerTestCase):

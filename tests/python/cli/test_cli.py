@@ -375,6 +375,15 @@ class ControlFileTests(PrivateStateTestCase):
                 cli._agent_credential()
             self.assertEqual(empty.exception.code, "UNAUTHORIZED")
 
+    def test_lead_control_file_preserves_null_host_id(self):
+        path = cli._save_control("owned-run", {"hostId": None, "ownerGeneration": 1,
+                                               "controlToken": "lead-control"}, state_dir=self.directory)
+        self.assertEqual(cli._read_control(path), {"hostId": None, "ownerGeneration": 1,
+                                                   "controlToken": "lead-control"})
+        self.assertEqual(cli._apply_control({"runId": "owned-run", "controlFile": path}, "accept"),
+                         {"runId": "owned-run", "hostId": None, "ownerGeneration": 1,
+                          "controlToken": "lead-control"})
+
     def test_scrub_and_save_replaces_the_token_with_the_control_file(self):
         result = {
             "runId": "run-1",
@@ -433,7 +442,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         claim = self.claim(board)
         token = claim["claim"]["agentCredential"]
         credential_file = self.directory / "attempt-credential.json"
-        credential_file.write_text(json.dumps({"token": token}))
+        credential_file.write_text(json.dumps({"token": token, "stateDir": str(self.directory)}))
         credential_file.chmod(0o600)
 
         other_state = self.directory / "other-board"

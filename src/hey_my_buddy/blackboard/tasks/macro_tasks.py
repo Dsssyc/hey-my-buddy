@@ -767,7 +767,7 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
     placeholders = ",".join("?" for _ in run_ids)
     kinds = ",".join("?" for _ in HOST_MARKERS)
     rows = connection.execute(
-        f"SELECT seq, task_id, attempt_id, kind, payload_json, created_at FROM events"
+        f"SELECT seq, task_id, attempt_id, kind, payload_json, created_at, actor_role, actor_id FROM events"
         f" WHERE task_id IN ({placeholders}) AND kind IN ({kinds}) ORDER BY seq",
         [*run_ids, *HOST_MARKERS],
     ).fetchall()
@@ -787,7 +787,7 @@ def _markers(connection, run_ids: list[str]) -> list[dict]:
             return value[:SUMMARY_LIMIT] if isinstance(value, str) and value else None
 
         micro_task = payload.get("microTask") if isinstance(payload.get("microTask"), dict) else {}
-        actor = text("actor") or text("newHostId") or (
+        actor = row["actor_id"] or text("newHostId") or (
             micro_task.get("sourceHostId") if isinstance(micro_task.get("sourceHostId"), str) else None)
         details = [part for part in (text("decision"), text("verdict"), text("state"), text("strategy"),
                                      text("reason")) if part]

@@ -1,7 +1,6 @@
 """Recover stopped attempts from durable process facts, never from lease age."""
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import uuid
 
@@ -10,10 +9,6 @@ from ...protocol import schemas
 from ...protocol import process_identity as processes
 from ..store.db import canonical_json
 
-
-# Old records contain wall time only. Reserve one hour for an early forward
-# clock correction; records closer to boot cannot establish reboot evidence.
-LEGACY_BOOT_MARGIN_SECONDS = 60 * 60
 
 
 def read_identity(connection, attempt_id: str) -> dict | None:
@@ -53,25 +48,14 @@ def record_identity(connection, attempt_id: str, record: dict, *, previous_stopp
          record['jobName'], worker['bootId'], worker['pid'], worker['startedAt']))
 
 
-def legacy_boot_evidence(started_at: str) -> bool:
-    """The explicit legacy form proves only executions from before this boot."""
-    try:
-        boot = processes.boot_started_at()
-    except OSError:
-        return False
-    return datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp() < boot - LEGACY_BOOT_MARGIN_SECONDS
-
-
-def _snapshot(board, *, attempt_id: str | None = None, unobserved_only: bool = False) -> list[tuple[dict, dict | None, str | None]]:
+def _snapshot(board, *, attempt_id: str | None = None, unobserved_only: bool = False) -> list[tuple[dict, dict | None]]:
     with board.db.read() as connection:
         rows = connection.execute(
-            "SELECT a.*,l.started_at AS legacy_started_at FROM attempts a"
-            " LEFT JOIN attempt_legacy_starts l ON l.attempt_id=a.attempt_id"
-            " WHERE a.execution_state='uncertain'" +
+            "SELECT a.* FROM attempts a WHERE a.execution_state='uncertain'" +
             (' AND a.attempt_id=?' if attempt_id is not None else '') +
             (' AND NOT EXISTS(SELECT 1 FROM attempt_interruptions i WHERE i.attempt_id=a.attempt_id)'
              if unobserved_only else ''), (() if attempt_id is None else (attempt_id,))).fetchall()
-        return [(dict(row), read_identity(connection, row['attempt_id']), row['legacy_started_at'])
+        return [(dict(row), read_identity(connection, row['attempt_id']))
                 for row in rows]
 
 
@@ -96,7 +80,7 @@ def _native_identities(board, attempt: dict, identity: dict) -> list[dict] | Non
     return value['identities']
 
 
-def _evidence(board, attempt: dict, record: dict | None, legacy_start: str | None) -> str:
+def _evidence(board, attempt: dict, record: dict | None) -> str:
     if record is not None:
         observed = processes.inspect_process_identity(record)
         if observed != 'identity-absent':
@@ -113,27 +97,25 @@ def _evidence(board, attempt: dict, record: dict | None, legacy_start: str | Non
             if observed not in ('boot-changed', 'identity-absent'):
                 return observed
         return 'identity-absent'
-    if legacy_start is not None and legacy_boot_evidence(legacy_start):
-        return 'boot-changed'
     return 'unknown'
 
 
 def recover(board) -> int:
     settled = 0
-    for attempt, record, legacy_start in _snapshot(board):
+    for attempt, record in _snapshot(board):
         with board.db.read() as connection:
             pending = connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
                                          (attempt['attempt_id'],)).fetchone()
         if pending is not None:
-            settled += _settle(board, attempt, record, pending['evidence_kind'], legacy_start)
+            settled += _settle(board, attempt, record, pending['evidence_kind'])
             continue
         # A surviving original Worker still owns collection and its durable
         # receipt, including a child that completed while the Worker was asleep.
         if record is not None and processes.worker_identity_alive(record) is not False:
             continue
-        evidence = _evidence(board, attempt, record, legacy_start)
+        evidence = _evidence(board, attempt, record)
         if evidence in ('boot-changed', 'identity-absent'):
-            settled += _settle(board, attempt, record, evidence, legacy_start)
+            settled += _settle(board, attempt, record, evidence)
     return settled
 
 
@@ -157,11 +139,11 @@ def worker_recover(board, params: dict) -> dict:
             if observed['worker_id'] != worker_id:
                 raise BoardError('UNAUTHORIZED', 'The local orphan belongs to a different Worker')
     candidates = []
-    for attempt, record, legacy_start in _snapshot(board, attempt_id=attempt_id, unobserved_only=attempt_id is None):
+    for attempt, record in _snapshot(board, attempt_id=attempt_id, unobserved_only=attempt_id is None):
         if record is None or processes.worker_identity_alive(record) is not False:
             continue
         if attempt_id == attempt['attempt_id']:
-            observed = _evidence(board, attempt, record, legacy_start)
+            observed = _evidence(board, attempt, record)
             if observed not in ('boot-changed', 'identity-absent'):
                 return {'settled': False, 'evidence': observed}
             # The new Worker reports its exact stop action; the service independently
@@ -210,12 +192,12 @@ def _reserve(board, snapshot: dict, identity: dict | None, kind: str) -> str | N
     return kind
 
 
-def _settle(board, snapshot: dict, identity: dict | None, kind: str, legacy_start: str | None) -> int:
+def _settle(board, snapshot: dict, identity: dict | None, kind: str) -> int:
     attempt_id = snapshot['attempt_id']
     kind = _reserve(board, snapshot, identity, kind)
     if kind is None:
         return 0
-    result = {'interruptionEvidence': {'kind': kind, 'legacyStartedAt': legacy_start},
+    result = {'interruptionEvidence': {'kind': kind},
               'partialOutput': {'reason': 'interrupted', 'verified': False, 'final': False}}
     # No SQLite write transaction spans Git. A completed stop proof precedes all
     # sealing; the transaction below still fences a surviving original Worker.

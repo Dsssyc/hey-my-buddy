@@ -308,6 +308,9 @@ def worker_request(control: dict, module):
         raise BoardError("INVALID_ARGUMENT", "the micro task input is not an object")
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
     delegation_authority = turn_input.get("context", {}).get("delegationAuthority") is True
+    credential_file = os.environ.get("HMB_AGENT_CREDENTIAL_FILE") if delegation_authority else None
+    if delegation_authority and not credential_file:
+        raise BoardError("UNAUTHORIZED", "A Lead turn requires its attempt credential file")
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
     task_text = Path(control["taskFile"]).read_text()
@@ -326,13 +329,14 @@ def worker_request(control: dict, module):
             native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
         prompt = worker_services.micro_task_prompt(
             task_text, turn_input, binding.completion_tool,
-            checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
+            checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
+            credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
         schema, scope = worker_services.outcome_schema_for(
             delegation_authority=delegation_authority), permission.tool_scope
     else:
         format = format.for_turn(turn_input)
-        prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, permission.tool_scope
+        prompt, schema, scope = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema, permission.tool_scope
         services = _native_services(control, module, scope)
         descriptions = ()
     mode = turn_input.get("resumeMode")

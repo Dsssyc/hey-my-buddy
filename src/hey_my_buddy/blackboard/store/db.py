@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -163,13 +163,6 @@ CREATE TABLE IF NOT EXISTS attempt_process_identities (
         OR (process_group_id IS NULL AND job_name IS NOT NULL))
 );
 
--- Only the schema-19 conversion writes these rows. Their timestamp is explicitly
--- legacy evidence, never a second representation of a complete process identity.
-CREATE TABLE IF NOT EXISTS attempt_legacy_starts (
-    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    started_at          TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS attempt_interruptions (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     evidence_kind       TEXT NOT NULL CHECK (evidence_kind IN ('boot-changed','identity-absent','worker-stopped')),
@@ -240,7 +233,10 @@ CREATE TABLE IF NOT EXISTS events (
     revision     INTEGER,
     kind         TEXT NOT NULL,
     payload_json TEXT NOT NULL,
-    created_at   TEXT NOT NULL
+    actor_role   TEXT,
+    actor_id     TEXT,
+    created_at   TEXT NOT NULL,
+    CHECK ((actor_role IS NULL) = (actor_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
@@ -535,7 +531,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     title                   TEXT,
     activity_seq            INTEGER NOT NULL DEFAULT 0,
     activity_at             TEXT,
-    host_id                 TEXT NOT NULL,
+    host_id                 TEXT,
     owner_generation        INTEGER NOT NULL DEFAULT 1,
     control_verifier        TEXT NOT NULL,
     micro_task_json               TEXT NOT NULL,
@@ -737,7 +733,8 @@ CREATE TABLE IF NOT EXISTS workflow_scope_versions (
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     scope_version       INTEGER NOT NULL,
     command_id          TEXT,
-    actor               TEXT NOT NULL,
+    actor_role          TEXT NOT NULL,
+    actor_id            TEXT NOT NULL,
     reason              TEXT,
     write_scope_json    TEXT NOT NULL,
     manifest_sha256     TEXT,
@@ -773,13 +770,15 @@ CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
     artifact_id             TEXT,
     output_commit           TEXT,
     output_tree             TEXT,
-    actor                   TEXT,
+    actor_role              TEXT,
+    actor_id                TEXT,
     reason                  TEXT,
     command_id              TEXT,
     delivery_json           TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    UNIQUE(run_id, attempt_id, observed_fingerprint)
+    UNIQUE(run_id, attempt_id, observed_fingerprint),
+    CHECK ((actor_role IS NULL) = (actor_id IS NULL))
 );
 """,
     """
@@ -812,7 +811,8 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     verification_json     TEXT NOT NULL,
     reason                TEXT,
     command_id            TEXT,
-    actor                 TEXT NOT NULL,
+    actor_role            TEXT NOT NULL,
+    actor_id              TEXT NOT NULL,
     created_at            TEXT NOT NULL,
     UNIQUE(binding_sha256)
 );
@@ -838,7 +838,8 @@ CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     reasons_json     TEXT NOT NULL DEFAULT '[]',
     result_json      TEXT,
     command_id       TEXT,
-    actor            TEXT NOT NULL,
+    actor_role       TEXT NOT NULL,
+    actor_id         TEXT NOT NULL,
     revision         INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
     applied_at       TEXT,
@@ -965,7 +966,8 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     evidence_json    TEXT NOT NULL DEFAULT '{"references":[]}',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
     integration_id   TEXT REFERENCES workflow_integrations(integration_id) ON DELETE RESTRICT,
-    actor            TEXT NOT NULL,
+    actor_role       TEXT NOT NULL,
+    actor_id         TEXT NOT NULL,
     command_id       TEXT NOT NULL UNIQUE,
     created_at       TEXT NOT NULL
 );

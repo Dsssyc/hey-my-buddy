@@ -13,10 +13,13 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import upgrade as board_upgrade
+from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
 
 
@@ -118,7 +121,6 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, old = self.restored()
         state = fixture['state']
         before = upgrade.idle_snapshot(state)
-        board_bytes = (state / 'board.sqlite3').read_bytes()
         expected_settings = router.configuration(old)
         expected_runs = dict(old.execute('SELECT run_id,state FROM workflow_runs'))
         request_fingerprints = dict(old.execute('SELECT run_id,request_fingerprint FROM workflow_runs'))
@@ -159,8 +161,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertNotIn('archive', result)
         after = upgrade.idle_snapshot(state, event_head=before['eventHead'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
-        self.assertEqual(after['fingerprints'], before['fingerprints'])
-        self.assertEqual((state / 'board.sqlite3').read_bytes(), board_bytes)
+        converted = {'events', 'workflow_runs', 'workflow_scope_versions',
+                     'workflow_workspace_conflicts', 'workflow_integrations',
+                     'workspace_cleanup_plans', 'workflow_host_conclusions', 'attempt_legacy_starts',
+                     'attempts', 'commands', 'workflow_requests', 'workflow_turns', 'meta'}
+        self.assertEqual(after['eventHead'], before['eventHead'])
+        self.assertEqual({name: value for name, value in after['fingerprints'].items() if name not in converted},
+                         {name: value for name, value in before['fingerprints'].items() if name not in converted})
         self.assertEqual({relative: (state / relative).read_bytes() for relative in history}, history)
         self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], fixture['schemaVersion'])
 
@@ -173,6 +180,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             fresh_schema = [tuple(row) for row in baseline.execute(
                 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
             self.assertEqual(source_schema, fresh_schema)
+            self.assertNotIn('attempt_legacy_starts', after['tables'])
+            self.assertEqual(upgraded.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
+                             str(SCHEMA_VERSION))
             self.assertEqual(upgraded.execute('SELECT COUNT(*) FROM workflow_lead_tasks').fetchone()[0], 0)
             self.assertEqual({row[0] for row in upgraded.execute(
                 'SELECT delegation_authority FROM workflow_runs')}, {0})
@@ -187,3 +197,137 @@ class UpgradeFixtureTests(unittest.TestCase):
                 expected_preferences)
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_lead_relationship_converts_authority_and_preserves_opaque_actor_text(self):
+        fixture, connection = self.restored()
+        owned = fixture['stableIds']['delivered']
+        lead = fixture['stableIds']['accepted']
+        helper = fixture['stableIds']['failed']
+        unrelated = fixture['stableIds']['cancelled']
+        lead_turn = connection.execute('SELECT turn_id FROM workflow_turns WHERE run_id=? LIMIT 1', (lead,)).fetchone()[0]
+        connection.execute('INSERT INTO workflow_lead_tasks VALUES(?,?,?,?)',
+                           (owned, lead, lead_turn, '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO workflow_lead_tasks VALUES(?,?,?,?)',
+                           (unrelated, lead, lead_turn, '2026-01-01T00:00:00Z'))
+        connection.execute(
+            "INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,"
+            "state,workspace_intent_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (helper, owned, 'owned-helper', 'owned-helper-decision', 'succeeded', '{}',
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'))
+        connection.execute('UPDATE workflow_runs SET host_id=? WHERE run_id IN (?,?)', ('lead:' + lead, owned, helper))
+        connection.execute('UPDATE workflow_runs SET host_id=?,owner_generation=2 WHERE run_id=?',
+                           ('lead:' + lead, unrelated))
+        connection.execute('UPDATE workflow_runs SET host_id=? WHERE run_id=?', ('lead:literal-host', lead))
+        connection.execute('UPDATE tasks SET owner=? WHERE task_id=?', ('host:lead:' + lead, owned))
+        connection.execute('UPDATE workflow_scope_versions SET actor=? WHERE run_id IN (?,?) AND scope_version=1',
+                           ('host:lead:' + lead, owned, unrelated))
+        connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                           (unrelated, 'workflow.takeover', json.dumps({'newHostId': 'lead:' + lead}),
+                            '2026-01-01T00:00:00Z'))
+        for run_id, actor in ((owned, 'host:lead:' + lead), (helper, 'lead:' + lead),
+                              (unrelated, 'host:lead:' + lead), (lead, 'host:lead:literal-host')):
+            connection.execute(
+                'INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                (run_id, 'workflow.fixture_actor', json.dumps({'actor': actor,
+                    'opaque': {'actor': 'host:stay-opaque'},
+                    'interruptionEvidence': {'kind': 'boot-changed', 'legacyStartedAt': None}}),
+                 '2026-01-01T00:00:00Z'))
+        for kind, actor in (('task.cancel_requested', 'console:literal-host'),
+                            ('message.updated', 'host:literal-bridge')):
+            connection.execute('INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,?,?,?)',
+                               (owned, kind, json.dumps({'actor': actor}), '2026-01-01T00:00:00Z'))
+        receipt = {'runId': owned, 'ownerGeneration': 1, 'hostId': 'lead:' + lead,
+                   'control': {'hostId': 'lead:' + lead},
+                   'scope': {'actor': 'host:lead:' + lead},
+                   'hostConclusion': {'actor': 'lead:' + lead},
+                   'integrations': [{'actor': 'host:lead:' + lead}],
+                   'cancellation': {'actor': 'host:lead:' + lead},
+                   'currentTurn': {'outcome': {'actor': 'host:stay-opaque'}}}
+        attempt_id = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (owned,)).fetchone()[0]
+        interrupted = {'terminationReason': 'interrupted', 'result': {
+            'interruptionEvidence': {'kind': 'boot-changed', 'legacyStartedAt': '2026-01-01T00:00:00Z'},
+            'opaque': {'actor': 'host:stay-opaque'}}}
+        connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?',
+                           (json.dumps(interrupted), attempt_id))
+        connection.execute('INSERT INTO attempt_legacy_starts VALUES(?,?)',
+                           (attempt_id, '2026-01-01T00:00:00Z'))
+        receipt['task'] = {'interruptionEvidence': dict(interrupted['result']['interruptionEvidence']),
+                           'selectedAttempt': {'result': json.loads(json.dumps(interrupted))}}
+        receipt['attempt'] = {'result': json.loads(json.dumps(interrupted))}
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('fixture-lead-replay', 'workflow.fixture', 'fixture-hash', json.dumps(receipt),
+                            '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('fixture-task-replay', 'task.cancel', 'fixture-hash',
+                            json.dumps({'task': {'cancellation': {'actor': 'console:literal-host'}}}),
+                            '2026-01-01T00:00:00Z'))
+        connection.commit()
+        connection.close()
+        archived = backup.create(BoardStore(fixture['state']), offline=True)
+        self.assertEqual(backup.verify(Path(archived['path']))['schema'], 20)
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as upgraded:
+            upgraded.row_factory = sqlite3.Row
+            self.assertEqual(dict(upgraded.execute(
+                'SELECT run_id,host_id FROM workflow_runs WHERE run_id IN (?,?,?,?)',
+                (owned, helper, unrelated, lead))),
+                {owned: None, helper: None, unrelated: 'lead:' + lead, lead: 'lead:literal-host'})
+            self.assertEqual(upgraded.execute('SELECT owner FROM tasks WHERE task_id=?', (owned,)).fetchone()[0], lead)
+            self.assertEqual({tuple(row) for row in upgraded.execute(
+                'SELECT actor_role,actor_id FROM workflow_scope_versions WHERE run_id IN (?,?) AND scope_version=1',
+                (owned, unrelated))}, {('lead', lead)})
+            rows = upgraded.execute("SELECT task_id,actor_role,actor_id,payload_json FROM events WHERE kind='workflow.fixture_actor'").fetchall()
+            actors = {row['task_id']: (row['actor_role'], row['actor_id']) for row in rows}
+            self.assertEqual(actors, {owned: ('lead', lead), helper: ('lead', lead),
+                                      unrelated: ('host', 'lead:' + lead), lead: ('host', 'lead:literal-host')})
+            self.assertEqual([tuple(row) for row in upgraded.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='task.cancel_requested' AND actor_id='console:literal-host'")],
+                [('host', 'console:literal-host')])
+            self.assertEqual([tuple(row) for row in upgraded.execute(
+                "SELECT actor_role,actor_id FROM events WHERE kind='message.updated' AND actor_id='host:literal-bridge'")],
+                [('bridge', 'host:literal-bridge')])
+            for row in rows:
+                payload = json.loads(row['payload_json'])
+                self.assertNotIn('actor', payload)
+                self.assertEqual(payload['opaque'], {'actor': 'host:stay-opaque'})
+                self.assertEqual(payload['interruptionEvidence'], {'kind': 'boot-changed'})
+            replay = json.loads(upgraded.execute(
+                "SELECT response_json FROM commands WHERE command_id='fixture-lead-replay'").fetchone()[0])
+            self.assertIsNone(replay['hostId'])
+            self.assertIsNone(replay['control']['hostId'])
+            for field in ('scope', 'hostConclusion', 'cancellation'):
+                self.assertEqual(replay[field]['actor'], {'role': 'lead', 'id': lead})
+            self.assertEqual(replay['integrations'][0]['actor'], {'role': 'lead', 'id': lead})
+            self.assertEqual(replay['currentTurn']['outcome'], {'actor': 'host:stay-opaque'})
+            ordinary = json.loads(upgraded.execute(
+                "SELECT response_json FROM commands WHERE command_id='fixture-task-replay'").fetchone()[0])
+            self.assertEqual(ordinary['task']['cancellation']['actor'],
+                             {'role': 'console', 'id': 'literal-host'})
+            self.assertEqual(replay['task']['interruptionEvidence'], {'kind': 'boot-changed'})
+            for envelope in (replay['task']['selectedAttempt']['result'], replay['attempt']['result'],
+                             json.loads(upgraded.execute(
+                                 'SELECT result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()[0])):
+                self.assertEqual(envelope['result']['interruptionEvidence'], {'kind': 'boot-changed'})
+                self.assertEqual(envelope['result']['opaque'], {'actor': 'host:stay-opaque'})
+
+    def test_unsettled_legacy_attempt_refuses_conversion_without_consuming_base(self):
+        fixture, connection = self.restored()
+        _run_id, _manifest, attempt_id = self.sample(fixture, connection)
+        connection.execute("UPDATE attempts SET execution_state='uncertain',shutdown_confirmed=0 WHERE attempt_id=?",
+                           (attempt_id,))
+        connection.execute('INSERT INTO attempt_legacy_starts VALUES(?,?)',
+                           (attempt_id, '2026-01-01T00:00:00Z'))
+        connection.commit()
+        connection.close()
+        store = BoardStore(fixture['state'])
+        archived = backup.create(store)
+        store.db.close()
+        self.assertEqual(backup.verify(Path(archived['path']))['schema'], 20)
+        before = (fixture['state'] / 'board.sqlite3').read_bytes()
+        with self.assertRaises(BoardError) as caught:
+            board_upgrade.migrate(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), before)
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as unchanged:
+            self.assertEqual(unchanged.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '20')
+            self.assertEqual(unchanged.execute('SELECT COUNT(*) FROM attempt_legacy_starts').fetchone()[0], 1)

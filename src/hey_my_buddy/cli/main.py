@@ -33,7 +33,7 @@ from ..install.entrypoints import ENTRY_MODULES
 from ..protocol import transport
 from ..errors import BoardError
 from ..home import control_file_path
-from ..install.launcher import service_environment
+from ..install.launcher import agent_credential_document, credential_state_dir, service_environment
 from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
 from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
 
@@ -332,16 +332,7 @@ def _agent_credential() -> str | None:
         return None
     if not path_value.strip():
         raise BoardError("UNAUTHORIZED", "HMB_AGENT_CREDENTIAL_FILE is empty")
-    try:
-        value = json.loads(Path(path_value).expanduser().read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise BoardError(
-            "UNAUTHORIZED", f"The attempt-scoped credential file {path_value!r} is missing or unreadable"
-        ) from exc
-    scoped = value.get("token") if isinstance(value, dict) else None
-    if not isinstance(scoped, str) or not scoped.strip():
-        raise BoardError("UNAUTHORIZED", f"The attempt-scoped credential file {path_value!r} has no token")
-    return scoped.strip()
+    return agent_credential_document()["token"].strip()
 
 
 def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
@@ -362,8 +353,8 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     host_id = control.get("hostId")
     generation = control.get("ownerGeneration")
     token = control.get("controlToken")
-    if not isinstance(host_id, str) or not host_id.strip():
-        raise BoardError("INVALID_ARGUMENT", "control.hostId must be a nonempty string")
+    if "hostId" not in control or (host_id is not None and (not isinstance(host_id, str) or not host_id.strip())):
+        raise BoardError("INVALID_ARGUMENT", "control.hostId must be null or a nonempty string")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "control.ownerGeneration must be a positive integer")
     if not isinstance(token, str) or not token.strip():
@@ -371,7 +362,7 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     path = _control_path(run_id, generation, state_dir)
     payload = json.dumps(
         {
-            "hostId": host_id.strip(),
+            "hostId": host_id.strip() if host_id is not None else None,
             "ownerGeneration": generation,
             "controlToken": token.strip(),
             "runId": run_id,
@@ -450,13 +441,14 @@ def _read_control(path_value: str) -> dict:
     host_id = value.get("hostId")
     generation = value.get("ownerGeneration")
     token = value.get("controlToken")
-    if not isinstance(host_id, str) or not host_id.strip():
-        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be a nonempty string")
+    if "hostId" not in value or (host_id is not None and (not isinstance(host_id, str) or not host_id.strip())):
+        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be null or a nonempty string")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "controlFile ownerGeneration must be a positive integer")
     if not isinstance(token, str) or not token.strip():
         raise BoardError("INVALID_ARGUMENT", "controlFile controlToken must be a nonempty string")
-    return {"hostId": host_id.strip(), "ownerGeneration": generation, "controlToken": token.strip()}
+    return {"hostId": host_id.strip() if host_id is not None else None,
+            "ownerGeneration": generation, "controlToken": token.strip()}
 
 
 def _apply_control(params: object, method: str) -> dict:
@@ -474,7 +466,7 @@ def _apply_control(params: object, method: str) -> dict:
         return prepared
     control = _read_control(path_value)
     for field in _CONTROL_TRIPLE:
-        if prepared.get(field) is None:
+        if field not in prepared:
             prepared[field] = control[field]
     return prepared
 
@@ -660,7 +652,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         params = _parse_parameters(_parameters_text(args))
-        state_dir = get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
+        scoped_state = credential_state_dir() if args.method != "console" else None
+        state_dir = scoped_state or get_state_dir(params.get("stateDir") if args.method in LOCAL_METHODS else None)
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)

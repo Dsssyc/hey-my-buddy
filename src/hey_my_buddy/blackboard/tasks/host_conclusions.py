@@ -18,5 +18,5 @@ def view(row):
     return {"conclusionId": row["conclusion_id"], "attemptId": row["attempt_id"],
             "executionStatus": row["execution_status"], "note": row["note"],
             "evidence": json.loads(row["evidence_json"])["references"], "artifactId": row["artifact_id"],
-            "integrationId": row["integration_id"], "actor": row["actor"], "createdAt": row["created_at"],
+            "integrationId": row["integration_id"], "actor": {"role": row["actor_role"], "id": row["actor_id"]}, "createdAt": row["created_at"],
             "ownerGeneration": row["owner_generation"], "runRevision": row["run_revision"]}

@@ -1,4 +1,5 @@
 """Lead credentials extend the existing operation and target boundaries."""
+import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
@@ -41,7 +42,7 @@ class LeadOwnedTests(WorkflowTestCase):
                      "createdAt": child["createdAt"]}
         self.assertEqual(child["leadOwnership"], ownership)
         self.assertFalse(child["delegationAuthority"])
-        self.assertEqual(child["hostId"], "lead:" + lead["runId"])
+        self.assertIsNone(child["hostId"])
         fetched = board.call("workflow_get", {"runId": child["runId"], "credential": claim["agentCredential"]})
         self.assertEqual(fetched["leadOwnership"], ownership)
         self.assertEqual(micro_task_brief(fetched)["leadOwnership"], ownership)
@@ -60,7 +61,7 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertEqual(groups[lead["runId"]], groups[child["runId"]])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT owner FROM tasks WHERE task_id=?", (child["runId"],)).fetchone()[0],
-                             "host:lead:" + lead["runId"])
+                             lead["runId"])
         replay = self.owned(board, claim)
         self.assertTrue(replay["duplicate"])
         self.assertEqual(replay["control"], child["control"])
@@ -346,3 +347,36 @@ class LeadOwnedTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertIsNone(db.execute("SELECT task_id FROM tasks WHERE request_id='revoked'").fetchone())
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_continuations").fetchone()[0], 0)
+
+    def test_owned_wake_filter_compares_role_and_identity(self):
+        from hey_my_buddy.blackboard.tasks.workflow import OWNED_WAKE_FILTER_SQL
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        with board.store.db.write() as db:
+            for role, identifier, expected in (("lead", lead["runId"], 0),
+                                                ("host", lead["runId"], 1),
+                                                ("host", "lead:" + lead["runId"], 1),
+                                                ("lead", "another-lead", 1)):
+                board.store._append_event(db, "workflow.cancelled", task_id=child["runId"],
+                                          payload={"actor": {"role": role, "id": identifier}})
+                row = db.execute("SELECT * FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+                self.assertEqual((row["actor_role"], row["actor_id"]), (role, identifier))
+                self.assertNotIn("actor", json.loads(row["payload_json"]))
+                count = db.execute("SELECT COUNT(*) FROM events e JOIN workflow_lead_tasks l"
+                                   " ON l.owned_run_id=e.task_id WHERE e.seq=? AND " + OWNED_WAKE_FILTER_SQL,
+                                   (row["seq"],)).fetchone()[0]
+                self.assertEqual(count, expected)
+
+    def test_without_execution_credential_lead_named_host_is_host(self):
+        board = self.board()
+        lead, claim = self.lead(board)
+        host = self.submit(board, request_id="named-host", host_id="lead:" + lead["runId"],
+                           cwd=str(self.workdir("named-host")))
+        self.assertIsNone(host["leadOwnership"])
+        self.assertEqual(host["hostId"], "lead:" + lead["runId"])
+        stopped = board.call("workflow_cancel", {"runId": host["runId"], **host["control"]})
+        self.assertEqual(stopped["cancellation"]["actor"], {"role": "host", "id": host["hostId"]})
+        child = self.owned(board, claim)
+        stopped = board.call("workflow_cancel", {"runId": child["runId"], "credential": claim["agentCredential"]})
+        self.assertEqual(stopped["cancellation"]["actor"], {"role": "lead", "id": lead["runId"]})

@@ -89,7 +89,8 @@ class RolePromptTests(unittest.TestCase):
                                     for authority in (False, True)):
                 turn["context"] = {"delegationAuthority": authority}
                 turn_io.private_json(root / "input.json", turn)
-                with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}):
+                with self.subTest(harness=name, authority=authority), mock.patch.object(run_execution, "_native_services", return_value={}), \
+                        mock.patch.dict("os.environ", {"HMB_AGENT_CREDENTIAL_FILE": str(root / "agent-credential.json")}, clear=False):
                     control = {"harness": name, "privateRoot": str(root), "nativeRoot": str(root / "native"),
                                "directory": str(root), "cwd": str(root), "invocationId": "invocation",
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
@@ -103,6 +104,10 @@ class RolePromptTests(unittest.TestCase):
                     if authority:
                         self.assertTrue(request.input_text.startswith(role + "\n" + lead))
                         self.assertGreater(request.input_text.index(task), request.input_text.index(lead) + len(lead))
+                        self.assertIn(str(root / "agent-credential.json"), request.input_text)
+                        self.assertIn("HMB_AGENT_CREDENTIAL_FILE", request.input_text)
+                    else:
+                        self.assertNotIn(str(root / "agent-credential.json"), request.input_text)
                     self.assertGreater(request.input_text.index(task), len(role))
                     self.assertTrue(request.input_text.endswith(turn_io.canonical_json(turn)))
 

@@ -98,9 +98,10 @@ class LeadGrantTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT delegation_authority FROM workflow_runs").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)
-            event = decode_strict_json(db.execute(
-                "SELECT payload_json FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()[0])
-            self.assertEqual(event, {"actor": "host:host", "buddy": BUDDY})
+            row = db.execute(
+                "SELECT payload_json,actor_role,actor_id FROM events WHERE kind='workflow.delegation_authority_granted'").fetchone()
+            self.assertEqual(decode_strict_json(row["payload_json"]), {"buddy": BUDDY})
+            self.assertEqual((row["actor_role"], row["actor_id"]), ("host", "host"))
 
     def test_absent_or_false_grant_has_one_identity_and_no_authority(self):
         board = self.board()

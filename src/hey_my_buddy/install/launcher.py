@@ -91,6 +91,31 @@ def clean_host_environment() -> None:
             os.environ.pop(key, None)
 
 
+def agent_credential_document() -> dict | None:
+    """Read the private attempt credential named by this command, if present."""
+    from hey_my_buddy.errors import BoardError
+    path_value = os.environ.get('HMB_AGENT_CREDENTIAL_FILE')
+    if path_value is None:
+        return None
+    if not path_value.strip():
+        raise BoardError('UNAUTHORIZED', 'HMB_AGENT_CREDENTIAL_FILE is empty')
+    try:
+        value = read_private(Path(path_value).expanduser())
+    except (BoardError, OSError, ValueError) as error:
+        raise BoardError('UNAUTHORIZED', 'The attempt credential file is unreadable') from error
+    if not isinstance(value, dict) or not isinstance(value.get('token'), str) or not value['token'].strip():
+        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no token')
+    state = value.get('stateDir')
+    if not isinstance(state, str) or not state or not Path(state).is_absolute():
+        raise BoardError('UNAUTHORIZED', 'The attempt credential file has no absolute stateDir')
+    return value
+
+
+def credential_state_dir() -> Path | None:
+    value = agent_credential_document()
+    return Path(value['stateDir']).resolve() if value is not None else None
+
+
 def read_private(path: Path) -> dict | None:
     from hey_my_buddy.errors import BoardError
     try:
@@ -283,7 +308,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         clean_host_environment()
         from hey_my_buddy.home import default_state_dir
-        state = Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
+        scoped_state = credential_state_dir()
+        state = scoped_state or Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
+        if scoped_state is not None:
+            os.environ['HMB_STATE_DIR'] = str(scoped_state)
         if args and args[0] not in {'upgrade','install','backup-preflight','--help','-h'}:
             if (state / 'upgrade.json').exists():
                 from hey_my_buddy.errors import BoardError

@@ -81,6 +81,25 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(execute.call_args.args[0], str(python))
             self.assertEqual(execute.call_args.args[1], [str(python), '-P', '-m', 'hey_my_buddy.cli.main', 'ping'])
 
+    def test_attempt_file_alone_selects_its_board_before_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = root / 'board'
+            state.mkdir(mode=0o700)
+            credential = root / 'agent-credential.json'
+            credential.write_text(json.dumps({'token': 'fixture-secret', 'stateDir': str(state)}))
+            credential.chmod(0o600)
+            target = root / 'runtime' / ('a' * 32)
+            (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
+            with mock.patch.dict(os.environ, {'HMB_AGENT_CREDENTIAL_FILE': str(credential)}, clear=True), \
+                    mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target) as selected, \
+                    mock.patch('hey_my_buddy.install.launcher.os.execve', side_effect=SystemExit(0)) as execute:
+                with self.assertRaises(SystemExit):
+                    launcher.main(['get', '{"runId":"owned"}'])
+            selected.assert_called_once_with(state)
+            self.assertEqual(execute.call_args.args[2]['HMB_STATE_DIR'], str(state))
+            self.assertEqual(execute.call_args.args[2]['HMB_AGENT_CREDENTIAL_FILE'], str(credential))
+
     def test_host_scrubs_internal_identity_and_endpoints_but_worker_keeps_credential(self):
         inherited = {'HMB_STATE_DIR': '/private/state', 'HMB_RUNTIME_ROOT': '/private/runtime',
                      'HMB_DEV_SOURCE': '1', 'HMB_RUNTIME': '/stale', 'HMB_RUNTIME_IDENTITY': 'stale',

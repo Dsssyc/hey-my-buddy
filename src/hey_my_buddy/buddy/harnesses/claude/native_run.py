@@ -290,8 +290,6 @@ def _prepare(request: RunRequest) -> _Preparation:
     incoming = dict(os.environ)
     command = cli_command(incoming)
     environment = native_environment(incoming)
-    from ..runtime_selection import worker_launcher_environment
-    environment.update(worker_launcher_environment(incoming))
     # Worker levels select their native sandbox posture for this turn. Calls
     # without a Worker level keep the explicit Router controls unchanged.
     settings = (worker_sandbox_settings(request.worker_permission.level)

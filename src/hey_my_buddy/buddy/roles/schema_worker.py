@@ -74,11 +74,11 @@ class NativeSchemaWorker:
         schema["properties"]["outcome"]["anyOf"][0]["properties"]["disposition"]["enum"].append("waiting")
         return replace(self, schema=schema, delegation_authority=True)
 
-    def prompt(self, task_text: str, turn_input: dict) -> str:
+    def prompt(self, task_text: str, turn_input: dict, *, credential_file: str | None = None) -> str:
         delivery = self.prefixes + ((
             "When you have handed off work to micro tasks you own and need their results, conclude this Lead turn with disposition waiting, request: null and a clear summary. The blackboard will start a later turn when an owned task needs your attention.",
         ) if self.delegation_authority else ())
-        return worker_prompt(task_text, turn_input, delivery=delivery)
+        return worker_prompt(task_text, turn_input, delivery=delivery, credential_file=credential_file)
 
     def parse_value(self, result) -> tuple[dict | None, str | None, dict]:
         """Use the same outcome validator for the decision and its diagnostic."""

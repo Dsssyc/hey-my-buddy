@@ -362,7 +362,7 @@ class UpgradeTests(BoardTestCase):
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 
-    def test_upgrade_refuses_another_schema_without_conversion(self):
+    def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
         for version in ('19', '999'):
             with self.subTest(schema=version):

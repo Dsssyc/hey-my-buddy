@@ -419,7 +419,7 @@ def normalize_control(params: dict) -> dict | None:
     A partial triple is invalid: attribution without authority is never accepted
     silently.
     """
-    present = {name: params.get(name) for name in CONTROL_FIELDS if params.get(name) is not None}
+    present = {name: params[name] for name in CONTROL_FIELDS if name in params}
     if not present:
         return None
     missing = [name for name in CONTROL_FIELDS if name not in present]
@@ -429,7 +429,7 @@ def normalize_control(params: dict) -> dict | None:
             f"Control fields must be supplied together; missing {missing[0]}",
             field=missing[0],
         )
-    host_id = required_string(params, "hostId", max_length=256)
+    host_id = optional_string(params, "hostId", max_length=256)
     generation = params.get("ownerGeneration")
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
@@ -540,14 +540,14 @@ def _reject_retired_spec_keys(params: dict) -> None:
             )
 
 
-def normalize_workflow_submit(params: dict) -> dict:
+def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -> dict:
     """Validate one ``workflow_submit`` request into its canonical parts."""
     params = require_object(params, "workflow submit request")
     reject_untrusted_override(params)
     _reject_retired_spec_keys(params)
     reject_unknown(params, WORKFLOW_SUBMIT_FIELDS, "workflow.submit")
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
-    host_id = required_string(params, "hostId", max_length=256)
+    host_id = None if lead_run_id is not None else required_string(params, "hostId", max_length=256)
     submission_token = normalize_submission_token(params)
     delegation_authority = optional_bool(params, "delegationAuthority", False)
     if delegation_authority:
@@ -566,7 +566,7 @@ def normalize_workflow_submit(params: dict) -> dict:
     # ordinary spec's cwd is the only source spelling, and the integrator is
     # attribution owned by the submitting Host.
     workspace_intent["cwd"] = spec["cwd"]
-    workspace_intent["integrator"] = f"host:{host_id}"
+    workspace_intent["integrator"] = lead_run_id if lead_run_id is not None else f"host:{host_id}"
     return {
         "requestId": request_id,
         "hostId": host_id,

@@ -55,7 +55,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "submissionToken": request_id[0] * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": list(scope)},
         })
-        self.assertEqual(submitted["control"]["hostId"], f"lead:{lead['runId']}")
+        self.assertIsNone(submitted["control"]["hostId"])
         with board.store.db.read() as connection:
             owner = connection.execute(
                 "SELECT lead_run_id,lead_turn_id FROM workflow_lead_tasks WHERE owned_run_id=?",

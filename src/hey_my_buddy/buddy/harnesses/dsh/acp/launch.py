@@ -124,8 +124,6 @@ def child_environment(extra_env: dict | None = None, *, source: dict | None = No
         if overlap:
             raise LaunchRejected("extra environment may not override inherited home keys", keys=overlap)
     environment = discovery.native_environment(dict(os.environ if source is None else source))
-    from ...runtime_selection import worker_launcher_environment
-    environment.update(worker_launcher_environment(os.environ if source is None else source))
     if extra_env:
         environment.update({str(key): str(value) for key, value in extra_env.items()})
     return environment
