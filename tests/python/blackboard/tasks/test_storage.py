@@ -725,8 +725,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
         self.assertTrue(known)
 
     def test_unreadable_or_changed_processes_keep_runtime_status_unknown(self):
-        for error in (storage.psutil.AccessDenied(104), storage.psutil.NoSuchProcess(104),
-                      storage.psutil.ZombieProcess(104), AttributeError('cmdline missing')):
+        for error in (storage.psutil.AccessDenied(104), AttributeError('cmdline missing')):
             with self.subTest(error=type(error).__name__):
                 fixture = process(104, ['python'])
                 fixture.cmdline.side_effect = error
@@ -736,8 +735,9 @@ class ProcessInventoryServiceTests(BoardTestCase):
                 self.assertEqual(storage.runtime_usage(self.directory, commands, known),
                                  ['process-inspection-unavailable'])
         fixture = process(104, ['python'])
-        fixture.is_running.return_value = False  # Same PID now names another process.
-        with processes(fixture):
+        replacement = process(104)
+        replacement.create_time.return_value = 124.0
+        with processes(fixture, current={104: replacement}):
             self.assertFalse(storage.process_inventory(self.directory)[2])
 
     def test_missing_cmdline_and_unreadable_identity_are_unknown(self):
@@ -749,7 +749,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
                     self.assertFalse(storage.process_inventory(self.directory)[2])
         with mock.patch.object(storage.psutil, 'pids', return_value=[104]), \
              mock.patch.object(storage.psutil, 'Process', side_effect=storage.psutil.NoSuchProcess(104)):
-            self.assertFalse(storage.process_inventory(self.directory)[2])
+            self.assertTrue(storage.process_inventory(self.directory)[2])
 
     def test_unreadable_service_files_keep_state_and_runtime_usage_unknown(self):
         fixture = process(104, ['python', '-m', 'hey_my_buddy.blackboard.service.daemon'])
@@ -759,6 +759,18 @@ class ProcessInventoryServiceTests(BoardTestCase):
         self.assertFalse(known)
         self.assertIsNone(orphans[0]['stateDir'])
 
+    def test_ended_service_is_not_an_orphan_or_runtime_user(self):
+        for phase in ('cmdline', 'open_files'):
+            for error in (storage.psutil.NoSuchProcess(104), storage.psutil.ZombieProcess(104)):
+                with self.subTest(phase=phase, error=type(error).__name__):
+                    fixture = process(104, ['python', '-m', 'hey_my_buddy.blackboard.service.daemon'])
+                    getattr(fixture, phase).side_effect = error
+                    with processes(fixture):
+                        orphans, commands, known = storage.process_inventory(self.directory)
+                    self.assertEqual(orphans, [])
+                    self.assertEqual(commands, [])
+                    self.assertTrue(known)
+
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_runtime_references_from_cwd_mappings_and_deleted_descriptors(self):
         runtime = self.directory / '运行时 with spaces'
@@ -767,7 +779,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
                 fixture = process(104, cwd=str(runtime) if channel == 'cwd' else '/',
                                   mappings=[runtime / 'library.so'] if channel == 'mappings' else [])
                 opened = (f'p104\nn{runtime}/unlinked (deleted)\n' if channel == 'deleted-file' else
-                          f'p104\nn{runtime}\n' if channel == 'directory-fd' else '')
+                          f'p104\nn{runtime}\n' if channel == 'directory-fd' else 'p104\n')
                 with (processes(fixture),
                       mock.patch.object(storage.psutil, 'WINDOWS', False),
                       mock.patch.object(storage.psutil, 'LINUX', True),
@@ -780,7 +792,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_incomplete_path_observation_never_releases_a_runtime(self):
-        for attribute in ('cwd', 'memory_maps', 'uids', 'is_running'):
+        for attribute in ('cwd', 'memory_maps', 'uids', 'status'):
             with self.subTest(attribute=attribute):
                 fixture = process(104)
                 getattr(fixture, attribute).side_effect = storage.psutil.AccessDenied(104)
@@ -795,7 +807,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_complete_unreferenced_runtime_and_incomplete_native_channels(self):
-        for native, expected in ((SimpleNamespace(stdout='', stderr='', returncode=0), []),
+        for native, expected in ((SimpleNamespace(stdout='p104\n', stderr='', returncode=0), []),
                                  (SimpleNamespace(stdout='', stderr='permission denied', returncode=0),
                                   ['process-inspection-unavailable']),
                                  (SimpleNamespace(stdout='', stderr='', returncode=1),

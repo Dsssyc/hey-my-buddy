@@ -8,7 +8,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -222,22 +221,18 @@ class PrivateRootTeardownTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True, encoding="utf-8",
         )
-        # This test owns the child and must reap it while teardown observes it;
-        # waiting after teardown would keep an unreadable zombie in the snapshot.
-        reaper = threading.Thread(target=process.wait, daemon=True)
-        reaper.start()
         try:
             self.assertEqual(process.stdout.readline().strip(), "LOCKED")
             lock.unlink()
             self.assertFalse(lock.exists())
             self.assertIsNone(checks.teardown_private_root(root, drain_seconds=20))
             self.assertFalse(root.exists())
+            process.wait(timeout=10)
             self.assertEqual(process.returncode, 0, "the live holder must have exited before clean")
         finally:
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=10)
-            reaper.join(timeout=10)
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
@@ -274,9 +269,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             self.assertTrue(root.exists())
             report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
             self.assertIn(process.pid, [entry["pid"] for entry in report["processes"]])
-            # Positive residue must be retained even if another in-scope process
-            # disappears during the global observation. The unknown-channel tests
-            # separately require that incomplete observations cannot clear a root.
+            self.assertEqual(report["observation"]["problems"], [])
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -357,16 +350,16 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_unreadable_missing_and_reused_process_argv_are_unknown(self):
-        for error in (storage.psutil.AccessDenied(123), storage.psutil.NoSuchProcess(123),
-                      AttributeError('cmdline unavailable')):
+        for error in (storage.psutil.AccessDenied(123), AttributeError('cmdline unavailable')):
             with self.subTest(error=type(error).__name__):
                 target = process(123)
                 target.cmdline.side_effect = error
                 with processes(target):
                     self.assertIsNone(checks._ps_argv_table())
         target = process(123)
-        target.is_running.return_value = False
-        with processes(target):
+        replacement = process(123)
+        replacement.create_time.return_value = 124.0
+        with processes(target, current={123: replacement}):
             self.assertIsNone(checks._ps_argv_table())
 
     def test_incomplete_enumeration_keeps_positive_findings_and_unknown_status(self):
@@ -378,6 +371,82 @@ class ProcessObservationTests(unittest.TestCase):
             findings, problems, _ = checks._observation_snapshot(root)
         self.assertEqual(set(findings), {123})
         self.assertIn('psutil process enumeration incomplete', problems[0])
+
+    def test_process_exiting_between_snapshot_and_argv_is_ended(self):
+        for error in (storage.psutil.NoSuchProcess(123), storage.psutil.ZombieProcess(123)):
+            with self.subTest(error=type(error).__name__):
+                target = process(123, ['python', '/private/checks-fixture/state'])
+                target.cmdline.side_effect = error
+                with processes(target):
+                    self.assertEqual(checks._ps_argv_table(), [])
+
+    def test_ended_or_zombie_process_releases_observed_paths(self):
+        root = Path('/private/checks-fixture')
+        for phase in ('cwd', 'memory_maps', 'status'):
+            with self.subTest(phase=phase):
+                target = process(123, cwd=str(root), mappings=[root / 'library.so'])
+                if phase == 'status':
+                    target.status.return_value = storage.psutil.STATUS_ZOMBIE
+                else:
+                    getattr(target, phase).side_effect = storage.psutil.NoSuchProcess(123)
+                with processes(target), native_references():
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, set())
+                self.assertIsNone(error)
+                self.assertTrue(available)
+
+    def test_lsof_exit_one_missing_ended_identity_is_complete(self):
+        root = Path('/private/checks-fixture')
+        for state in ('gone', 'zombie'):
+            with self.subTest(state=state):
+                survivor = process(123)
+                ended = process(456, cwd=str(root))
+                replacement = process(456)
+                replacement.status.return_value = storage.psutil.STATUS_ZOMBIE
+                current = storage.psutil.NoSuchProcess(456) if state == 'gone' else replacement
+                with (processes(survivor, ended, current={456: current}),
+                      native_references('p123\n', returncode=1)):
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, set())
+                self.assertIsNone(error)
+                self.assertTrue(available)
+
+    def test_lsof_missing_live_or_reused_identity_is_unknown(self):
+        root = Path('/private/checks-fixture')
+        for returncode in (0, 1):
+            for reused in (False, True):
+                with self.subTest(returncode=returncode, reused=reused):
+                    target = process(123)
+                    replacement = process(123)
+                    replacement.create_time.return_value = 124.0 if reused else 123.0
+                    with (processes(target, current={123: replacement}),
+                          native_references('', returncode=returncode)):
+                        _, error, available = checks._open_file_pids(root)
+                    self.assertIsNotNone(error)
+                    self.assertTrue(available)
+
+    def test_other_lsof_failures_remain_unknown_even_when_a_process_ends(self):
+        for returncode, stderr in ((2, ''), (0, 'denied'), (1, 'denied')):
+            with self.subTest(returncode=returncode, stderr=stderr):
+                with (processes(process(123), current={123: storage.psutil.NoSuchProcess(123)}),
+                      native_references('', returncode=returncode, stderr=stderr)):
+                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                self.assertIsNotNone(error)
+                self.assertTrue(available)
+
+    def test_linux_missing_fd_directory_is_complete_only_after_identity_ends(self):
+        for state in ('gone', 'alive', 'reused'):
+            with self.subTest(state=state):
+                target = process(123)
+                replacement = process(123)
+                replacement.create_time.return_value = 124.0 if state == 'reused' else 123.0
+                current = storage.psutil.NoSuchProcess(123) if state == 'gone' else replacement
+                with (processes(target, current={123: current}),
+                      patch.object(storage.shutil, 'which', return_value=None),
+                      patch.object(Path, 'iterdir', side_effect=FileNotFoundError('fd directory gone'))):
+                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                self.assertEqual(error is None, state == 'gone')
+                self.assertTrue(available)
 
     def test_cwd_and_linux_mappings_find_processes_without_an_argv_reference(self):
         root = Path('/private/检查 fixture')
@@ -440,9 +509,9 @@ class ProcessObservationTests(unittest.TestCase):
 
     def test_incomplete_paths_cannot_report_a_clear_root(self):
         for attribute, error in (('cwd', storage.psutil.AccessDenied(123)),
-                                 ('memory_maps', storage.psutil.NoSuchProcess(123)),
+                                 ('memory_maps', storage.psutil.AccessDenied(123)),
                                  ('uids', AttributeError('uid missing')),
-                                 ('is_running', storage.psutil.NoSuchProcess(123))):
+                                 ('status', storage.psutil.AccessDenied(123))):
             with self.subTest(attribute=attribute):
                 target = process(123)
                 getattr(target, attribute).side_effect = error
@@ -452,8 +521,9 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
         target = process(123)
-        target.is_running.return_value = False  # Exit or PID reuse during the scan.
-        with processes(target), native_references():
+        replacement = process(123)
+        replacement.create_time.return_value = 124.0
+        with processes(target, current={123: replacement}), native_references():
             self.assertIsNotNone(checks._open_file_pids(Path('/private/checks-fixture'))[1])
 
     def test_windows_paths_are_positive_evidence_and_empty_handles_remain_unknown(self):

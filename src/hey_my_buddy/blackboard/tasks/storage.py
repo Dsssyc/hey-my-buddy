@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from ...paths import is_absolute_path
 from ... import locking
@@ -59,17 +60,38 @@ def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[i
     return size, digest.hexdigest(), safe
 
 
-_INSPECTION_ERRORS = (psutil.Error, OSError, AttributeError, NotImplementedError)
+class _ProcessReused(Exception):
+    """A snapshot PID now identifies a process that was not observed."""
 
 
-def _require_running(process: psutil.Process) -> None:
-    # is_running compares creation identities as well as PIDs. These are local
-    # observations, never substitutes for the execution's durable stop identity.
-    if not process.is_running():
-        raise psutil.NoSuchProcess(process.pid)
+_INSPECTION_ERRORS = (psutil.Error, OSError, AttributeError, NotImplementedError, _ProcessReused)
 
 
-def _processes() -> tuple[list[psutil.Process], bool]:
+@dataclass(frozen=True)
+class _ObservedProcess:
+    pid: int
+    started: float
+    process: psutil.Process
+
+
+def _require_running(observed: _ObservedProcess) -> None:
+    # is_running alone conflates disappearance with PID reuse. Reopen the PID
+    # and compare the frozen creation time before accepting its current state.
+    # This is local observation, not the execution's durable stop identity.
+    current = psutil.Process(observed.pid)
+    started = current.create_time()
+    if started is None:
+        raise AttributeError('process creation time unavailable')
+    if started != observed.started:
+        raise _ProcessReused(f'PID {observed.pid} was reused')
+    status = current.status()
+    if status is None:
+        raise AttributeError('process status unavailable')
+    if status == psutil.STATUS_ZOMBIE:
+        raise psutil.ZombieProcess(observed.pid)
+
+
+def _processes() -> tuple[list[_ObservedProcess], bool]:
     """One PID snapshot in this effective user's scope; unreadable is unknown.
 
     POSIX private state and runtimes belong to this effective user. Other users,
@@ -85,8 +107,8 @@ def _processes() -> tuple[list[psutil.Process], bool]:
     processes = []
     known = True
     effective_uid = None if psutil.WINDOWS else os.geteuid()
-    # process_iter silently skips disappearing processes and caches identities.
-    # Explicit construction lets this boundary retain those races as unknown.
+    # Fresh instances freeze this snapshot's identities without process_iter's
+    # cross-call cache; later reads can distinguish exit from PID reuse.
     for pid in pids:
         try:
             process = psutil.Process(pid)
@@ -96,25 +118,32 @@ def _processes() -> tuple[list[psutil.Process], bool]:
                     raise AttributeError('process effective uid unavailable')
                 if uid != effective_uid:
                     continue
-            if process.create_time() is None:
+            started = process.create_time()
+            if started is None:
                 raise AttributeError('process creation time unavailable')
-            processes.append(process)
+            processes.append(_ObservedProcess(pid, started, process))
+        except psutil.NoSuchProcess:
+            # Includes ZombieProcess. An entry that ended while its snapshot
+            # was being captured cannot retain files, cwd or mappings.
+            continue
         except _INSPECTION_ERRORS:
             known = False
     return processes, known
 
 
-def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], bool]:
+def observe_process_argv() -> tuple[list[tuple[_ObservedProcess, list[str]]], bool]:
     """Shared read-only argv observation, preserving native argument boundaries."""
     processes, known = _processes()
     rows = []
-    for process in processes:
+    for observed in processes:
         try:
-            argv = process.cmdline()
+            argv = observed.process.cmdline()
             if argv is None:
                 raise AttributeError('process command line unavailable')
-            _require_running(process)
-            rows.append((process, argv))
+            _require_running(observed)
+            rows.append((observed, argv))
+        except psutil.NoSuchProcess:
+            continue
         except _INSPECTION_ERRORS:
             known = False
     return rows, known
@@ -133,84 +162,104 @@ def _open_file_paths(process: psutil.Process) -> set[str]:
 def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], str | None, bool]:
     """Path references, observation failure, and channel availability.
 
-    psutil supplies cwd and Linux/Windows mappings. POSIX descriptor references
-    still need lsof (or the checks runner's existing Linux fd channel):
-    open_files omits directories and Linux deleted-but-open files. macOS has no
-    psutil memory_maps, so lsof also retains mappings there. No class of reference
-    is observed through both channels. Windows open_files is positive evidence
-    only: the API can silently miss handles, even after a successful call.
+    psutil supplies cwd and Linux/Windows mappings. POSIX descriptors still
+    need lsof (or the checks runner's existing Linux fd channel): open_files
+    omits directories and Linux deleted-but-open files. macOS also needs lsof
+    for mappings. Each reference class has one observer. A recorded identity
+    that ends during observation releases its references; reuse remains unknown.
+    Windows open_files can silently miss handles and never proves completeness.
     """
     processes, known = _processes()
     problems = [] if known else ['psutil process enumeration incomplete']
-    if not processes and not psutil.WINDOWS:
-        return {}, '; '.join(problems) or None, True
     paths: dict[int, set[str]] = {}
-    for process in processes:
+    ended: set[int] = set()
+    for observed in processes:
+        process = observed.process
         try:
-            observed = paths.setdefault(process.pid, set())
+            values = paths.setdefault(observed.pid, set())
             cwd = process.cwd()
             if cwd is None:
                 raise AttributeError('process cwd unavailable')
-            observed.add(cwd)
+            values.add(cwd)
             if psutil.LINUX or psutil.WINDOWS:
                 mappings = process.memory_maps()
                 if mappings is None:
                     raise AttributeError('process mappings unavailable')
-                observed.update(item.path for item in mappings)
+                values.update(item.path for item in mappings)
             if psutil.WINDOWS:
-                observed.update(_open_file_paths(process))
-            missing = {path for path in observed if not isinstance(path, str)}
+                values.update(_open_file_paths(process))
+            missing = {path for path in values if not isinstance(path, str)}
             if missing:
-                observed.difference_update(missing)
+                values.difference_update(missing)
                 raise AttributeError('process path unavailable')
+        except psutil.NoSuchProcess:
+            ended.add(observed.pid)
+            paths.pop(observed.pid, None)
         except _INSPECTION_ERRORS as error:
             problems.append(f'psutil path observation failed: {type(error).__name__}')
+    active = [observed for observed in processes if observed.pid not in ended]
     available = True
+    native_pids: set[int] | None = None
+    native_returncode = None
+    fd_missing: set[int] = set()
     if psutil.WINDOWS:
         problems.append('Windows open-file observation is incomplete: psutil can omit handles')
-    else:
+    elif active:
         binary = shutil.which('lsof')
         if binary is not None:
-            # Linux memory_maps includes program text and deleted mappings.
             excluded = '^cwd,^mem,^DEL,^txt' if psutil.LINUX else '^cwd'
             try:
                 result = subprocess.run(
-                    [binary, '-nP', '-a',
-                     '-p', ','.join(str(process.pid) for process in processes),
+                    [binary, '-nP', '-a', '-p', ','.join(str(item.pid) for item in active),
                      '-d', excluded, '-Fpn'],
                     capture_output=True, text=True, encoding=locale.getencoding(), timeout=120,
                     check=False)
             except (OSError, subprocess.SubprocessError) as error:
                 problems.append(f'lsof failed: {type(error).__name__}')
             else:
-                if result.returncode or result.stderr.strip():
+                native_returncode = result.returncode
+                if result.returncode not in (0, 1) or result.stderr.strip():
                     problems.append(f'lsof observation incomplete (exit {result.returncode})')
+                native_pids = set()
+                selected_pids = {item.pid for item in active}
                 current_pid = None
-                selected_pids = {process.pid for process in processes}
                 for line in result.stdout.splitlines():
                     if line.startswith('p'):
                         current_pid = int(line[1:]) if line[1:].isdigit() else None
-                        if current_pid not in selected_pids:
-                            problems.append('lsof process identity was not observed')
-                    elif line.startswith('n') and current_pid is not None:
+                        if current_pid in selected_pids:
+                            native_pids.add(current_pid)
+                    elif line.startswith('n') and current_pid in selected_pids:
                         paths.setdefault(current_pid, set()).add(line[1:])
         elif proc_fds and psutil.LINUX:
-            # psutil.open_files filters out deleted/non-regular fd targets. Keep
-            # only the existing fd observation here, with psutil supplying PIDs,
-            # cwd and mappings; failures can no longer disappear into a continue.
-            for process in processes:
+            # Only descriptors remain here: psutil already supplied cwd/maps.
+            # A lost fd directory/link needs an identity check, not an empty set.
+            for observed in active:
                 try:
-                    for handle in (Path('/proc') / str(process.pid) / 'fd').iterdir():
-                        paths[process.pid].add(os.readlink(handle))
+                    for handle in (Path('/proc') / str(observed.pid) / 'fd').iterdir():
+                        paths[observed.pid].add(os.readlink(handle))
+                except (FileNotFoundError, ProcessLookupError):
+                    fd_missing.add(observed.pid)
                 except OSError as error:
                     problems.append(f'/proc fd observation failed: {type(error).__name__}')
         else:
             available = False
-    for process in processes:
+    for observed in active:
         try:
-            _require_running(process)
+            _require_running(observed)
+        except psutil.NoSuchProcess:
+            ended.add(observed.pid)
+            paths.pop(observed.pid, None)
         except _INSPECTION_ERRORS as error:
             problems.append(f'psutil process identity changed: {type(error).__name__}')
+        else:
+            if native_pids is not None and observed.pid not in native_pids:
+                problems.append('lsof has no result for a live snapshot identity')
+            if observed.pid in fd_missing:
+                problems.append('/proc fd observation incomplete for a live snapshot identity')
+    if native_returncode == 1:
+        missing_pids = {item.pid for item in active} - native_pids
+        if not missing_pids or not missing_pids.issubset(ended):
+            problems.append('lsof exit 1 is not explained by ended snapshot identities')
     normalized = {pid: {path.removesuffix(' (deleted)') for path in values if isinstance(path, str)}
                   for pid, values in paths.items()}
     return normalized, '; '.join(dict.fromkeys(problems)) or None, available
@@ -253,11 +302,14 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
             pass
         if observed_state is None:
             try:
-                roots = {str(Path(path).parent) for path in _open_file_paths(process)
+                roots = {str(Path(path).parent) for path in _open_file_paths(process.process)
                          if Path(path).name in {'board-owner.lock', 'control-daemon.lock'}}
                 _require_running(process)
                 if len(roots) == 1:
                     observed_state = roots.pop()
+            except psutil.NoSuchProcess:
+                commands.pop()
+                continue
             except _INSPECTION_ERRORS:
                 known = False
         runtime = next((str(parent) for parent in Path(argv[0]).parents
