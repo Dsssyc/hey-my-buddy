@@ -178,7 +178,7 @@ def _remove_tombstone(state: Path, identifier: str) -> bool:
     return True
 
 
-def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> list[dict]:
+def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, first_execution_times=None) -> list[dict]:
     """Remove proven physical allocations, exact refs, then their private records.
 
     The caller owns the storage lock, shared-dependency check and settled-task
@@ -186,6 +186,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
     remain in the board. No database transaction is held through this function.
     """
     state = store.directory.resolve()
+    first_execution_times = first_execution_times or {}
     by_id = {}
     skipped = []
     for manifest in manifests:
@@ -241,7 +242,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                     checkout_retained = True
                 else:
                     from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout)
+                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
+                        (manifest["repositoryId"], manifest["checkoutId"])))
                     # A complete checkout uses the established Git/seal proof;
                     # interrupted removal is checked without restoring files.
                     proof = workspace.deletion_inspect(state, manifest, artifacts, retained=manifests)
@@ -251,7 +253,8 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                         checkout_retained = True
                     else:
                         workspace.cleanup_remove(state, manifest, retained=manifests,
-                                                 resume=proof["resume"])
+                                                 resume=proof["resume"], first_execution_at=first_execution_times.get(
+                                                     (manifest["repositoryId"], manifest["checkoutId"])))
             if checkout_retained or workspace._path_present(checkout):
                 skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["DEPENDENCY_RETAINED"]

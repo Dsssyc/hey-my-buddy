@@ -4702,10 +4702,12 @@ class WorkflowCoordinator:
             manifest = json.loads(run_row["workspace_manifest_json"])
             allocation = workspace_module().resolve_allocation(
                 self.board.directory, manifest, self._allocation_provenance(connection, run_row))
+            from .checkout_processes import first_execution_time
+            first_execution_at = first_execution_time(connection, manifest)
         if allocation is not None and Path(allocation["path"]).exists():
             from .checkout_processes import require_idle_checkout
             try:
-                require_idle_checkout(Path(allocation["path"]))
+                require_idle_checkout(Path(allocation["path"]), first_execution_at=first_execution_at)
             except BoardError as error:
                 return {"removed": False, "path": allocation["path"], **error.details}
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
@@ -5659,7 +5661,11 @@ class WorkflowCoordinator:
             raise refusal
         removed = None
         if path.exists() or path.is_symlink():
-            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume)
+            from .checkout_processes import first_execution_time
+            with self.db.read() as connection:
+                first_execution_at = first_execution_time(connection, manifest)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained, resume=resume,
+                                                        first_execution_at=first_execution_at)
         from ... import private_dirs
         for micro_task_id, attempt_ids in failed_attempts.items():
             for adapter in private_dirs.ADAPTERS:

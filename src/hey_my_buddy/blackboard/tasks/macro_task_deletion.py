@@ -330,7 +330,11 @@ def _delete_sessions(store, scope):
 
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
-    return delete_workspaces(store, scope.manifests, scope.artifacts)
+    from .checkout_processes import first_execution_time
+    with store.db.read() as connection:
+        starts = {(m["repositoryId"], m["checkoutId"]): first_execution_time(connection, m)
+                  for m in scope.manifests}
+    return delete_workspaces(store, scope.manifests, scope.artifacts, first_execution_times=starts)
 
 
 def _remove_owned_tree(path, *, object_kind='private-root'):

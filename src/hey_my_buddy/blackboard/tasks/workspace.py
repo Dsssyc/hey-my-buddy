@@ -2441,7 +2441,7 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
         return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
 
 
-def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:
+def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, first_execution_at=None) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
     The caller has rechecked acceptance, integration, shutdown and dependency
@@ -2473,7 +2473,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
         if not _path_present(checkout_root):
             return removal
         from .checkout_processes import require_idle_checkout
-        require_idle_checkout(checkout_root)
+        require_idle_checkout(checkout_root, first_execution_at=first_execution_at)
         restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
