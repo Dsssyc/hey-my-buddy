@@ -1,7 +1,6 @@
 """Windows pipe EOF is independent of the child's eventual exit."""
 from __future__ import annotations
 
-import ctypes
 import os
 import subprocess
 import sys
@@ -15,26 +14,26 @@ from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.protocol.owned_process import owned_popen
 
 
+class Win32Error(Exception):
+    def __init__(self, code):
+        super().__init__(code, 'PeekNamedPipe', 'fixture')
+        self.winerror = code
+
+
 class WindowsProbePipeTests(unittest.TestCase):
     def fake_probe(self, error, *, wait_expires=False):
         process = mock.Mock(returncode=0)
         process.poll.return_value = None  # stdout can close before process exit
         process.stdout.fileno.return_value = 123
         process.wait.side_effect = [subprocess.TimeoutExpired('fixture', 1), 0] if wait_expires else None
-        def peek(_pipe, _buffer, _size, _read, available, _left):
-            if not getattr(peek, 'read', False):
-                available._obj.value = 4
-                peek.read = True
-                return True
-            return False
-        kernel = SimpleNamespace(PeekNamedPipe=mock.Mock(side_effect=peek))
-        with mock.patch.dict(sys.modules, {'msvcrt': SimpleNamespace(get_osfhandle=lambda _: 456)}), \
-             mock.patch.object(ctypes, 'windll', SimpleNamespace(kernel32=kernel), create=True), \
-             mock.patch.object(ctypes, 'WinDLL', return_value=kernel, create=True), \
-             mock.patch.object(ctypes, 'get_last_error', return_value=error, create=True), \
+        peek = mock.Mock(side_effect=[(b'', 4, 0), Win32Error(error)])
+        with mock.patch.dict(sys.modules, {'msvcrt': SimpleNamespace(get_osfhandle=lambda _: 456),
+                                          'pywintypes': SimpleNamespace(error=Win32Error),
+                                          'win32pipe': SimpleNamespace(PeekNamedPipe=peek)}), \
              mock.patch.object(discovery.os, 'read', return_value=b'1.2\n'), \
              mock.patch.object(discovery.subprocess, 'run'):
             result = discovery._probe_windows(process, time.monotonic() + 1)
+        peek.assert_called_with(456, 0)
         return result, process
 
     def test_broken_pipe_waits_for_exit_and_keeps_already_read_output(self):
@@ -51,6 +50,32 @@ class WindowsProbePipeTests(unittest.TestCase):
         result, process = self.fake_probe(109, wait_expires=True)
         self.assertEqual(result, ('timeout', b'', False))
         process.kill.assert_called_once()
+
+    def test_output_limit_still_requires_verified_shutdown(self):
+        with mock.patch.object(discovery, '_MAX_OUTPUT', 3):
+            result, process = self.fake_probe(109)
+        self.assertEqual(result, ('output-limit', b'', False))
+        process.kill.assert_called_once()
+        process.stdout.close.assert_called_once()
+
+    def test_empty_pipe_times_out_even_if_the_leader_exited(self):
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        process.stdout.fileno.return_value = 123
+        peek = mock.Mock(return_value=(b'', 0, 0))
+        with mock.patch.dict(sys.modules, {'msvcrt': SimpleNamespace(get_osfhandle=lambda _: 456),
+                                          'pywintypes': SimpleNamespace(error=Win32Error),
+                                          'win32pipe': SimpleNamespace(PeekNamedPipe=peek)}), \
+             mock.patch.object(discovery.time, 'monotonic', side_effect=[0, 0.2]), \
+             mock.patch.object(discovery.time, 'sleep'), \
+             mock.patch.object(discovery.os, 'read') as read, \
+             mock.patch.object(discovery.subprocess, 'run'):
+            result = discovery._probe_windows(process, 0.1)
+        self.assertEqual(result, ('timeout', b'', False))
+        peek.assert_called_once_with(456, 0)
+        read.assert_not_called()
+        process.kill.assert_not_called()
+        process.stdout.close.assert_called_once()
 
     @unittest.skipUnless(os.name == 'nt', 'actual PeekNamedPipe requires Windows')
     def test_native_child_can_close_stdout_before_a_successful_exit(self):
