@@ -53,8 +53,8 @@ class ZcodeToolFacts:
     projection cannot name, keeping the receipt's call count at least one.
     """
 
-    def __init__(self, binding: dict, native_log_dir: Path | None = None):
-        self.evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self.roots: list[dict] = []
         self.close_pending = False
         self.violation = False

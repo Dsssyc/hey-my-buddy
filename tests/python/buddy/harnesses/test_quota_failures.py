@@ -92,7 +92,7 @@ class NativeQuotaFailureTests(unittest.TestCase):
                           harness=harness, buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
                           cwd=str(self.root), input_text="fixture", permission="none",
                           output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),
-                          private_state=PrivateStatePaths(invocation_root=str(self.root / "run"),
+                          private_state=PrivateStatePaths(state_dir=str(self.root), invocation_root=str(self.root / "run"),
                                                           native_root=str(self.root / "native")),
                           session_record_path=str(self.root / "session.jsonl"))
 

@@ -138,7 +138,7 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
                 if code == "no-tool-violation":
                     self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
                     self.assertFalse(outcome.result["toolEvidence"]["streamComplete"])
-                    calls = list(tool_evidence.read_tool_calls(outcome.result["toolEvidence"]))
+                    calls = list(tool_evidence.read_tool_calls(outcome.result["toolEvidence"], state_dir=self.state_dir))
                     self.assertTrue(calls)
 
     def test_deadline(self):

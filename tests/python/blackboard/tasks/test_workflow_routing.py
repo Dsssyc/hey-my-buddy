@@ -47,7 +47,7 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
-        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': shutdown, 'native': {'shutdownConfirmed': shutdown}}, 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
+        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': shutdown, 'native': {'shutdownConfirmed': shutdown}}, 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
     def test_macro_task_description_never_enters_selector_or_worker(self):
         board = self.board()

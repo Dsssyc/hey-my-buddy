@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -23,13 +24,15 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy import paths as local_paths
 from hey_my_buddy.protocol import tool_evidence
 
+STATE_DIR = Path(os.environ["HMB_STATE_DIR"])
+
 FIXTURES = Path(__file__).parent / "fixtures" / "run_contract"
 def fixture_payloads():
     payloads = json.loads((FIXTURES / "codex-payloads.json").read_text(encoding="utf-8"))
     for payload in payloads["payloads"].values():
         if "toolEvidence" in payload:
             package = payload["toolEvidence"]
-            reference = tool_evidence.write_tool_calls(package["binding"], [])
+            reference = tool_evidence.write_tool_calls(package["binding"], [], state_dir=STATE_DIR)
             assert reference["sha256"] == package["calls"]["sha256"]
             assert reference["bytes"] == package["calls"]["bytes"]
             package["calls"] = reference
@@ -57,7 +60,7 @@ def full_request(tmp: Path) -> rc.RunRequest:
     return rc.RunRequest(
         identity=identity(), harness="zcode",
         buddy=rc.RunBuddy(provider="fixture-provider", model="fixture-model", effort="off"),
-        cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
+        cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(state_dir=str(tmp), invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
         session_record_path=str(tmp / "session.jsonl"),
         input_text="one bounded role-assembled input", permission="read",
@@ -84,7 +87,7 @@ def full_result() -> rc.RunResult:
         completion_evidence=rc.CompletionEvidence( stream_end=True),
         tool_evidence=rc.FrozenJson(tool_evidence.ToolEventEvidence({
             "harness": "zcode", "taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1,
-        }).finish([{"sessionId": "s1"}], True)),
+        }, state_dir=STATE_DIR).finish([{"sessionId": "s1"}], True)),
 
         effective_policy=rc.EffectivePolicy(
             tools=rc.PolicyFact(
@@ -325,7 +328,7 @@ class CodecRoundtripTests(unittest.TestCase):
                      "captureEvidence", "continuation", "sessionRecordPath"):
             decoded = rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
             self.assertIsInstance(decoded, rc.RunRequest, path)
-        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema"):
+        for path in ("identity.taskId", "budget.timeoutSeconds", "outputSchema", "privateState.stateDir"):
             with self.assertRaises(BoardError, msg=path):
                 rc.RunRequest.from_payload(without(json.loads(json.dumps(request)), path))
         result = full_result().to_payload()
@@ -361,7 +364,7 @@ class CodecRoundtripTests(unittest.TestCase):
             rc.RunValue(schema_status="valid",  raw="x" * (rc.MAX_VALUE_BYTES + 1))
         # Growing call facts exceed a message without enlarging its envelope.
         collector = tool_evidence.ToolEventEvidence({
-            "harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1})
+            "harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1}, state_dir=STATE_DIR)
         root = {"sessionId": "s" * 128}
         for index in range(1000):
             for phase in ("start", "end"):
@@ -373,7 +376,7 @@ class CodecRoundtripTests(unittest.TestCase):
         payload = full_result().to_payload()
         payload["toolEvidence"] = package
         decoded = rc.RunResult.from_payload(payload).tool_evidence.value
-        self.assertEqual(len(list(tool_evidence.read_tool_calls(decoded))), 1000)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(decoded, state_dir=STATE_DIR))), 1000)
         payload = full_result().to_payload()
         payload["evidenceRefs"] = [{"kind": "blob", "location": "x" * 900000}]
         with self.assertRaises(BoardError):
@@ -397,7 +400,7 @@ class CodecRoundtripTests(unittest.TestCase):
                     for field in ("cwd", "session_record_path"):
                         with self.subTest(field=field, value=value), self.assertRaises(BoardError):
                             edited(request, **{field: value})
-                    for field in ("invocation_root", "native_root"):
+                    for field in ("state_dir", "invocation_root", "native_root"):
                         fields = dict(request.private_state.__dict__)
                         fields[field] = value
                         with self.subTest(field=field, value=value), self.assertRaises(BoardError):
@@ -484,7 +487,7 @@ class FreezingTests(unittest.TestCase):
         request = rc.RunRequest(
             identity=rc.RunIdentity.from_payload(mutable_identity), harness="codex",
             buddy=rc.RunBuddy.from_payload(requested), cwd=str(root / "checkout"),
-            private_state=rc.PrivateStatePaths(invocation_root=str(root / "inv"), native_root=str(root / "native")),
+            private_state=rc.PrivateStatePaths(state_dir=str(root), invocation_root=str(root / "inv"), native_root=str(root / "native")),
             session_record_path=str(root / "session.jsonl"),
             input_text="x",
             permission="none",
@@ -663,14 +666,14 @@ class InterfaceSurfaceTests(unittest.TestCase):
         row = {"nativeIdentity": {}, "callId": None, "categories": ["other"], "phases": [],
                "facts": [{"toolName": None, "category": "other"}], "consistent": True,
                "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False}
-        carried["calls"] = tool_evidence.write_tool_calls(carried["binding"], [row])
+        carried["calls"] = tool_evidence.write_tool_calls(carried["binding"], [row], state_dir=STATE_DIR)
         payload = full_result().to_payload()
         payload["toolEvidence"] = carried
         decoded = rc.RunResult.from_payload(payload)
-        self.assertEqual(list(tool_evidence.read_tool_calls(decoded.tool_evidence.value)), [row])
+        self.assertEqual(list(tool_evidence.read_tool_calls(decoded.tool_evidence.value, state_dir=STATE_DIR)), [row])
         for mutation in ({"version": 1}, {"calls": []},
                          {"calls": {**package["calls"], "sha256": "x" * 64}},
-                         {"calls": {**package["calls"], "path": str(Path(tempfile.gettempdir()) / "foreign.jsonl")}},
+                         {"calls": {**package["calls"], "path": "relative/calls.jsonl"}},
                          {"calls": {**package["calls"], "bytes": True}}):
             broken = json.loads(json.dumps(package))
             broken.update(mutation)

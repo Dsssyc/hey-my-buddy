@@ -52,7 +52,7 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
     def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
-        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
+        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
     def history(self, board, run_id, **params):
         return board.call("workflow_get", {"runId": run_id, "routingHistory": params})["routingHistory"]

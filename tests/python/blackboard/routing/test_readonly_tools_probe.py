@@ -24,14 +24,15 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.args = SimpleNamespace(harness='codex', provider='openai', model='gpt-6.1-sol',
                                     effort='high', output_root=Path(self.temp.name) / 'probe', execute=False)
+        self.state_dir = Path(self.temp.name) / 'state'
 
     def prepared(self):
         report = probe.run(self.args)
         self.args.expected_packet_sha256 = report['packetSha256']
         return json.loads(Path(report['packet']).read_text(encoding="utf-8"))
 
-    def outcome(self, packet):
-        result = {**tool_receipt(packet['binding'], 1), 'resolved': packet['buddy'],
+    def outcome(self, packet, *, state_dir):
+        result = {**tool_receipt(packet['binding'], 1, state_dir=state_dir), 'resolved': packet['buddy'],
                   'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
                   'processState': {'shutdownConfirmed': True},
                   'rawAnswer': {'buddyId': packet['expected']['buddyId'],
@@ -57,7 +58,8 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         self.args.execute = True
         with patch.object(probe, 'adapter_for', return_value=native), \
              patch.object(probe, 'start_review', native.registered_start), \
-             patch.object(probe.read_only, 'collect', return_value=self.outcome(packet)):
+             patch.object(probe.read_only, 'collect', side_effect=lambda _handle: self.outcome(
+                 packet, state_dir=Path(native.registered_start.call_args.args[1].environment['HMB_STATE_DIR']))):
             self.assertEqual(probe.run(self.args)['status'], 'passed')
             with self.assertRaises(FileExistsError):
                 probe.run(self.args)
@@ -92,8 +94,9 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
 
     def test_a_final_answer_cannot_replace_tool_identity_budget_or_stop_proof(self):
         packet = self.prepared()
-        good = self.outcome(packet)
-        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=True)['status'], 'passed')
+        good = self.outcome(packet, state_dir=self.state_dir)
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=True,
+                                        state_dir=self.state_dir)['status'], 'passed')
         mutations = (
             lambda out: out.result.pop('toolEvidence'),
             lambda out: out.result['toolEvidence']['binding'].update(attemptId='foreign'),
@@ -106,9 +109,12 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         for mutate in mutations:
             bad = copy.deepcopy(good)
             mutate(bad)
-            self.assertEqual(probe.evaluate(packet, bad, elapsed_ms=100, unchanged=True)['status'], 'failed')
-        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=60001, unchanged=True)['status'], 'failed')
-        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False)['status'], 'failed')
+            self.assertEqual(probe.evaluate(packet, bad, elapsed_ms=100, unchanged=True,
+                                            state_dir=self.state_dir)['status'], 'failed')
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=60001, unchanged=True,
+                                        state_dir=self.state_dir)['status'], 'failed')
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False,
+                                        state_dir=self.state_dir)['status'], 'failed')
 
     def test_all_harness_packets_freeze_policy_without_selecting_a_native_adapter(self):
         for harness in probe.HARNESSES:
@@ -125,13 +131,15 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                 self.args.harness = harness
                 self.args.output_root = Path(self.temp.name) / harness
                 packet = self.prepared()
-                outcome = self.outcome(packet)
+                outcome = self.outcome(packet, state_dir=self.state_dir)
                 evidence = outcome.result['toolEvidence']
-                calls = list(read_tool_calls(evidence))
+                calls = list(read_tool_calls(evidence, state_dir=self.state_dir))
                 for call in calls:
                     call['categories'] = ['execute']
                     call['facts'] = [{'toolName': 'native-command', 'category': 'execute'}]
-                evidence['calls'] = write_tool_calls(evidence['binding'], calls)
-                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'passed')
+                evidence['calls'] = write_tool_calls(evidence['binding'], calls, state_dir=self.state_dir)
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True,
+                                                state_dir=self.state_dir)['status'], 'passed')
                 packet['permission'] = 'none'
-                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'failed')
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True,
+                                                state_dir=self.state_dir)['status'], 'failed')

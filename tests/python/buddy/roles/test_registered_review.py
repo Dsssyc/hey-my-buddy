@@ -25,6 +25,7 @@ class RegisteredReviewTests(NativeRunCase):
             "operation": "review", "harness": "claude", "spec": BUDDY,
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
+            "stateDir": os.environ["HMB_STATE_DIR"],
             "directory": str(root),
             "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
             "cwd": str(self.cwd), "timeoutSeconds": 10,
@@ -70,11 +71,12 @@ class RegisteredReviewTests(NativeRunCase):
     def test_a_real_tool_over_budget_is_stopped_by_the_role_and_keeps_its_fact(self):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("budget")
-        result, _request, payload, code = self.review(tool_budget=1)
+        result, request, payload, code = self.review(tool_budget=1)
         self.assertEqual(code, 1)
         self.assertEqual(payload["code"], "readonly-budget-exhausted")
         self.assertEqual(payload["usage"]["toolCalls"], 2)
-        self.assertEqual(list(read_tool_calls(payload["toolEvidence"]))[0]["categories"], ["read"])
+        self.assertEqual(list(read_tool_calls(payload["toolEvidence"],
+                                              state_dir=Path(request.private_state.state_dir)))[0]["categories"], ["read"])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_correction_keeps_review_budget_and_the_original_review_prompt(self):

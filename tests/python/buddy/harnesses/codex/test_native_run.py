@@ -152,6 +152,7 @@ class SeamCase(unittest.TestCase):
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
+                state_dir=str(self.base / "state"),
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / (native or f"native-{marker}"))),
             input_text=prompt, permission=permission, output_schema=output_schema,
@@ -379,7 +380,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
-        self.assertEqual([call["categories"] for call in read_tool_calls(package)], [["execute"]])
+        self.assertEqual([call["categories"] for call in read_tool_calls(package, state_dir=Path(self.base / "state"))], [["execute"]])
         self.assertTrue(result.stop_evidence.interrupt.requested)
 
     def test_unknown_events_continue_through_the_observer_to_a_result(self):
@@ -525,7 +526,8 @@ class FastSeamTests(SeamCase):
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertFalse(result.tool_evidence.value["streamComplete"])
-                self.assertIsNotNone(judge_tool_evidence(result.tool_evidence.value, "none"))
+                self.assertIsNotNone(judge_tool_evidence(result.tool_evidence.value, "none",
+                                                         state_dir=self.base / "state"))
                 self.assertIsNotNone(result.native_evidence.unknown_events)
 
     def test_unfamiliar_drain_frame_continues_and_retains_unknown_shape(self):
@@ -1422,7 +1424,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(package["binding"]["taskId"], "micro-task-1")
         self.assertEqual([(call["categories"], call["phases"], call["consistent"])
-                          for call in read_tool_calls(package)],
+                          for call in read_tool_calls(package, state_dir=Path(self.base / "state"))],
                          [(["execute"], ["end", "start"], True)])
         # This run's one root turn is the package's own native root.
         self.assertEqual(package["nativeIdentity"],
@@ -2125,6 +2127,7 @@ class CatalogTrustTests(CodexSeamCase):
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="medium"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
+                state_dir=str(self.base / "state"),
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / "worker-native")),
             input_text="fixture micro task task", permission="write", output_schema=OUTCOME_SCHEMA,

@@ -409,6 +409,7 @@ class _TurnCollector:
         self.tools = ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
                                            "attemptId": request.identity.attempt_id,
                                            "generation": request.identity.generation},
+                                          state_dir=Path(request.private_state.state_dir),
                                           native_schema_delivery=native_schema_delivery)
         self.evidence: TurnEvidence | None = None
         self.denied: list[dict] = []

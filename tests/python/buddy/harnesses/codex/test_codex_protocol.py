@@ -80,7 +80,7 @@ class NativeCheckpointTests(unittest.TestCase):
                                  input_sha256=input_hash(self.document)),
             harness="codex", buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             session_record_path=str(root / "session.jsonl"),
-            cwd=str(root), private_state=PrivateStatePaths(invocation_root=str(root / "invocation"),
+            cwd=str(root), private_state=PrivateStatePaths(state_dir=str(root / "state"), invocation_root=str(root / "invocation"),
                                                             native_root=str(root / "native")),
             input_text="prompt", permission="write", output_schema={},
             budget=RunBudget(timeout_seconds=8))

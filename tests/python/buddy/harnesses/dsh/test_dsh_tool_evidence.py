@@ -18,7 +18,9 @@ names through the real root-turn tracker.
 """
 from __future__ import annotations
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from hey_my_buddy.buddy.harnesses.dsh.protocol import (
     DshToolFacts,
@@ -44,39 +46,44 @@ def update(session_id="session-1", call_id="call-1", name="read", kind="tool_cal
 
 
 class DshToolFactsTests(unittest.TestCase):
+    def setUp(self):
+        private = tempfile.TemporaryDirectory()
+        self.addCleanup(private.cleanup)
+        self.state_dir = Path(private.name) / "state"
+
     def test_known_names_classify_through_the_fixed_table_and_unknown_stay_other(self):
         for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("write", "edit"), ("edit", "edit"), ("run-command", "other")):
             with self.subTest(name=name):
-                collector = DshToolFacts(dict(BINDING))
+                collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
                 collector.add_root("session-1")
                 collector.observe(update(call_id=f"call-{name}", name=name))
                 collector.observe(update(call_id=f"call-{name}", name=name, kind="tool_call_update",
                                          status="completed"))
                 package = collector.finish(True)
-                calls = list(read_tool_calls(package))
+                calls = list(read_tool_calls(package, state_dir=self.state_dir))
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(calls[0]["categories"], [category])
                 self.assertEqual(calls[0]["phases"], ["end", "start"])
                 self.assertTrue(calls[0]["consistent"])
                 self.assertEqual(package["toolCalls"], 1)
                 if category in ("edit", "other"):
-                    self.assertEqual(judge_tool_evidence(package, "read"), TOOLS_FORBIDDEN)
+                    self.assertEqual(judge_tool_evidence(package, "read", state_dir=self.state_dir), TOOLS_FORBIDDEN)
                 if name == "bash":
                     # Read permits native command execution as a read-category
                     # fact; a write or unknown category still voids review.
                     collector.close_root("session-1")
-                    self.assertIsNone(judge_tool_evidence(collector.finish(True), "read"))
+                    self.assertIsNone(judge_tool_evidence(collector.finish(True), "read", state_dir=self.state_dir))
 
     def test_a_one_frame_completed_call_carries_start_and_end(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(name="grep", kind="tool_call", status="completed"))
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(list(read_tool_calls(package))[0]["phases"], ["end", "start"])
+        self.assertEqual(list(read_tool_calls(package, state_dir=self.state_dir))[0]["phases"], ["end", "start"])
 
     def test_a_pending_update_settles_only_on_its_terminal_frame(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(name="read"))
         self.assertEqual(collector.finish(True)["unsettledToolCalls"], 1)
@@ -86,13 +93,13 @@ class DshToolFactsTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 1)
 
     def test_missing_identity_or_name_is_retained_and_never_completes_the_stream(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(call_id=None, name="read"))
         collector.observe(update(call_id="call-no-name", name=None))
         collector.observe(update(session_id=None, call_id="call-no-session", name="read"))
         package = collector.finish(True)
-        calls = list(read_tool_calls(package))
+        calls = list(read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual(len(calls), 3, "each broken fact stays a bounded retained call")
         self.assertEqual([call["callId"] for call in calls],
                          [None, "call-no-name", "call-no-session"])
@@ -103,7 +110,7 @@ class DshToolFactsTests(unittest.TestCase):
                          "a missing name cannot establish a normalized started call")
 
     def test_correction_roots_accumulate_without_resetting_counts(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(session_id="session-1", call_id="call-1", name="read"))
         collector.observe(update(session_id="session-1", call_id="call-1", name="read",
@@ -118,23 +125,23 @@ class DshToolFactsTests(unittest.TestCase):
                          ["session-1", "session-2"])
 
     def test_more_than_128_named_calls_remain_complete_and_keep_their_categories(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         for index in range(131):
             collector.observe(update(call_id=f"call-{index}", name="read" if index != 130 else "write"))
             collector.observe(update(call_id=f"call-{index}", name="read" if index != 130 else "write",
                                      kind="tool_call_update", status="completed"))
         package = collector.finish(True)
-        calls = list(read_tool_calls(package))
+        calls = list(read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (131, 0))
         self.assertTrue(package["streamComplete"])
         self.assertEqual(len(calls), 131)
         self.assertEqual(calls[-1]["categories"], ["edit"])
         self.assertTrue(all(call["consistent"] and not call["incomplete"] for call in calls))
-        self.assertEqual(judge_tool_evidence(package, "read"), TOOLS_FORBIDDEN)
+        self.assertEqual(judge_tool_evidence(package, "read", state_dir=self.state_dir), TOOLS_FORBIDDEN)
 
     def test_stream_and_verdicts_stay_separate_facts(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(name="read"))
         collector.observe(update(name="read", kind="tool_call_update", status="completed"))
@@ -142,7 +149,7 @@ class DshToolFactsTests(unittest.TestCase):
         self.assertFalse(collector.finish(False)["streamComplete"])
         self.assertEqual(collector.finish(False)["toolCalls"], 1,
                          "an unproven stream never erases the observed facts")
-        proven = DshToolFacts(dict(BINDING))
+        proven = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         proven.add_root("session-1")
         proven.observe(update(name="read"))
         proven.observe(update(name="read", kind="tool_call_update", status="completed"))
@@ -150,17 +157,17 @@ class DshToolFactsTests(unittest.TestCase):
         self.assertTrue(proven.finish(True)["streamComplete"])
 
     def test_the_blackboard_judge_refuses_tool_facts_in_a_fast_answer(self):
-        collector = DshToolFacts(dict(BINDING))
+        collector = DshToolFacts(dict(BINDING), state_dir=self.state_dir)
         collector.add_root("session-1")
         collector.observe(update(name="read"))
         collector.observe(update(name="read", kind="tool_call_update", status="completed"))
         package = collector.finish(True)
-        self.assertEqual(judge_tool_evidence(package, "none"), TOOLS_FORBIDDEN,
+        self.assertEqual(judge_tool_evidence(package, "none", state_dir=self.state_dir), TOOLS_FORBIDDEN,
                          "any recorded call refuses a fast answer")
-        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "none"),
+        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "none", state_dir=self.state_dir),
                          TOOLS_FORBIDDEN,
                          "a clearly disallowed call invalidates the answer even on a broken stream")
-        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "read"),
+        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "read", state_dir=self.state_dir),
                          TOOL_EVIDENCE_UNVERIFIED,
                          "an incomplete stream cannot establish permission")
 

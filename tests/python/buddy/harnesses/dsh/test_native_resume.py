@@ -228,7 +228,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertEqual(_record_facts(result2)["bootstrapUpdates"], 4)
         package = result2.tool_evidence.value
         self.assertEqual(package["toolCalls"], 0)
-        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [])
         self.assertEqual(package["nativeIdentity"], [{"sessionId": previous}])
         self.assertEqual(result2.activity.value["counts"]["modelTurns"], 1)
         # The replayed old tool pair is not this turn's activity: only this
@@ -361,7 +361,7 @@ class ResumeFailureTests(NativeResumeCase):
         self.assertEqual(result2.end.status, "error")
         self.assertEqual(result2.end.reason_code, "missing-finish")
         package = result2.tool_evidence.value
-        foreign = [call for call in tool_evidence.read_tool_calls(package)
+        foreign = [call for call in tool_evidence.read_tool_calls(package, state_dir=self.state_dir)
                    if call["nativeIdentity"].get("sessionId") == "foreign-live-root"]
         self.assertTrue(foreign, "the foreign root's finish attempt stays a retained fact")
         self.assertTrue(all(not call["belongsToRoot"] for call in foreign))

@@ -58,6 +58,7 @@ class CodexSchemaTests(unittest.TestCase):
                 (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                 (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
+                           "stateDir": str(root),
                            "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                            "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
                            "invocationId": "invocation",
@@ -136,6 +137,7 @@ class CodexSchemaTests(unittest.TestCase):
                                               answer_tool="answer")
                     module = SimpleNamespace(prepare_services=lambda **_kwargs: binding)
                     control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
+                               "stateDir": str(root),
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                                "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
                                "invocationId": "invocation",
@@ -179,6 +181,7 @@ class SchemaWorkerTests(NativeRunCase):
         (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
         (root / "task.txt").write_text("Do this bounded task", encoding="utf-8", newline="\n")
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
+                   "stateDir": os.environ["HMB_STATE_DIR"],
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),
                    "sessionRecordPath": str(root / "session.jsonl"),

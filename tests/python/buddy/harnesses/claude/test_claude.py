@@ -672,7 +672,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(evidence["nativeIdentity"],
                          [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (0, 0))
-        self.assertEqual(list(read_tool_calls(evidence)), [])
+        self.assertEqual(list(read_tool_calls(evidence, state_dir=Path(self.environment["HMB_STATE_DIR"]))), [])
         self.assertTrue(evidence["streamComplete"])
 
 

@@ -79,7 +79,7 @@ class NoToolCodexTests(unittest.TestCase):
                                                "attemptId": "router-attempt", "generation": 7})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual((list(read_tool_calls(evidence)), evidence["toolCalls"],
+        self.assertEqual((list(read_tool_calls(evidence, state_dir=Path(self.root / "state"))), evidence["toolCalls"],
                           evidence["unsettledToolCalls"]), ([], 0, 0))
         trace = json.loads((directory / "trace.json").read_text(encoding="utf-8"))
         self.assertEqual(trace["home"], str(self.home))
@@ -104,10 +104,10 @@ class NoToolCodexTests(unittest.TestCase):
                 # Fast calls interrupt on the first tool marker. A typed result
                 # has no end fact yet when its display's started frame arrives.
                 fast_phases = (() if name == "functionCallOutput" else phases[:1]) if carrier == "typed" else phases
-                rows = list(read_tool_calls(evidence))
+                rows = list(read_tool_calls(evidence, state_dir=Path(self.root / "state")))
                 self.assertEqual(tuple(rows[0]["phases"]) if fast_phases else (),
                                  tuple(sorted(phase for phase in fast_phases if phase is not None)))
-                self.assertEqual(judge_tool_evidence(evidence, "none"),
+                self.assertEqual(judge_tool_evidence(evidence, "none", state_dir=Path(self.root / "state")),
                                  "router-tool-evidence-unverified" if name == "functionCallOutput" or not complete
                                  else "router-tools-forbidden" if rows else None)
                 if phases and complete:
@@ -182,14 +182,14 @@ class NoToolCodexTests(unittest.TestCase):
                 outcome, _control, _directory = self.run_case(case)
                 evidence = outcome.result["toolEvidence"]
                 self.assertFalse(evidence["streamComplete"])
-                rows = list(read_tool_calls(evidence))
+                rows = list(read_tool_calls(evidence, state_dir=Path(self.root / "state")))
                 self.assertTrue(any(category in row["categories"] for row in rows), (case, rows))
                 self.assertEqual(evidence["binding"]["taskId"], "router-task")
         outcome, _control, _directory = self.run_case("format")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual([identity["turnId"] for identity in evidence["nativeIdentity"]], ["turn-1", "turn-2"])
-        self.assertEqual(list(read_tool_calls(evidence)), [])
+        self.assertEqual(list(read_tool_calls(evidence, state_dir=Path(self.root / "state"))), [])
         self.assertTrue(evidence["streamComplete"])
 
     def test_unknown_event_keeps_a_valid_answer(self):

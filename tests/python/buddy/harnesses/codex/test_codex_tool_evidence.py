@@ -42,15 +42,26 @@ def raw(item: dict, **kwargs) -> dict:
 
 
 def new_projector() -> CodexToolEventProjector:
-    return CodexToolEventProjector(dict(BINDING))
+    return CodexToolEventProjector(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
 
-def calls(package):
-    return list(tool_evidence.read_tool_calls(package))
+def calls(package, *, state_dir: Path):
+    return list(tool_evidence.read_tool_calls(package, state_dir=state_dir))
 
 
 class CodexToolEventProjectionTests(unittest.TestCase):
     """The projector's facts over real typed and raw frame shapes."""
+
+    def test_collector_uses_its_explicit_state_root(self):
+        with tempfile.TemporaryDirectory(prefix="codex-evidence-root-") as directory:
+            state_dir = Path(directory) / "state"
+            self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
+            projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir)
+            projector.observe_root("thread-1", "turn-1")
+            projector.observe_notification(raw({"type": "function_call", "call_id": "call-1", "name": "shell"}))
+            package = projector.finish(True)
+            self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(
+                package, state_dir=state_dir)], ["call-1"])
 
     def observe_root(self, projector):
         projector.observe_root("thread-1", "turn-1")
@@ -65,14 +76,14 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                     projector.observe_notification(frame(method, item))
                 package = projector.finish(True)
                 self.assertEqual(package["toolCalls"], expected_calls)
-                self.assertEqual(tuple(calls(package)[0]["phases"]) if phases else (),
+                self.assertEqual(tuple(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["phases"]) if phases else (),
                                  tuple(sorted(phase for phase in phases if phase is not None)))
                 self.assertEqual(package["streamComplete"], complete)
                 self.assertEqual(package["unsettledToolCalls"], int(phases == ("start",)))
-                self.assertEqual({category for call in calls(package) for category in call["categories"]},
+                self.assertEqual({category for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) for category in call["categories"]},
                                  {"other"} if phases else set())
                 for permission in ("none", "read"):
-                    self.assertEqual(judge_tool_evidence(package, permission),
+                    self.assertEqual(judge_tool_evidence(package, permission, state_dir=Path(os.environ["HMB_STATE_DIR"])),
                                      "router-tool-evidence-unverified" if not complete
                                      else "router-tools-forbidden" if phases else None)
 
@@ -85,10 +96,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             projector.observe_notification(frame(method, item))
         package = projector.finish(True)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
-        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package)],
+        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [("item-1", ["execute"], ["end", "start"])])
-        self.assertIsNone(judge_tool_evidence(package, "read"))
-        self.assertEqual(judge_tool_evidence(package, "none"), "router-tools-forbidden")
+        self.assertIsNone(judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
+        self.assertEqual(judge_tool_evidence(package, "none", state_dir=Path(os.environ["HMB_STATE_DIR"])), "router-tools-forbidden")
 
     def test_raw_tool_search_result_settles_only_its_actual_call(self):
         projector = new_projector()
@@ -98,7 +109,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 projector.observe_notification(frame(method, item))
         package = projector.finish(True)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
-        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package)],
+        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [("item-1", ["other"], ["end", "start"])])
 
     def test_typed_execution_and_raw_native_call_join_by_actual_call_id(self):
@@ -113,9 +124,9 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 projector.observe_notification(frame('item/completed', {'type': 'commandExecution', 'id': 'call-1'}))
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
-                self.assertEqual([(call['categories'], call['phases'], call['consistent']) for call in calls(package)],
+                self.assertEqual([(call['categories'], call['phases'], call['consistent']) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                                  [(['execute'], ['end', 'start'], True)])
-                self.assertIsNone(judge_tool_evidence(package, 'read'))
+                self.assertIsNone(judge_tool_evidence(package, 'read', state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_mcp_namespace_cannot_borrow_builtin_execution_classification(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -125,8 +136,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                                             'namespace': 'mcp__server', 'call_id': 'mcp-1'}))
         projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'mcp-1'}))
         package = projector.finish(True)
-        self.assertEqual([call['categories'] for call in calls(package)], [['other']])
-        self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tools-forbidden')
+        self.assertEqual([call['categories'] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))], [['other']])
+        self.assertEqual(judge_tool_evidence(package, 'read', state_dir=Path(os.environ["HMB_STATE_DIR"])), 'router-tools-forbidden')
 
     def test_two_raw_names_or_conflicting_categories_are_not_execution_aliases(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -139,8 +150,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                     projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'call-1'}))
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
-                self.assertFalse(calls(package)[0]['consistent'])
-                self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tool-evidence-unverified')
+                self.assertFalse(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]['consistent'])
+                self.assertEqual(judge_tool_evidence(package, 'read', state_dir=Path(os.environ["HMB_STATE_DIR"])), 'router-tool-evidence-unverified')
 
     def test_typed_call_projects_start_and_end_over_the_real_identity(self):
         projector = new_projector()
@@ -151,7 +162,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(calls(package), [{
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])), [{
             "nativeIdentity": ROOT, "callId": "item-1", "categories": ["execute"],
             "phases": ["end", "start"], "facts": [{"toolName": "commandExecution", "category": "execute"}],
             "consistent": True, "endBeforeStart": False,
@@ -170,10 +181,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 2)
         # The typed fileChange item was started but never completed.
         self.assertEqual(package["unsettledToolCalls"], 1)
-        raw_calls = [call for call in calls(package) if call["callId"] == "call-1"]
+        raw_calls = [call for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) if call["callId"] == "call-1"]
         self.assertEqual([(call["categories"], call["phases"]) for call in raw_calls],
                          [(["execute"], ["end", "start"])])
-        self.assertEqual(calls(package)[0]["categories"], ["edit"])
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["categories"], ["edit"])
 
     def test_replayed_frames_collapse_but_two_native_calls_count_separately(self):
         projector = new_projector()
@@ -190,10 +201,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # distinct native calls and each counts.
         self.assertEqual(package["toolCalls"], 3)
         self.assertEqual(package["unsettledToolCalls"], 2)
-        self.assertEqual(len(calls(package)), 3)
-        self.assertEqual([call["callId"] for call in calls(package)],
+        self.assertEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 3)
+        self.assertEqual([call["callId"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          ["call-1", "call-2", "item-9"])
-        self.assertEqual(calls(package)[0]["phases"], ["end", "start"])
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["phases"], ["end", "start"])
 
     def test_fixed_classification_for_the_native_operation_types(self):
         projector = new_projector()
@@ -206,7 +217,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # A named call whose name is "reasoning" is still a call, classified other.
         projector.observe_notification(raw({"type": "function_call", "call_id": "r-1", "name": "reasoning"}))
         package = projector.finish(True)
-        categories = {call["callId"]: call["categories"] for call in calls(package)}
+        categories = {call["callId"]: call["categories"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))}
         self.assertEqual(categories, {"w-1": ["fetch"], "s-1": ["execute"], "m-1": ["other"],
                                       "d-1": ["other"], "r-1": ["other"]})
         self.assertEqual(package["toolCalls"], 5)
@@ -220,7 +231,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({"type": "message", "role": "assistant"}))
         projector.observe_notification(raw({"type": "reasoning"}))
         package = projector.finish(True)
-        self.assertEqual(calls(package), [])
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])), [])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertTrue(package["streamComplete"])
 
@@ -233,9 +244,9 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         package = projector.finish(True)
         self.assertEqual(package["toolCalls"], 1, "only the fully identified call counts")
         self.assertFalse(package["streamComplete"])
-        unbound = [call for call in calls(package) if call["callId"] == "item-1"]
+        unbound = [call for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) if call["callId"] == "item-1"]
         self.assertEqual(unbound[0]["nativeIdentity"], {"sessionId": "thread-1"})
-        missing = [call for call in calls(package) if call["callId"] is None]
+        missing = [call for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) if call["callId"] is None]
         self.assertIsNone(missing[0]["callId"])
         self.assertEqual(missing[0]["nativeIdentity"], ROOT)
         self.assertTrue(missing[0]["incomplete"])
@@ -249,7 +260,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         package = projector.finish(True)
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
-        self.assertGreaterEqual(len(calls(package)), 2)
+        self.assertGreaterEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 2)
 
     def test_typed_item_outside_the_known_tools_is_kept_as_other(self):
         projector = new_projector()
@@ -257,7 +268,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(frame("item/started", {"type": "todoList", "id": "t-1"}))
         projector.observe_notification(frame("item/completed", {"type": "todoList", "id": "t-1"}))
         package = projector.finish(True)
-        self.assertEqual(calls(package)[0]["categories"], ["other"])
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["categories"], ["other"])
         self.assertEqual(package["toolCalls"], 1)
 
     def test_uncorrelated_output_keeps_only_its_own_frame_type(self):
@@ -266,7 +277,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({"type": "custom_tool_call_output", "call_id": "u-1", "output": "x"}))
         package = projector.finish(True)
         self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"], call["phases"],
-                           call["endBeforeStart"]) for call in calls(package)],
+                           call["endBeforeStart"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
                          [(ROOT, "u-1", ["other"], ["end"], True)])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["unsettledToolCalls"], 0)
@@ -290,11 +301,11 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             projector.observe_notification(frame("item/started", {"type": "commandExecution", "id": f"i-{number}"}))
             projector.observe_notification(frame("item/completed", {"type": "commandExecution", "id": f"i-{number}"}))
         package = projector.finish(True)
-        self.assertEqual(len(calls(package)), 129)
+        self.assertEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 129)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (129, 0))
         self.assertLess(package["calls"]["bytes"], 129 * 512)
         self.assertLess(len(json.dumps(package)), 2048)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_arguments_and_output_bodies_never_enter_the_package(self):
         projector = new_projector()
@@ -337,14 +348,15 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
             harness="codex", buddy=RunBuddy(provider="openai", model="m", effort="low"),
             session_record_path=str(root / "session.jsonl"),
-            cwd=str(root), private_state=PrivateStatePaths(invocation_root=str(root / "i"), native_root=str(root / "n")),
+            cwd=str(root), private_state=PrivateStatePaths(state_dir=str(root / "state"), invocation_root=str(root / "i"), native_root=str(root / "n")),
             input_text="prompt", permission="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
         frame = request.to_payload()
         decoded = RunRequest.from_payload(frame)
         projector = CodexToolEventProjector({"harness": "codex", "taskId": decoded.identity.task_id,
                                               "attemptId": decoded.identity.attempt_id,
-                                              "generation": decoded.identity.generation})
+                                              "generation": decoded.identity.generation},
+                                             state_dir=Path(decoded.private_state.state_dir))
         self.assertEqual(projector.finish(False)["binding"], {"harness": "codex", "taskId": "t",
                                                               "attemptId": "a", "generation": 0})
         mutations = {"missing task": lambda identity: identity.pop("taskId"),
@@ -363,7 +375,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # The projector itself still refuses an incomplete binding, so a
         # caller that bypasses the frame validation cannot invent one.
         with self.assertRaises(BoardError):
-            CodexToolEventProjector({"harness": "codex", "taskId": "t"})
+            CodexToolEventProjector({"harness": "codex", "taskId": "t"},
+                                    state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
 
 class UnreadableCodexToolEvidenceTests(unittest.TestCase):
@@ -377,7 +390,7 @@ class UnreadableCodexToolEvidenceTests(unittest.TestCase):
                     projector.observe_notification(frame(method, item))
                     evidence = projector.finish(True)
                     self.assertFalse(evidence["streamComplete"])
-                    self.assertIsNotNone(judge_tool_evidence(evidence, "none"))
+                    self.assertIsNotNone(judge_tool_evidence(evidence, "none", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_unknown_connection_and_thread_notifications_preserve_tool_completeness(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -387,7 +400,7 @@ class UnreadableCodexToolEvidenceTests(unittest.TestCase):
         projector.observe_notification({"method": "thread/futureNotification", "params": {"threadId": "thread-1"}})
         evidence = projector.finish(True)
         self.assertTrue(evidence["streamComplete"])
-        self.assertIsNone(judge_tool_evidence(evidence, "none"))
+        self.assertIsNone(judge_tool_evidence(evidence, "none", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
 
 class CodexReviewToolEvidenceTests(unittest.TestCase):
@@ -438,16 +451,16 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         for index, (name, _carrier, _fields, expected_calls, phases, complete) in enumerate(PROTOCOL_ITEMS + FUTURE_ITEMS):
             with self.subTest(name=name):
-                outcome, _context = self.run_review("protocol-" + name, index="protocol-" + str(index))
+                outcome, context = self.run_review("protocol-" + name, index="protocol-" + str(index))
                 self.assertEqual(outcome.status, "ok", outcome.result)
                 self.assertEqual(json.loads(outcome.result["rawAnswer"])["buddyId"], "legal")
                 evidence = outcome.result["toolEvidence"]
                 self.assertEqual(evidence["toolCalls"], expected_calls)
                 self.assertEqual(outcome.result["usage"]["toolCalls"], expected_calls)
-                self.assertEqual(tuple(calls(evidence)[0]["phases"]) if phases else (),
+                self.assertEqual(tuple(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))[0]["phases"]) if phases else (),
                                  tuple(sorted(phase for phase in phases if phase is not None)))
                 self.assertEqual(evidence["streamComplete"], complete)
-                self.assertEqual(judge_tool_evidence(evidence, "read"),
+                self.assertEqual(judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                                  "router-tool-evidence-unverified" if not complete
                                      else "router-tools-forbidden" if phases else None)
 
@@ -463,7 +476,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
-                          for call in calls(evidence)],
+                          for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))],
                          [("item-1", ["execute"], ["end", "start"]),
                           ("call-1", ["execute"], ["end", "start"])])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 2)
@@ -471,21 +484,21 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(len(outcome.result["nativeRawToolEvents"]), 3)
 
     def test_equivalent_typed_and_raw_names_of_one_call_stay_recorded(self):
-        outcome, _context = self.run_review("readonly-conflict", index=2)
+        outcome, context = self.run_review("readonly-conflict", index=2)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["toolCalls"], 1)
         self.assertEqual([(call["categories"], call["phases"], call["consistent"])
-                          for call in calls(evidence) if call["callId"] == "call-1"],
+                          for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])) if call["callId"] == "call-1"],
                          [(["execute"], ["end", "start"], True)])
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
-        self.assertIsNone(judge_tool_evidence(evidence, 'read'))
+        self.assertIsNone(judge_tool_evidence(evidence, 'read', state_dir=Path(context.environment["HMB_STATE_DIR"])))
 
     def test_foreign_and_old_turn_facts_are_kept_with_their_real_identity(self):
-        outcome, _context = self.run_review("readonly-foreign", index=3)
+        outcome, context = self.run_review("readonly-foreign", index=3)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        identities = {json.dumps(call["nativeIdentity"], sort_keys=True) for call in calls(evidence)}
+        identities = {json.dumps(call["nativeIdentity"], sort_keys=True) for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))}
         self.assertEqual(identities, {json.dumps(identity, sort_keys=True) for identity in (
             {"sessionId": "thread-sub", "turnId": "sub-turn-1"},
             {"sessionId": "thread-1", "turnId": "native-turn-99"})})
@@ -494,19 +507,19 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["toolCalls"], 2)
 
     def test_stream_above_old_bound_keeps_all_judgeable_calls(self):
-        outcome, _context = self.run_review("readonly-truncated", index=4, toolCalls=500)
+        outcome, context = self.run_review("readonly-truncated", index=4, toolCalls=500)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual(len(calls(evidence)), 130)
+        self.assertEqual(len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))), 130)
         self.assertEqual(evidence["toolCalls"], 130)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
         self.assertLess(evidence["calls"]["bytes"], 130 * 512)
         self.assertLess(len(json.dumps(evidence)), 2048)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])))
         self.assertTrue(outcome.result["nativeEvidenceTruncated"])
 
     def test_correction_accumulates_roots_tool_counts_and_keeps_old_turn_facts(self):
-        outcome, _context = self.run_review("readonly-repair-evidence", index=5)
+        outcome, context = self.run_review("readonly-repair-evidence", index=5)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertEqual(outcome.result["correctionCount"], 1)
         evidence = outcome.result["toolEvidence"]
@@ -514,7 +527,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                       {"sessionId": "thread-1", "turnId": "native-turn-2"}])
         self.assertEqual(evidence["toolCalls"], 3)
         self.assertEqual(evidence["unsettledToolCalls"], 1)
-        stale = [call for call in calls(evidence) if call["callId"] == "item-stale"]
+        stale = [call for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])) if call["callId"] == "item-stale"]
         self.assertEqual([(call["nativeIdentity"], call["categories"], call["phases"]) for call in stale],
                          [({"sessionId": "thread-1", "turnId": "native-turn-1"}, ["execute"], ["start"])])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 3)
@@ -530,10 +543,10 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [])
         self.assertFalse(evidence["streamComplete"])
-        self.assertEqual(calls(evidence), [])
+        self.assertEqual(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])), [])
 
     def test_budget_interrupt_leaves_the_open_call_unsettled_in_the_package(self):
-        outcome, _context = self.run_review("readonly-budget", index=7, toolCalls=0)
+        outcome, context = self.run_review("readonly-budget", index=7, toolCalls=0)
         self.assertEqual(outcome.result["code"], "readonly-budget-exhausted")
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["toolCalls"], 1)

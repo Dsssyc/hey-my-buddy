@@ -136,8 +136,9 @@ class RunBuddy(InternalModel):
 
 
 class PrivateStatePaths(InternalModel):
-    """The attempt-private invocation and native roots of one run."""
+    """The selected state root and attempt-private roots of one run."""
 
+    state_dir: AbsolutePath
     invocation_root: AbsolutePath
     native_root: AbsolutePath
 

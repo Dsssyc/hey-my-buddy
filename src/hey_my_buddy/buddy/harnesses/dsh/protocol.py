@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from ....json_codec import canonical_json
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
@@ -84,8 +85,8 @@ class DshToolFacts:
     its own ``session/new`` receipts.
     """
 
-    def __init__(self, binding: dict):
-        self.evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, *, state_dir: Path):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self.roots: list[dict] = []
         self.close_pending = False
         self._names: dict[tuple[str, str], str] = {}

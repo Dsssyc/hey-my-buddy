@@ -16,7 +16,10 @@ ROOT = {"sessionId": "session", "turnId": "turn"}
 
 class NativeProjectionTests(unittest.TestCase):
     def setUp(self):
-        self.facts = ZcodeToolFacts(BINDING)
+        self.private = tempfile.TemporaryDirectory()
+        self.addCleanup(self.private.cleanup)
+        self.state_dir = Path(self.private.name) / "state"
+        self.facts = ZcodeToolFacts(BINDING, state_dir=self.state_dir)
         self.facts.add_root("session", "turn")
         self.seq = 0
         self.telemetry_seq = 0
@@ -58,7 +61,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("tool.updated", {"kind": "result", "toolCallId": call, "result": {"success": success}})
 
     def judge(self):
-        return tool_evidence.judge_tool_evidence(self.facts.finish(True), "read")
+        return tool_evidence.judge_tool_evidence(self.facts.finish(True), "read", state_dir=self.state_dir)
 
     def test_native_order_deduplicates_starts_and_uses_only_canonical_end(self):
         self.scheduled()
@@ -73,7 +76,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertIsNone(self.judge())
         package = self.facts.finish(True)
         self.assertEqual(package["toolCalls"], 1)
-        calls = list(tool_evidence.read_tool_calls(package))
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["phases"], ["end", "start"])
         self.assertEqual(calls[0]["categories"], ["read"])
@@ -83,7 +86,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.scheduled()
         self.metadata("completed")
         self.assertIsNotNone(self.judge())
-        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[0]["phases"],
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["phases"],
                          ["start"])
 
     def test_metadata_start_without_canonical_start_stays_incomplete(self):
@@ -99,12 +102,12 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
         self.assertIsNotNone(self.judge())
         self.assertTrue(any(call["nativeIdentity"] == {"sessionId": "session"}
-                            for call in tool_evidence.read_tool_calls(self.facts.finish(True))))
+                            for call in tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir)))
 
     def test_unknown_optional_turn_is_not_invented(self):
         self.metadata("started", turn=None)
         self.assertIsNotNone(self.judge())
-        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[0]["nativeIdentity"],
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["nativeIdentity"],
                          {"sessionId": "session"})
 
     def test_optional_turn_requires_a_unique_known_native_call(self):
@@ -115,7 +118,7 @@ class NativeProjectionTests(unittest.TestCase):
             "payload": {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}}})
         self.metadata("started", turn=None)
         self.assertFalse(self.facts.finish(True)["streamComplete"])
-        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[-1]["nativeIdentity"],
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[-1]["nativeIdentity"],
                          {"sessionId": "session"})
 
     def test_names_scope_and_foreign_metadata_remain_incomplete(self):
@@ -133,7 +136,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.facts.observe({"method": "v4/telemetry/event", "params": {
             "kind": "tool.lifecycle", "sessionId": "foreign", "turnId": "foreign-turn",
             "eventSeq": 1, "phase": "scheduled", "toolCallId": "read", "toolName": "Bash"}})
-        self.assertTrue(list(tool_evidence.read_tool_calls(self.facts.finish(False))))
+        self.assertTrue(list(tool_evidence.read_tool_calls(self.facts.finish(False), state_dir=self.state_dir)))
         self.assertIsNotNone(self.judge())
 
     def test_late_metadata_and_conflicting_terminal_facts_remain_incomplete(self):
@@ -204,8 +207,9 @@ class NativeDenialTests(unittest.TestCase):
         self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
         self.log_dir = Path(self.private.name)
+        self.state_dir = self.log_dir / "state"
         self.log = self.log_dir / "zcode-2026-10-20.jsonl"
-        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir)
+        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir, state_dir=self.state_dir)
         self.facts.add_root("session", "turn")
 
     def frame(self, kind, call, name=None, *, session="session", turn="turn", seq=1):
@@ -247,12 +251,12 @@ class NativeDenialTests(unittest.TestCase):
         self.append(self.denial("write", "Write"))
         package = self.complete()
         self.assertEqual(package["unsettledToolCalls"], 0)
-        calls = list(tool_evidence.read_tool_calls(package))
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual([(call["callId"], call["categories"], call["phases"])
                           for call in calls],
                          [("write", ["edit"], ["end", "start"])])
         self.assertTrue(calls[0]["belongsToRoot"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_native_bash_denial_is_settled_and_allowed_under_read(self):
@@ -262,8 +266,8 @@ class NativeDenialTests(unittest.TestCase):
         self.append(denial)
         package = self.complete()
         self.assertEqual(package["unsettledToolCalls"], 0)
-        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))), 1)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir))
 
     def test_incomplete_log_line_waits_for_the_rest(self):
         self.frame("scheduled", "bash", "Bash")
@@ -273,7 +277,7 @@ class NativeDenialTests(unittest.TestCase):
         self.assertEqual(self.facts.tool_calls, 1)
         with self.log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(raw[20:] + "\n")
-        self.assertIsNone(tool_evidence.judge_tool_evidence(self.complete(), "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(self.complete(), "read", state_dir=self.state_dir))
 
     def test_malformed_native_log_record_remains_unverified(self):
         for line in ("{broken\n", '"tool.permission.denied"\n'):
@@ -282,7 +286,7 @@ class NativeDenialTests(unittest.TestCase):
                 self.frame("scheduled", "bash", "Bash")
                 self.log.write_text(line, encoding="utf-8", newline="\n")
                 package = self.complete()
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_foreign_conflicting_and_late_denials_remain_unverified(self):
@@ -297,14 +301,14 @@ class NativeDenialTests(unittest.TestCase):
                 self.append(record)
                 package = self.complete()
                 self.assertNotEqual(package["unsettledToolCalls"], 0)
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         self.setUp()
         self.frame("scheduled", "write", "Write")
         self.complete()
         self.append(self.denial("write", "Write"))
         package = self.facts.finish(True)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
 

@@ -211,7 +211,7 @@ class SyntheticBoard:
             raise AssertionError({"syntheticRouterClaim": response, "routing": view.get("routing")})
         claim = response["claim"]
         attempt, document = claim["attempt"], claim["decisionInput"]
-        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'Fictional fixture selection', 'evidence': []}}})
+        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim, state_dir=self.board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'Fictional fixture selection', 'evidence': []}}})
 
     def _finish(self, run_id, *, disposition="completed"):
         from protocol.fixtures.native_turn import claim_record

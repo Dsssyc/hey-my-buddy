@@ -1045,6 +1045,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation},
+                           state_dir=Path(request.private_state.state_dir),
                            native_log_dir=invocation_root / "native-logs")
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()

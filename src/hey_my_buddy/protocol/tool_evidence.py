@@ -22,7 +22,7 @@ from typing import Any
 from .. import private_dirs
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
-from ..state_root import get_state_dir
+from ..paths import is_absolute_path
 from .internal_models import MAX_COUNT, MAX_PATH_BYTES, check_text
 from ..private_files import publish_bytes
 
@@ -194,7 +194,8 @@ class ToolEventEvidence:
     cannot grow a call. The finished file has one bounded row per call.
     """
 
-    def __init__(self, binding: dict):
+    def __init__(self, binding: dict, *, state_dir: Path):
+        self.state_dir = state_dir
         self.binding = _binding(binding)
         self._calls: dict[tuple[str, str | None], dict] = {}
         self._root_identities: list[dict] = []
@@ -330,21 +331,21 @@ class ToolEventEvidence:
             "version": TOOL_EVIDENCE_VERSION, "binding": dict(self.binding),
             "nativeIdentity": [dict(identity) for identity in self._root_identities],
             "streamComplete": bool(self._stream_reported) and not self._late and not self._incomplete,
-            "calls": write_tool_calls(self.binding, calls),
+            "calls": write_tool_calls(self.binding, calls, state_dir=self.state_dir),
             "toolCalls": started, "unsettledToolCalls": unsettled,
         }
 
 
-def _calls_directory(binding: dict) -> Path:
-    return private_dirs.attempt_root(get_state_dir(), binding["harness"], binding["taskId"],
+def _calls_directory(state_dir: Path, binding: dict) -> Path:
+    return private_dirs.attempt_root(state_dir, binding["harness"], binding["taskId"],
                                      binding["attemptId"]) / "tool-evidence"
 
 
-def write_tool_calls(binding: dict, calls: Iterable[dict]) -> dict:
+def write_tool_calls(binding: dict, calls: Iterable[dict], *, state_dir: Path) -> dict:
     """Publish only growing facts as an immutable private JSONL file."""
     content = b"".join((canonical_json(call) + "\n").encode("utf-8") for call in calls)
     digest = hashlib.sha256(content).hexdigest()
-    directory = private_dirs.ensure_private_dir(_calls_directory(binding))
+    directory = private_dirs.ensure_private_dir(_calls_directory(state_dir, binding))
     path = directory / (digest + ".jsonl")
     publish_bytes(path, content, immutable=True)
     return {"path": str(path), "sha256": digest, "bytes": len(content)}
@@ -378,8 +379,8 @@ def validate_tool_evidence_package(evidence: Any) -> None:
         raise BoardError("INVALID_ARGUMENT", "calls.sha256 must be a SHA256 digest")
     if type(reference["bytes"]) is not int or not 0 <= reference["bytes"] <= MAX_COUNT:
         raise BoardError("INVALID_ARGUMENT", "calls.bytes must be a nonnegative byte count")
-    if Path(reference["path"]) != _calls_directory(binding) / (digest + ".jsonl"):
-        raise BoardError("INVALID_ARGUMENT", "tool calls must name this attempt's private digest file")
+    if not is_absolute_path(reference["path"]):
+        raise BoardError("INVALID_ARGUMENT", "tool calls must name an absolute private file")
 
 
 def _call_summary(value: Any, harness: str) -> dict:
@@ -423,13 +424,15 @@ def _call_summary(value: Any, harness: str) -> dict:
     return value
 
 
-def read_tool_calls(evidence: dict) -> Iterable[dict]:
+def read_tool_calls(evidence: dict, *, state_dir: Path) -> Iterable[dict]:
     """Read bounded rows, verifying file shape, length and digest at the boundary.
 
     No total call limit is imposed. A consumer must finish iteration before
     accepting any facts, because the final digest binds the complete file.
     """
     reference = evidence["calls"]
+    if Path(reference["path"]) != _calls_directory(state_dir, evidence["binding"]) / (reference["sha256"] + ".jsonl"):
+        raise BoardError("INVALID_ARGUMENT", "tool calls must name this attempt's private digest file")
     fd = private_dirs.open_regular_fd(Path(reference["path"]), os.O_RDONLY)
     digest = hashlib.sha256()
     size = 0
@@ -454,7 +457,7 @@ def _consistent_call_facts(harness: str, facts: set) -> bool:
                for name, category in facts)
 
 
-def judge_tool_evidence(evidence: Any, permission: Any) -> str | None:
+def judge_tool_evidence(evidence: Any, permission: Any, *, state_dir: Path) -> str | None:
     """The one publication matrix over digest-bound per-call facts.
 
     A clearly forbidden call outranks an unclosed stream. Conflicting facts
@@ -474,7 +477,7 @@ def judge_tool_evidence(evidence: Any, permission: Any) -> str | None:
         malformed = False
         keys = set()
         started = unsettled = 0
-        for call in read_tool_calls(evidence):
+        for call in read_tool_calls(evidence, state_dir=state_dir):
             key = (canonical_json(call["nativeIdentity"]), call["callId"])
             if key in keys:
                 return TOOL_EVIDENCE_UNVERIFIED

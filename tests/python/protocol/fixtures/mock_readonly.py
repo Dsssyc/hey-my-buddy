@@ -96,6 +96,7 @@ def start(harness, context, request, fixture, options):
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
     control = {
         "operation": "review", "harness": harness, "privateRoot": str(private),
+        "stateDir": context.environment["HMB_STATE_DIR"],
         "sessionRecordPath": context.session_record_path,
         "directory": str(context.directory), "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
@@ -141,7 +142,7 @@ def start(harness, context, request, fixture, options):
             buddy=ResultBuddy(requested=built_request.buddy),
             native_identity=NativeIdentity(session_id="mock-native"),
             value=None if mode in _END else RunValue(schema_status=schema_status, raw=raw, parsed=parsed),
-            tool_evidence=tool_receipt(binding, 1, native_identity={"sessionId": "mock-native"})["toolEvidence"],
+            tool_evidence=tool_receipt(binding, 1, state_dir=Path(built_request.private_state.state_dir), native_identity={"sessionId": "mock-native"})["toolEvidence"],
             stop_evidence=StopEvidence(native=StopLayer(
                 group_state="unknown" if mode == "no_shutdown" else "gone")),
         )

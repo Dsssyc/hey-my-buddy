@@ -147,7 +147,8 @@ class NativeRunCase(FakeAppServerTests):
             session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
-            private_state=PrivateStatePaths(invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
+            private_state=PrivateStatePaths(state_dir=str(self.state_dir),
+                                            invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                                             native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
             input_text=prompt, permission="none",
             output_schema=SCHEMA,
@@ -159,6 +160,7 @@ class MockNativeCase(ZcodeFixtureCase):
 
     def setUp(self):
         super().setUp()
+        self.state_dir = Path(self.environment["HMB_STATE_DIR"])
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
@@ -181,7 +183,8 @@ class MockNativeCase(ZcodeFixtureCase):
             session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
-            private_state=PrivateStatePaths(invocation_root=str(invocation),
+            private_state=PrivateStatePaths(state_dir=self.environment["HMB_STATE_DIR"],
+                                            invocation_root=str(invocation),
                                             native_root=str(self.base / "worker-native")),
             input_text=prompt, permission="write",
             output_schema=worker_services.OUTCOME_SCHEMA,
@@ -291,7 +294,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
-        calls = list(tool_evidence.read_tool_calls(package))
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         self.assertTrue(calls)
         self.assertTrue(all(call["categories"] for call in calls))
 
@@ -492,7 +495,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         self.assertFalse(result.tool_evidence.value["streamComplete"])
-        calls = list(tool_evidence.read_tool_calls(result.tool_evidence.value))
+        calls = list(tool_evidence.read_tool_calls(result.tool_evidence.value, state_dir=self.state_dir))
         self.assertTrue(calls)
         self.assertTrue(any(not call["belongsToRoot"] for call in calls))
 
@@ -986,7 +989,7 @@ class WorkerSeamTests(MockNativeCase):
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         package = result.tool_evidence.value
-        calls = list(tool_evidence.read_tool_calls(package))
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         call_ids = [call["callId"] for call in calls]
         self.assertIn("child-fin", call_ids, "the child relay's same-name call was silently dropped")
         self.assertIn("foreign-fin", call_ids, "the foreign session's same-name call was silently dropped")
@@ -1019,7 +1022,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
-        calls = list(tool_evidence.read_tool_calls(package))
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
         self.assertEqual([call["callId"] for call in calls], ["call-task"])
         self.assertEqual(calls[0]["categories"], ["execute"])
         self.assertEqual(calls[0]["phases"], ["end", "start"])

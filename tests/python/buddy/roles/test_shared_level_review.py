@@ -64,6 +64,7 @@ class _ReviewCases:
             "spec": {"provider": self.provider, "model": self.model, "effort": self.effort},
             "taskId": "task", "attemptId": "attempt", "generation": 1,
             "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
+            "stateDir": str(self.base / "state"),
             "directory": str(root), "nativeRoot": str(root / "native"),
             "sessionRecordPath": str(root / "session.jsonl"), "cwd": str(cwd),
             "timeoutSeconds": 10, "canCorrect": False,
@@ -86,7 +87,8 @@ class _ReviewCases:
         self.assertTrue(payload["answerValid"])
         self.assertEqual(payload["usage"]["toolCalls"], 0)
         self.assertLessEqual(payload["usage"]["toolCalls"], control["readOnlyRequest"]["budget"]["toolCalls"])
-        self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read"))
+        self.assertIsNone(judge_tool_evidence(payload["toolEvidence"], "read",
+                                               state_dir=Path(control["stateDir"])))
         self.assertEqual(result.effective_policy.tools.requested.value, self.native_policy)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
@@ -127,7 +129,8 @@ class _ReviewCases:
                          {"buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertTrue(outcome.result["inputVerification"]["unchanged"])
         self.assertLessEqual(outcome.result["usage"]["toolCalls"], document["budget"]["toolCalls"])
-        self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read"))
+        self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read",
+                                               state_dir=Path(context.environment["HMB_STATE_DIR"])))
         self.assertFalse(frozen.exists(), "a verified private copy is discarded")
 
     def test_router_rejects_a_changed_frozen_copy_after_native_stop(self):

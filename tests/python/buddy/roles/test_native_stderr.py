@@ -25,6 +25,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
     task_path = invocation / "task.txt"
     task_path.write_text("fixture task", encoding="utf-8")
     control = {"operation": "worker", "harness": harness, "privateRoot": str(invocation),
+               "stateDir": str(self.base / "state"),
                "directory": str(self.base), "nativeRoot": str(native_root),
                "sessionRecordPath": str(self.base / "session.jsonl"),
                "inputFile": str(input_path), "taskFile": str(task_path),

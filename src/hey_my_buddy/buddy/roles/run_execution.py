@@ -437,7 +437,7 @@ def worker_request(control: dict, module):
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
         session_record_path=control["sessionRecordPath"],
-        private_state=PrivateStatePaths(invocation_root=str(invocation_root),
+        private_state=PrivateStatePaths(state_dir=control["stateDir"], invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
         input_text=prompt, permission=permission,
         output_schema=schema,
@@ -476,7 +476,7 @@ def fast_request(control: dict, module):
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
         session_record_path=control["sessionRecordPath"],
-        private_state=PrivateStatePaths(invocation_root=str(invocation_root),
+        private_state=PrivateStatePaths(state_dir=control["stateDir"], invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
         input_text=base_prompt, permission="none",
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
@@ -495,7 +495,7 @@ def review_request(control: dict, module):
         harness=control["harness"], buddy=RunBuddy(**control["spec"]),
         cwd=control["cwd"],
         session_record_path=control["sessionRecordPath"],
-        private_state=PrivateStatePaths(invocation_root=control["privateRoot"],
+        private_state=PrivateStatePaths(state_dir=control["stateDir"], invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),
         input_text=prompt, output_schema=values["outputSchema"], permission="read",
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
@@ -508,7 +508,7 @@ def review_request(control: dict, module):
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,
             identity: RunIdentity, grace_seconds: float = 0) -> InlineRunHandle:
     ensure_private_dir(Path(control["privateRoot"]))
-    control.update(invocationId=identity.invocation_id,
+    control.update(stateDir=environment["HMB_STATE_DIR"], invocationId=identity.invocation_id,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
                    generation=identity.generation)
     handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)

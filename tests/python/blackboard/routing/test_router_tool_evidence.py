@@ -45,8 +45,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 self.configure(board, defaultRoutingMode=mode)
                 requested, claim = self.request_route(board, f'matrix-{number}')
                 events = settled(category, 'call-1') if category else []
-                package = self.package_for(claim, requested, events, stream_complete=complete)
-                output = {**stopped_answer(claim), 'nativeIdentity': ROOT, 'toolEvidence': package,
+                package = self.package_for(board, claim, requested, events, stream_complete=complete)
+                output = {**stopped_answer(claim, state_dir=board.directory), 'nativeIdentity': ROOT, 'toolEvidence': package,
                           'usage': {'elapsedMs': 100, 'toolCalls': 1 if category else 0}}
                 board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
@@ -62,7 +62,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         requested, claim = self.request_route(board, 'usage-mismatch')
-        output = stopped_answer(claim)
+        output = stopped_answer(claim, state_dir=board.directory)
         output['usage']['toolCalls'] = 1
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
         self.assertEqual(self.decision(board, requested['decisionId'])['reason']['code'], 'router-tool-evidence-unverified')
@@ -78,7 +78,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
             self.assertEqual(hashlib.sha256(original['input_json'].encode()).hexdigest(), original['input_sha256'])
             self.assertEqual(set(db.execute('SELECT * FROM router_claims WHERE attempt_id=?', (claim['attempt']['attemptId'],)).fetchone().keys()), {'attempt_id', 'task_id', 'generation'})
         self.assertEqual(document['routingMode'], 'review')
-        package = self.package_for(claim, requested, settled('execute', 'read-command'))
+        package = self.package_for(board, claim, requested, settled('execute', 'read-command'))
         self.assertIsNone(self.problem(board, requested['decisionId'], {'nativeIdentity': ROOT, 'toolEvidence': package}))
 
     def setUp(self):
@@ -104,11 +104,11 @@ class RouterToolEvidenceTests(DecisionTestCase):
         row, document = self.frozen(board, decision_id)
         return board.store.decisions._tool_evidence_problem(row, document, output)
 
-    def package_for(self, claim, result, events, roots=None, stream_complete=True):
+    def package_for(self, board, claim, result, events, roots=None, stream_complete=True):
         evidence = tool_evidence.ToolEventEvidence({
             "harness": "dsh", "taskId": result["runId"],
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
-        })
+        }, state_dir=board.directory)
         for event in events:
             evidence.observe(event)
         return evidence.finish(list(roots if roots is not None else [ROOT]), stream_complete)
@@ -121,7 +121,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         row, document = self.frozen(board, result["decisionId"])
         self.assertIsNone(row["decision_attempt_id"])
         problem = board.store.decisions._tool_evidence_problem(
-            row, document, {"nativeIdentity": ROOT, "toolEvidence": collect_empty(row, result)})
+            row, document, {"nativeIdentity": ROOT, "toolEvidence": collect_empty(row, result, state_dir=board.directory)})
         self.assertEqual(problem["code"], "router-tool-evidence-unverified")
 
     # -- the bound wrapper ---------------------------------------------------
@@ -130,7 +130,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.seed(board)
         result, claim = self.request_route(board, "bound-ok")
         events = settled("read", "call-1", tool="read") + settled("search", "call-2", tool="grep")
-        package = self.package_for(claim, result, events)
+        package = self.package_for(board, claim, result, events)
         self.assertIsNone(self.problem(board, result["decisionId"],
                                        {"nativeIdentity": ROOT, "toolEvidence": package}))
 
@@ -138,7 +138,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         result, claim = self.request_route(board, "bindings")
-        package = self.package_for(claim, result, settled("read", "call-1", tool="read"))
+        package = self.package_for(board, claim, result, settled("read", "call-1", tool="read"))
         good = {"nativeIdentity": ROOT, "toolEvidence": package}
         self.assertIsNone(self.problem(board, result["decisionId"], good))
         for replace in ({"harness": "zcode"}, {"taskId": "task-foreign"}, {"attemptId": "attempt-foreign"},
@@ -152,7 +152,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         result, claim = self.request_route(board, "missing")
-        package = self.package_for(claim, result, settled("read", "call-1", tool="read"))
+        package = self.package_for(board, claim, result, settled("read", "call-1", tool="read"))
         for output in ({"nativeIdentity": ROOT}, {"toolEvidence": package},
                        {"nativeIdentity": [], "toolEvidence": package},
                        {"nativeIdentity": [SECOND_ROOT], "toolEvidence": package}):
@@ -165,8 +165,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.seed(board)
         result, claim = self.request_route(board, "roots")
         events = settled("read", "call-1", tool="read")
-        single = self.package_for(claim, result, events, roots=[ROOT])
-        both = self.package_for(claim, result, events, roots=[ROOT, SECOND_ROOT])
+        single = self.package_for(board, claim, result, events, roots=[ROOT])
+        both = self.package_for(board, claim, result, events, roots=[ROOT, SECOND_ROOT])
         for evidence, reported, expected in (
                 (single, [ROOT], None), (single, ROOT, None),
                 (single, [ROOT, SECOND_ROOT], "router-tool-evidence-unverified"),
@@ -181,7 +181,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.seed(board)
         result, claim = self.request_route(board, "shared-read")
         for category in ("read", "search", "execute", "fetch", "edit", "other"):
-            package = self.package_for(claim, result, settled(category, "call-1"))
+            package = self.package_for(board, claim, result, settled(category, "call-1"))
             problem = self.problem(board, result["decisionId"], {"nativeIdentity": ROOT, "toolEvidence": package})
             self.assertEqual(problem, {"code": "router-tools-forbidden"} if category in ("edit", "other") else None)
 
@@ -189,10 +189,10 @@ class RouterToolEvidenceTests(DecisionTestCase):
         board = self.board()
         self.seed(board)
         result, claim = self.request_route(board, "incomplete")
-        truncated = self.package_for(claim, result, settled("read", "call-1", tool="read"),
+        truncated = self.package_for(board, claim, result, settled("read", "call-1", tool="read"),
                                      stream_complete=False)
-        unsettled = self.package_for(claim, result, [settled("read", "call-1", tool="read")[0]])
-        foreign = self.package_for(claim, result, settled("read", "call-1", identity=SECOND_ROOT, tool="read"))
+        unsettled = self.package_for(board, claim, result, [settled("read", "call-1", tool="read")[0]])
+        foreign = self.package_for(board, claim, result, settled("read", "call-1", identity=SECOND_ROOT, tool="read"))
         for name, package in (("truncated", truncated), ("unsettled", unsettled), ("foreign", foreign)):
             with self.subTest(condition=name):
                 problem = self.problem(board, result["decisionId"],
@@ -205,21 +205,21 @@ class RouterToolEvidenceTests(DecisionTestCase):
         self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode="fast")
         result, claim = self.request_route(board, "fast-zero")
         self.assertEqual(claim["decisionInput"]["routingMode"], "fast")
-        empty = self.package_for(claim, result, [])
+        empty = self.package_for(board, claim, result, [])
         self.assertIsNone(self.problem(board, result["decisionId"],
                                        {"nativeIdentity": ROOT, "toolEvidence": empty}))
-        one_call = self.package_for(claim, result, settled("read", "call-1", tool="read"))
+        one_call = self.package_for(board, claim, result, settled("read", "call-1", tool="read"))
         problem = self.problem(board, result["decisionId"], {"nativeIdentity": ROOT, "toolEvidence": one_call})
         self.assertEqual(problem["code"], "router-tools-forbidden")
 
 
-def collect_empty(row, result):
+def collect_empty(row, result, *, state_dir):
     """A well-formed zero-call package bound to the row's own frozen identity."""
     return tool_evidence.ToolEventEvidence({
         "harness": "dsh", "taskId": result["runId"],
         "attemptId": row["decision_attempt_id"] or "attempt-unbound",
         "generation": row["decision_generation"] if row["decision_generation"] is not None else 0,
-    }).finish([ROOT], True)
+    }, state_dir=state_dir).finish([ROOT], True)
 
 
 if __name__ == "__main__":  # pragma: no cover

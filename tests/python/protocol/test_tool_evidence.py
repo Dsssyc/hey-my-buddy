@@ -5,11 +5,15 @@ needed: the collector writes digest-bound call summaries for the judge to read.
 """
 import os
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
+
+STATE_DIR = Path(os.environ["HMB_STATE_DIR"])
 
 IDENTITY = {"sessionId": "session-1", "turnId": "turn-1"}
 SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}
@@ -48,14 +52,14 @@ def settled_events(category, call_id="call-1", identity=None, tool="native-tool"
 
 
 def collect(events, roots=None, stream_complete=True, binding=BINDING):
-    evidence = tool_evidence.ToolEventEvidence(binding)
+    evidence = tool_evidence.ToolEventEvidence(binding, state_dir=STATE_DIR)
     for event in events:
         evidence.observe(event)
     return evidence.finish(list(roots if roots is not None else [IDENTITY]), stream_complete)
 
 
 def call_rows(package):
-    return list(tool_evidence.read_tool_calls(package))
+    return list(tool_evidence.read_tool_calls(package, state_dir=STATE_DIR))
 
 
 class NormalizeToolEventTests(unittest.TestCase):
@@ -94,7 +98,7 @@ class NormalizeToolEventTests(unittest.TestCase):
                      native_fact("unknown", type="another-unknown")):
             event = tool_evidence.normalize_tool_event("codex", fact)
             self.assertEqual(event["category"], "other")
-            self.assertEqual(tool_evidence.judge_tool_evidence(collect([event]), "none"),
+            self.assertEqual(tool_evidence.judge_tool_evidence(collect([event]), "none", state_dir=STATE_DIR),
                              tool_evidence.TOOLS_FORBIDDEN)
 
     def test_name_and_type_disagreement_settles_as_other(self):
@@ -145,7 +149,7 @@ class NormalizeToolEventTests(unittest.TestCase):
 
 class ToolEventEvidenceTests(unittest.TestCase):
     def test_verified_delivery_exclusion_keeps_a_foreign_id_collision_and_an_open_call(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         delivery = settled_events("other", call_id="shared", tool="mcp__session__finish")
         foreign = settled_events("execute", call_id="shared", identity=SECOND_IDENTITY, tool="Bash")
         opened = settled_events("execute", call_id="open", tool="Bash")[0]
@@ -160,7 +164,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence.tool_calls, 3, "live observations still include all starts")
 
     def test_delivery_exclusion_counts_all_calls_beyond_the_old_event_bound(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         for event in settled_events("other", call_id="delivery"):
             evidence.observe(event)
         for index in range(130):
@@ -175,7 +179,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
     def test_verified_delivery_cannot_hide_conflicting_or_incomplete_call_facts(self):
         for broken in ("conflict", "incomplete"):
             with self.subTest(broken=broken):
-                evidence = tool_evidence.ToolEventEvidence(BINDING)
+                evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
                 for event in settled_events("other", call_id="delivery", tool="finish"):
                     evidence.observe(event)
                 if broken == "conflict":
@@ -192,7 +196,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
                     self.assertFalse(package["streamComplete"])
 
     def test_delivery_exclusion_keeps_late_stream_facts_and_rejects_bare_ids(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         for event in settled_events("other", call_id="delivery"):
             evidence.observe(event)
         evidence.finish([IDENTITY], True)
@@ -206,18 +210,18 @@ class ToolEventEvidenceTests(unittest.TestCase):
                     evidence.finish([IDENTITY], True, exclude_calls=invalid)
 
     def test_settled_calls_after_a_native_turn_end_remain_late(self):
-        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         tracker.close_root(IDENTITY)
         for event in settled_events("read"):
             tracker.observe(event)
         package = tracker.finish([IDENTITY], True)
         self.assertEqual(package["unsettledToolCalls"], 0)
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_native_ids_are_retained_without_inventing_a_call(self):
-        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         tracker.observe_incomplete("codex", {"toolName": "shell", "phase": "start",
                                              "arguments": {"text": "private body"}})
         package = tracker.finish([IDENTITY], True)
@@ -228,11 +232,11 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "malformed": True, "belongsToRoot": False,
         }])
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_live_start_count_and_returned_snapshot_do_not_change_stored_facts(self):
-        tracker = tool_evidence.ToolEventEvidence(BINDING)
+        tracker = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         start, end = settled_events("read")
         tracker.observe(start)
         self.assertEqual(tracker.tool_calls, 1)
@@ -247,7 +251,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
     def test_an_end_before_its_start_never_becomes_complete(self):
         package = collect(list(reversed(settled_events("read"))))
         self.assertTrue(call_rows(package)[0]["endBeforeStart"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_package_carries_exactly_the_fixed_fields_and_digest_file(self):
@@ -276,11 +280,11 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(len(call_rows(package)), 1)
         self.assertEqual(call_rows(package)[0]["categories"], ["edit", "read"])
         self.assertFalse(call_rows(package)[0]["consistent"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_many_conflicting_names_cannot_grow_a_call_row(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         for index in range(1000):
             evidence.observe({**settled_events("read")[0], "toolName": f"dynamic-{index}"})
         evidence.observe(settled_events("read")[1])
@@ -294,17 +298,17 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = collect([settled_events("read")[1]])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertEqual(call_rows(package)[0]["phases"], ["end"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_an_unsettled_call_is_counted(self):
         package = collect([settled_events("read")[0]])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 1))
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_events_after_the_closed_stream_are_recorded_and_leave_it_incomplete(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         for event in settled_events("read"):
             evidence.observe(event)
         self.assertTrue(evidence.finish([IDENTITY], True)["streamComplete"])
@@ -313,7 +317,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         refreshed = evidence.finish([IDENTITY], True)
         self.assertEqual(len(call_rows(refreshed)), 2)
         self.assertFalse(refreshed["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(refreshed, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(refreshed, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_more_than_128_events_are_all_judged_without_a_count_cutoff(self):
@@ -323,12 +327,12 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = collect(events)
         self.assertEqual(len(call_rows(package)), 150)
         self.assertEqual(package["toolCalls"], 150)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
 
     def test_duplicates_do_not_add_call_rows(self):
         package = collect(settled_events("read") * 200)
         self.assertEqual(len(call_rows(package)), 1)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
 
     def test_correction_roots_accumulate_within_one_package(self):
         events = settled_events("read") + settled_events(
@@ -336,13 +340,13 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = collect(events, roots=[IDENTITY, SECOND_IDENTITY])
         self.assertEqual(package["toolCalls"], 2)
         self.assertTrue(all(row["belongsToRoot"] for row in call_rows(package)))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR))
 
     def test_a_foreign_root_is_kept_but_not_trusted(self):
         package = collect(settled_events("read", identity=SECOND_IDENTITY), roots=[IDENTITY])
         self.assertEqual(len(call_rows(package)), 1)
         self.assertFalse(call_rows(package)[0]["belongsToRoot"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_binding_and_identity_shapes_are_validated(self):
@@ -350,31 +354,31 @@ class ToolEventEvidenceTests(unittest.TestCase):
                         {**BINDING, "extra": 1}, {**BINDING, "generation": -1}):
             with self.subTest(binding=binding):
                 with self.assertRaises(BoardError):
-                    tool_evidence.ToolEventEvidence(binding)
+                    tool_evidence.ToolEventEvidence(binding, state_dir=STATE_DIR)
         with self.assertRaises(BoardError):
-            tool_evidence.ToolEventEvidence(BINDING).finish(IDENTITY, True)
+            tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR).finish(IDENTITY, True)
 
     def test_an_incomplete_stream_cannot_be_completed_by_a_later_close(self):
-        evidence = tool_evidence.ToolEventEvidence(BINDING)
+        evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         self.assertFalse(evidence.finish([IDENTITY], False)["streamComplete"])
         self.assertFalse(evidence.finish([IDENTITY], True)["streamComplete"])
 
 
 class JudgeToolEvidenceTests(unittest.TestCase):
     def test_fast_mode_requires_complete_zero_tool_evidence(self):
-        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "none"))
-        self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events("read")), "none"),
+        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "none", state_dir=STATE_DIR))
+        self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events("read")), "none", state_dir=STATE_DIR),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_read_level_allows_read_search_execute_and_network(self):
         for category in ("read", "search", "execute", "fetch"):
             with self.subTest(category=category):
-                self.assertIsNone(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read"))
+                self.assertIsNone(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read", state_dir=STATE_DIR))
 
     def test_every_other_category_is_forbidden_at_read_level(self):
         for category in ("edit", "delete", "move", "switch_mode", "think", "other"):
             with self.subTest(category=category):
-                self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read", state_dir=STATE_DIR),
                                  tool_evidence.TOOLS_FORBIDDEN)
 
     def test_missing_or_malformed_evidence_is_unverified(self):
@@ -383,11 +387,11 @@ class JudgeToolEvidenceTests(unittest.TestCase):
                   {**good, "unexpected": 1}, {key: value for key, value in good.items() if key != "calls"}]
         for evidence in broken:
             with self.subTest(evidence=evidence):
-                self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=STATE_DIR),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         for mode in (None, "write", "full", "review", "fast", True, {}):
             with self.subTest(permission=mode):
-                self.assertEqual(tool_evidence.judge_tool_evidence(good, mode),
+                self.assertEqual(tool_evidence.judge_tool_evidence(good, mode, state_dir=STATE_DIR),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_summary_fields_with_wrong_types_or_values_are_unverified(self):
@@ -397,54 +401,54 @@ class JudgeToolEvidenceTests(unittest.TestCase):
                        {"binding": {"harness": "zcode"}}, {"nativeIdentity": IDENTITY},
                        {"calls": {"path": "elsewhere"}}):
             with self.subTest(change=change):
-                self.assertEqual(tool_evidence.judge_tool_evidence({**good, **change}, "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence({**good, **change}, "read", state_dir=STATE_DIR),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_counts_that_disagree_with_the_call_file_are_unverified(self):
         good = collect(settled_events("read"))
         for change in ({"toolCalls": 2}, {"toolCalls": 0}, {"unsettledToolCalls": 1}):
             with self.subTest(change=change):
-                self.assertEqual(tool_evidence.judge_tool_evidence({**good, **change}, "read"),
+                self.assertEqual(tool_evidence.judge_tool_evidence({**good, **change}, "read", state_dir=STATE_DIR),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_conflicting_categories_remain_unverified_even_if_one_is_forbidden(self):
         package = collect(settled_events("read") + settled_events("edit"))
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_consistency_is_recomputed_from_bounded_native_facts(self):
         package = collect(settled_events("read"))
         row = call_rows(package)[0]
         forged = {**row, "categories": ["read", "edit"]}
-        self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": tool_evidence.write_tool_calls(package["binding"], [forged])}, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": tool_evidence.write_tool_calls(package["binding"], [forged], state_dir=STATE_DIR)}, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         forged = {**row, "consistent": False}
-        self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": tool_evidence.write_tool_calls(package["binding"], [forged])}, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": tool_evidence.write_tool_calls(package["binding"], [forged], state_dir=STATE_DIR)}, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_malformed_fact_outranks_a_forbidden_category_at_read_level(self):
-        collector = tool_evidence.ToolEventEvidence(BINDING)
+        collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         collector.observe_incomplete("zcode", {"toolName": "Write", "phase": "start"})
         package = collector.finish([IDENTITY], False)
         self.assertEqual(call_rows(package)[0]["categories"], ["edit"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_forbidden_recorded_call_outranks_stream_incompleteness(self):
-        self.assertEqual(tool_evidence.judge_tool_evidence(collect([settled_events("edit")[0]]), "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(collect([settled_events("edit")[0]]), "read", state_dir=STATE_DIR),
                          tool_evidence.TOOLS_FORBIDDEN)
         self.assertEqual(tool_evidence.judge_tool_evidence(
-            collect(settled_events("read"), stream_complete=False), "read"),
+            collect(settled_events("read"), stream_complete=False), "read", state_dir=STATE_DIR),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         self.assertEqual(tool_evidence.judge_tool_evidence(
-            collect(settled_events("edit"), stream_complete=False), "read"),
+            collect(settled_events("edit"), stream_complete=False), "read", state_dir=STATE_DIR),
             tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_empty_root_list_cannot_establish_any_evidence(self):
         self.assertEqual(tool_evidence.judge_tool_evidence(
-            collect(settled_events("read"), roots=[]), "read"),
+            collect(settled_events("read"), roots=[]), "read", state_dir=STATE_DIR),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-        self.assertEqual(tool_evidence.judge_tool_evidence(collect([], roots=[]), "none"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(collect([], roots=[]), "none", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_digest_tampering_is_rejected(self):
@@ -456,7 +460,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
             self.assertEqual(len(changed), len(original))
             self.assertNotEqual(changed, original)
             path.write_bytes(changed)
-            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                              tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         finally:
             path.write_bytes(original)
@@ -464,8 +468,8 @@ class JudgeToolEvidenceTests(unittest.TestCase):
     def test_oversized_call_row_is_rejected(self):
         good = collect(settled_events("read"))
         oversized = {**call_rows(good)[0], "padding": "x" * tool_evidence.MAX_CALL_BYTES}
-        package = {**good, "calls": tool_evidence.write_tool_calls(BINDING, [oversized])}
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        package = {**good, "calls": tool_evidence.write_tool_calls(BINDING, [oversized], state_dir=STATE_DIR)}
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_foreign_attempt_file_reference_is_rejected(self):
@@ -473,7 +477,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         foreign_binding = {**BINDING, "attemptId": "attempt-foreign"}
         foreign = collect(settled_events("read", call_id="foreign-ref"), binding=foreign_binding)
         package = {**good, "calls": foreign["calls"]}
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     @unittest.skipIf(os.name == "nt", "symlink creation requires Windows privilege")
@@ -486,7 +490,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         expected.symlink_to(target)
         try:
             package = {**good, "calls": {**foreign["calls"], "path": str(expected)}}
-            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+            self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                              tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         finally:
             expected.unlink()
@@ -496,9 +500,43 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         row = call_rows(good)[0]
         for rows in ([{**row, "extra": True}], [{**row, "belongsToRoot": False}], [row, row]):
             with self.subTest(rows=rows):
-                package = {**good, "calls": tool_evidence.write_tool_calls(BINDING, rows)}
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                package = {**good, "calls": tool_evidence.write_tool_calls(BINDING, rows, state_dir=STATE_DIR)}
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+
+class ExplicitStateRootTests(unittest.TestCase):
+    def test_collection_without_an_environment_root_only_writes_the_explicit_private_root(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
+            root = Path(directory)
+            state_dir = root / "selected"
+            with mock.patch.dict(os.environ), mock.patch(
+                    "hey_my_buddy.home.default_state_dir", side_effect=AssertionError("implicit state root")):
+                os.environ.pop("HMB_STATE_DIR", None)
+                collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=state_dir)
+                for event in settled_events("read"):
+                    collector.observe(event)
+                package = collector.finish([IDENTITY], True)
+                self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir))
+            self.assertTrue(Path(package["calls"]["path"]).is_relative_to(state_dir))
+            self.assertEqual(list(root.iterdir()), [state_dir])
+            self.assertEqual(len(list(state_dir.rglob("*.jsonl"))), 1)
+
+    def test_another_state_root_cannot_adopt_a_valid_evidence_reference(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
+            selected = Path(directory) / "selected"
+            other = Path(directory) / "other"
+            collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=selected)
+            for event in settled_events("read"):
+                collector.observe(event)
+            package = collector.finish([IDENTITY], True)
+            self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=selected))
+            with mock.patch.object(tool_evidence.private_dirs, "open_regular_fd", side_effect=AssertionError("foreign read")):
+                with self.assertRaises(BoardError):
+                    list(tool_evidence.read_tool_calls(package, state_dir=other))
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=other),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+            self.assertFalse(other.exists())
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -361,7 +361,7 @@ class SelectionRequestTests(DecisionTestCase):
                 with board.store.db.write() as connection:
                     before = connection.execute(f"SELECT {field} FROM buddies WHERE buddy_id=?", (SECOND_BUDDY_ID,)).fetchone()[0]
                     connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (replacement, SECOND_BUDDY_ID))
-                output = {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
+                output = {**claim_tool_receipt(claim, state_dir=board.directory), "status": "ok", "operation": "select",
                           "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                           "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": None},
                           "usage": {"elapsedMs": 100, "toolCalls": 0},
@@ -728,7 +728,7 @@ class DecisionFailureTests(DecisionTestCase):
         restarted.store.execution_connection(claim["attempt"]["attemptId"], connected=True)
 
         envelope = {
-            **claim_tool_receipt(claim),
+            **claim_tool_receipt(claim, state_dir=board.directory),
             "status": "ok",
             "operation": "select",
             "requested": {"provider": CATALOG_BUDDY["provider"], "model": CATALOG_BUDDY["model"], "reasoningEffort": CATALOG_BUDDY["effort"]},
@@ -789,7 +789,7 @@ class DecisionFailureTests(DecisionTestCase):
         claim = admit_execution(client, "n" * 32, task_id=request["runId"])["claim"]
         document = claim["decisionInput"]
         envelope = {
-            **claim_tool_receipt(claim),
+            **claim_tool_receipt(claim, state_dir=board.directory),
             "status": "ok",
             "operation": "select",
             "requested": document["buddy"],

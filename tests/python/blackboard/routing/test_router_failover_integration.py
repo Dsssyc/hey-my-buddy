@@ -54,7 +54,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def answer(self, claim, *, buddy_id=B, tools=0, **receipt_options):
         doc = claim["decisionInput"]
-        return {**claim_tool_receipt(claim, tools, **receipt_options), "status": "ok", "operation": "select",
+        return {**claim_tool_receipt(claim, tools, state_dir=self.board_.directory, **receipt_options), "status": "ok", "operation": "select",
                 "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
@@ -473,7 +473,7 @@ class FailoverTests(RouterDispatchTestCase):
         output = self.answer(claim, tools=1)
         binding = output["toolEvidence"]["binding"]
         root = output["nativeIdentity"]
-        collector = ToolEventEvidence(binding)
+        collector = ToolEventEvidence(binding, state_dir=self.board_.directory)
         if kind == "late":
             collector.close_root(root)
         identity = {"sessionId": "child-session"} if kind == "child" else root

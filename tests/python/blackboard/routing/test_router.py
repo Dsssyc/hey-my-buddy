@@ -48,6 +48,7 @@ class RouterContractTests(unittest.TestCase):
                 'operation': 'review', 'harness': 'dsh', 'taskId': 'task',
                 'attemptId': 'attempt', 'generation': 1, 'invocationId': 'invocation',
                 'privateRoot': str(root), 'nativeRoot': str(root / 'native'),
+                'stateDir': str(root),
                 'sessionRecordPath': None,
                 'executionLiveFile': str(root / 'execution-live.json'),
                 'cwd': str(root), 'timeoutSeconds': 10, 'canCorrect': False,
@@ -101,7 +102,7 @@ class RouterPublicationTests(WorkflowTestCase):
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
         pass  # Admission is owned by the service.
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
-        result = {**claim_tool_receipt(claim), 'status': 'error' if code else 'ok', 'operation': 'select',
+        result = {**claim_tool_receipt(claim, state_dir=board.directory), 'status': 'error' if code else 'ok', 'operation': 'select',
 
                   'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},

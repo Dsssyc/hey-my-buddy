@@ -1116,7 +1116,8 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     # without adopting any read-only policy here.
     projector = CodexToolEventProjector({"harness": "codex", "taskId": request.identity.task_id,
                                          "attemptId": request.identity.attempt_id,
-                                         "generation": request.identity.generation})
+                                         "generation": request.identity.generation},
+                                        state_dir=Path(request.private_state.state_dir))
     activity = _ActivityWriter(services.live)
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()
