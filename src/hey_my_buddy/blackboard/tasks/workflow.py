@@ -1077,22 +1077,21 @@ class WorkflowCoordinator:
                 return row
         return None
 
-    def _reserve(
-        self,
-        connection,
-        *,
-        manifest: dict,
-        holder_task_id: str,
-        holder_kind: str,
-        parent_run_id: str | None,
-        access: str,
-        now: str,
-        transfer_from: str | None = None,
-    ) -> None:
+    @staticmethod
+    def _verify_read_snapshot(manifest, checkout_id, holder_task_id):
+        try:
+            workspace_module().verify(manifest, require_unchanged=True)
+        except BoardError as error:
+            if error.code in ("WORKSPACE_CHANGED", "SNAPSHOT_CHANGED"):
+                raise BoardError(
+                    "SNAPSHOT_CHANGED", "The checkout no longer matches a reader's frozen input",
+                    checkoutId=checkout_id, holderTaskId=holder_task_id,
+                ) from error
+            raise
+
+    def _check_reservations(self, connection, *, manifest, access, holder_task_id=None, transfer_from=None):
+        """Check ownership before preparation and again at the atomic claim point."""
         checkout_id = manifest.get("checkoutId")
-        manifest_sha = manifest.get("manifestSha256")
-        if not checkout_id or not manifest_sha:
-            raise BoardError("WORKSPACE_INVALID", "The prepared workspace manifest is missing checkoutId/manifestSha256")
         # Reservation admission is the one atomic claim point for a checkout. A cleanup
         # plan in ``applying`` has already passed its inspection but its removal has not
         # finished, so no new writer may take the checkout across that boundary; the
@@ -1117,32 +1116,48 @@ class WorkflowCoordinator:
             "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY rowid",
             (checkout_id,),
         ).fetchall()
-        writers = [row for row in held if row["access"] == "write"]
-        writer = writers[0] if writers else None
-        if access == "write":
-            if writer is not None and writer["holder_task_id"] != holder_task_id:
-                if transfer_from is not None and writer["holder_task_id"] == transfer_from:
-                    connection.execute(
-                        "UPDATE workspace_reservations SET state='transferred' WHERE reservation_id=?",
-                        (writer["reservation_id"],),
-                    )
-                else:
-                    raise BoardError(
-                        "PREPARATION_CONFLICT",
-                        "Another writer holds this checkout; a sibling cwd path of one checkout cannot bypass the "
-                        "write exclusion. Wait for its release or use an isolated worktree.",
-                        checkoutId=checkout_id,
-                        holderTaskId=writer["holder_task_id"],
-                    )
-        else:
+        for row in held:
+            if row["holder_task_id"] == holder_task_id:
+                continue
+            if access == "write" or row["access"] == "write":
+                if (access == "write" and row["access"] == "write"
+                        and row["holder_task_id"] == transfer_from):
+                    continue
+                raise BoardError(
+                    "PREPARATION_CONFLICT" if access == "write" else "SNAPSHOT_CHANGED",
+                    "A writer requires exclusive access to this checkout; wait for its release or use an isolated worktree.",
+                    checkoutId=checkout_id, holderTaskId=row["holder_task_id"],
+                )
+            # Each reader observes the same checkout through its own untracked
+            # selectors. Different selections may yield different input trees;
+            # sharing depends on every frozen view still matching the live site.
+            recorded = json.loads(self._run_row(connection, row["holder_task_id"])["workspace_manifest_json"])
+            self._verify_read_snapshot(recorded, checkout_id, row["holder_task_id"])
+        if held and access == "read" and manifest.get("manifestSha256"):
+            self._verify_read_snapshot(manifest, checkout_id, holder_task_id)
+        return held
+
+    def _reserve(
+        self,
+        connection,
+        *,
+        manifest: dict,
+        holder_task_id: str,
+        holder_kind: str,
+        parent_run_id: str | None,
+        access: str,
+        now: str,
+        transfer_from: str | None = None,
+    ) -> None:
+        checkout_id = manifest["checkoutId"]
+        manifest_sha = manifest["manifestSha256"]
+        held = self._check_reservations(connection, manifest=manifest, access=access,
+                                        holder_task_id=holder_task_id, transfer_from=transfer_from)
+        if access == "write" and transfer_from is not None:
             for row in held:
-                if row["manifest_sha256"] != manifest_sha:
-                    raise BoardError(
-                        "SNAPSHOT_CHANGED",
-                        "Read sharing requires one unchanged snapshot; this checkout already has a reservation for "
-                        "a different manifest",
-                        checkoutId=checkout_id,
-                    )
+                if row["holder_task_id"] == transfer_from:
+                    connection.execute("UPDATE workspace_reservations SET state='transferred' WHERE reservation_id=?",
+                                       (row["reservation_id"],))
         existing = [row for row in held if row["holder_task_id"] == holder_task_id]
         if existing:
             if (existing[0]["path"] != manifest.get("path") or existing[0]["access"] != access
@@ -1512,6 +1527,20 @@ class WorkflowCoordinator:
                     head = self.board._head_of(connection)
                 self.board._notify(head)
 
+    def _submission_authority(self, connection, *, buddy, delegation_authority, lead, fixes, host_id):
+        if delegation_authority:
+            self._require_enabled_buddy(connection, buddy)
+        if lead is not None:
+            self._active_credential(connection, lead)
+        fixed_run = self._run_row(connection, fixes) if fixes is not None else None
+        if fixed_run is not None:
+            actor = {"role": "lead", "id": lead["runId"]} if lead else {"role": "host", "id": host_id}
+            if self._owner_actor(connection, fixed_run) != actor:
+                raise BoardError("FORBIDDEN", "fixes must name a micro task currently owned by the submitting Host or Lead")
+            if fixed_run["state"] != "accepted":
+                raise BoardError("INVALID_STATE", "fixes must name an accepted micro task", fixes=fixes)
+        return fixed_run
+
     def attach_micro_task(
         self,
         connection,
@@ -1540,17 +1569,8 @@ class WorkflowCoordinator:
         access = "read" if executionWorkspace["access"] == "read" else "write"
         from .macro_tasks import attach_macro_task
         presentation = presentation or {}
-        if delegationAuthority:
-            self._require_enabled_buddy(connection, buddy)
-        if lead is not None:
-            self._active_credential(connection, lead)
-        fixed_run = self._run_row(connection, fixes) if fixes is not None else None
-        if fixed_run is not None:
-            actor = {"role": "lead", "id": lead["runId"]} if lead else {"role": "host", "id": hostId}
-            if self._owner_actor(connection, fixed_run) != actor:
-                raise BoardError("FORBIDDEN", "fixes must name a micro task currently owned by the submitting Host or Lead")
-            if fixed_run["state"] != "accepted":
-                raise BoardError("INVALID_STATE", "fixes must name an accepted micro task", fixes=fixes)
+        fixed_run = self._submission_authority(connection, buddy=buddy, delegation_authority=delegationAuthority,
+                                               lead=lead, fixes=fixes, host_id=hostId)
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
                          attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
@@ -1723,7 +1743,8 @@ class WorkflowCoordinator:
         self._require_permission(schemas.buddy_constraints(spec) or None, normalized["executionWorkspace"]["access"])
         buddy = self._validated_buddy(spec)
         self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
-        with self._submission_preparation(request_id, normalized["executionWorkspace"]) as prepared:
+        with self._submission_preparation(request_id, normalized["executionWorkspace"],
+                                           admission={**normalized, "buddy": buddy, "lead": lead}) as prepared:
             manifest = prepared["manifest"]
             try:
                 store_params = {
@@ -1795,15 +1816,54 @@ class WorkflowCoordinator:
                         return view
                 return self._submitted_view(response["task"]["runId"])
             except Exception as error:
-                if prepared["newAllocation"]:
+                if prepared["newAllocation"] and manifest["kind"] == "worktree":
                     self._revoke_submission_allocation(request_id, manifest, error)
                 raise
 
     @contextmanager
-    def _submission_preparation(self, request_id, intent, *, shared_locks=None):
-        with workspace_module().submission_preparation(
-                self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
-            yield prepared
+    def _submission_preparation(self, request_id, intent, *, shared_locks=None, transfer_from=None, admission=None):
+        if intent["kind"] == "existing":
+            actual = workspace_module().inspect(intent["cwd"])
+            with self.db.read() as connection:
+                if admission is not None:
+                    from .macro_tasks import macro_task_target
+                    fixed_run = self._submission_authority(
+                        connection, buddy=admission["buddy"], delegation_authority=admission["delegationAuthority"],
+                        lead=admission["lead"], fixes=admission["fixes"], host_id=admission["hostId"])
+                    if admission["lead"] is None:
+                        macro_task_target(connection, admission["presentation"], project_id=actual["repositoryId"],
+                                          host_id=admission["hostId"], fixed_run=fixed_run)
+                existing = connection.execute("SELECT task_id FROM tasks WHERE request_id=?", (request_id,)).fetchone()
+                self._check_reservations(connection, manifest=actual,
+                                         access="read" if intent["access"] == "read" else "write",
+                                         holder_task_id=existing["task_id"] if existing is not None else None,
+                                         transfer_from=transfer_from)
+        prepared = None
+        rejected = False
+
+        def discard():
+            if rejected:
+                with self.db.write() as connection:
+                    registered = connection.execute("SELECT 1 FROM tasks WHERE request_id=?", (request_id,)).fetchone()
+                    if registered is None:
+                        workspace_module().discard_submission(self.board.directory, prepared["manifest"])
+
+        if shared_locks is not None:
+            # Register before acquiring this allocation's lock, so a failed
+            # helper batch discards it only after the shared stack releases it.
+            shared_locks[0].callback(discard)
+        try:
+            with workspace_module().submission_preparation(
+                    self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
+                yield prepared
+        except BoardError as error:
+            rejected = (prepared is not None and prepared["newAllocation"] and intent["kind"] == "existing"
+                        and error.code in ("SNAPSHOT_CHANGED", "PREPARATION_CONFLICT"))
+            if rejected and shared_locks is None:
+                # A competing admission can win after the early read. Its final
+                # atomic rejection must also revoke this call's logical snapshot.
+                discard()
+            raise
 
     def _revoke_submission_allocation(self, request_id, manifest, original_error):
         """Preserve admission failure while revoking this call's unregistered checkout.
@@ -2150,7 +2210,7 @@ class WorkflowCoordinator:
 
         # Keep every prepared allocation locked until the helper admission
         # transaction commits. Shared physical checkouts reuse the same lock.
-        with self._helper_preparations(helpers if decision == "approve" else []) as prepared:
+        with self._helper_preparations(helpers if decision == "approve" else [], transfer_from=run_id) as prepared:
             now = self.now()
             with self.db.write() as connection:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", request_key)
@@ -2331,7 +2391,7 @@ class WorkflowCoordinator:
             return response
 
     @contextmanager
-    def _helper_preparations(self, helpers):
+    def _helper_preparations(self, helpers, *, transfer_from=None):
         prepared = []
         with ExitStack() as locks, ExitStack() as preparations:
             shared_locks = (locks, set())
@@ -2341,7 +2401,8 @@ class WorkflowCoordinator:
                     buddy = self._validated_buddy(helper["spec"])
                     self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                     allocation = preparations.enter_context(self._submission_preparation(
-                        helper["requestId"], helper["executionWorkspace"], shared_locks=shared_locks))
+                        helper["requestId"], helper["executionWorkspace"], shared_locks=shared_locks,
+                        transfer_from=transfer_from))
                     prepared.append({**helper, "manifest": allocation["manifest"],
                                      "newAllocation": allocation["newAllocation"],
                                      "buddy": buddy})
@@ -2349,7 +2410,7 @@ class WorkflowCoordinator:
             except Exception as error:
                 cleanups = []
                 for helper in prepared:
-                    if helper["newAllocation"]:
+                    if helper["newAllocation"] and helper["manifest"]["kind"] == "worktree":
                         cleanups.append(self._revoke_submission_allocation(helper["requestId"], helper["manifest"], error))
                 if cleanups and isinstance(error, BoardError):
                     error.details["helperPreparationCleanup"] = cleanups
@@ -7276,9 +7337,10 @@ class WorkflowCoordinator:
         recovery command and the explicit cause-unknown note. Its
         ``manifestSha256`` is computed from every payload field except the
         digest, and the executed workspace manifest keeps its own digest under
-        ``workspaceManifestSha256``. It is evidence only: it restores nothing,
-        judges nothing, and can neither fail this import nor any later seal or
-        verification. Turns whose input predates the freezing have no start
+        ``workspaceManifestSha256``. It is evidence only: it restores nothing
+        and does not judge checkout changes. Collection failures become unknown
+        observations; malformed records and persistence failures propagate.
+        Turns whose input predates the freezing have no start
         fact and pin nothing — a start observation is never invented from a
         later reading.
         """
