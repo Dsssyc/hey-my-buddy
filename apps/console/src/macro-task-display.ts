@@ -214,7 +214,7 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
   const key = row.state || row.status;
   const style = ROW_STATE_STYLE[key];
   return {
-    label: key === "awaiting-host" && row.leadOwnership ? "等待 Lead" : STATE_LABELS[key] || key || "未知",
+    label: key === "awaiting-host" && row.rootLeadRunId ? "等待 Lead" : STATE_LABELS[key] || key || "未知",
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",
@@ -493,7 +493,7 @@ export function spanFacts(
 ): { item: TimelineItem; startMs: number | null; endMs: number | null; recordedEndMs: number | null; outcome: SpanOutcome } {
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
-  const head = span.kind === "host" && row.leadOwnership ? "等待 Lead" : spanHead(span.kind);
+  const head = span.kind === "host" && row.rootLeadRunId ? "等待 Lead" : spanHead(span.kind);
   const parts: string[] = [displayTitle(row.titleSource, row.title).text];
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);

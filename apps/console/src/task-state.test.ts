@@ -25,12 +25,15 @@ describe("awaiting review", () => {
 });
 
 describe("Lead ownership display", () => {
-  it("shows Lead-owned boundaries separately from Host boundaries", () => {
+  it("shows a helper's Lead boundary through its root even without direct ownership", () => {
     const boundary = task({ status: "completed", workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host", ownerGeneration: 1, revision: 1 } });
     expect(taskStatus(boundary)).toBe("awaiting-host");
     expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
-      rootRunId: "run-1", project: { id: "p", path: null, label: "p" }, buddy: null,
+      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { id: "p", path: null, label: "p" }, buddy: null,
       leadOwnership: { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: boundary.createdAt } } })).toBe("awaiting-lead");
+    expect(taskStatus({ ...boundary, lineage: { kind: "helper", sourceHostId: "host", currentHostId: "host", parentRunId: "run-1",
+      rootRunId: "run-1", rootLeadRunId: "lead-1", project: { id: "p", path: null, label: "p" }, buddy: null,
+      leadOwnership: null } })).toBe("awaiting-lead");
     expect(taskStatus({ ...boundary, workflow: { ...boundary.workflow!, state: "waiting-owned" } })).toBe("waiting-owned");
   });
 });

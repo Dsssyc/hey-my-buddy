@@ -10,7 +10,7 @@ afterEach(cleanup);
 const microTask: Task = {
   runId: "run-micro-task", task: "列表行的第一行\n不应出现在标题的第二行", status: "completed", owner: "host-a", cwd: "/repo",
   revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-  lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "run-micro-task",
+  lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "run-micro-task", rootLeadRunId: null,
     project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
   workflow: { state: "delivered", awaitingHost: false, hostId: "host-a", ownerGeneration: 1, revision: 2,
     title: "修复标题错位", resultSummary: "已验证的整合结果摘要" },

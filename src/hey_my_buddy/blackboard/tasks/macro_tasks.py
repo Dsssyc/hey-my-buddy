@@ -557,6 +557,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "depth": depth,
         "kind": metadata["kind"],
         "leadOwnership": metadata["leadOwnership"],
+        "rootLeadRunId": metadata["rootLeadRunId"],
         "buddy": _full_buddy(metadata["buddy"]),
         "acceptedAt": row["accepted_at"],
         "acceptanceVerdict": row["acceptance_verdict"],

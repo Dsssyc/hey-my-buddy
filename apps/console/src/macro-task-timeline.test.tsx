@@ -6,6 +6,8 @@ import { MacroTaskTimeline } from "./MacroTaskTimeline";
 import type { MacroTaskTimelineProps } from "./MacroTaskTimeline";
 import { macroTaskTimelineFixture, OBSERVED_AT, LONG_TASK_LINE } from "./macro-task-fixtures";
 import { clockTime } from "./macro-task-display";
+import { spanFacts } from "./macro-task-display";
+import { buildInspectorCard } from "./inspector-card";
 import type { MacroTaskTimeline as MacroTaskTimelineData } from "./macro-task-types";
 import type { InspectorSelection } from "./inspector-card";
 import type { TimelineItem } from "./macro-task-display";
@@ -47,6 +49,23 @@ async function expandHostEvents(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("macroTask timeline rendering", () => {
+  it("labels a helper's wait span and inspector with its root Lead", () => {
+    const timeline = macroTaskTimelineFixture();
+    const helper = timeline.rows.find(row => row.runId === "r3")!;
+    Object.assign(helper, { state: "awaiting-host", rootLeadRunId: "lead-1", leadOwnership: null });
+    const hostSpan = { ...timeline.spans.find(span => span.spanId === "s-r3-q")!, spanId: "s-helper-host",
+      kind: "host" as const, state: "open", startAt: "2026-09-26T02:30:00Z", endAt: null };
+    timeline.spans.push(hostSpan);
+    timeline.totals.spans += 1;
+    const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
+    const bar = container.querySelector<HTMLButtonElement>('[data-key="span:s-helper-host"]')!;
+    expect(bar.getAttribute("aria-label")).toContain("等待 Lead");
+    expect(bar.querySelector(".sp-text")?.textContent).toContain("等待 Lead");
+    const item = spanFacts(hostSpan, helper, Date.parse(timeline.observedAt)).item;
+    const card = buildInspectorCard({ type: "item", key: item.key }, timeline, new Map([[item.key, item]]))!;
+    expect(card.fields.find(field => field.label === "类型")?.value).toBe("等待 Lead");
+  });
+
   it("keeps routing failure, cancellation, abstention and unknown stop distinct", () => {
     const timeline = macroTaskTimelineFixture();
     const route = timeline.spans.find(span => span.spanId === "s-r2-r")!;
@@ -314,7 +333,7 @@ describe("macroTask timeline rendering", () => {
       events: [],
       macroTask: { ...macroTaskTimelineFixture().macroTask, counts: { roots: 1, helpers: 1, accepted: 0, active: 0, host: 0, review: 0, ended: 2 } },
     });
-    timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", depth: 1, kind: "helper" };
+    timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", rootLeadRunId: null, depth: 1, kind: "helper" };
     const { container } = render(<MacroTaskTimeline {...baseProps(timeline)} />);
     // The single root keeps one expanded card inside the collapsible band.
     expect(container.querySelectorAll(".micro-task-strip .micro-task-card:not(.single)")).toHaveLength(0);
@@ -348,7 +367,7 @@ describe("macroTask timeline rendering", () => {
   it("treats unknown shutdown as outranking a recorded failure, keeping the failure text", () => {
     const timeline = macroTaskTimelineFixture({
       rows: [{
-        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的微任务", titleSource: "title", taskSummary: null, summary: null,
+        runId: "r7", parentRunId: null, rootRunId: "r7", rootLeadRunId: null, title: "失败但停止未确认的微任务", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: false, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
@@ -373,7 +392,7 @@ describe("macroTask timeline rendering", () => {
   it("says the end time is missing for a terminal span instead of borrowing now", () => {
     const timeline = macroTaskTimelineFixture({
       rows: [{
-        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的微任务", titleSource: "task", taskSummary: null, summary: null,
+        runId: "r8", parentRunId: null, rootRunId: "r8", rootLeadRunId: null, title: "结束时间缺失的微任务", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],

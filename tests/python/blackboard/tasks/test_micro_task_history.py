@@ -459,6 +459,11 @@ class LeadHistoryFilterTests(MicroTaskTestCase):
         hosted = self.history(board, filter="host", limit=100)
         self.assertEqual([row["runId"] for row in hosted["runs"]], [pending["runId"]])
         self.assertEqual(hosted["total"], 1)
+        for run_id in (root["runId"], helper):
+            lineage = self.task_view(board, run_id)["lineage"]
+            self.assertEqual(lineage["rootLeadRunId"], lead["runId"])
+        self.assertIsNone(self.task_view(board, helper)["lineage"]["leadOwnership"])
+        self.assertIsNone(self.task_view(board, pending["runId"])["lineage"]["rootLeadRunId"])
 
 
 class HistoryPagingTests(MicroTaskTestCase):

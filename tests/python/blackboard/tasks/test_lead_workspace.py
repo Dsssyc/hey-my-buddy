@@ -164,7 +164,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self.assertTrue(reclaimed["removed"])
         self.assertFalse(checkout.exists())
 
-    def test_host_conclusion_of_lead_concludes_and_reclaims_owned_checkout(self):
+    def _concludable_lead_with_owned_checkout(self):
         board, lead, _other = self._board_with_leads()
         child = self._child(board, lead, "child-auto-conclude")
         claim, manifest, checkout = self._claim_child(board, child)
@@ -178,9 +178,51 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "nonce": "l" * 16, "status": "cancelled", "result": {"status": "cancelled"},
             "shutdownConfirmed": True,
         })
+        return board, lead, child, checkout
+
+    def test_host_conclusion_of_lead_concludes_and_reclaims_owned_checkout(self):
+        board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
         concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work", **lead["control"]})
         self.assertEqual(concluded["state"], "concluded")
         current = board.call("workflow_get", {"runId": child["runId"]})
         self.assertEqual(current["state"], "concluded")
         self.assertIn(lead["runId"], current["hostConclusion"]["note"])
         self.assertFalse(checkout.exists())
+
+    def test_console_conclusion_reclaims_owned_checkout_without_host_control(self):
+        board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
+        concluded = board.store.workflow.conclude(
+            {"runId": lead["runId"], "note": "Console closes Lead work"},
+            console_authority={"sessionId": "fixture-console"},
+        )
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertTrue(concluded["ownedReclaims"][0]["removed"])
+        self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "concluded")
+        self.assertFalse(checkout.exists())
+
+    def test_replaying_lead_conclusion_retries_blocked_owned_reclaim(self):
+        board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
+        coordinator = board.store.workflow
+        reclaim = coordinator._reclaim_checkout
+
+        def blocked_owned_reclaim(**kwargs):
+            if kwargs["run_id"] == child["runId"]:
+                return {"removed": False, "reasons": ["fixture-busy"]}
+            return reclaim(**kwargs)
+
+        params = {"runId": lead["runId"], "note": "Close and reclaim", **lead["control"]}
+        with patch.object(coordinator, "_reclaim_checkout", side_effect=blocked_owned_reclaim):
+            first = board.call("workflow_conclude", params)
+        self.assertFalse(first["ownedReclaims"][0]["removed"])
+        self.assertTrue(checkout.exists())
+        with board.store.db.read() as connection:
+            conclusions = connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0]
+        with self.assertRaises(BoardError) as caught:
+            board.call("workflow_reclaim", {"runId": lead["runId"], "targetRunId": child["runId"], **lead["control"]})
+        self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+        replayed = board.call("workflow_conclude", params)
+        self.assertTrue(replayed["duplicate"])
+        self.assertTrue(replayed["ownedReclaims"][0]["removed"])
+        self.assertFalse(checkout.exists())
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], conclusions)

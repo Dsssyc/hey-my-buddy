@@ -51,7 +51,7 @@ function task(runId = "micro-task"): Task {
     runId, task: runId === "micro-task" ? "完成 goal 状态内核" : `完成 ${runId} 状态内核`, status: "running", owner: "host:source", cwd: "/repo",
     revision: 2, createdAt: "2026-09-24T08:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "source", ownerGeneration: 1, revision: 4 },
-    lineage: { kind: "micro-task", sourceHostId: "source", currentHostId: "source", parentRunId: null, rootRunId: runId,
+    lineage: { kind: "micro-task", sourceHostId: "source", currentHostId: "source", parentRunId: null, rootRunId: runId, rootLeadRunId: null,
       project: { id: "repo", path: "/repo", label: "repo" }, buddy: { ...worker } },
   };
 }

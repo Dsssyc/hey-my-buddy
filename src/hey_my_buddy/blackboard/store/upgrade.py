@@ -85,7 +85,7 @@ def _run(row: dict) -> dict:
 
 
 def _continuation(row: dict) -> dict:
-    row['kind'] = 'manual' if row['authorized_by'] == 'manual' else 'helper'
+    row['kind'] = 'manual' if row.pop('authorized_by') == 'manual' else 'helper'
     row['trigger_event_json'] = None
     return row
 

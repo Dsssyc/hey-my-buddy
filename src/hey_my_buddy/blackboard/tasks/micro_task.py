@@ -309,6 +309,7 @@ def metadata_from_row(row: sqlite3.Row) -> dict:
         },
         "buddy": buddy,
         "delegationAuthority": bool(row["run_delegation_authority"]),
+        "rootLeadRunId": row["root_lead_run_id"],
         "leadOwnership": ({"leadRunId": row["lead_run_id"], "leadTurnId": row["lead_turn_id"],
                            "createdAt": row["lead_owned_at"]} if row["lead_run_id"] is not None else None),
     }

@@ -65,6 +65,8 @@ export type TimelineRow = {
   /** 0 for a root, +1 per helper level. Rows arrive in tree order. */
   depth: number;
   kind: "micro-task" | "helper";
+  /** Lead owning this row's root tree, including helper descendants. */
+  rootLeadRunId: string | null;
   /** Recorded owner of a Lead's own micro task, if any. */
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
   buddy: TimelineBuddy | null;

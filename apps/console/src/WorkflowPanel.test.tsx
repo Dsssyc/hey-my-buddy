@@ -26,7 +26,7 @@ function fixture() {
   const task: Task = {
     runId: "parent", task: "完成状态内核", status: "waiting-host", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent",
+    lineage: { kind: "micro-task", sourceHostId: "host-a", currentHostId: "host-a", parentRunId: null, rootRunId: "parent", rootLeadRunId: null,
       project: { id: "repo", path: "/repo", label: "repo" }, buddy: null },
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host-a", ownerGeneration: 2, revision: 7 },
@@ -66,7 +66,19 @@ const REMOVED_CONTROLS = [
 describe("micro task workflow console (0.15.1 read-only)", () => {
   it("names a Lead-owned decision boundary and a waiting Lead", async () => {
     const f = fixture();
+    f.workflow.task.lineage!.rootLeadRunId = "lead-1";
     f.workflow.task.lineage!.leadOwnership = { leadRunId: "lead-1", leadTurnId: "turn-1", createdAt: f.props.task.createdAt };
+    render(<WorkflowPanel {...f.props} />);
+    expect(await screen.findByText(/等待 Lead 决定：补充并发测试/)).toBeTruthy();
+    expect(screen.getByText("等待 Lead 决定", { exact: true })).toBeTruthy();
+    await userEvent.setup().click(screen.getByText("记录细节（微任务与回合）"));
+    expect(screen.getByText("等待 Lead")).toBeTruthy();
+  });
+
+  it("names the Lead for a helper with no direct Lead ownership", async () => {
+    const f = fixture();
+    Object.assign(f.workflow.task.lineage!, { kind: "helper", parentRunId: "root-1", rootRunId: "root-1",
+      rootLeadRunId: "lead-1", leadOwnership: null });
     render(<WorkflowPanel {...f.props} />);
     expect(await screen.findByText(/等待 Lead 决定：补充并发测试/)).toBeTruthy();
     expect(screen.getByText("等待 Lead 决定", { exact: true })).toBeTruthy();

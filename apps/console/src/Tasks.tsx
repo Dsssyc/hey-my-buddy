@@ -42,7 +42,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     return { projects: [...new Map(records.filter(t => t.lineage?.kind === "micro-task").map(t => [taskProject(t).id, taskProject(t)])).values()],
       hosts: [...new Set(records.map(t => t.lineage?.sourceHostId).filter((x): x is string => !!x))].sort() };
   }, [history.known]);
-  const matchesState = (t: Task) => filter === "all" || (filter === "host" ? t.workflow?.awaitingHost && !t.lineage?.leadOwnership :
+  const matchesState = (t: Task) => filter === "all" || (filter === "host" ? t.workflow?.awaitingHost && !t.lineage?.rootLeadRunId :
     filter === "review" ? needsReview(t) : ["queued", "running", "cancelling", "reconciliation-needed"].includes(t.status)
       || ["executing", "awaiting-host", "waiting-helpers", "waiting-owned"].includes(t.workflow?.state || ""));
   const visible = tasks.filter(matchesState);

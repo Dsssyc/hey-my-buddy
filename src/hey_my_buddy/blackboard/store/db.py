@@ -634,7 +634,6 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     continuation_id   TEXT PRIMARY KEY,
     run_id            TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     command_id        TEXT,
-    authorized_by     TEXT NOT NULL CHECK (authorized_by IN ('manual','auto')),
     kind              TEXT NOT NULL CHECK (kind IN ('manual','helper','lead-wakeup')),
     request_id        TEXT,
     trigger_event_json TEXT,
@@ -650,9 +649,8 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     turn_id           TEXT,
     created_at        TEXT NOT NULL,
     consumed_at       TEXT,
-    CHECK ((kind='manual' AND authorized_by='manual' AND trigger_event_json IS NULL)
-        OR (kind='helper' AND authorized_by='auto' AND trigger_event_json IS NULL)
-        OR (kind='lead-wakeup' AND authorized_by='auto' AND trigger_event_json IS NOT NULL
+    CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
+        OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
 );
 """,

@@ -177,6 +177,8 @@ export type Lineage = {
   project: { id: string; path: string | null; label: string };
   buddy: { harness: string; provider: string; model: string; effort: string } | null;
   delegationAuthority?: boolean;
+  /** Lead owning this micro task's root tree, including helper descendants. */
+  rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
 export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };

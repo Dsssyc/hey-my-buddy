@@ -439,6 +439,8 @@ class MacroTaskReadTests(WorkflowTestCase):
         rows = {row['runId']: row for row in timeline['rows']}
         self.assertEqual(rows[root['runId']]['leadOwnership']['leadRunId'], lead['runId'])
         self.assertIsNone(rows[helper]['leadOwnership'])
+        self.assertEqual(rows[root['runId']]['rootLeadRunId'], lead['runId'])
+        self.assertEqual(rows[helper]['rootLeadRunId'], lead['runId'])
 
     def test_a_lease_expired_execution_that_reported_and_confirmed_its_stop_ends_definitely(self):
         board = self.board()

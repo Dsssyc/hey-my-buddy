@@ -78,12 +78,12 @@ export function needsReview(task: Task): boolean {
 export function taskStatus(task: Task): string {
   if (["cancelling", "reconciliation-needed"].includes(task.status)) return task.status;
   if (task.workflow?.state === "cancelled" && task.workflowShutdown?.unconfirmedCount) return "cancelling";
-  return displayWorkflowState(task.workflow?.state || task.status, task.lineage?.leadOwnership);
+  return displayWorkflowState(task.workflow?.state || task.status, task.lineage?.rootLeadRunId ?? null);
 }
 
-/** Presentation only: the stored state stays awaiting-host for a Lead-owned micro task. */
-export function displayWorkflowState(state: string, leadOwnership?: Lineage["leadOwnership"]): string {
-  return state === "awaiting-host" && leadOwnership ? "awaiting-lead" : state;
+/** Presentation only: the stored state stays awaiting-host for a Lead-owned tree. */
+export function displayWorkflowState(state: string, rootLeadRunId: Lineage["rootLeadRunId"]): string {
+  return state === "awaiting-host" && rootLeadRunId !== null ? "awaiting-lead" : state;
 }
 
 export function canRetry(task: Task): boolean {

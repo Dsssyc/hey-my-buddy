@@ -128,7 +128,13 @@ OWNED_WAKE_EVENTS = frozenset({
     "workflow.turn_returned", "workflow.turn_rejected", "workflow.turn_failed",
     "workflow.boundary_updated", "workflow.routing_needs_host", "workflow.scope_conflict",
     "workflow.cancelled", "workflow.helper_cancelled", "workflow.lead_task_cancelled", "workflow.workspace_preparation_failed",
+    "workflow.late_turn", "workflow.owned_stop_reported",
 })
+OWNED_WAKE_FILTER_SQL = (
+    "(e.kind!='workflow.boundary_updated' OR json_extract(e.payload_json,'$.state')='awaiting-host')"
+    " AND (e.kind NOT IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
+    " OR COALESCE(json_extract(e.payload_json,'$.actor'),'') != 'lead:' || l.lead_run_id)"
+)
 
 #: Request-scoped authority resolved by the service for one operation call.
 _SCOPE = threading.local()
@@ -2013,7 +2019,7 @@ class WorkflowCoordinator:
             "continuations": [
                 {
                     "continuationId": row["continuation_id"],
-                    "authorizedBy": row["authorized_by"],
+                    "kind": row["kind"],
                     "state": row["state"],
                     "requestId": row["request_id"],
                     "reason": row["reason"],
@@ -2202,9 +2208,9 @@ class WorkflowCoordinator:
                             reason or "Host approved assistance; continue the original micro task with the helper results"
                         )
                         connection.execute(
-                            "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
+                            "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
                             " kind, request_id, expected_revision, input_text, input_bytes, reason, helper_policy,"
-                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'auto','helper',?,?,?,?,?, 'keep','[]','recorded',?)",
+                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
                             (
                                 approve_continuation,
                                 run_id,
@@ -2257,9 +2263,9 @@ class WorkflowCoordinator:
                         input_text = reason or "Host declined the assistance request; continue with the current evidence"
                         decline_continuation = str(uuid.uuid4())
                         connection.execute(
-                            "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
+                            "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
                             " kind, request_id, expected_revision, input_text, input_bytes, reason, helper_policy,"
-                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'auto','helper',?,?,?,?,?, 'keep','[]','recorded',?)",
+                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
                             (
                                 decline_continuation,
                                 run_id,
@@ -2514,9 +2520,9 @@ class WorkflowCoordinator:
             )
         continuation_id = str(uuid.uuid4())
         connection.execute(
-            "INSERT INTO workflow_continuations(continuation_id,run_id,command_id,authorized_by,kind,request_id,"
+            "INSERT INTO workflow_continuations(continuation_id,run_id,command_id,kind,request_id,"
             "expected_revision,input_text,input_bytes,reason,helper_policy,helper_outcomes_json,state,created_at)"
-            " VALUES(?,?,?,'auto','helper',?,?,?,?,?,'keep','[]','recorded',?)",
+            " VALUES(?,?,?,'helper',?,?,?,?,?,'keep','[]','recorded',?)",
             (continuation_id, child_task_id, command_id, source_request["request_id"], child_run["revision"],
              input_text, len(input_text.encode()), reason or None, now),
         )
@@ -2722,7 +2728,7 @@ class WorkflowCoordinator:
         )
 
     # -- continue ------------------------------------------------------------
-    def _target_run(self, connection, owner, target_id: str):
+    def _target_run(self, connection, owner, target_id: str, *, include_lead: bool = False):
         """Resolve the run one Host control command acts on.
 
         ``runId`` always names the controlling root: only its control capability
@@ -2736,7 +2742,7 @@ class WorkflowCoordinator:
         helper control token is ever needed or exposed.
         """
         if target_id != owner["run_id"] and target_id not in {
-                child["child_task_id"] for child in self._owned_children(connection, owner["run_id"])}:
+                child["child_task_id"] for child in self._owned_children(connection, owner["run_id"], include_lead=include_lead)}:
             raise BoardError("UNAUTHORIZED", "targetRunId must be an authorized descendant of this owning Micro task")
         return self._run_row(connection, target_id)
 
@@ -2930,9 +2936,9 @@ class WorkflowCoordinator:
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
             continuation_id = str(uuid.uuid4())
             connection.execute(
-                "INSERT INTO workflow_continuations(continuation_id, run_id, command_id, authorized_by,"
+                "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
                 " kind, expected_revision, input_text, input_bytes, reason, helper_policy, helper_outcomes_json, state,"
-                " created_at) VALUES(?,?,?,'manual','manual',?,?,?,?,?,?, 'queued', ?)",
+                " created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?, 'queued', ?)",
                 (
                     continuation_id,
                     run_id,
@@ -3015,7 +3021,7 @@ class WorkflowCoordinator:
                 revision=run_row["revision"] + 1,
                 payload={
                     "continuationId": continuation_id,
-                    "authorizedBy": "manual",
+                    "kind": "manual",
                     "reroute": reroute,
                     "helperPolicy": policy,
                     "actor": actor,
@@ -3143,7 +3149,7 @@ class WorkflowCoordinator:
             )
         continuation = (connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?", (continuation_id,)).fetchone()
                         if continuation_id is not None else None)
-        if continuation is not None and continuation["authorized_by"] == "manual":
+        if continuation is not None and continuation["kind"] == "manual":
             self._reclaim_manual_workspace(connection, task, run_row, now)
         blocker = self.board._admission_blocker(connection, spec, exclude_task=task["task_id"])
         if task["review_rejected_at"]:
@@ -3468,7 +3474,7 @@ class WorkflowCoordinator:
         # Fence the root before descendants settle: a transferred checkout must
         # not be handed back to a micro task cancelled in this transaction.
         self._cancel_owned_run(connection, task, now, explicit=True, actor=actor, initiator=initiator)
-        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator)
+        self._cancel_children(connection, run_id, reason, now, actor=actor, initiator=initiator, include_lead=True)
         self.board._append_event(
             connection, "workflow.cancelled", task_id=run_id, revision=run_row["revision"] + 1,
             payload={"reason": reason, "actor": actor, "stopInitiator": initiator, "honestShutdown": True},
@@ -3490,7 +3496,7 @@ class WorkflowCoordinator:
         }
 
     def _cancel_children(self, connection, run_id: str, reason: str, now: str, *,
-                         actor: str | None = None, initiator: str = "unknown", include_lead: bool = True) -> list[str]:
+                         actor: str | None = None, initiator: str = "unknown", include_lead: bool = False) -> list[str]:
         """Fence the whole owned graph, including work behind settled helpers."""
         cancelled: list[str] = []
         rows = self._owned_children(connection, run_id, include_lead=include_lead)
@@ -3516,7 +3522,7 @@ class WorkflowCoordinator:
                 self._release_reservations(connection, child["child_task_id"], now)
         return cancelled
 
-    def _owned_children(self, connection, run_id: str, *, include_lead: bool = True) -> list:
+    def _owned_children(self, connection, run_id: str, *, include_lead: bool = False) -> list:
         return connection.execute(
             "WITH RECURSIVE edges(parent_run_id,child_task_id,state,created_at,kind) AS ("
             " SELECT parent_run_id,child_task_id,state,created_at,'helper' FROM workflow_children"
@@ -3528,10 +3534,10 @@ class WorkflowCoordinator:
             (include_lead, run_id, run_id),
         ).fetchall()
 
-    def _routing_tasks(self, connection, run_id: str, *, descendants: bool = False) -> list:
+    def _routing_tasks(self, connection, run_id: str, *, descendants: bool = False, include_lead: bool = False) -> list:
         ids = [run_id]
         if descendants:
-            ids.extend(child["child_task_id"] for child in self._owned_children(connection, run_id))
+            ids.extend(child["child_task_id"] for child in self._owned_children(connection, run_id, include_lead=include_lead))
         placeholders = ",".join("?" for _ in ids)
         return connection.execute(
             "SELECT t.* FROM tasks t JOIN decision_requests d ON d.task_id=t.task_id"
@@ -3598,11 +3604,11 @@ class WorkflowCoordinator:
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         own_stop = self._stop_proven(connection, task)
         unconfirmed = [] if own_stop else [run_id]
-        for child in self._owned_children(connection, run_id):
+        for child in self._owned_children(connection, run_id, include_lead=True):
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
             if not self._stop_proven(connection, task):
                 unconfirmed.append(child["child_task_id"])
-        for task in self._routing_tasks(connection, run_id, descendants=True):
+        for task in self._routing_tasks(connection, run_id, descendants=True, include_lead=True):
             if not self._stop_proven(connection, task):
                 unconfirmed.append(task["task_id"])
         return {"selfConfirmed": own_stop, "descendantsConfirmed": len(unconfirmed) == (0 if own_stop else 1),
@@ -3888,7 +3894,7 @@ class WorkflowCoordinator:
             response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
         elif not keep_checkout:
             response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
-                                                         purpose="accept", control=params)
+                                                         purpose="accept", control=params, console_authority=console_authority)
         # The reclaim journals its removal under fresh run revisions; the returned
         # view must match the board a caller sees after this call.
         with self.db.read() as connection:
@@ -4032,6 +4038,19 @@ class WorkflowCoordinator:
                 runId=run_id,
                 state=run_row["state"],
             )
+        if run_row["delegation_authority"]:
+            unfinished = connection.execute(
+                "SELECT r.run_id,r.state,COUNT(*) OVER() AS total FROM workflow_lead_tasks l"
+                " JOIN workflow_runs r ON r.run_id=l.owned_run_id"
+                " WHERE l.lead_run_id=? AND r.state NOT IN ('accepted','concluded')"
+                " ORDER BY l.created_at,r.run_id LIMIT ?", (run_id, MAX_CHILD_VIEW),
+            ).fetchall()
+            if unfinished:
+                raise BoardError(
+                    "NOT_READY", "Accept or conclude every owned micro task before accepting its Lead; continue or conclude the Lead",
+                    unfinishedOwnedMicroTasks=[{"runId": row["run_id"], "state": row["state"]} for row in unfinished],
+                    unfinishedOwnedMicroTaskTotal=unfinished[0]["total"],
+                )
         if host_completion:
             self._lineage_stop_evidence(connection, run_row, "Host completion")
             if self._open_conflict(connection, run_id) is not None:
@@ -4417,20 +4436,21 @@ class WorkflowCoordinator:
             head = self.board._head_of(connection)
         self.board._notify(head)
         response = dict(response)
+        owned_reclaims = []
+        for child_id in descendants:
+            reclaimed = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=child_id,
+                                                purpose="conclude", control=params, lead_conclusion=True,
+                                                console_authority=console_authority)
+            if len(owned_reclaims) < MAX_CHILD_VIEW:
+                owned_reclaims.append({"runId": child_id, **reclaimed})
+        if descendants:
+            response["ownedReclaims"] = owned_reclaims
+            response["ownedReclaimTotal"] = len(descendants)
         if duplicate is not None:
             response.setdefault("reclaim", {"removed": False, "reasons": ["replayed"], "retry": "reclaim"})
         else:
-            owned_reclaims = []
-            for child_id in descendants:
-                reclaimed = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=child_id,
-                                                    purpose="conclude", control=params)
-                if len(owned_reclaims) < MAX_CHILD_VIEW:
-                    owned_reclaims.append({"runId": child_id, **reclaimed})
-            if descendants:
-                response["ownedReclaims"] = owned_reclaims
-                response["ownedReclaimTotal"] = len(descendants)
             response["reclaim"] = self._reclaim_checkout(owner_run_id=owner_run_id, run_id=run_id,
-                                                         purpose="conclude", control=params)
+                                                         purpose="conclude", control=params, console_authority=console_authority)
         with self.db.read() as connection:
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
@@ -4445,8 +4465,13 @@ class WorkflowCoordinator:
             actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority,
                                                 action="A Host conclusion")
             lead = self._target_run(connection, owner, target_id)
-            if not lead["delegation_authority"] or lead["state"] in ("accepted", "concluded"):
+            if not lead["delegation_authority"] or lead["state"] == "accepted":
                 return []
+            if lead["state"] == "concluded":
+                # A replay may retry the cascade's blocked checkout removals;
+                # it never records another conclusion or broadens public targets.
+                return [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id, include_lead=True))
+                        if self._run_row(connection, row["child_task_id"])["state"] == "concluded"]
             conflict = self._open_conflict(connection, target_id)
             if conflict is not None:
                 raise BoardError("CONFLICT", "Resolve the Lead workspace conflict before concluding its owned work",
@@ -4456,8 +4481,8 @@ class WorkflowCoordinator:
             if lead["state"] not in ("failed", "cancelled", "delivered") or not self._stop_proven(connection, task):
                 self._cancel_in_transaction(connection, lead, task, reason, actor, initiator, self.now())
             else:
-                self._cancel_children(connection, target_id, reason, self.now(), actor=actor, initiator=initiator)
-            descendants = [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id))
+                self._cancel_children(connection, target_id, reason, self.now(), actor=actor, initiator=initiator, include_lead=True)
+            descendants = [row["child_task_id"] for row in reversed(self._owned_children(connection, target_id, include_lead=True))
                            if self._run_row(connection, row["child_task_id"])["state"] not in ("accepted", "concluded")]
             summary = self.shutdown_summary(connection, target_id)
             head = self.board._head_of(connection)
@@ -4612,7 +4637,8 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
             run_row = self._target_run(connection, owner, target_id)
             target_id = run_row["run_id"]
-        result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params)
+        result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params,
+                                       console_authority=console_authority)
         with self.db.read() as connection:
             run_row = self._run_row(connection, target_id)
             response = {**self.compact(connection, run_row), "targetRunId": target_id,
@@ -4622,7 +4648,8 @@ class WorkflowCoordinator:
                              runId=run_id, reclaim=result)
         return response
 
-    def _reclaim_checkout(self, *, owner_run_id: str, run_id: str, purpose: str, control: dict) -> dict:
+    def _reclaim_checkout(self, *, owner_run_id: str, run_id: str, purpose: str, control: dict,
+                          lead_conclusion: bool = False, console_authority: dict | None = None) -> dict:
         """Reclaim one owned checkout through the guarded internal removal journal.
 
         The two internal steps reuse the expiring plan only as the durable journal
@@ -4630,11 +4657,14 @@ class WorkflowCoordinator:
         writer claims on that checkout, the removal converges when another owner
         completes it first, and an interrupted apply resumes. They are authorized
         by the originating Host's exact control triple against the controlling
-        root, so a takeover between the recorded review and the removal only
+        root or the authenticated console session, so a control takeover between
+        the recorded review and the removal only
         blocks the removal (the review stays recorded) until the new owner
         retries; no synthetic authority plans a deletion. No Host-visible
         two-step path exists. A blocked removal keeps every recorded acceptance
-        or conclusion and reports the concrete reasons.
+        or conclusion and reports the concrete reasons. Only a committed Lead
+        conclusion may reclaim its owned micro tasks through the larger stop
+        graph; public targets remain confined to the helper graph.
         """
         with self.db.read() as connection:
             run_row = self._run_optional(connection, run_id)
@@ -4646,7 +4676,7 @@ class WorkflowCoordinator:
         params = {"runId": owner_run_id, "targetRunId": run_id, "expectedRevision": revision,
                   "commandId": command, **control_triple}
         try:
-            planned = self.cleanup_plan(params)
+            planned = self.cleanup_plan(params, console_authority=console_authority, _lead_conclusion=lead_conclusion)
         except BoardError as error:
             return {"removed": False, "reasons": [error.code], "detail": error.message}
         plan = planned["plan"]
@@ -4668,6 +4698,8 @@ class WorkflowCoordinator:
             applied = self.cleanup_apply(
                 {**params, "commandId": command + "-apply", "expectedRevision": apply_revision,
                  "planId": plan["planId"], "confirmPath": plan["path"]},
+                console_authority=console_authority,
+                _lead_conclusion=lead_conclusion,
             )
         except BoardError as error:
             if error.code == "NOT_READY":
@@ -5346,7 +5378,8 @@ class WorkflowCoordinator:
                 retention["fixedRefs"].append(pinned["ref"])
         return reasons, evidence, retention
 
-    def cleanup_plan(self, params: dict, *, console_authority: dict | None = None) -> dict:
+    def cleanup_plan(self, params: dict, *, console_authority: dict | None = None,
+                     _lead_conclusion: bool = False) -> dict:
         """Plan the removal of exactly one registered disposable hey-my-buddy checkout.
 
         The plan names the allocation and checks board eligibility without reading
@@ -5372,7 +5405,7 @@ class WorkflowCoordinator:
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id)
+            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
             target_snapshot = run_row
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
@@ -5427,7 +5460,7 @@ class WorkflowCoordinator:
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id)
+            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = run_row["run_id"]
             self._expect_revision(run_row, target_snapshot["revision"])
             existing = connection.execute(
@@ -5468,7 +5501,8 @@ class WorkflowCoordinator:
         moment = datetime.fromisoformat(self.now().replace("Z", "+00:00")) + timedelta(seconds=seconds)
         return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
-    def cleanup_apply(self, params: dict, *, console_authority: dict | None = None) -> dict:
+    def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
+                      _lead_conclusion: bool = False) -> dict:
         """Apply one unexpired cleanup plan to exactly its registered checkout.
 
         Acceptance, integration, shutdown, dependency and unsealed-change evidence
@@ -5498,7 +5532,7 @@ class WorkflowCoordinator:
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id)
+            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
             target_snapshot = run_row
             plan = connection.execute(
@@ -5552,7 +5586,7 @@ class WorkflowCoordinator:
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
-            run_row = self._target_run(connection, owner, target_id)
+            run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = run_row["run_id"]
             self._expect_revision(run_row, target_snapshot["revision"])
             plan = connection.execute(
@@ -6160,7 +6194,7 @@ class WorkflowCoordinator:
         failure site is never promoted to a baseline, and a resolution already pins
         the handoff that the next continuation prepares from.
         """
-        if continuation["authorized_by"] != "manual":
+        if continuation["kind"] != "manual":
             return None
         previous = connection.execute(
             "SELECT t.*, a.execution_state, a.shutdown_confirmed FROM workflow_turns t"
@@ -6440,16 +6474,37 @@ class WorkflowCoordinator:
 
     def owned_event(self, connection, *, task_id: str | None, kind: str, seq: int, now: str) -> None:
         """Wake a parked Lead from a committed owned-work boundary, never a running turn."""
+        if task_id is not None and kind in {"task.completed", "task.cancelled", "task.failed", "task.reconciliation-needed", "attempt.released"}:
+            self._owned_descendant_reported(connection, task_id, seq)
         if kind not in OWNED_WAKE_EVENTS or task_id is None:
-            return
-        if kind == "workflow.boundary_updated" and self._run_row(connection, task_id)["state"] != "awaiting-host":
             return
         lead = connection.execute(
             "SELECT r.* FROM workflow_lead_tasks l JOIN workflow_runs r ON r.run_id=l.lead_run_id"
-            " WHERE l.owned_run_id=? AND r.state='waiting-owned'", (task_id,),
+            " JOIN events e ON e.seq=? WHERE l.owned_run_id=? AND r.state='waiting-owned' AND "
+            + OWNED_WAKE_FILTER_SQL, (seq, task_id),
         ).fetchone()
         if lead is not None:
             self._wake_lead(connection, lead, seq, now)
+
+    def _owned_descendant_reported(self, connection, task_id: str, seq: int) -> None:
+        """Expose a stopped owned micro task's descendant result, including uncertainty."""
+        owned = connection.execute(
+            "WITH RECURSIVE edges(parent_id,child_id) AS ("
+            " SELECT parent_run_id,child_task_id FROM workflow_children"
+            " UNION ALL SELECT route.run_id,decision.task_id FROM workflow_routes route"
+            " JOIN decision_requests decision ON decision.decision_id=route.decision_id),"
+            " ancestors(run_id) AS (SELECT parent_id FROM edges WHERE child_id=?"
+            " UNION SELECT edge.parent_id FROM edges edge JOIN ancestors a ON edge.child_id=a.run_id)"
+            " SELECT r.* FROM ancestors a JOIN workflow_lead_tasks l ON l.owned_run_id=a.run_id"
+            " JOIN workflow_runs r ON r.run_id=l.owned_run_id WHERE r.state='cancelled'", (task_id,),
+        ).fetchone()
+        if owned is not None:
+            summary = self.shutdown_summary(connection, owned["run_id"])
+            self.board._append_event(
+                connection, "workflow.owned_stop_reported", task_id=owned["run_id"], revision=owned["revision"],
+                payload={"reportedTaskId": task_id, "sourceEventSeq": seq,
+                         "stopConfirmed": summary["selfConfirmed"] and summary["descendantsConfirmed"]},
+            )
 
     def _wake_lead(self, connection, lead, seq: int, now: str) -> None:
         event = connection.execute("SELECT * FROM events WHERE seq=?", (seq,)).fetchone()
@@ -6458,9 +6513,9 @@ class WorkflowCoordinator:
         continuation_id = str(uuid.uuid4())
         text = "An owned micro task reached a boundary. Review the current ownedMicroTasks in this turn input."
         connection.execute(
-            "INSERT INTO workflow_continuations(continuation_id,run_id,authorized_by,kind,trigger_event_json,"
+            "INSERT INTO workflow_continuations(continuation_id,run_id,kind,trigger_event_json,"
             " expected_revision,input_text,input_bytes,reason,state,created_at)"
-            " VALUES(?,?,'auto','lead-wakeup',?,?,?,?,?,'recorded',?)",
+            " VALUES(?,?,'lead-wakeup',?,?,?,?,?,'recorded',?)",
             (continuation_id, lead["run_id"], canonical_json(trigger), lead["revision"], text,
              len(text.encode()), "owned-micro-task-boundary", now),
         )
@@ -6480,12 +6535,12 @@ class WorkflowCoordinator:
     def _owned_since_input(self, connection, run_id: str, turn_row):
         cursor = _turn_input_context(turn_row["input_json"])["ownedFactsCursor"]
         kinds = tuple(sorted(OWNED_WAKE_EVENTS))
+        slots = ",".join("?" for _ in kinds)
         return connection.execute(
             "SELECT e.seq FROM events e JOIN workflow_lead_tasks l ON l.owned_run_id=e.task_id"
-            " WHERE l.lead_run_id=? AND e.seq>? AND e.kind IN (%s)"
-            " AND (e.kind!='workflow.boundary_updated' OR json_extract(e.payload_json,'$.state')='awaiting-host')"
-            " ORDER BY e.seq LIMIT 1"
-            % ",".join("?" for _ in kinds), (run_id, cursor, *kinds),
+            f" WHERE l.lead_run_id=? AND e.seq>? AND e.kind IN ({slots})"
+            " AND " + OWNED_WAKE_FILTER_SQL +
+            " ORDER BY e.seq LIMIT 1", (run_id, cursor, *kinds),
         ).fetchone()
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
@@ -6550,7 +6605,6 @@ class WorkflowCoordinator:
             }
         if continuation is not None:
             context["continuation"] = {
-                "authorizedBy": continuation["authorized_by"],
                 "kind": continuation["kind"],
                 "trigger": json.loads(continuation["trigger_event_json"]) if continuation["trigger_event_json"] else None,
                 "reason": continuation["reason"],
@@ -6809,11 +6863,15 @@ class WorkflowCoordinator:
                 " WHERE l.lead_run_id=? AND r.state NOT IN ('accepted','concluded') ORDER BY l.created_at,r.run_id",
                 (run_row["run_id"],),
             ).fetchall()
-            active = any(row["state"] in ("executing", "waiting-helpers")
-                         and row["execution_state"] in ("queued", "running") for row in unfinished)
+            active = any(row["execution_state"] == "cancelling" or (
+                         row["state"] in ("executing", "waiting-helpers")
+                         and row["execution_state"] in ("queued", "running")) or (
+                         row["state"] == "cancelled"
+                         and self.shutdown_summary(connection, row["run_id"])["unconfirmedCount"] > 0)
+                         for row in unfinished)
             if disposition == "completed" and unfinished or disposition == "waiting" and not active:
                 reason = ("Lead completion requires every owned micro task to be accepted or concluded"
-                          if disposition == "completed" else "Lead waiting requires an owned micro task still queued or running")
+                          if disposition == "completed" else "Lead waiting requires an owned micro task still queued, running or stopping")
                 request_id = self._record_lead_attention(connection, run_row, turn_row, attempt, reason, unfinished, now)
                 return {"accepted": False, "disposition": disposition, "state": "awaiting-host", "requestId": request_id,
                         "sharedStash": self._shared_refs_summary(shared_refs)}

@@ -782,17 +782,14 @@ class BoardStore:
         for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
             rows.extend(
                 connection.execute(
-                    "SELECT t.*, EXISTS(SELECT 1 FROM workflow_continuations c WHERE c.run_id=t.task_id"
-                    " AND c.kind='lead-wakeup' AND c.state='queued') AS lead_wakeup"
-                    " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
+                    "SELECT t.* FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
                     f" WHERE t.state='queued' AND {class_predicate}"
-                    " AND (r.run_id IS NULL OR r.state!='waiting-owned')"
                     + ((" AND " + " AND ".join(model_service_clauses)) if model_service_clauses else "")
-                    + " ORDER BY t.created_at, lead_wakeup DESC, t.task_id LIMIT ?",
+                    + " ORDER BY t.created_at, t.task_id LIMIT ?",
                     (scheduling.DECISION_ADAPTER, *model_service_values, self.CLAIM_CANDIDATE_LIMIT),
                 ).fetchall()
             )
-        rows.sort(key=lambda row: (row["created_at"], not row["lead_wakeup"], row["task_id"]))
+        rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
         return rows, full
 
     def _retain_claims(self, connection: sqlite3.Connection, attempt_id: str) -> None:

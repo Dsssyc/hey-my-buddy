@@ -1484,7 +1484,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         generation = {"done": False}
         nonlocal_taken = {"control": None}
 
-        def taking_over_plan(coordinator, params, *, console_authority=None):
+        def taking_over_plan(coordinator, params, *, console_authority=None, _lead_conclusion=False):
             if not generation["done"]:
                 # Exactly the documented window: the acceptance is committed, the
                 # automatic reclaim has not planned its removal yet, and another
@@ -1498,7 +1498,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                     **current_control,
                 })
                 nonlocal_taken["control"] = dict(taken["control"])
-            return real_plan(params)
+            return real_plan(params, console_authority=console_authority, _lead_conclusion=_lead_conclusion)
 
         with mock.patch.object(workflow_module.WorkflowCoordinator, "cleanup_plan", taking_over_plan):
             accepted = self.accept(board, view, artifact, target=self.target_with_artifact(artifact))

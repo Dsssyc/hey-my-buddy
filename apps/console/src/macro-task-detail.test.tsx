@@ -25,7 +25,7 @@ function taskFixture(runId: string): Task {
     revision: 1, createdAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
     lineage: { kind: runId === "r3" ? "helper" : "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
-      parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId,
+      parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId, rootLeadRunId: null,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" },
       buddy: { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" } } };
   if (runId === "r2") {

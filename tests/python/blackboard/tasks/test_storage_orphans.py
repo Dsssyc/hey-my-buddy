@@ -260,9 +260,9 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
-                (continuation_id,run_id,authorized_by,kind,expected_revision,input_text,input_bytes,
+                (continuation_id,run_id,kind,expected_revision,input_text,input_bytes,
                  workspace_manifest_json,state,created_at)
-                VALUES (?,?,'manual','manual',1,'input',5,?,'invalidated',?)''',
+                VALUES (?,?,'manual',1,'input',5,?,'invalidated',?)''',
                 ('retained-continuation', parent['runId'], json.dumps(manifest), '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 

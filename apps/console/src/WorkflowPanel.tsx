@@ -86,7 +86,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
   }
   return <div className="workflow-panel">
     {state.error && <p className="error-message" role="alert">{state.error}</p>}
-    {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待 {value?.task.lineage?.leadOwnership ? "Lead" : "Host"} 决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button></div>}
+    {(value?.awaitingHost || value?.activeRequest?.state === "open") && <div className="attention-bar" role="status"><span>等待 {value?.task.lineage?.rootLeadRunId ? "Lead" : "Host"} 决定：{excerpt(value!.activeRequest?.summary || value!.waitReason, 120)}</span><button className="button small-button" onClick={() => setSection("assistance")}>查看请求</button></div>}
     <DetailTabs id={tabsId} label="微任务详情栏目" value={selectedSection}
       items={[["overview", "概览"], ["routing", "路由依据"], ["assistance", "协作与待办"], ["artifacts", "产物与验收"], ["execution", "执行记录"]]} onChange={setSection} />
     <div className="detail-body">
@@ -120,7 +120,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         <details className="record-facts">
           <summary>记录细节（微任务与回合）</summary>
           <div className="record-facts-body">
-            <Status status={displayWorkflowState(value.state, value.task.lineage?.leadOwnership)} />
+            <Status status={displayWorkflowState(value.state, value.task.lineage?.rootLeadRunId ?? null)} />
             <dl className="facts">
               <dt>当前 Host</dt><dd>{value.task.lineage?.currentHostId || value.hostId}</dd>
               <dt>协作版本</dt><dd>V{value.revision}</dd>
@@ -163,7 +163,7 @@ export function WorkflowPanel({ task, snapshot, api, refresh, selectTask, active
         {(value.counts?.openRequests || 0) > 1 && <p className="small muted">另有 {(value.counts?.openRequests ?? 0) - 1} 项待决定</p>}
         <p>{value.activeRequest.summary}</p>
         {value.activeRequest.preparationError && <p role="alert"><code>{value.activeRequest.preparationError.code}</code> · {value.activeRequest.preparationError.message}</p>}
-        <dl className="facts"><dt>已尝试</dt><dd>{value.activeRequest.attempted}</dd><dt>需要完成</dt><dd>{value.activeRequest.neededWork.join("\n")}</dd><dt>验收条件</dt><dd>{value.activeRequest.acceptance}</dd><dt>请求状态</dt><dd>{value.activeRequest.state === "open" ? `等待 ${value.task.lineage?.leadOwnership ? "Lead" : "Host"} 决定` : value.activeRequest.state}</dd></dl>
+        <dl className="facts"><dt>已尝试</dt><dd>{value.activeRequest.attempted}</dd><dt>需要完成</dt><dd>{value.activeRequest.neededWork.join("\n")}</dd><dt>验收条件</dt><dd>{value.activeRequest.acceptance}</dd><dt>请求状态</dt><dd>{value.activeRequest.state === "open" ? `等待 ${value.task.lineage?.rootLeadRunId ? "Lead" : "Host"} 决定` : value.activeRequest.state}</dd></dl>
         {!!value.activeRequest.expectedArtifacts.length && <p className="small">期望产物：{value.activeRequest.expectedArtifacts.join("、")}</p>}
         {value.activeRequest.childTaskId && <button className="button" onClick={() => selectTask(value.activeRequest!.origin?.runId || value.activeRequest!.childTaskId!)}>打开需要协助的子任务</button>}
       </section>}

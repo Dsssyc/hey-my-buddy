@@ -775,7 +775,7 @@ export function MacroTaskTimeline(props: MacroTaskTimelineProps) {
       </button>;
     }
     if (span.kind === "host") {
-      const waitLabel = row.leadOwnership ? "等待 Lead" : "等待 Host";
+      const waitLabel = row.rootLeadRunId ? "等待 Lead" : "等待 Host";
       return <button key={facts.item.key} type="button" className={classes.join(" ")} style={positionStyle}
         data-x={left} tabIndex={tabIndex} aria-label={aria} title={aria} {...handlers}>
         <span className="sp-text" style={{ width: `${widthPxSpan}px` }}>{textPx >= 110 ? `${waitLabel} · ${durationShort((facts.endMs ?? observedAtMs ?? 0) - facts.startMs!)}` : textPx >= 64 ? waitLabel : textPx >= 34 ? "等待" : ""}</span>
