@@ -1,8 +1,6 @@
 """Owned child process handles and private log descriptors shared by service and buddy."""
 from __future__ import annotations
 
-from ..private_dirs import directory_mode
-
 import os
 import signal
 import subprocess
@@ -10,6 +8,7 @@ import threading
 import time
 from pathlib import Path
 
+from ..private_dirs import ensure_private_dir, open_regular_fd
 from .process_identity import COMMAND_STOP_GRACE_SECONDS
 
 class ProcessHandle:
@@ -197,10 +196,10 @@ class ProcessHandle:
 
 
 def open_logs(paths: dict) -> tuple[int, int]:
-    Path(paths["stdout"]).parent.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
-    stdout = os.open(paths["stdout"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    ensure_private_dir(Path(paths["stdout"]).parent)
+    stdout = open_regular_fd(Path(paths["stdout"]), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     try:
-        stderr = os.open(paths["stderr"], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        stderr = open_regular_fd(Path(paths["stderr"]), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     except BaseException as error:
         try:
             os.close(stdout)

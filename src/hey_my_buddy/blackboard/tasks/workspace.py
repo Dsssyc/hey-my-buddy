@@ -8,7 +8,6 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
-from ...private_dirs import directory_mode
 from ...paths import is_absolute_path
 from ... import locking
 from ... import private_dirs, private_files
@@ -22,6 +21,7 @@ import stat
 import subprocess
 import tempfile
 
+from ...private_dirs import directory_mode
 from ...errors import BoardError
 from ...protocol.schemas import normalize_access
 from . import windows_paths
@@ -299,17 +299,18 @@ def _known_objects(root, oids):
     return present
 
 
-def _write_objects(root, objects):
+def _write_objects(root, objects, *, state_dir):
     # One fast-import stream stores every missing payload as a blob in the same
     # repository, carrying the exact bytes that were already read. The exported
     # marks must reproduce the computed object numbers, so the write semantics
     # stay hash-object's. Blob commands create no ref, branch, tag or stash.
     # https://git-scm.com/docs/git-fast-import
     with ExitStack() as cleanup:
-        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-objects-")
+        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-objects-",
+            directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp"))
         cleanup.callback(private_dirs.remove_tree, directory)
         marks = Path(directory) / "marks"
-        with tempfile.TemporaryFile() as diagnostics, tempfile.TemporaryFile() as output:
+        with tempfile.TemporaryFile(dir=directory) as diagnostics, tempfile.TemporaryFile(dir=directory) as output:
             command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
                                             "--export-marks=" + os.fspath(marks))
             try:
@@ -355,7 +356,7 @@ def _write_objects(root, objects):
                                        expected=oid)
 
 
-def _batch_blobs(root, payloads, *, write):
+def _batch_blobs(root, payloads, *, write, state_dir=None):
     """Object numbers for already-read payloads, in input order.
 
     One Git process names the repository's object format; write=True adds one
@@ -375,12 +376,12 @@ def _batch_blobs(root, payloads, *, write):
             if oid not in present:
                 missing.setdefault(oid, payload)
         if missing:
-            _write_objects(root, missing)
+            _write_objects(root, missing, state_dir=state_dir)
     return oids
 
 
-def _blob(root, data, *, write=False):
-    return _batch_blobs(root, [data], write=write)[0]
+def _blob(root, data, *, write=False, state_dir=None):
+    return _batch_blobs(root, [data], write=write, state_dir=state_dir)[0]
 
 
 def _batch_objects(root, oids):
@@ -446,7 +447,7 @@ def _untracked(root, selected):
     return result
 
 
-def _observe(root, selected, *, write=False, require_selected=False):
+def _observe(root, selected, *, write=False, require_selected=False, state_dir=None):
     head = _commit(root, "HEAD")
     index = _entries(root)
     tracked, untracked, included = {}, {}, {}
@@ -468,7 +469,7 @@ def _observe(root, selected, *, write=False, require_selected=False):
             entry = [mode, None]
             blobs.append((entry, data))
             included[path] = entry
-    for (entry, _data), oid in zip(blobs, _batch_blobs(root, [data for _entry, data in blobs], write=write)):
+    for (entry, _data), oid in zip(blobs, _batch_blobs(root, [data for _entry, data in blobs], write=write, state_dir=state_dir)):
         entry[1] = oid
     if _WINDOWS:
         windows_paths.validate_unique([*index, *untracked])
@@ -481,18 +482,19 @@ def _observe(root, selected, *, write=False, require_selected=False):
     return observation
 
 
-def _stable_observation(root, selected, *, write=False, require_selected=False):
-    observation = _observe(root, selected, write=write, require_selected=require_selected)
-    if observation != _observe(root, selected):
+def _stable_observation(root, selected, *, write=False, require_selected=False, state_dir=None):
+    observation = _observe(root, selected, write=write, require_selected=require_selected, state_dir=state_dir)
+    if observation != _observe(root, selected, state_dir=state_dir):
         raise BoardError("WORKSPACE_CHANGED", "The checkout changed during snapshot capture")
     return observation
 
 
-def _tree(root, entries):
+def _tree(root, entries, *, state_dir):
     # A private index builds raw blob trees without filters or changes to the
     # source index. https://git-scm.com/docs/git-update-index#_using_index_info
     with ExitStack() as cleanup:
-        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-")
+        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-",
+            directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp"))
         cleanup.callback(private_dirs.remove_tree, directory)
         environment = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
         _git(root, "read-tree", "--empty", env=environment)
@@ -628,7 +630,7 @@ def _workspace_directory(state_dir, request_id):
     return workspace_id, directory
 
 
-def _snapshot(source, intent, workspace_id):
+def _snapshot(source, intent, workspace_id, *, state_dir):
     root = Path(source["checkoutRoot"])
     base = _commit(root, intent["base"].get("ref", "HEAD"))
     base_entries = _entries(root, base)
@@ -638,11 +640,11 @@ def _snapshot(source, intent, workspace_id):
                 "inputRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/input",
                 "stagedRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/staged"}
     if intent["base"]["kind"] == "working-tree":
-        observed = _stable_observation(root, intent["includeUntracked"], write=True, require_selected=True)
+        observed = _stable_observation(root, intent["includeUntracked"], write=True, require_selected=True, state_dir=state_dir)
         if observed["head"] != source["headCommit"]:
             raise BoardError("WORKSPACE_CHANGED", "The source HEAD changed during preparation")
-        staged_tree = _tree(root, observed["index"])
-        input_tree = _tree(root, observed["tracked"] | observed["included"])
+        staged_tree = _tree(root, observed["index"], state_dir=state_dir)
+        input_tree = _tree(root, observed["tracked"] | observed["included"], state_dir=state_dir)
         # A later turn may select its previous sealed output without moving the
         # source HEAD. Such a ref is an exact content handoff, not permission to
         # silently absorb unrelated edits made after that turn was sealed.
@@ -656,7 +658,7 @@ def _snapshot(source, intent, workspace_id):
         staged_tree = input_tree = base_tree
         snapshot.update(includedUntracked=[], excludedUntracked=_untracked(root, []), excludedEntries={})
         if intent["kind"] == "existing":
-            observed = _stable_observation(root, [])
+            observed = _stable_observation(root, [], state_dir=state_dir)
             if observed["head"] != base or observed["index"] != base_entries or observed["tracked"] != base_entries or observed["untracked"]:
                 raise BoardError("WORKSPACE_BASE_MISMATCH", "The existing checkout does not exactly match the selected commit")
             snapshot["sourceFingerprint"] = observed["fingerprint"]
@@ -934,9 +936,9 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                     raise BoardError("WORKSPACE_CHANGED", "The borrowed allocation changed while its lock was acquired")
             new = _record(directory / "manifest.json") is None
             if _preparation is None:
-                manifest = _prepare_locked(directory, workspace_id, request_id, intent)
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent, state_dir=state_dir)
             else:
-                manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation)
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation, state_dir=state_dir)
         prepared.update(manifest=manifest, newAllocation=new)
         yield prepared
 
@@ -1071,7 +1073,7 @@ def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None
         return prepared["manifest"]
 
 
-def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None):
+def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None, *, state_dir):
     manifest = _record(directory / "manifest.json")
     request_version = manifest["version"] if manifest is not None else 3
     _write_once(directory / "request.json", _json({"version": request_version, "requestId": request_id, "intent": intent}))
@@ -1084,7 +1086,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
     fresh_input = pinned is None
     if pinned is None:
         source = inspect(intent["cwd"])
-        pinned = {"source": source, **_snapshot(source, intent, workspace_id)}
+        pinned = {"source": source, **_snapshot(source, intent, workspace_id, state_dir=state_dir)}
         # Keep newly created objects reachable before a durable record
         # promises they can be recovered, including across Git GC.
         _pin(source["repositoryPath"], f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/input", pinned["inputCommit"])
@@ -1112,11 +1114,11 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         if intent["kind"] == "existing" and source["checkoutId"] != actual["checkoutId"]:
             raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         if intent["kind"] == "existing" and not fresh_input:
-            replay = _observe(Path(actual["checkoutRoot"]), selectors)
+            replay = _observe(Path(actual["checkoutRoot"]), selectors, state_dir=state_dir)
             if replay["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
-                       _observe(Path(actual["checkoutRoot"]), selectors)["fingerprint"])
+                       _observe(Path(actual["checkoutRoot"]), selectors, state_dir=state_dir)["fingerprint"])
         snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
         manifest = {"version": 3, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
@@ -1187,7 +1189,7 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
     }
 
 
-def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, write=True):
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, write=True, state_dir=None):
     initial = _entries(root, manifest["inputCommit"])
     staged_tree = manifest["snapshot"]["stagedTree"]
     initial_index = (_entries(root, staged_tree)
@@ -1212,7 +1214,7 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
         if item is None or [item[0], _sha(item[1])] != fingerprint:
             raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
         pending.append((path, item))
-    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=write)):
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=write, state_dir=state_dir)):
         entry = [item[0], oid]
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
@@ -1310,7 +1312,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 return _finish_output(repository, output, directory)
             _verify(manifest, require_unchanged=False)
             root = Path(manifest["checkoutRoot"])
-            observation = _observe(root, manifest["snapshot"]["executionSelectors"], write=True)
+            observation = _observe(root, manifest["snapshot"]["executionSelectors"], write=True, state_dir=state_dir)
             if manifest["access"] == "read":
                 if observation["fingerprint"] != manifest["snapshot"]["executionFingerprint"]:
                     raise BoardError("WORKSPACE_CHANGED", "Read-only input changed before it could be sealed")
@@ -1318,7 +1320,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             else:
                 try:
                     entries, changed, excluded_changes, _adopted = _output_entries(
-                        root, manifest, observation, allowed_paths=allowed_paths)
+                        root, manifest, observation, allowed_paths=allowed_paths, state_dir=state_dir)
                 except BoardError as error:
                     # The failed site keeps a durable record of exactly
                     # which managed paths diverged and from which authorized state.
@@ -1326,9 +1328,9 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                     if error.code == "WORKSPACE_SCOPE_VIOLATION" and isinstance(error.details.get("evidence"), dict):
                         _record_scope_evidence(directory, error.details["evidence"], task_id, attempt_id)
                     raise
-            tree = _tree(root, entries)
+            tree = _tree(root, entries, state_dir=state_dir)
             changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
-            if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
+            if observation != _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir):
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
             commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name)
             patch_data = _diff(repository, manifest["inputCommit"], commit)
@@ -1661,9 +1663,9 @@ def _restore_index(root, entries):
         _git(root, "update-index", "-z", "--index-info", data=payload)
 
 
-def _blocking_paths(root, manifest, observation):
+def _blocking_paths(root, manifest, observation, *, state_dir):
     try:
-        _output_entries(root, manifest, observation)
+        _output_entries(root, manifest, observation, state_dir=state_dir)
     except BoardError as error:
         if error.code != "WORKSPACE_SCOPE_VIOLATION":
             raise
@@ -1766,7 +1768,7 @@ def _replay_record(directory, names, *, task_id, attempt_id, manifest):
     return None
 
 
-def _resolution_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, action, actor, note, conflict_fingerprint):
+def _resolution_record(root, manifest, repository, directory, observation, *, state_dir, task_id, attempt_id, action, actor, note, conflict_fingerprint):
     workspace_id = manifest["workspaceId"]
     output_id = _sha(_json([task_id, attempt_id]))
     names = (f"resolve-{action}.json", f"resolve-{action}-pending.json")
@@ -1776,10 +1778,10 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
                               ref_kind="resolutions", record_name=f"resolve-{action}.json",
                               patch_name=f"resolve-{action}.patch", bindings=_RECORD_BINDINGS)
     entries, changed, excluded_changes, adopted = _output_entries(root, manifest, observation,
-                                                                  allow_outside_scope=(action == "adopt"))
-    tree = _tree(root, entries)
+                                                                  allow_outside_scope=(action == "adopt"), state_dir=state_dir)
+    tree = _tree(root, entries, state_dir=state_dir)
     changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
-    if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
+    if observation != _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir):
         raise BoardError("WORKSPACE_CHANGED", "The workspace changed during resolution sealing")
     commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " resolution " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
@@ -1802,7 +1804,7 @@ def _resolution_record(root, manifest, repository, directory, observation, *, ta
                           bindings=_RECORD_BINDINGS)
 
 
-def _abandoned_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, actor, note, conflict_fingerprint):
+def _abandoned_record(root, manifest, repository, directory, observation, *, state_dir, task_id, attempt_id, actor, note, conflict_fingerprint):
     """Preserve the abandoned site as immutable evidence before returning input."""
     workspace_id = manifest["workspaceId"]
     output_id = _sha(_json([task_id, attempt_id]))
@@ -1818,9 +1820,9 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, tas
         if item is None:
             raise BoardError("WORKSPACE_CHANGED", "A managed path disappeared during evidence capture", path=path)
         pending.append((path, item))
-    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True)):
+    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True, state_dir=state_dir)):
         entries[path] = [item[0], oid]
-    tree = _tree(root, entries)
+    tree = _tree(root, entries, state_dir=state_dir)
     changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
@@ -1895,7 +1897,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             if manifest["repositoryId"] != _identity(repository):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
             _verify(manifest, require_unchanged=False)
-            observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
+            observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
             if observation["fingerprint"] != observed_fingerprint:
                 raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
                                  observedFingerprint=observed_fingerprint, currentFingerprint=observation["fingerprint"])
@@ -1907,7 +1909,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                                      recordedFingerprint=records[0]["observedFingerprint"])
                 record = _resolution_record(root, manifest, repository, directory, observation,
                                             task_id=task_id, attempt_id=attempt_id, action="adopt", actor=actor,
-                                            note=note, conflict_fingerprint=records[0]["observedFingerprint"])
+                                            note=note, conflict_fingerprint=records[0]["observedFingerprint"], state_dir=state_dir)
                 return _resolution_result("adopt", "adopted", record, blocking, [], [],
                                           observation["fingerprint"], record["snapshot"]["observationSha256"])
             if action == "abandon":
@@ -1915,10 +1917,10 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                     raise BoardError("INVALID_WORKSPACE", "Abandon returns the whole site and takes no path selection")
                 evidence = _abandoned_record(root, manifest, repository, directory, observation,
                                              task_id=task_id, attempt_id=attempt_id, actor=actor,
-                                             note=note, conflict_fingerprint=records[0]["observedFingerprint"])
+                                             note=note, conflict_fingerprint=records[0]["observedFingerprint"], state_dir=state_dir)
                 reset, remaining = _reset_site(root, manifest, observation)
-                after = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
-                remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after)))
+                after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
+                remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after, state_dir=state_dir)))
                 return _resolution_result("abandon", "abandoned" if not remaining else "open", evidence,
                                           reset, [], remaining, observation["fingerprint"], after["fingerprint"])
             selected = selected_paths or blocking
@@ -1940,8 +1942,8 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                 _write_path(root, path, authorized[path], data=payloads.get(path))
             _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
                                   if _entry_state(index, path) != entries[path].get("authorizedIndex")})
-            after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True)
-            remaining = _blocking_paths(root, manifest, after)
+            after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True, state_dir=state_dir)
+            remaining = _blocking_paths(root, manifest, after, state_dir=state_dir)
             preserved = sorted(set(entries) - set(selected))
             if remaining:
                 # A partial restore is progress, not a completed baseline: the
@@ -1950,7 +1952,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                                           observation["fingerprint"], after["fingerprint"])
             record = _resolution_record(root, manifest, repository, directory, after,
                                         task_id=task_id, attempt_id=attempt_id, action="restore", actor=actor,
-                                        note=note, conflict_fingerprint=records[0]["observedFingerprint"])
+                                        note=note, conflict_fingerprint=records[0]["observedFingerprint"], state_dir=state_dir)
             return _resolution_result("restore", "restored", record, selected, preserved, [],
                                       observation["fingerprint"], record["snapshot"]["observationSha256"])
 

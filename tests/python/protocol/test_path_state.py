@@ -21,6 +21,7 @@ from protocol.test_public_state import DAEMON_COMMAND, prepare_daemon_spawn, cle
 from protocol import test_transport_attach as attach_fixture
 from protocol.test_transport_attach import MutationRecorder, snapshot
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy import state_root
 from hey_my_buddy.protocol import rpc_config, transport
 
 
@@ -68,29 +69,26 @@ def run_path_case(name, work):
 
     try:
         with patch.dict(os.environ, environment, clear=True):
-            if name in ('cold-755', 'daemon-755'):
+            if name == 'cold-755':
                 state.chmod(0o755)
-                if name == 'cold-755':
-                    try:
-                        transport.call_service('health', state_dir=state)
-                    except BoardError as error:
-                        assert error.code == 'LAUNCH_ACCESS_DENIED', error.payload()
-                        evidence['refusal'] = error.payload()
-                    else:
-                        raise AssertionError('cold start accepted a non-private state root')
-                else:
-                    child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
-                    assert child.wait(timeout=20) == 2
-                    evidence['processes'][-1]['waitExit'] = child.returncode
-                    evidence['refusedProcesses'] = [evidence['processes'].pop()]
-                    handles.remove(child)
-                    evidence['refusal'] = json.loads((state / 'startup-error.json').read_bytes())
-                    assert evidence['refusal']['code'] == 'PRIVATE_PATH_UNSAFE'
-                assert stat.S_IMODE(state.stat().st_mode) == 0o755
-                return
-            child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
-            endpoint, reply = ready(child)
-            assert stat.S_IMODE(state.stat().st_mode) == 0o700
+                preflight = transport._cold_start_preflight
+
+                def observe(selected):
+                    preflight(selected)
+                    evidence['preflightMode'] = stat.S_IMODE(state.stat().st_mode)
+                    assert evidence['preflightMode'] == 0o700, 'preflight did not repair owner mode'
+                with patch.object(transport, '_cold_start_preflight', side_effect=observe), \
+                        patch.object(transport.subprocess, 'Popen', side_effect=collect):
+                    reply = transport.call_service('health', state_dir=state)
+                assert handles
+                endpoint = transport._read_endpoint(state)
+                assert endpoint['pid'] == handles[0].pid
+            else:
+                if name == 'daemon-755':
+                    state.chmod(0o755)
+                child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
+                endpoint, reply = ready(child)
+            assert stat.S_IMODE(state.stat().st_mode) == 0o700, 'Daemon.run did not repair owner mode'
             evidence['serviceId'] = reply['serviceId']
             evidence['stateDir'] = reply['stateDir']
             assert reply['stateDir'] == str(state)
@@ -100,7 +98,7 @@ def run_path_case(name, work):
                 alias = work / 'state-alias'
                 alias.symlink_to(state, target_is_directory=True)
                 for selected in (ancestor / 'state', alias):
-                    assert transport.get_state_dir(selected) == state
+                    assert state_root.get_state_dir(selected) == state
                     cli, receipt = cli_health(selected, environment)
                     handles.append(cli)
                     evidence['processes'].append(receipt)
@@ -140,10 +138,10 @@ class PathStateTests(unittest.TestCase):
         alias = self.work / 'alias'
         alias.symlink_to(self.state, target_is_directory=True)
         with patch.dict(os.environ, {'HMB_STATE_DIR': str(alias)}):
-            self.assertEqual(transport.get_state_dir(), self.state)
-            self.assertEqual(transport.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
-        with patch.dict(os.environ, {}, clear=True), patch.object(transport.home, 'default_state_dir', return_value=alias):
-            self.assertEqual(transport.get_state_dir(), self.state)
+            self.assertEqual(state_root.get_state_dir(), self.state)
+            self.assertEqual(state_root.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
+        with patch.dict(os.environ, {}, clear=True), patch.object(state_root.home, 'default_state_dir', return_value=alias):
+            self.assertEqual(state_root.get_state_dir(), self.state)
 
     def test_path02_private_ipc_and_inner_links_and_dotdot_have_paths(self):
         self.state.mkdir(mode=0o700)
@@ -171,28 +169,35 @@ class PathStateTests(unittest.TestCase):
             rpc_config.configure_client(self.state / 'missing' / '..')
         self.assertEqual(caught.exception.details.get('path'), str(self.state / 'missing' / '..'))
 
-    def test_path03_preflight_refuses_755_without_changing_permissions(self):
+    def test_path03_preflight_repairs_755_without_test_environment(self):
         self.state.mkdir(mode=0o755)
         self.state.chmod(0o755)
+        before = set(self.state.iterdir())
+        # Supplemental local preflight check: sockets alone are substitutes.
+        # Real cold startup is separately exercised below.
         sockets = Mock()
-        with patch.dict(os.environ, {}, clear=True), patch.object(transport.socket, 'socket', sockets):
-            with self.assertRaises(BoardError) as failure:
+        sockets.return_value.accept.return_value = (Mock(), None)
+        with patch.dict(os.environ, {}, clear=True), patch.object(transport.socket, 'socket', sockets), \
+                patch.object(transport.tempfile, 'mkdtemp', wraps=tempfile.mkdtemp) as temporary:
+            try:
                 transport._cold_start_preflight(self.state)
-        self.assertEqual(failure.exception.code, 'LAUNCH_ACCESS_DENIED')
-        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o755)
-        sockets.assert_not_called()
+            except BoardError as error:
+                self.fail('owner preflight refused its 0755 state: ' + json.dumps(error.payload()))
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
+        self.assertEqual(set(self.state.iterdir()), before | {self.state / 'ipc'})
+        temporary.assert_called_once_with(prefix='hey-my-buddy-ipc-')
 
-    def test_path03_daemon_refuses_755_before_rpc_configuration(self):
+    def test_path03_daemon_run_repairs_before_rpc_configuration(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
         self.state.mkdir(mode=0o755)
         self.state.chmod(0o755)
         daemon = Daemon(self.state)
-        with patch.object(rpc_config, 'configure_server') as configure:
-            with self.assertRaises(BoardError) as caught:
+        stop = RuntimeError('stop before local registration')
+        with patch.object(rpc_config, 'configure_server', side_effect=stop):
+            with self.assertRaises(RuntimeError) as caught:
                 daemon.run()
-        self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
-        configure.assert_not_called()
-        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o755)
+        self.assertIs(caught.exception, stop)
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
 
     def test_path03_both_owner_entries_create_before_rpc_configuration(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -267,10 +272,10 @@ class RealPathStateTests(unittest.TestCase):
     def test_path01_linked_cli_health_and_canonical_native_root(self):
         self.case('linked-cli')
 
-    def test_path03_real_cold_start_refuses_755(self):
+    def test_path03_real_cold_start_repairs_755(self):
         self.case('cold-755')
 
-    def test_path03_real_direct_daemon_refuses_755(self):
+    def test_path03_real_direct_daemon_repairs_755(self):
         self.case('daemon-755')
 
 

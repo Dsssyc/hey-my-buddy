@@ -28,7 +28,7 @@ from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, utc_now
 from hey_my_buddy.blackboard.tasks.macro_tasks import MEMBERS_SQL, RUN_GROUPS_SQL
 from hey_my_buddy.blackboard.routing.router import initialize_configuration
-from hey_my_buddy.protocol.transport import get_state_dir
+from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
 
@@ -166,10 +166,10 @@ def _validate(connection) -> None:
 def export_sample(source: Path, output: Path) -> Path:
     source = Path(source).expanduser().absolute()
     output = Path(output).expanduser().absolute()
-    for path in (source, output):
-        if private_dirs.linked_component(path) is not None:
-            raise ValueError('Source and output must not contain linked components')
-    source, output = source.resolve(), output.resolve()
+    source = get_state_dir(source)
+    if private_dirs.linked(output):
+        raise ValueError('Output must not be a linked directory')
+    output = output.resolve()
     if output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError('Source and output must be separate directory trees')
     if output.exists() and (not output.is_dir() or any(output.iterdir())):

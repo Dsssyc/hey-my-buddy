@@ -242,7 +242,8 @@ class HarnessServiceTests(BoardTestCase):
             self.service.harnesses._thread.join()
         self.assertEqual(refresh.call_count, 4)
         issue = self.board.service_issues()[0]
-        self.assertEqual((issue["stage"], issue["code"]), ("harness-scan:dsh", "HARNESS_UNAVAILABLE"))
+        self.assertEqual((issue["stage"], issue["code"]),
+                         ("harness-scan:" + refresh.call_args_list[0].args[0], "HARNESS_UNAVAILABLE"))
         with patch.object(self.service.harnesses, "refresh", return_value={}):
             HarnessHealth.kick(self.service.harnesses)
             self.service.harnesses._thread.join()

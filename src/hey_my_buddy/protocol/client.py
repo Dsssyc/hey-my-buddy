@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from . import transport
 from ..errors import BoardError
+from ..state_root import get_state_dir
 
 def new_command_id(prefix: str = "cmd") -> str:
     return f"{prefix}-{uuid.uuid4()}"
@@ -30,7 +31,7 @@ class BoardClient:
     def call(self, operation: str, params: dict | None = None, *, resource: str = "control") -> dict:
         if self._call is not None:
             return self._call(operation, params or {})
-        directory = transport.get_state_dir(self.state_dir)
+        directory = get_state_dir(self.state_dir)
         if not self.autostart:
             return transport._call_board_read_only(operation, params, directory, resource=resource)
         return transport._call_board(operation, params or {}, directory, resource=resource)

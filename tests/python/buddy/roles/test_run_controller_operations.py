@@ -84,6 +84,34 @@ class ControllerOperationTests(unittest.TestCase):
 
 
 class DeletionReceiptBoundaryTests(unittest.TestCase):
+    def test_native_control_tree_is_in_state_outside_the_worker_tmpdir(self):
+        from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state, worker_tmp = root / 'state', root / 'worker-tmp'
+            worker_tmp.mkdir()
+            reached = RuntimeError('launch boundary reached')
+            reached.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+            controls = []
+            def launch(**kwargs):
+                argv, _cwd, _environment = kwargs['prepare']()
+                path = Path(argv[-1])
+                controls.append(path)
+                control = json.loads(path.read_bytes())
+                for field in ('privateRoot', 'nativeRoot', 'cwd'):
+                    self.assertTrue(Path(control[field]).is_relative_to(state / 'tmp'))
+                self.assertTrue(path.is_relative_to(state / 'tmp'))
+                raise reached
+            with patch.dict(os.environ, {'HMB_STATE_DIR': str(state), 'TMPDIR': str(worker_tmp)}), \
+                    patch('hey_my_buddy.buddy.harnesses.registry.run_seam', return_value=SimpleNamespace(run_delete_sessions=Mock())), \
+                    patch.object(run_execution, 'launch_controller', side_effect=launch):
+                with self.assertRaises(RuntimeError) as caught:
+                    run_execution.delete_sessions('codex', ['owned'])
+            self.assertIs(caught.exception, reached)
+            self.assertEqual(len(controls), 1)
+            self.assertEqual(list(worker_tmp.iterdir()), [])
+            self.assertEqual(list((state / 'tmp').iterdir()), [])
+
     def test_control_file_carries_only_the_operation_name_arguments_and_context(self):
         handle = Mock()
         handle.wait.return_value = 0

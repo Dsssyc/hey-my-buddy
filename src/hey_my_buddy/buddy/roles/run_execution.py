@@ -22,6 +22,7 @@ from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
+from ...state_root import get_state_dir
 from ...private_files import open_read, read_bytes, read_text
 from ...protocol import usage
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -836,7 +837,8 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
             if not callable(getattr(module, specification["seam"], None)):
                 raise BoardError(specification["unavailableCode"],
                                  f"The harness has no registered {operation} operation", harness=name)
-            directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-")
+            directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-",
+                directory=ensure_private_dir(get_state_dir() / "tmp"))
             control = directory / _NATIVE_CONTROL
             private_json(control, {"operation": operation, "arguments": arguments,
                                    "harness": name,

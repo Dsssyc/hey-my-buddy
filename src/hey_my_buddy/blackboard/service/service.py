@@ -7,8 +7,6 @@ a generic ``dispatch(method, JSON)`` entry point.
 """
 from __future__ import annotations
 
-from ...protocol.harness_names import HARNESS_NAMES
-
 import json
 import logging
 from contextlib import nullcontext
@@ -21,6 +19,7 @@ import re
 
 from ...install import runtime
 from ...protocol import schemas
+from ...protocol.harness_names import HARNESS_NAMES
 from ..tasks import macro_tasks, micro_task, workflow as workflow_module
 from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report

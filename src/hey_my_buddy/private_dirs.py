@@ -127,18 +127,17 @@ def ensure_private_dir(path: Path) -> Path:
         try:
             directory.mkdir(mode=directory_mode())
         except FileExistsError:
-            if not directory.is_dir():
-                raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(directory)) from None
+            pass
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
     return path
 
 
-def make_temporary_dir(*, prefix: str, directory: Path | None = None) -> Path:
+def make_temporary_dir(*, prefix: str, directory: Path) -> Path:
     """Keep Windows temporary directories inheriting their parent's ACL too."""
     if os.name != 'nt':
         return Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
-    path = Path(directory or tempfile.gettempdir()) / (prefix + secrets.token_urlsafe(6))
+    path = Path(directory) / (prefix + secrets.token_urlsafe(6))
     path.mkdir()
     return path
 
@@ -187,8 +186,6 @@ def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is not a directory', path=str(root))
     removed = []
     def inspect(directory: Path) -> None:
-        if linked(directory):
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'Credential directory is linked', path=str(directory))
         with os.scandir(directory) as entries:
             children = [Path(entry.path) for entry in entries]
         for child in children:

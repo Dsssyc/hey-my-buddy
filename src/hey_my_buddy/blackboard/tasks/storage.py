@@ -1,7 +1,6 @@
 """Guarded storage inventory and confirmed reclamation; no process termination."""
 from __future__ import annotations
 
-from ...private_dirs import directory_mode
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 from ...paths import is_absolute_path
@@ -18,6 +17,7 @@ import time
 import uuid
 
 from ... import private_dirs, private_files
+from ...private_dirs import directory_mode
 from ...protocol import schemas
 from ..store.db import utc_now
 from . import host_conclusions

@@ -510,7 +510,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                 replay = workspace_module._resolution_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
                     action="adopt", actor={"role": "host", "id": "host-1"}, note="later call",
-                    conflict_fingerprint=conflict["observedFingerprint"])
+                    conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
                 self.assertEqual([path.read_bytes() for path in paths], [original, original])
                 self.assertIn("outside.txt", workspace_module.verify_sealed_output(
@@ -538,7 +538,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                 replay = workspace_module._abandoned_record(
                     checkout, manifest, repository, directory, None, task_id=run_id, attempt_id=attempt_id,
                     actor={"role": "host", "id": "host-1"}, note="later call",
-                    conflict_fingerprint=conflict["observedFingerprint"])
+                    conflict_fingerprint=conflict["observedFingerprint"], state_dir=self.directory)
                 self.assertEqual(replay, historical)
                 self.assertEqual([path.read_bytes() for path in paths], [original, original])
 

@@ -28,7 +28,8 @@ from ..private_files import publish_bytes, open_read
 from ..errors import BoardError
 from ..home import control_file_path, submission_file_path
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
-from ..protocol.transport import METHOD_MAP, _call_service, get_state_dir
+from ..protocol.transport import METHOD_MAP, _call_service
+from ..state_root import get_state_dir
 
 METHODS = [
     "ping",

@@ -46,7 +46,7 @@ def read_strict_result(path: Path) -> dict | None:
 def read_plain_evidence(path: Path) -> object:
     """The Router channel's ordinary evidence read, raising like its baseline.
 
-    The path must be a guarded private path, read up to 256 KiB as one plain
+    The ordinary leaf is opened without following links and read up to 256 KiB as one plain
     ``json.loads`` value (duplicates and non-finite
     numbers are the Router's own ordinary semantics, not refused here). The
     same read serves the frozen request/result retention; violations raise

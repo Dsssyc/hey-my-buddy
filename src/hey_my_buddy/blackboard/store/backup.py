@@ -42,7 +42,7 @@ def _shown_path(relative: str) -> str:
 
 def _guard(path: Path) -> None:
     if _linked(path):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup path contains a linked component', path=str(path))
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup entry is linked', path=str(path))
 
 
 def _open_fd(path: Path, flags: int, mode: int = 0o600) -> int:
@@ -343,7 +343,7 @@ def recover(state: Path) -> Path:
 def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | None, contract_version: str) -> dict:
     started = time.monotonic()
     if _linked(state):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state root cannot be a linked entry', path='.')
     state = state.resolve()
     wal = state / 'board.sqlite3-wal'
     if wal.exists() and wal.stat().st_size:

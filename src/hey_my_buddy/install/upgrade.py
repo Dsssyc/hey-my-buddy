@@ -24,7 +24,7 @@ from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
-from ..protocol.transport import get_state_dir
+from ..state_root import get_state_dir
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
 # in 5.5 seconds. Allow the seven-second observer join plus bounded client close.
@@ -476,13 +476,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
     state = get_state_dir()
-    if os.name == 'nt':
-        from ..windows_files import validate_state_root
-        validate_state_root(state)
-    else:
-        from ..protocol.transport import _trusted_directory
-        if not _trusted_directory(state):
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'State directory must be owner-private with trusted ancestors')
     root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):

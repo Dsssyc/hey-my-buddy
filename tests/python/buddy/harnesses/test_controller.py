@@ -182,6 +182,21 @@ class PartialLogOpenTests(unittest.TestCase):
             os.fstat(descriptor)
         self.assertEqual(caught.exception.errno, errno.EBADF)
 
+    def test_existing_log_is_not_truncated_or_followed(self):
+        sentinel = self.root / 'sentinel'
+        sentinel.write_bytes(b'existing log')
+        for linked in (False, True):
+            path = self.root / ('linked-log' if linked else 'existing-log')
+            if linked:
+                path.symlink_to(sentinel)
+            else:
+                path.write_bytes(b'existing log')
+            with self.subTest(linked=linked), self.assertRaises(FileExistsError):
+                base.open_logs({'stdout': str(path), 'stderr': self.paths['stderr']})
+            self.assertEqual(sentinel.read_bytes(), b'existing log')
+            self.assertEqual(path.read_bytes(), b'existing log')
+        self.assertFalse(Path(self.paths['stderr']).exists())
+
     def test_stderr_open_failure_closes_the_real_stdout_fd(self):
         with partial_log_open_failure() as state:
             with self.assertRaises(OSError) as caught:
@@ -401,6 +416,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def test_posix_each_log_close_failure_keeps_observed_owned_cleanup(self):
         for log in ("stdout", "stderr"):
+            self.paths = {name: str(self.root / (log + "-" + name)) for name in ("stdout", "stderr")}
             with self.subTest(log=log), controller_log_close_failure(log=log) as state:
                 with self.assertRaises(OSError) as caught:
                     self.launch()
