@@ -19,6 +19,7 @@ import tempfile
 import time
 
 from .db import SCHEMA_VERSION, Database, utc_now
+from .upgrade import BASE_SCHEMA_VERSION
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ...protocol import attempt_evidence
@@ -405,7 +406,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     policy = manifest.get('attemptEvidencePolicy')
     if policy is not None and policy != attempt_evidence.POLICY:
@@ -445,7 +446,8 @@ def _verify(directory: Path) -> dict:
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
             if schema is None or int(schema[0]) != manifest['schema']:
                 raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        Database(trial).initialize()
+        if manifest['schema'] == SCHEMA_VERSION:
+            Database(trial).initialize()
     return manifest
 
 

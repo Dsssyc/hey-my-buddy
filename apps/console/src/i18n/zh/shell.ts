@@ -36,6 +36,18 @@ export default {
     lost: "连接中断",
     retry: "重试连接",
   },
+  reminders: {
+    title: "执行提醒",
+    description: "执行超过预计时长会提示已超过预期；长时间没有原生事件会提示可能卡住，提醒会带上最近事件与工具状态供判断。",
+    silenceSeconds: "静默提醒阈值（秒）",
+    range: "可设为 1–86400 秒；默认 900 秒。",
+    unavailable: "提醒设置暂不可用，请刷新工作台。",
+    save: "保存",
+    saving: "正在保存…",
+    saved: "提醒设置已保存。",
+    overdue: "已超过预期",
+    possiblyStuck: "可能卡住",
+  },
   /** The state of the page's draft: what waits to be saved, and what a save ran into. */
   draft: {
     label: "未保存的修改",

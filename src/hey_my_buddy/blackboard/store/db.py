@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -1048,9 +1048,40 @@ CREATE TABLE IF NOT EXISTS catalog_pending (
     PRIMARY KEY (harness, provider, model)
 );
 """
+REMINDER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS reminder_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    silence_seconds INTEGER NOT NULL CHECK (silence_seconds >= 1),
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1)
+);
+CREATE TABLE IF NOT EXISTS attempt_reminders (
+    reminder_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    kind TEXT NOT NULL CHECK (kind IN ('expected-duration','native-silence')),
+    expected_multiple INTEGER,
+    silence_started_at TEXT,
+    elapsed_seconds REAL NOT NULL,
+    last_native_event_at TEXT,
+    tool_in_progress INTEGER NOT NULL CHECK (tool_in_progress IN (0,1)),
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    delivery_id TEXT UNIQUE,
+    CHECK ((delivered_at IS NULL AND delivery_id IS NULL)
+        OR (delivered_at IS NOT NULL AND delivery_id IS NOT NULL)),
+    CHECK ((kind = 'expected-duration' AND expected_multiple IS NOT NULL
+            AND expected_multiple >= 1 AND silence_started_at IS NULL)
+        OR (kind = 'native-silence' AND expected_multiple IS NULL AND silence_started_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
+    ON attempt_reminders(attempt_id, expected_multiple) WHERE kind = 'expected-duration';
+CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
+    ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
+"""
 SCHEMA = "\n".join((CORE_SCHEMA, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
-                    CATALOG_PENDING_SCHEMA))
+                    CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA))
 
 
 def utc_now() -> str:
@@ -1225,6 +1256,10 @@ class Database:
                 if fresh:
                     from ..routing.router import initialize_configuration
                     initialize_configuration(connection)
+                    connection.execute(
+                        "INSERT INTO reminder_settings(id, silence_seconds, updated_at, revision) "
+                        "VALUES(1, 900, ?, 1)", (utc_now(),)
+                    )
                     os.chmod(self.path, 0o600)
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
                 if integrity != "ok":

@@ -138,6 +138,7 @@ CONSOLE_OPERATIONS = (
     "harness_set",
     "quota_redetect",
     "user_policy_publish",
+    "reminder_settings_set",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",

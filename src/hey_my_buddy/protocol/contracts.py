@@ -54,6 +54,9 @@ class BuddyControl:
     def console_snapshot(self, request_json: str) -> str:
         ...
 
+    def reminder_settings_set(self, request_json: str) -> str:
+        ...
+
     def storage_plan(self, request_json: str) -> str:
         ...
 

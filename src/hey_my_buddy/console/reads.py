@@ -53,6 +53,7 @@ def console_snapshot_projection(service, *, clock=_time.time) -> tuple[dict, flo
     projection["harnesses"] = service.harnesses.all()
     projection["routingHealth"] = service.decisions.health_summary()
     projection["capabilities"] = service.evaluation.capabilities()
+    projection["reminderSettings"] = service.reminder_settings_view()
     projection["tasks"] = {"pendingCount": macro_tasks.pending_root_count(service.store)}
     deadline = collect_deadline(projection, after=now)
     if automatic:

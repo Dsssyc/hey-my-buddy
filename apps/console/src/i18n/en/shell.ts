@@ -37,6 +37,18 @@ export default {
     lost: "Connection lost",
     retry: "Retry",
   },
+  reminders: {
+    title: "Execution reminders",
+    description: "An execution past its expected duration is marked overdue. Prolonged silence from native events may indicate a stall; the reminder includes the last event and tool status for context.",
+    silenceSeconds: "Silence threshold (seconds)",
+    range: "Set 1–86400 seconds; default 900 seconds.",
+    unavailable: "Reminder settings are unavailable. Refresh the console.",
+    save: "Save",
+    saving: "Saving…",
+    saved: "Reminder settings saved.",
+    overdue: "Overdue",
+    possiblyStuck: "Possibly stuck",
+  },
   draft: {
     label: "Unsaved changes",
     unsaved: "Unsaved: {{n}}",

@@ -541,6 +541,8 @@ class BoardStore:
             # The projection is looked up by the *selected* attempt, so a replacement
             # generation never inherits the previous attempt's observation.
             view["activity"] = self._activity_latest(connection, attempt["attempt_id"])
+            from ..tasks.reminders import status as reminder_status
+            view["selectedAttempt"]["reminders"] = reminder_status(connection, attempt, view["activity"])
         artefacts = connection.execute(
             "SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at", (task["task_id"],)
         ).fetchall()

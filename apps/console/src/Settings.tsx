@@ -3,7 +3,8 @@ import type { ThemeChoice } from "./theme";
 import { StoragePanel } from "./StoragePanel";
 import { RuntimeVersion } from "./RuntimeVersion";
 import { ConsoleAccessSettings } from "./ConsoleAccessSettings";
-import type { ConsoleAccess } from "./types";
+import { ReminderSettings } from "./ReminderSettings";
+import type { ConsoleAccess, ReminderSettings as ReminderSettingsValue } from "./types";
 
 const THEME_CHOICES: [ThemeChoice, string][] = [["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]];
 
@@ -12,12 +13,13 @@ const THEME_CHOICES: [ThemeChoice, string][] = [["light", "浅色"], ["dark", "�
  * local storage check and reclaim panel (moved here unchanged from the old
  * routing page). Language will join them later.
  */
-export function Settings({ api, csrfToken, connectionError = "", writesAvailable = true, access, refresh = async () => {}, theme, onTheme, active = true }: {
+export function Settings({ api, csrfToken, connectionError = "", writesAvailable = true, access, reminders, refresh = async () => {}, theme, onTheme, active = true }: {
   api: ConsoleApi;
   csrfToken: string;
   connectionError?: string;
   writesAvailable?: boolean;
   access?: ConsoleAccess;
+  reminders?: ReminderSettingsValue;
   refresh?: () => Promise<unknown>;
   theme: ThemeChoice;
   onTheme: (choice: ThemeChoice) => void;
@@ -37,6 +39,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
         </label>)}
       </div>
     </section>
+    <ReminderSettings api={api} csrfToken={csrfToken} settings={reminders} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
     <ConsoleAccessSettings api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
     <RuntimeVersion api={api} active={active} />
     <StoragePanel api={api} csrfToken={csrfToken} connectionError={connectionError} active={active} />

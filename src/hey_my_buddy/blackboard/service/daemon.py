@@ -649,6 +649,9 @@ class Daemon:
             )
             self._sweeper = threading.Thread(target=self._sweep, name="hey-my-buddy-lease-sweeper", daemon=True)
             self._sweeper.start()
+            from ..tasks.reminders import Scheduler
+            self._reminders = Scheduler(self.store)
+            self._reminders.thread.start()
             self.stopping.wait()
             return self.finish()
         finally:
@@ -810,6 +813,8 @@ class Daemon:
     def cleanup(self) -> None:
         self.stopping.set()
         self.store.stop_waiters()
+        if getattr(self, '_reminders', None) is not None:
+            self._reminders.thread.join()
         if self._sweeper is not None:
             self._sweeper.join()
         if getattr(self, 'harnesses', None) is not None:
