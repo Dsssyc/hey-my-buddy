@@ -232,9 +232,12 @@ def _mark_old_projects(manifests) -> None:
             ensure_ascii=True).encode("utf-8")).hexdigest()
         if old_id == project_id:
             try:
+                os.listdir(repository)
                 _mark_project(repository, project_id)
             except _NotRepository:
                 continue
+            except OSError as error:
+                raise RuntimeError(f"Cannot inspect old repository at {location}: {error}") from error
 
 
 def _json(value: dict) -> str:

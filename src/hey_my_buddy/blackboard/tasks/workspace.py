@@ -176,6 +176,18 @@ def repository_at(path, *, allow_parent=False):
     except BoardError as error:
         if error.code == "WORKSPACE_GIT_ERROR" and any(
                 line.startswith("fatal: not a git repository") for line in error.details["stderr"].splitlines()):
+            with _errors():
+                os.listdir(path)
+                git_path = Path(path) / ".git"
+                try:
+                    git_facts = git_path.stat()
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
+                else:
+                    if stat.S_ISDIR(git_facts.st_mode):
+                        os.listdir(git_path)
+                    else:
+                        git_path.read_bytes()
             return None
         raise
     return str(Path(common).resolve(strict=True))
