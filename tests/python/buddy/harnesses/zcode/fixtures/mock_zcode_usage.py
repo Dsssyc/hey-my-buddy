@@ -142,10 +142,14 @@ def message_page(request_id, params):
             # restore its main deadline.
             time.sleep(3.0)
         page = FIXTURE["baselineMessages"] if case in RESUME_CASES else {"messages": []}
+    elif prompt_input_id is None:
+        page = {"messages": []}
     elif case == "cursor-lost":
         # The native server could not resolve the cursor and returned the whole
         # conversation, so nothing in this page is provably new.
         page = {"messages": FIXTURE["baselineMessages"]["messages"] + FIXTURE["finalMessages"]["messages"]}
+    elif params.get("afterMessageId") == FIXTURE["finalMessages"]["messages"][-1]["info"]["messageId"]:
+        page = {"messages": []}
     elif "afterMessageId" in params and params["afterMessageId"] != baseline_cursor():
         send({"id": request_id, "error": {"code": -32602, "message": "unknown cursor"}})
         return

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Iterator
 import zstandard
 
-from .protocol import decode_json
+from ....json_codec import decode_strict_json
 
 #: The record file suffixes and header version the lookup and fold accept.
 _RECORD_SUFFIXES = (".v3.jsonl.zstd", ".v3.jsonl")
@@ -261,7 +261,7 @@ def fold_record(path: Path, session_ids: frozenset, acc: RecordAccumulator) -> b
     session = None
     for raw in stream.lines():
         try:
-            event = decode_json(raw)
+            event = decode_strict_json(raw)
         except (ValueError, RecursionError):
             acc.truncated = True
             continue
@@ -360,7 +360,7 @@ def _matching_lines(path: Path, session_id: str) -> tuple[tuple[str, ...], bool]
     matched = False
     for raw in stream.lines():
         try:
-            event = decode_json(raw)
+            event = decode_strict_json(raw)
         except (ValueError, RecursionError):
             digests.append(hashlib.sha256(raw).hexdigest())
             continue
@@ -490,7 +490,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
         for raw in stream.lines():
             if index >= len(frozen.digests):
                 try:
-                    event = decode_json(raw)
+                    event = decode_strict_json(raw)
                 except (ValueError, RecursionError):
                     acc.truncated = True
                     continue

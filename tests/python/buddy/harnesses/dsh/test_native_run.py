@@ -201,6 +201,26 @@ class NativeRunCase(unittest.TestCase):
 class FastSeamTests(NativeRunCase):
     """The final-message carrier over the none/read/write launch configurations."""
 
+    def test_fast_and_review_runs_retain_stderr_in_their_invocation(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+
+        for scope in ("none", "read"):
+            with self.subTest(scope=scope):
+                note = f"{scope} stderr evidence"
+                self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
+                                         "--stderr-note", note]
+                request = self.fast_request("prompt", scope=scope)
+                result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                             services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                ref = next(ref for ref in result.evidence_refs if ref.kind == "native-stderr")
+                path = Path(request.private_state.invocation_root) / "native-stderr.log"
+                self.assertEqual(ref.location, str(path))
+                raw = path.read_bytes()
+                self.assertIn(note.encode(), raw)
+                self.assertEqual(ref.size_bytes, len(raw))
+                self.assertEqual(ref.sha256, hashlib.sha256(raw).hexdigest())
+
     def test_session_open_obeys_the_router_budget(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--delay", "session/new:1.5"]

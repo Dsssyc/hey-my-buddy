@@ -579,14 +579,43 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(answer["toolCallId"], "root-answer-call")
         self.assertEqual(answer["via"], "tool:hey_my_buddy_answer_inquiry")
 
-    def test_attention_is_bounded_and_readable_while_the_turn_is_live(self):
-        for index in range(10):
-            self.harness.bridge.note_attention({"kind": "unsupported-native-request", "method": f"interaction/{index}",
-                                                "at": "2026-01-01T00:00:00Z", "outcome": "refused-with-jsonrpc-error"})
-        self.assertEqual(self.harness.bridge.attention_report()["requests"], 8)
+    def test_attention_is_recorded_and_published_without_another_native_event(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        bridge = self.harness.bridge
+        published = []
+        recorder = AttentionRecorder(self.harness.attention_path, identity=IDENTITY,
+                                     requests=bridge.attention, on_record=bridge.publish_attention)
+        def capture():
+            written = json.loads(self.harness.attention_path.read_text(encoding="utf-8"))
+            published.append((bridge.attention_report()["requests"], len(written["requests"])))
+        with mock.patch.object(bridge, "_publish", side_effect=capture):
+            for index in range(10):
+                recorder.record({"kind": "unsupported-native-request", "method": f"interaction/{index}",
+                                 "at": "2026-01-01T00:00:00Z", "outcome": "refused-with-jsonrpc-error"})
+        self.assertEqual(published, [(count, count) for count in range(1, 11)])
+        self.assertEqual(bridge.attention_report()["requests"], 10)
         written = json.loads(self.harness.attention_path.read_text(encoding="utf-8"))
         self.assertEqual(written["requests"][-1]["method"], "interaction/9")
         self.assertEqual(written["attemptId"], "attempt-1")
+
+    def test_failed_attention_write_cannot_publish_on_bridge_close(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        bridge = self.harness.bridge
+        recorder = AttentionRecorder(self.harness.attention_path, identity=IDENTITY,
+                                     requests=bridge.attention, on_record=bridge.publish_attention)
+        published = []
+        with mock.patch("hey_my_buddy.buddy.roles.attention.private_json", side_effect=OSError("disk full")), \
+             mock.patch.object(bridge, "_publish", side_effect=lambda: published.append(bridge.attention_report())):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                recorder.record({"kind": "unsupported-native-request", "method": "interaction/permission"})
+            self.assertEqual(published, [])
+            bridge.close()
+        self.assertTrue(published)
+        self.assertTrue(all(view["requests"] == 0 for view in published))
 
 
 class JournalBarrierTests(unittest.TestCase):

@@ -15,7 +15,7 @@ from ..native_observations import bound_native_text, native_counter
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
-from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, PHASES
+from ....protocol.activity import MAX_TOOL_NAME, PHASES
 from ....protocol.reasons import reason as make_reason
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -69,12 +69,6 @@ class NativeRpcError(NativeError):
     """A failure raised by the current RPC, rather than by an observer."""
 
 
-#: The one shared strict decode (duplicate members and non-finite numbers,
-#: including the ``1e999`` overflow, refused); the caller keeps its own error
-#: mapping around the ``ValueError`` this raises.
-decode_json = decode_strict_json
-
-
 #: How this adapter carries Host questions, stated once and reported verbatim.
 #: The native protocol still has no turn-bound in-turn input: ``session/send``
 #: has no delivery/expectedTurn fields and rejects a send during an active
@@ -95,7 +89,7 @@ class ActivityProjection:
     PHASES = PHASES
 
     def __init__(self, session_id: str | None = None):
-        self.session_id = session_id[:MAX_SESSION_ID] if isinstance(session_id, str) else None
+        self.session_id = session_id
         self.phase = "starting"
         self.event_seq = 0
         self.observed_at = _now()
@@ -320,9 +314,7 @@ def optional_native_call(connection, method: str, params: dict,
     connection.deadline = min(original, time.monotonic() + max(0.0, timeout))
     try:
         return connection.call(method, params)
-    except NativeRpcError as error:
-        if error.code not in ("native-rpc-error", "timeout"):
-            raise
+    except NativeRpcError:
         return None
     finally:
         connection.deadline = original
@@ -353,6 +345,7 @@ def _bounded_message_page(response: object, *, session_id: str, limit: int) -> l
 def _message_pages(connection, session_id: str, after: str | None = None) -> list[dict] | None:
     """Read every native page through its afterMessageId cursor."""
     messages: list[dict] = []
+    seen_cursors = {after} if after is not None else set()
     while True:
         params = {"sessionId": session_id, "limit": MESSAGE_PAGE_SIZE}
         if after is not None:
@@ -361,10 +354,14 @@ def _message_pages(connection, session_id: str, after: str | None = None) -> lis
         page = _bounded_message_page(response, session_id=session_id, limit=MESSAGE_PAGE_SIZE)
         if page is None:
             return None
-        messages.extend(page)
-        if len(page) < MESSAGE_PAGE_SIZE:
+        if not page:
             return messages
-        after = page[-1]["info"]["messageId"]
+        cursor = page[-1]["info"]["messageId"]
+        if cursor in seen_cursors:
+            return None
+        seen_cursors.add(cursor)
+        messages.extend(page)
+        after = cursor
 
 
 def _root_assistant_tokens(message: dict) -> dict | None:
@@ -630,7 +627,7 @@ class NativeConnection:
             while raw := self.process.stdout.readline(MAX_MESSAGE_BYTES + 1):
                 if len(raw) > MAX_MESSAGE_BYTES:
                     raise ValueError("oversized native frame")
-                message = decode_json(raw)
+                message = decode_strict_json(raw)
                 if not isinstance(message, dict):
                     raise ValueError("native frame is not an object")
                 self.messages.put(message)

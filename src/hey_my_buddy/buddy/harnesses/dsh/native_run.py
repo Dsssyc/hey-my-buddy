@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from ....errors import BoardError
+from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
 from ....protocol.owned_process import WindowsCommandLineTooLong
 from ....private_dirs import ensure_private_dir
@@ -50,7 +51,7 @@ from ..native_support import (
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
 from ..run_contract import (
     ActivityPackage,
     MAX_SCHEMA_BYTES,
@@ -98,7 +99,6 @@ from .protocol import (
     DshToolFacts,
     NativeError,
     RootTurnEvidence,
-    decode_json,
     text_blocks,
 )
 from .session_records import (
@@ -170,7 +170,6 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 #: The discovery read that could not recognize the session's configuration
 #: options: the catalog stays unknown with this reason instead of a complete
 #: empty reading.
-UNREAD_CATALOG_REASON = "config-options-shape-unreadable"
 
 
 def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
@@ -923,7 +922,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 # a missing or foreign binding fails the run before any process
                 # exists, inside the same honest error result as every other stage.
                 try:
-                    binding = decode_json(_binding_path(native_root, previous).read_bytes())
+                    binding = decode_strict_json(_binding_path(native_root, previous).read_bytes())
                 except (OSError, ValueError):
                     raise NativeError("native-resume-unavailable",
                                       "the previous native session has no private micro task binding") from None
@@ -937,7 +936,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             policy = (_AttentionPolicy(AttentionRecorder(
                                            Path(services.mount.bridge["attentionPath"]),
                                            identity=services.mount.bridge["identity"],
-                                           requests=inquiry_bridge.attention if inquiry_bridge is not None else None))
+                                           requests=inquiry_bridge.attention if inquiry_bridge is not None else None,
+                                           on_record=inquiry_bridge.publish_attention if inquiry_bridge is not None else None))
                       if micro_task else PermissionPolicy())
             client = _launch_agent(cwd=request.cwd,
                                    invocation_root=invocation_root,
@@ -1040,6 +1040,7 @@ def _open_session(*, client: AcpClient, request: RunRequest, servers: list,
     session_id = snapshot.get("sessionId") if isinstance(snapshot, dict) else None
     if not isinstance(session_id, str) or not session_id:
         raise NativeError("wrong-native-session", "the native agent did not open a root session")
+    _validate_root_session_id(session_id)
     state.session_opened = True
     sessions.append(session_id)
     tools.add_root(session_id)
@@ -1058,6 +1059,7 @@ def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
     attempt's own: the completion and inquiry service the prompt verifies
     against is the one this request bound, never the previous attempt's.
     """
+    _validate_root_session_id(previous)
     snapshot = _native_call(lambda: client.resume_session(previous, request.cwd,
                                                           mcp_servers=servers,
                                                           timeout=_remaining(deadline)),
@@ -1072,6 +1074,11 @@ def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
     tools.add_root(previous)
     activity.session_id = previous
     return previous, snapshot
+
+
+def _validate_root_session_id(session_id: str) -> None:
+    if len(session_id) > MAX_SESSION_ID:
+        raise NativeError("invalid-protocol", "the native session identity exceeds the protocol limit")
 
 
 def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, input_text: str,
@@ -1645,8 +1652,8 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
     if protocol_facts:
         retain("acp-connection-summary", "acp-connection-summary.json", protocol_facts)
     stderr = client.stderr_tail()
-    if stderr and stderr_mirror:
-        target = Path(stderr_mirror)
+    if stderr:
+        target = Path(stderr_mirror) if stderr_mirror else invocation_root / "native-stderr.log"
         with target.open("x", encoding="utf-8") as handle:
             handle.write(stderr)
         raw = target.read_bytes()
@@ -1786,7 +1793,7 @@ def _unread_catalog(options: object, version: str) -> dict:
     return _catalog_receipt(
         version, [],
         [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
-          "reason": make_reason(UNREAD_CATALOG_REASON)}])
+          "reason": make_reason("config-options-shape-unreadable")}])
 
 
 def _catalog_receipt(version: str, providers: list, discoveries: list) -> dict:

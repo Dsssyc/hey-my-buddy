@@ -22,10 +22,9 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
-from ....json_codec import canonical_json, decode_strict_json
+from ....json_codec import canonical_json
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
-    MAX_SESSION_ID,
     MAX_TOOL_NAME,
 )
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
@@ -59,9 +58,6 @@ class NativeError(Exception):
         super().__init__(message)
         self.code = code
         self.failure = failure
-
-
-decode_json = decode_strict_json
 
 
 def _now() -> str:
@@ -191,7 +187,7 @@ class DshActivity:
     """
 
     def __init__(self, session_id: str | None = None):
-        self.session_id = session_id[:MAX_SESSION_ID] if isinstance(session_id, str) else None
+        self.session_id = session_id if isinstance(session_id, str) else None
         self.phase = "starting"
         self.event_seq = 0
         self.observed_at = _now()
