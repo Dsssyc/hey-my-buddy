@@ -220,7 +220,7 @@ Every DSH execution writes its session rollout under an execution-private root t
 
 This upgrade leaves historical Codex threads in place. Historical cleanup is a separate explicit post-installation Host action. Ordinary old-layout private files still relocate only after verified backup under decision 11's existing journal, validation and rollback. Any future upgrade that reorganizes native history must run after `backup.verify`, retain exact reversible identities and validate rollback before claiming completion; merely changing a default cannot authorize native history changes.
 
-After ADR-030 batch 3b, ordinary Codex execution and eligible native continuation use Codex's own user directory, without credential links or a private configuration home. Old private-session receipts reconstruct new sessions; old private homes are retained pending a separate measured cleanup decision. Installed native verification remains pending.
+After ADR-030 batch 3b, Codex Worker execution and eligible native continuation use Codex's own user directory, without credential links or a private configuration home. Old private-session receipts reconstruct new sessions; old private homes are retained pending a separate cleanup decision. Installed native verification remains pending.
 
 ## Private state and environment
 

@@ -81,7 +81,8 @@ class NoToolCodexTests(unittest.TestCase):
         trace = json.loads((directory / "trace.json").read_text())
         self.assertEqual(trace["home"], str(self.home))
         self.assertEqual(trace["userHome"], str(self.root))
-        for name in ("ephemeral", "baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots"):
+        self.assertIs(trace["thread"]["ephemeral"], True)
+        for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
             self.assertNotIn(name, trace["thread"])
         self.assertNotIn("environments", trace["turns"][0])
         self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
@@ -131,7 +132,10 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertEqual(outcome.result['tokenUsage']['inputTokens'], 17)
         self.assertEqual(outcome.result['tokenUsage']['outputTokens'], 5)
-        self.assertEqual(outcome.result['tokenUsage']['totalTokens'], 22)
+        self.assertEqual(outcome.result['tokenUsage']['cachedInputTokens'], 3)
+        self.assertEqual(outcome.result['tokenUsage']['reasoningOutputTokens'], 1)
+        self.assertEqual(outcome.result['tokenUsage']['completeness'], 'complete')
+        self.assertNotIn('totalTokens', outcome.result['tokenUsage'])
 
     def test_every_tool_shape_and_late_tool_fails_closed(self):
         for case in ("typed", "collab", "raw", "raw-no-id", "turn-item", "late", "request"):

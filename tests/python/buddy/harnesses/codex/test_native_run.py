@@ -192,9 +192,10 @@ class FastSeamTests(SeamCase):
 
     def test_native_usage_survives_corrections_and_reaches_the_fast_receipt(self):
         from hey_my_buddy.buddy.roles.run_execution import _fast_result
-        for case, input_tokens, completeness in (("usage", 17, "complete"),
-                                                 ("usage-format", 34, "complete"),
-                                                 ("usage-then-missing", 17, "partial")):
+        for case, input_tokens, cached_tokens, output_tokens, completeness in (
+                ("usage", 17, 3, 5, "complete"),
+                ("usage-format", 34, 6, 10, "complete"),
+                ("usage-then-missing", 17, 3, 5, "partial")):
             with self.subTest(case=case):
                 correction = FastCorrection(FAST_SCHEMA, "Pick a profile")
                 result = self.fast_run(case, correction)
@@ -205,6 +206,9 @@ class FastSeamTests(SeamCase):
                 receipt = _fast_result(result, request, {"elapsedMs": 1})
                 self.assertEqual(receipt["tokenUsage"]["inputTokens"], input_tokens)
                 self.assertEqual(receipt["tokenUsage"]["completeness"], completeness)
+                self.assertEqual(receipt["tokenUsage"]["cachedInputTokens"], cached_tokens)
+                self.assertEqual(receipt["tokenUsage"]["outputTokens"], output_tokens)
+                self.assertNotIn("totalTokens", receipt["tokenUsage"])
 
     def test_user_config_layers_mcp_and_native_home_are_preserved(self):
         request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a profile")
@@ -218,7 +222,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(trace["userHome"], str(self.base))
         overrides = [trace["argv"][index + 1] for index, item in enumerate(trace["argv"][:-1]) if item == "-c"]
         self.assertEqual(overrides, ['web_search="disabled"', 'approval_policy="never"'])
-        self.assertNotIn("ephemeral", trace["thread"])
+        self.assertIs(trace["thread"]["ephemeral"], True)
         self.assertNotIn("baseInstructions", trace["thread"])
         self.assertFalse((Path(request.private_state.native_root) / "codex-home").exists())
         self.assertEqual((self.home / "config.toml").read_text(), '[mcp_servers.user]\ncommand = "user-tool"\n')
@@ -498,6 +502,10 @@ class ReviewSeamTests(CodexSeamCase):
         readback = json.loads(Path(retained["review-config-readback"].location).read_text())
         filesystem = readback["config"]["permissions"]["buddy-router"]["filesystem"]
         self.assertEqual(filesystem[str(self.cwd.resolve())], "read")
+        thread = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())["threads"][result.native_identity.session_id]
+        self.assertIs(thread["start"]["ephemeral"], True)
+        for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
+            self.assertNotIn(name, thread["start"])
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["binding"]["taskId"], "goal-1")
 
@@ -589,6 +597,7 @@ class WorkerSeamTests(CodexSeamCase):
         state = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
         thread = state["threads"][result.native_identity.session_id]
         self.assertEqual(thread["start"]["modelProvider"], "fixture-provider")
+        self.assertNotIn("ephemeral", thread["start"])
         self.assertEqual(thread["codexHome"], str(self.home))
         self.assertEqual(thread["home"], str(self.base))
         self.assertIsNone(thread["sqliteHome"])

@@ -667,7 +667,7 @@ def _configure_review(connection: Connection, request: RunRequest,
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "permissions": "buddy-router", "serviceName": "hey-my-buddy",
-        "experimentalRawEvents": True,
+        "experimentalRawEvents": True, "ephemeral": True,
     })
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config") or {}
     # Retain permission facts and presence, never user MCP arguments or credentials.
@@ -717,7 +717,7 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
         "approvalPolicy": "never", "sandbox": "read-only", "serviceName": "hey-my-buddy",
-        "experimentalRawEvents": True,
+        "experimentalRawEvents": True, "ephemeral": True,
     })
     configured = connection.call("config/read", {"cwd": cwd, "includeLayers": True}).get("config")
     if (not isinstance(configured, dict) or configured.get("web_search") != "disabled"
@@ -1666,7 +1666,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         "adapter": "codex",
         "sessionId": session_id if captured else None,
         "captured": captured,
-        "storageScope": "user-native",
+        "storageScope": "harness-user-store",
         "storageOwner": "harness-user-store",
         "nativeAppVisibility": "listed-in-native-app",
         "note": ("Codex stores ordinary threads in the user's native directory. Native continuation "

@@ -26,7 +26,8 @@ D 类四处删除：`_initialize` 的 ChatGPT-only 与固定 openai 条件、`_c
 | `account/read(refreshToken=false)`；`config/read`；`model/list` 的分页/隐藏项参数 | 保留 | 无模型的原生事实读取；配置来自 app-server，不直接读取用户文件 |
 | Worker `thread/start`、`thread/resume` 的 cwd/model/modelProvider、serviceName、approvalPolicy、sandbox | 保留，modelProvider 用请求配置 | 绑定获配检出与请求配置、表达暂行权限；原生供应方回执单独记 checked 值，不因与 openai 不同拒绝 |
 | 审阅 `thread/start` 的 permissions；无工具的 read-only sandbox；两者 raw events | 保留 | 权限表达与事后工具事实 |
-| 无工具 `ephemeral`、`baseInstructions`、空 environments/dynamicTools/selectedCapabilityRoots、禁止供应方模型 fallback | 删除 | 会话普通运行；不另建指令层或挑选用户配置与原生能力 |
+| 快速与审阅 Router `thread/start.ephemeral=true` | 恢复 / 增加 | Host 于第二回合定：Router 不续接，不将每次路由决策写进用户会话历史；Worker 不传此开关 |
+| 无工具 `baseInstructions`、空 environments/dynamicTools/selectedCapabilityRoots、禁止供应方模型 fallback | 删除 | 不另建指令层或挑选用户配置与原生能力 |
 | `turn/start` 的 threadId/cwd/model/effort、任务输入、outputSchema、审批、Worker sandboxPolicy 与审阅 permissions | 保留 | 归属、请求配置、任务/结果约定及暂行权限；Worker 网络仍沿用原来的 false，不在本批设计档位 |
 | 无工具 `turn/start` 的空 environments 与 thread/started 的空环境条件 | 删除 | 不再挑选原生环境来源；仍核对会话身份 |
 | `thread/read(includeTurns=true)`；`turn/interrupt`；拒绝交互请求的原生错误响应 | 保留 | 续接归属、停止与没有 Host 审批渠道的事实 |
@@ -40,11 +41,30 @@ D 类四处删除：`_initialize` 的 ChatGPT-only 与固定 openai 条件、`_c
 
 新绑定只有 `taskId`、`threadId`、`cwd`、`configuration`、`lastTurnId`、`lastAttemptId`、`lastInputSha256`；删去 `codexHome` 和整个 `credentialSource`，没有固定 `source=native` / `credentialRevision=0`，没有账户来源比较。续接仍核对 checkpoint 的回合、attempt、摘要，以及原生 thread/read 的最后已完成回合；没有缺失绑定时的隐式回退。
 
-服务按已有的明确 `storageOwner` 区分位置：Codex 新回执为 `harness-user-store`，存储范围 `user-native`；旧 `buddy-goal` 回执不再原生续接，而以 `native-storage-changed` 重建。运行模块只读七字段新绑定，旧形式直接拒绝，不增加第二种读法或历史转换。历史回执与最终消息原样保留，会话历史列表仍可列出旧的归属事实；DSH 的归属判断与理由不变。没有改变 SQLite 存储字段形式，schema 保持 17。
+服务按已有的明确 `storageOwner` 区分位置：Codex 新回执为 `harness-user-store`，存储范围 `harness-user-store`；旧 `buddy-goal` 回执不再原生续接，而以 `native-storage-changed` 重建。运行模块只读七字段新绑定，旧形式直接拒绝，不增加第二种读法或历史转换。历史回执与最终消息原样保留，会话历史列表仍可列出旧的归属事实；DSH 的归属判断与理由不变。没有改变 SQLite 存储字段形式，schema 保持 17。
 
-在获配检出内以不跟随链接的目录遍历排除 git/依赖缓存后，量到旧 `codex-home` 目录 0 个；这不是实际状态目录的数量。实际状态目录与旧私有主目录在授权范围之外，故没有访问；没有把“没有量到”当作“那里是空的”。旧源码可证明曾写登录链接或刷新文件、配置、模型裁剪缓存并让 Codex 在里面保存 SQLite/rollout 等原生状态，但这是写入者清单，不是实际存量测量。
+Host 于验收时测量真实状态目录并提供结果：10 个旧 `codex-home`，7064 个文件，495 MiB，7 个链接，其中 1 个是指向用户自己 Codex 目录的 `auth.json`；只量名字、数量与大小，未读取凭据内容。该组数字来自 Host，不是实现方在本回合重新访问状态目录的结果。
 
-请 Host 仅量目录/文件名、类型、数量、字节数与链接目标的类别，不读取凭据内容、不跟随凭据链接；覆盖旧 goal-private 与 attempt-private Codex 主目录，另核对来源执行的停止证据。建议本次升级不清理：原生会话有历史价值，现有备份还排除了部分原生/凭据路径，未量清也未证实原来执行已停时不能安全删除；将来若决定清理，应单独列出范围、备份和停止依据。本批没有删除任何存量目录或凭据。
+Host 已同意本批不清理旧私有主目录，是否清理由用户另定；本批不删除这些存量。今后若授权清理，仍需明确范围、来源执行的停止依据及备份；现有备份排除了部分原生/凭据路径，不能据升级或缺少进程 ID 推断可以删除。
+
+## 第二回合：会话归属读者核对
+
+`harness-user-store` 表示 harness 用户目录持有会话，不授予黑板删除该目录的权力；Worker 的 storageScope 与 storageOwner 都使用这个已有值，删除上一回合新造的 `user-native` 输出值。Router 的快速与审阅路径均传 `ephemeral=true`，不记录可续接的 Worker 绑定；Worker 的 thread/start/resume 不传 ephemeral，继续普通持久化和原生续接。没有恢复 baseInstructions、空 environments/dynamicTools/selectedCapabilityRoots 或禁模型 fallback。
+
+| 读者 / 关联移除路径 | 核对结果 |
+| --- | --- |
+| `buddy/roles/run_execution.py` WorkerRunExecutor.collect | 从 Codex session_facts 原样投影 storageScope/storageOwner；可续接还须绑定、回合及两层停止证据；不由这些字段推导删除路径 |
+| `blackboard/tasks/workflow.py` 续接选择 | Codex 只认可 storageOwner=harness-user-store 的当前存储；旧 buddy-goal 回执重建，storageScope 不参与授权；DSH 分支不变 |
+| `blackboard/tasks/worker_sessions.py` 会话历史列表 | 只读黑板内停止确认的归属回执，列出用户存储与旧 buddy-goal 历史；nativeAccess=false，只允许 list，原生会话 ID 不成为文件访问或删除路径 |
+| `blackboard/tasks/storage.py` inspect / apply / _validate_pending | 不读 storageOwner/storageScope 或会话 ID 来找删除位置；候选从黑板 state 下已知 harness goal 根、注册检出或运行时根生成；harness 恢复删除的父目录必须是 state/harnesses/<adapter>/goals；不枚举用户 Codex 主目录 |
+| `blackboard/tasks/workflow.py` cleanup_apply | 只从 board.directory、adapter 和微任务 ID 构造 private_dirs.goal_root；回收绑定与执行证据，不把用户原生会话归为这棵树 |
+| `private_dirs.py` goal_root / native_root / remove_tree | 根固定在黑板 state/harnesses/.../goals 下；根路径链接拒绝，树内链接仅解除链接，不跟随到用户目录 |
+| `blackboard/store/private_migration.py` 旧布局迁移 | 按旧 state 内目录与记录固定路径搬迁，非 nativeSession 归属读者；本批未更改迁移或赋予用户原生目录任何搬迁/清理权限 |
+| `apps/console/src/native-session.tsx` 与 `WorkflowPanel.tsx` | 从选中 attempt 的冻结回执读取两字段，既有标签分别是 Harness 用户存储、由 Harness 用户目录持有；会话区为只读，未接原生归档/删除动作；这次不改前端 |
+
+`rg` 核对源码与测试中的两字段后，除其他 harness 自己的事实输出与夹具外，所有生产读者就是上述角色投影、续接选择、会话列表和会话页；存储回收与旧布局迁移没有读取这两字段。新增 `blackboard.tasks.test_storage.StorageTests.test_codex_user_sessions_are_not_inventory_or_goal_removal_targets`：私有测试目录模拟用户原生会话，在黑板 goal 内保留到用户目录的链接，验证用户目录不成为 storage 候选、用户文件不计入私有树大小，且删除该私有 goal 后用户会话原样保留。
+
+第二回合测试修正：恢复 test_codex 的 stat 引入；无工具用量只检查规范化的 inputTokens/cachedInputTokens/outputTokens/reasoningOutputTokens 及事实标志，明确没有 totalTokens，不向生产结果另加键；Worker 会话列表夹具改期望 harness-user-store，保留历史 buddy-goal 列表测试。规范化契约以 protocol/usage.py.normalize_token_usage 为准，fast 与 Worker 均使用它。
 
 ## 供应方、登录与计费
 
@@ -66,7 +86,7 @@ Codex 的 NativeSchemaWorker 使用 `outcome_schema(suggested_profile=True)`，�
 
 所有命令都在检出根运行，使用 Host 指定的只读现成解释器、`PYTHONPATH=src:tests/python`，先清除 AGENTS.md 列出的十个环境变量；没有安装依赖，没有 uv，没有写只读环境。解释器路径在记录中写为 `<provided-python>`。
 
-最终源码的可运行选择共 190 项，32.468 秒，`OK`；`git diff --check` 通过，删除文件的公开导出也逐项核对。覆盖 native_run/protocol、纯工具事件投影、角色资源/执行/schema/审阅、无进程的注册接线、健康与计费、三条发现/readiness，以及六条无需控制器的服务续接测试。源内使用离线模拟 app-server，验证不代表真实安装或 Host 接受。
+第一回合源码的可运行选择共 190 项，32.468 秒，`OK`；`git diff --check` 通过，删除文件的公开导出也逐项核对。覆盖 native_run/protocol、纯工具事件投影、角色资源/执行/schema/审阅、无进程的注册接线、健康与计费、三条发现/readiness，以及六条无需控制器的服务续接测试。源内使用离线模拟 app-server，验证不代表真实安装或 Host 接受。
 
 可复现的选择：`env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT PYTHONPATH=src:tests/python <provided-python> -m unittest` 后接：
 
@@ -78,4 +98,10 @@ Codex 的 NativeSchemaWorker 使用 `outcome_schema(suggested_profile=True)`，�
 
 受沙盒阻挡的测试没有改成 skip，没有绕过监听限制：角色控制器的 C-Two live endpoint 创建返回 `Operation not permitted (os error 1)`，由此出现 role-controller-failed 或 invalid-native-result，后续无法得到真实 checkpoint / 停止帧。Host 需在允许本地监听的环境运行：`buddy.harnesses.codex.test_codex` 的控制器生命周期部分、`buddy.harnesses.codex.test_no_tool_codex` 全部、`buddy.harnesses.codex.test_codex_tool_evidence.CodexReviewToolEvidenceTests`、`buddy.harnesses.codex.test_codex_continuation.CodexContinuationTests.test_controller_failure_to_workflow_continue_keeps_the_native_thread`，以及 `buddy.roles.test_registered_run_wiring` 的 FastRegisteredRunTests/WorkerRegisteredRunTests/DshPublishedReceiptTests。完整检查、真实启动器、真实 Worker/Router 回合和故障注入仍按冻结任务由 Host 做。
 
-Host 的真实验收还应核对：用户第三方供应方可用，MCP/skill/钩子/用户指令可见且角色说明生效，普通会话写进原生目录并原生续接，原生和控制器两层停止证据真实，运行与异常结束均没有新建私有配置主目录或凭据链接；另量实际旧主目录并决定未来清理。Windows/Linux、本次真实权限回读与真实 fast 用量仍未验证。
+Host 的真实验收还应核对：用户第三方供应方可用，MCP/skill/钩子/用户指令可见且角色说明生效，Worker 普通会话写进原生目录并原生续接、两种 Router 调用使用 ephemeral，原生和控制器两层停止证据真实，运行与异常结束均没有新建私有配置主目录或凭据链接；旧私有主目录本批不清理，未来清理由用户另定。Windows/Linux、本次真实权限回读与真实 fast 用量仍未验证。
+
+第二回合最终源码的可运行选择共 108 项，27.295 秒，`OK`：`buddy.harnesses.codex.test_native_run`、`blackboard.tasks.test_storage`、`buddy.harnesses.codex.test_codex_protocol` 全文件，`buddy.runtime.test_worker_sessions.WorkerSessionTests` 的 `test_dsh_sessions_are_no_longer_listed_or_archived` 与 `test_codex_list_uses_board_only_and_never_guesses_other_sessions`，以及上列三条 Codex 发现/readiness 测试；清环境与解释器命令同上。`git diff --check` 通过；未改前端。
+
+同时用指定解释器执行 `-m unittest buddy.harnesses.codex.test_codex buddy.harnesses.codex.test_no_tool_codex buddy.runtime.test_worker_sessions`，51 项、42.864 秒，未通过（42 个失败、16 个错误，含 subTest）；控制器无法建立 C-Two live endpoint，因而没有有效原生结果帧或确认停止，后续断言失败。没有改成 skip 或用模拟停止来掩盖它。Host 需重跑这三个文件，具体不可运行范围为 test_codex 的控制器生命周期用例、test_no_tool_codex.NoToolCodexTests 全类、test_worker_sessions.WorkerSessionTests.test_codex_list_accepts_actual_stopped_adapter_fixture；它们的三个原始测试缺陷已在相应测试与输出归属处修正，用量生产契约没有增加 totalTokens。
+
+此前 Host 在第一回合候选上报告前端 78 个文件、1119 项通过，完整 Python 216 个文件里 213 个通过，上述三个文件未过；这是 Host 提供的验收事实，不是本回合的复跑。

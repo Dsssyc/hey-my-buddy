@@ -180,6 +180,28 @@ class StorageTests(BoardTestCase):
             board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
         self.assertEqual(sentinel.read_bytes(),b'outside')
 
+    def test_codex_user_sessions_are_not_inventory_or_goal_removal_targets(self):
+        from hey_my_buddy.buddy.harnesses.codex.native_run import session_facts
+        board = self.board()
+        user_home = self.directory / 'user-home' / '.codex'
+        user_home.mkdir(parents=True)
+        session = user_home / 'rollout.jsonl'
+        session.write_bytes(b'user-owned native session')
+        native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', 'fixture-task'))
+        # Even a link left in blackboard-owned storage does not grant ownership
+        # of the user store. Inventory never follows it, removal unlinks it.
+        (native / 'native-user-store').symlink_to(user_home, target_is_directory=True)
+        facts = session_facts(native, 'thread-1')
+        self.assertEqual((facts['storageScope'], facts['storageOwner']),
+                         ('harness-user-store', 'harness-user-store'))
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+            candidates = storage.inspect(board.store)['candidates']
+        self.assertFalse(any(Path(row['path']).is_relative_to(user_home) for row in candidates))
+        private = next(row for row in candidates if row.get('adapter') == 'codex')
+        self.assertEqual(private['bytes'], 0)
+        private_dirs.remove_tree(private_dirs.goal_root(board.directory, 'codex', 'fixture-task'))
+        self.assertEqual(session.read_bytes(), b'user-owned native session')
+
     def test_all_adapters_private_goals_are_visible(self):
         board = self.board()
         state = board.directory.resolve()

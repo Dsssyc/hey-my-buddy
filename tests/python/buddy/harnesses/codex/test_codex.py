@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import stat
 import tempfile
 import time
 import unittest
@@ -111,7 +112,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["nativeSession"]["nativeAppVisibility"], "listed-in-native-app")
-        self.assertEqual(outcome.result["nativeSession"]["storageScope"], "user-native")
+        self.assertEqual(outcome.result["nativeSession"]["storageScope"], "harness-user-store")
         self.assertEqual(outcome.result["nativeSession"]["storageOwner"], "harness-user-store")
         self.assertTrue(outcome.result["nativeSession"]["resumable"])
         turn = outcome.result["turn"]
@@ -204,6 +205,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(thread['home'], self.environment['HOME'])
         self.assertIsNone(thread['sqliteHome'])
         self.assertEqual(thread['start']['modelProvider'], 'fixture-provider')
+        self.assertNotIn('ephemeral', thread['start'])
         self.assertFalse(list(Path(self.environment['BUDDY_STATE_DIR']).rglob('codex-home')))
         self.assertEqual(auth.read_text(), 'fixture login')
         self.assertFalse(auth.is_symlink())
