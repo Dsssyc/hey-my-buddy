@@ -653,12 +653,13 @@ class DecisionCoordinator:
         return "decision-dispatch-advanced"
 
     # -- worker lifecycle hooks ---------------------------------------------
-    def claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, spec: dict, attempt_id: str, generation: int, now: str) -> tuple[str | None, dict | None]:
+    def claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, spec: dict, attempt_id: str, generation: int, now: str) -> dict:
         """Admit one decision attempt inside the claim transaction.
 
-        Returns ``(blocker, input_document)``. A blocker keeps the task queued and
-        consumes no execution slot; the queue reason is visible on the task view. On
-        success the decision is ``running``, the attempt is bound to the dispatch, and the exact model input is persisted for audit.
+        Every case that keeps the task queued was already settled by
+        :meth:`prepare_router_claim` above, so this only succeeds. The decision
+        becomes ``running``, the attempt is bound to the dispatch, and the exact
+        model input is persisted for audit.
         """
         row = self._row(connection, decision_spec(spec)["decisionId"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
@@ -671,7 +672,7 @@ class DecisionCoordinator:
         # this same claim transaction: one atomic dispatch-to-attempt binding.
         router_sequence.record_claim(
             connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
-        return None, document
+        return document
 
     def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
         digest = sha256_text(canonical_json(document))

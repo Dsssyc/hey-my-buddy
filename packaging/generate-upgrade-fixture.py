@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-27 upgrade stock using the frozen installed base source.
+"""Generate schema-28 upgrade-base stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations and current store writers run in process; native
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "ea7ff3a4967154b2d2bf258aa2412f744d252b59"
-BASE_VERSION = "0.49.0"
-BASE_SCHEMA = 27
+BASE = "fd9f04e828ea49a5f2259cdcae0d71401e5c0d84"
+BASE_VERSION = "0.51.0"
+BASE_SCHEMA = 28
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -115,7 +115,7 @@ def populate(args):
     from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
     from hey_my_buddy.buddy.harnesses import inquiry_bridge
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
-    from hey_my_buddy.blackboard.service.service import BoardService, dispatch_local
+    from hey_my_buddy.blackboard.service.service import BoardService, call_operation
     from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
     from hey_my_buddy.blackboard.store.store import BoardStore
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
@@ -187,7 +187,8 @@ def populate(args):
 
         def call(name, params, *, human=False):
             print("operation:", name, params.get("requestId", params.get("runId", "")), flush=True)
-            result = dispatch_local(service, name, {**params, **({"consoleAuthority": "fixture-console"} if human else {})})
+            authority = {"consoleAuthority": {"sessionId": "fixture-console"}} if human else {}
+            result = call_operation(service, name, {**params, **authority})
             operations.append({"operation": name, "params": params, "response": result})
             return result
 
@@ -338,22 +339,51 @@ def populate(args):
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
 
         # Preserve this original unavailable question as the first message row.
+        # The console authority authors it: a current-form author pair on the
+        # oldest row, beside the service-authored stock below.
         original = call("inquiry_observe", {"runId": ids["delivered"], "inquiryId": "fixture-inquiry",
-                     "question": "fixture question after the execution ended"})
+                     "question": "fixture question after the execution ended"}, human=True)
         with store.db.read() as connection:
             first_message = connection.execute(
                 "SELECT message_id,attempt_id FROM messages WHERE inquiry_id='fixture-inquiry'").fetchone()
         inquiry_stock["existingUnavailable"] = {"taskId": ids["delivered"],
             "attemptId": first_message["attempt_id"], "inquiryId": "fixture-inquiry",
-            "messageId": first_message["message_id"], "expectedState": "unavailable",
-            "expectedReason": "inquiry-no-live-agent"}
-        with store.db.write() as connection:
-            connection.execute("UPDATE messages SET recipient=?,attempts_count=? WHERE inquiry_id=?",
-                               ("fixture-retired-recipient", 3, "fixture-inquiry"))
+            "messageId": first_message["message_id"]}
 
         # Additional base-writer stock for the three forms absent from the first
         # four runs. These IDs are deliberately separate from stableIds.
         stock_ids = {}
+
+        # A delegation-authority run is the current form for lead-owned work. Its
+        # attempt credential authors one inquiry while the attempt is live, which
+        # settles with the attempt like every other question.
+        lead = call("workflow_submit", {"requestId": "fixture-lead", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-lead", "task": "fixture lead-authored inquiry",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "workspaces" / "cancelled"),
+            "executionWorkspace": {"kind": "existing", "access": "full",
+                                   "accessNote": "Fixture lead stock generation"},
+            "delegationAuthority": True, "macroTaskOf": ids["delivered"]})
+        stock_ids["lead"] = lead["runId"]
+        lead_claim = admit(nonce, lead["runId"])
+        call("inquiry_observe", {"runId": lead["runId"], "inquiryId": "fixture-lead-inquiry",
+             "question": "fixture lead question", "credential": lead_claim["agentCredential"]})
+        with store.db.read() as connection:
+            lead_message = connection.execute(
+                "SELECT message_id FROM messages WHERE inquiry_id='fixture-lead-inquiry'").fetchone()
+        inquiry_stock["leadAuthored"] = {"taskId": lead["runId"],
+            "attemptId": lead_claim["attempt"]["attemptId"], "inquiryId": "fixture-lead-inquiry",
+            "messageId": lead_message["message_id"]}
+        lead_manifest = lead_claim["turn"]["input"]["executionWorkspace"]
+        lead_seal = workspace.seal(work / "state", lead_manifest, lead["runId"],
+                                   lead_claim["attempt"]["attemptId"])
+        report(lead_claim, nonce, status="ok", result={"status": "ok",
+            "turn": completed_record(lead_claim, "lead"), "workspaceSeal": lead_seal,
+            "processState": {"shutdownConfirmed": True}})
+        lead_view = call("workflow_get", {"runId": lead["runId"]})
+        call("workflow_accept", {"runId": lead["runId"], "artifactId": lead_view["finalArtifactId"],
+            "note": "fixture lead accepted", "notRequired": "Full-access fixture has no separate target",
+            "keepCheckout": True, **lead["control"]})
         adopted = call("workflow_submit", {"requestId": "fixture-adopted", "hostId": "fixture-host",
             "submissionToken": "fixture-submission-token-adopted", "task": "fixture adopted scope site",
             "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
@@ -432,7 +462,7 @@ def populate(args):
             "adjusted": True, "hostPaths": ["fixture-host.txt"], "keepCheckout": True,
             **verified["control"]})
         assert verified_accepted["integration"]["state"] == "verified"
-        assert verified_accepted["integration"]["verification"]["adjustments"] == ["README.md"]
+        assert [item["path"] for item in verified_accepted["integration"]["verification"]["differingPaths"]] == ["README.md"]
         assert verified_accepted["integration"]["verification"]["hostPaths"] == ["fixture-host.txt"]
         verified_plan = internal_call("cleanup_plan", {"runId": verified["runId"],
             "commandId": "plan-verified-fixture", "expectedRevision": verified_accepted["revision"],
@@ -494,23 +524,13 @@ def populate(args):
                 bridge.deliver_native(inquiry_id, {"nativeItemId": "fixture-" + case})
             if answer is not None:
                 assert bridge.answer_native(inquiry_id, answer, "fixture-tool-" + case) is None
-            inquiry_stock[case].update(expectedState="answered" if answer else "unavailable",
-                                       expectedDelivery=deliver,
-                                       **({"expectedAnswer": answer} if answer else
-                                          {"expectedReason": "inquiry-delivered-at-attempt-end"} if deliver else
-                                          {"expectedReason": "inquiry-queued-at-attempt-end"}))
 
         journal_question("journalAnsweredEarlier", deliver=True, answer="Fixture durable answer")
-        inquiry_stock["journalAnsweredEarlier"]["selectedAttempt"] = "later"
         journal_question("journalAnsweredQueued", deliver=True, answer="Fixture queued answer")
         journal_question("journalAnsweredDelivered", deliver=True, answer="Fixture delivered answer", state="delivered")
         journal_question("journalDeliveredOnly", deliver=True)
         stock_question("journalNoEntry")
-        inquiry_stock["journalNoEntry"].update(expectedState="unavailable",
-            expectedReason="inquiry-queued-at-attempt-end")
         stock_question("dbDeliveredNoEntry", state="delivered")
-        inquiry_stock["dbDeliveredNoEntry"].update(expectedState="unavailable", expectedDelivery=True,
-            expectedReason="inquiry-delivered-at-attempt-end")
         mismatch_id, mismatch_question = stock_question("journalBindingMismatch")
         foreign = InquiryBridge(identity={**identity, "taskId": "fixture-foreign-task"},
             journal_path=str(parent_journal), error_factory=lambda code, message: BoardError(code, message),
@@ -519,8 +539,6 @@ def populate(args):
         foreign.activate("fixture-foreign-session")
         assert foreign._ask({"inquiryId": mismatch_id, "question": mismatch_question},
                             inquiry_bridge._owner_response)["ok"]
-        inquiry_stock["journalBindingMismatch"].update(expectedState="unavailable",
-            expectedReason="inquiry-queued-at-attempt-end", journalRejection="journal-task-mismatch")
         journal_question("journalAnsweredClaimed", deliver=True, answer="Fixture claimed answer", state="claimed")
         other_id, other_question = stock_question("unavailableOtherReason", state="unavailable",
                        reason={"code": "inquiry-observe-only", "params": {}})
@@ -529,8 +547,6 @@ def populate(args):
         bridge.deliver_native(other_id, {"nativeItemId": "fixture-unavailable-other"})
         assert bridge.answer_native(other_id, "Answer that must not replace the refusal",
                                     "fixture-unavailable-other-tool") is None
-        inquiry_stock["unavailableOtherReason"].update(expectedState="unavailable",
-            expectedReason="inquiry-observe-only", journalAnswer="Answer that must not replace the refusal")
         parent_manifest = parent_claim["turn"]["input"]["executionWorkspace"]
         parent_seal = workspace.seal(work / "state", parent_manifest,
                                      helper_parent["runId"], parent_claim["attempt"]["attemptId"])
@@ -570,9 +586,7 @@ def populate(args):
         assert not missing_path.exists()
         inquiry_stock["missingJournal"] = {"taskId": helper_id,
             "attemptId": helper_claim["attempt"]["attemptId"], "inquiryId": missing_id,
-            "messageId": missing_posted["messageId"], "journal": str(missing_path.relative_to(work / "state")),
-            "expectedState": "unavailable", "expectedReason": "inquiry-delivered-at-attempt-end",
-            "expectedDelivery": True, "journalReason": "journal-not-written"}
+            "messageId": missing_posted["messageId"], "journal": str(missing_path.relative_to(work / "state"))}
         # Current writers produce both suggestion identities, monotone native
         # activity and both reminder forms while this attempt is active.
         activity = {"phase": "tool-running", "observedAt": AT, "eventSeq": 3,
@@ -661,7 +675,7 @@ def populate(args):
         with patch.object(macro_task_deletion, "_delete_sessions",
                           side_effect=BoardError("FIXTURE_STOP", "Retain in-progress deletion stock")):
             pending = call("macro_task_delete", {"macroTaskId": pending_target,
-                           "confirm": True, "microTaskCount": 8}, human=True)
+                           "confirm": True, "microTaskCount": 9}, human=True)
         assert pending["state"] == "deleting"
         # Cover default reason-only health and a native result whose JSON status
         # becomes stale after the base writer invalidates it. Codex stays ready
@@ -682,19 +696,6 @@ def populate(args):
         operations.append({"operation": "catalog_store.begin",
                            "params": {"requestId": "fixture-pending-observation"},
                            "response": pending_observation})
-        # Finishing an attempt turns all queued questions unavailable in the
-        # released base. Freeze one genuinely stale queued row to cover boards
-        # interrupted between a journal answer and that settlement. This is the
-        # only new SQL seed; all messages and journal records above used writers.
-        with store.db.write() as connection:
-            connection.execute("UPDATE messages SET state='queued',reason_code=NULL,reason_params_json=NULL "
-                               "WHERE message_id=?", (inquiry_stock["journalAnsweredQueued"]["messageId"],))
-        with store.db.read() as connection:
-            for item in inquiry_stock.values():
-                row = connection.execute("SELECT state,reason_code FROM messages WHERE message_id=?",
-                                         (item["messageId"],)).fetchone()
-                item["sourceState"] = row["state"]
-                item["sourceReason"] = row["reason_code"]
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -738,9 +739,7 @@ def populate(args):
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. SQL seeds retired message recipient/count and one stale queued state after attempt settlement. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
-            "retiredMessageStock": {"recipient": "fixture-retired-recipient", "attemptsCount": 3,
-                "author": "cli", "authorBoundary": "The base's sole messages INSERT in blackboard/store/store.py fixes author to cli; no base writer records a non-cli author."},
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Every stored row comes from a base writer; no SQL seed remains. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
@@ -860,18 +859,20 @@ def verify(output, restored):
         assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 1
         assert set(dict(connection.execute("SELECT key,value FROM meta"))) == {"schema_version", "capability_secret"}
         messages = connection.execute(
-            "SELECT message_id,attempt_id,inquiry_id,author,recipient,attempts_count,state,reason_code "
+            "SELECT message_id,attempt_id,inquiry_id,author_role,author_id,state,reason_code "
             "FROM messages ORDER BY rowid").fetchall()
-        assert messages[0][2:] == ("fixture-inquiry", "cli", "fixture-retired-recipient", 3,
-                                   "unavailable", "inquiry-no-live-agent")
+        assert messages[0][2:] == ("fixture-inquiry", "console", "f" * 24,
+                                   "unavailable", "inquiry-root-turn-ended")
+        assert {row[3] for row in messages} == {None, "console", "lead"}
+        assert {row[5] for row in messages} == {"answered", "unavailable"}
+        assert any(row[5] == "unavailable" and row[6] == "inquiry-delivered-at-attempt-end" for row in messages)
         assert {row[0] for row in messages} == {
             item["messageId"] for item in metadata["inquiryStock"].values()}
         by_id = {row[0]: row for row in messages}
         resource_files = json.loads((output / "workspace-resources.json").read_text(encoding="utf-8"))["files"]
         for case, item in metadata["inquiryStock"].items():
             row = by_id[item["messageId"]]
-            assert (row[1], row[2], row[6], row[7]) == (
-                item["attemptId"], item["inquiryId"], item["sourceState"], item["sourceReason"])
+            assert (row[1], row[2]) == (item["attemptId"], item["inquiryId"])
             if item.get("journal"):
                 if case == "missingJournal":
                     assert item["journal"] not in resource_files
@@ -880,7 +881,7 @@ def verify(output, restored):
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
-                          **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper")},
+                          **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper", "lead")},
                           metadata["stockIds"]["helperParent"]: "concluded"}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]

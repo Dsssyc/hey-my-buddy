@@ -13,7 +13,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, UPGRADE_BASE_SCHEMA, Database
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -222,7 +222,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertFalse(output.exists())
         self.assert_source_unchanged(before, files(board.directory))
 
-    def test_upgrade_base_export_keeps_schema_and_every_selected_attempt_journal(self):
+    def test_fixture_export_keeps_schema_and_every_selected_attempt_journal(self):
         fixture = load_fixture(self.directory / 'source')
         source = fixture['state']
         with closing(sqlite3.connect(source / DB_FILE)) as connection:
@@ -253,13 +253,14 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                str(UPGRADE_BASE_SCHEMA))
+                str(SCHEMA_VERSION))
             self.assertEqual(list(connection.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' "
                 "ORDER BY type,name")), source_schema)
             columns = {row[1] for row in connection.execute('PRAGMA table_info(messages)')}
-            self.assertIn('recipient', columns)
+            self.assertIn('author_role', columns)
+            self.assertIn('author_id', columns)
             selected_attempts = set(connection.execute('SELECT task_id,attempt_id FROM attempts'))
             self.assertTrue(selected_attempts)
             self.assertGreater(connection.execute(

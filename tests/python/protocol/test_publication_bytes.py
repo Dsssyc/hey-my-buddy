@@ -99,7 +99,7 @@ class PublicationByteTests(unittest.TestCase):
             state = Path(directory)
             with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
                 connection.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-                connection.execute("INSERT INTO meta VALUES ('schema_version', '27')")
+                connection.execute("INSERT INTO meta VALUES ('schema_version', '28')")
             with mock.patch.object(backup, "database_snapshot", return_value={"z": "café"}), \
                  mock.patch.object(backup, "utc_now", return_value="2026-01-02T03:04:05Z"), \
                  mock.patch.object(backup, "digest", return_value="a" * 64), \
@@ -114,7 +114,7 @@ class PublicationByteTests(unittest.TestCase):
                 b'"createdAt": "2026-01-02T03:04:05Z", "databaseSnapshot": {"z": "caf\xc3\xa9"}, '
                 b'"files": {"board.sqlite3.gz": {"bytes": ' + str(payload_size).encode("ascii")
                 + b', "sha256": "' + b'a' * 64 + b'"}}, "format": 1, "pluginCommit": null, '
-                b'"pluginCommitStatus": "unavailable-in-runtime-metadata", "runtime": null, "schema": 27}')
+                b'"pluginCommitStatus": "unavailable-in-runtime-metadata", "runtime": null, "schema": 28}')
             self.assertEqual((current / "manifest.json").read_bytes(), expected)
 
     def test_runtime_materialization_writes_old_pretty_manifest_and_ready_bytes(self):

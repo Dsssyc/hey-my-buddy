@@ -40,12 +40,12 @@ class BackupTests(BoardTestCase):
         self.assertIn((current / 'board.sqlite3.gz').stat().st_ino, regular_flushed)
         backup.verify(current)
 
-    def test_fixture_backup_retains_upgrade_base_schema_and_exact_bytes(self):
+    def test_fixture_backup_retains_current_schema_and_exact_bytes(self):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(backup.verify(current)['schema'], fixture['schemaVersion'])
-        self.assertEqual(fixture['schemaVersion'], 27)
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -159,7 +159,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for version in (21, 23, 24, 25, 26, 29):
+        for version in (21, 23, 24, 25, 26, 27, 29):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
