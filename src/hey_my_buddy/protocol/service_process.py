@@ -28,4 +28,7 @@ def independent_service_popen(*args, **kwargs):
     try:
         return subprocess.Popen(*args, **kwargs)
     except OSError as error:
-        raise BoardError("SERVICE_START_UNSUPPORTED", f"当前环境不支持独立启动: {error}") from error
+        if os.name != "nt" or getattr(error, "winerror", None) != 5:
+            raise
+        raise BoardError("SERVICE_START_UNSUPPORTED",
+                         f"Independent service start is not supported in this environment: {error}") from error

@@ -460,6 +460,7 @@ class ColdStartTests(unittest.TestCase):
 
     def test_windows_cold_start_refuses_denied_breakaway_without_retry(self):
         failure = OSError(5, "fixture breakaway denied")
+        failure.winerror = 5
         self.spawn.side_effect = failure
         with patch.object(service_process, "os", SimpleNamespace(name="nt")), \
              patch.object(transport, "_healthy", return_value=None):
