@@ -188,7 +188,7 @@ class ObjectiveReadCacheIntegrationTests(unittest.TestCase):
         self.assertEqual(first.value["objectives"][0]["objectiveId"],group)
         self.assertEqual(changed.value["objectives"][0]["objectiveId"],"run:"+root)
 
-    def test_duplicate_json_raw_corrections_change_response_validator(self):
+    def test_duplicate_description_raw_corrections_change_response_validator(self):
         group = self.fixture.macros[0]
         root = self.fixture.roots[0]
         payload = '{"objectiveId":' + json.dumps(group) + ',"description":"fixed","description":"old"}'
@@ -202,22 +202,6 @@ class ObjectiveReadCacheIntegrationTests(unittest.TestCase):
             self.assertFalse(changed.not_modified)
             rows = {row["objectiveId"]: row for row in changed.value["objectives"]}
             self.assertEqual(rows[group]["description"], "new")
-            self.assertEqual(changed.value["cursor"], first.value["cursor"])
-            self.assertEqual([call.args[1] for call in counter.call_args_list], [group])
-        project = "fictional-response-project"
-        report = '{"kept":{' + json.dumps(project) + ':"fixed",' + json.dumps(project) + ':"old"}}'
-        with self.store.db.write() as writer:
-            writer.execute("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (json.dumps({"objectiveId": group, "description": "fixed"}), root))
-            writer.execute("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
-            writer.execute("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?)", (report,))
-        first = self.read()
-        with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
-            with self.store.db.write() as writer:
-                writer.execute("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (report.replace('"old"', '"new"'),))
-            changed = self.read(etag=first.entry.identity_etag)
-            self.assertFalse(changed.not_modified)
-            rows = {row["objectiveId"]: row for row in changed.value["objectives"]}
-            self.assertEqual(rows[group]["project"]["identityReason"], "new")
             self.assertEqual(changed.value["cursor"], first.value["cursor"])
             self.assertEqual([call.args[1] for call in counter.call_args_list], [group])
 

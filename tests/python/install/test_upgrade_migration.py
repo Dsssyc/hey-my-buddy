@@ -1,10 +1,12 @@
 """The released schema-18 board becomes a fresh board containing only settings."""
+import json
 from contextlib import closing
 import sqlite3
 from pathlib import Path
 
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
+from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
@@ -19,10 +21,6 @@ SETTING_COLUMNS = {
     "family_annotations": ("adapter", "provider", "model", "text"),
     "model_concurrency": ("adapter", "provider", "model", "concurrency_limit"),
 }
-ROUTER_KEYS = (
-    "router_profile_ids", "router_default_mode", "router_budget_preset",
-    "router_retry_interval_seconds",
-)
 HISTORY_TABLES = (
     "tasks", "attempts", "workflow_runs", "workflow_host_conclusions",
     "workflow_artifacts", "events", "commands", "workspace_reservations",
@@ -45,8 +43,13 @@ class UpgradeMigrationTests(BoardTestCase):
     def test_verified_schema_18_stock_becomes_new_schema_with_only_settings(self):
         original_settings = {table: rows(self.state, table, columns)
                              for table, columns in SETTING_COLUMNS.items()}
-        original_router = rows(self.state, "meta", ("key", "value"))
-        original_router = [row for row in original_router if row[0] in ROUTER_KEYS]
+        original_router = dict(rows(self.state, "meta", ("key", "value")))
+        expected_router = {
+            "routerProfileIds": json.loads(original_router["router_profile_ids"]),
+            "defaultRoutingMode": original_router["router_default_mode"],
+            "routingBudget": original_router["router_budget_preset"],
+            "routerRetryIntervalSeconds": int(original_router["router_retry_interval_seconds"]),
+        }
         current = Path(backup.create(BoardStore(self.state))["path"])
         manifest = backup.verify(current)
         self.assertEqual(manifest["schema"], 18)
@@ -61,8 +64,9 @@ class UpgradeMigrationTests(BoardTestCase):
         for table, columns in SETTING_COLUMNS.items():
             with self.subTest(table=table):
                 self.assertEqual(rows(self.state, table, columns), original_settings[table])
-        actual_router = rows(self.state, "meta", ("key", "value"))
-        self.assertEqual([row for row in actual_router if row[0] in ROUTER_KEYS], original_router)
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            connection.row_factory = sqlite3.Row
+            self.assertEqual(router.configuration(connection), expected_router)
         for table in HISTORY_TABLES:
             with self.subTest(table=table):
                 self.assertEqual(rows(self.state, table, ("*",)), [])

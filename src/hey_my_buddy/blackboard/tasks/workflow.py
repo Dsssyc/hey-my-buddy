@@ -38,10 +38,8 @@ from ...errors import BoardError
 
 try:  # The workspace module is owned and delivered separately.
     from . import workspace as _workspace_module
-    from . import workspace_identity
 except ImportError:  # pragma: no cover - exercised by tests without the module
     _workspace_module = None
-    workspace_identity = None
 
 #: Operations an attempt-scoped credential may call at all.
 AGENT_OPERATIONS = frozenset(
@@ -229,53 +227,6 @@ class WorkflowCoordinator:
         self.board = board
         self.db = board.db
         self._clock = clock or board.now
-
-    # -- recorded identity resolution ------------------------------------------
-    def _workspace_aliases(self, connection=None) -> dict[str, str]:
-        """The board's registered old→new workspace identity mapping.
-
-        Resolve it from the operation's own connection when one is available;
-        historical JSON and command fingerprints never substitute these values.
-        """
-        if workspace_identity is None:
-            return {}
-        if connection is not None:
-            return workspace_identity.load_alias_map(connection)
-        with self.db.read() as reading:
-            return workspace_identity.load_alias_map(reading)
-
-    def _identity_equivalent(self, recorded, other, *, connection=None) -> bool:
-        if workspace_identity is None:
-            return recorded == other
-        return workspace_identity.equivalent(recorded, other, mapping=self._workspace_aliases(connection))
-
-    def _identity_canonical(self, recorded, *, connection=None):
-        if workspace_identity is None:
-            return recorded
-        return workspace_identity.canonical(recorded, mapping=self._workspace_aliases(connection))
-
-    def _identity_variants(self, recorded, *, connection=None) -> tuple[str, ...]:
-        """Every stored form that may name the same checkout as ``recorded``.
-
-        Mutable rows are normalized to the stable identity while historical
-        records keep their recorded old digest, so an indexed lookup keyed by
-        one form must select the others as well.
-        """
-        if workspace_identity is None:
-            return (recorded,)
-        return tuple(sorted(workspace_identity.identity_variants(recorded, mapping=self._workspace_aliases(connection))))
-
-    def _identity_placeholders(self, variants) -> str:
-        return "(" + ",".join("?" for _variant in variants) + ")"
-
-    def _workspace_call(self, operation, *arguments, **keywords):
-        """Run one workspace-module operation under the board's identity mapping.
-
-        Install this board's explicit mapping for the duration of the call so
-        comparisons accept a recorded old digest only at its proven anchor.
-        """
-        with workspace_identity.aliases(self._workspace_aliases()):
-            return operation(*arguments, **keywords)
 
     def now(self) -> str:
         return self._clock()
@@ -493,11 +444,6 @@ class WorkflowCoordinator:
             "inputCommit": manifest.get("inputCommit"),
             "manifestSha256": run_row["workspace_manifest_sha256"],
         }
-        if connection is not None and workspace_identity is not None:
-            reasons = {field: reason for field in ("checkoutId", "repositoryId")
-                       if (reason := workspace_identity.identity_reason(connection, manifest.get(field))) is not None}
-            if reasons:
-                view["identityReasons"] = reasons
         return view
 
     def _current_scope(self, connection, run_row) -> dict:
@@ -996,40 +942,26 @@ class WorkflowCoordinator:
             )
 
     def _held_writer(self, connection, checkout_id: str):
-        variants = self._identity_variants(checkout_id, connection=connection)
         return connection.execute(
-            "SELECT * FROM workspace_reservations WHERE checkout_id IN "
-            + self._identity_placeholders(variants) + " AND state='held' AND access='write' ORDER BY rowid",
-            variants,
+            "SELECT * FROM workspace_reservations WHERE checkout_id=?"
+            " AND state='held' AND access='write' ORDER BY rowid",
+            (checkout_id,),
         ).fetchone()
 
-    def _unproven_checkout_holder(self, connection, manifest, variants):
-        """Refuse an overlapping reservation whose old identity has no proof.
-
-        Recorded roots and paths can deny a second permission; they never prove
-        an alias, transfer ownership or rewrite an old record. The new root came
-        from preparation outside this transaction. This check uses only durable
-        records and lexical paths, with no Git/stat work under the write lock.
-        """
+    def _unproven_checkout_holder(self, connection, manifest, checkout_id):
+        """Refuse a conflicting reservation that records the same checkout path."""
         root = manifest.get("checkoutRoot")
         if not root:
             return None
-        aliases = self._workspace_aliases(connection)
-        current = workspace_identity.canonical(manifest["checkoutId"], mapping=aliases)
         rows = connection.execute(
             "SELECT r.*, run.workspace_manifest_json AS run_manifest, child.workspace_manifest_json AS child_manifest,"
             " (SELECT a.manifest_json FROM workflow_artifacts a WHERE a.run_id=r.holder_task_id"
             " AND a.kind='input' ORDER BY a.rowid LIMIT 1) AS initial_manifest"
             " FROM workspace_reservations r LEFT JOIN workflow_runs run ON run.run_id=r.holder_task_id"
             " LEFT JOIN workflow_children child ON child.child_task_id=r.holder_task_id"
-            " WHERE r.state IN ('held','transferred') AND r.checkout_id NOT IN "
-            + self._identity_placeholders(variants), variants,
+            " WHERE r.state IN ('held','transferred') AND r.checkout_id!=?", (checkout_id,),
         ).fetchall()
         for row in rows:
-            # Proved forms belong to the indexed family check. An unproved path
-            # must not become a second, path-based alias implementation.
-            if workspace_identity.canonical(row["checkout_id"], mapping=aliases) == current:
-                continue
             roots = []
             for field in ("run_manifest", "child_manifest", "initial_manifest"):
                 try:
@@ -1038,9 +970,7 @@ class WorkflowCoordinator:
                     continue
                 if isinstance(recorded, dict):
                     roots.append(recorded.get("checkoutRoot"))
-            reason = workspace_identity.identity_reason(connection, row["checkout_id"])
-            if (root in roots or row["path"] == manifest.get("path")
-                    or (reason and row["path"] and Path(row["path"]).is_relative_to(Path(root)))):
+            if root in roots or row["path"] == manifest.get("path"):
                 return row
         return None
 
@@ -1060,20 +990,14 @@ class WorkflowCoordinator:
         manifest_sha = manifest.get("manifestSha256")
         if not checkout_id or not manifest_sha:
             raise BoardError("WORKSPACE_INVALID", "The prepared workspace manifest is missing checkoutId/manifestSha256")
-        # Reservations key the stable identity: a manifest recorded before the
-        # restart-stable form is canonicalized through the board's mapping so an
-        # old and a new reservation can never doubly occupy one checkout.
-        checkout_id = self._identity_canonical(checkout_id, connection=connection)
         # Reservation admission is the one atomic claim point for a checkout. A cleanup
         # plan in ``applying`` has already passed its inspection but its removal has not
         # finished, so no new writer may take the checkout across that boundary; the
         # check and the insert below commit in the same SQLite write transaction.
-        variants = self._identity_variants(manifest.get("checkoutId"), connection=connection)
         cleanup = connection.execute(
-            "SELECT plan_id, path FROM workspace_cleanup_plans WHERE (checkout_id IN "
-            + self._identity_placeholders(variants) + " OR path=?) AND state='applying'"
-            " ORDER BY rowid DESC LIMIT 1",
-            (*variants, manifest.get("checkoutRoot")),
+            "SELECT plan_id, path FROM workspace_cleanup_plans WHERE (checkout_id=? OR path=?)"
+            " AND state='applying' ORDER BY rowid DESC LIMIT 1",
+            (checkout_id, manifest.get("checkoutRoot")),
         ).fetchone()
         if cleanup is not None:
             raise BoardError(
@@ -1083,22 +1007,22 @@ class WorkflowCoordinator:
                 planId=cleanup["plan_id"],
                 path=cleanup["path"],
             )
-        unproven = self._unproven_checkout_holder(connection, manifest, variants)
+        unproven = self._unproven_checkout_holder(connection, manifest, checkout_id)
         if unproven is not None:
             raise BoardError(
                 "PREPARATION_CONFLICT", "This checkout still has a reservation whose recorded identity is unproven; resolve that ownership before claiming it",
                 checkoutId=checkout_id, holderTaskId=unproven["holder_task_id"],
                 recordedCheckoutId=unproven["checkout_id"],
-                identityReason=workspace_identity.identity_reason(connection, unproven["checkout_id"]),
+                identityReason=None,
             )
         held = connection.execute(
-            "SELECT * FROM workspace_reservations WHERE checkout_id IN "
-            + self._identity_placeholders(variants) + " AND state='held' ORDER BY rowid", variants,
+            "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY rowid",
+            (checkout_id,),
         ).fetchall()
         writers = [row for row in held if row["access"] == "write"]
         if len(writers) > 1:
             raise BoardError(
-                "PREPARATION_CONFLICT", "Several historical identity forms still hold this checkout; resolve their ownership before claiming it",
+                "PREPARATION_CONFLICT", "Several reservations still hold this checkout; resolve their ownership before claiming it",
                 checkoutId=checkout_id,
                 holderTaskIds=sorted({row["holder_task_id"] for row in writers}),
             )
@@ -1129,11 +1053,11 @@ class WorkflowCoordinator:
                     )
         existing = [row for row in held if row["holder_task_id"] == holder_task_id]
         if len(existing) > 1:
-            raise BoardError("PREPARATION_CONFLICT", "This owner has duplicate historical reservations for one checkout",
+            raise BoardError("PREPARATION_CONFLICT", "This owner has duplicate reservations for one checkout",
                              checkoutId=checkout_id, holderTaskId=holder_task_id)
         if existing:
             if (existing[0]["path"] != manifest.get("path") or existing[0]["access"] != access
-                    or not self._identity_equivalent(existing[0]["repository_id"], manifest.get("repositoryId"), connection=connection)):
+                    or existing[0]["repository_id"] != manifest.get("repositoryId")):
                 raise BoardError("PREPARATION_CONFLICT", "The held reservation no longer matches the prepared checkout allocation",
                                  checkoutId=checkout_id, holderTaskId=holder_task_id)
             return
@@ -1145,7 +1069,7 @@ class WorkflowCoordinator:
                 str(uuid.uuid4()),
                 manifest.get("workspaceId") or checkout_id,
                 checkout_id,
-                self._identity_canonical(manifest.get("repositoryId"), connection=connection) if manifest.get("repositoryId") else None,
+                manifest.get("repositoryId"),
                 manifest.get("path"),
                 access,
                 holder_task_id,
@@ -1175,22 +1099,20 @@ class WorkflowCoordinator:
             "SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (task["task_id"],),
         ).fetchall()
         current = next((row for row in reservations if row["state"] in ("held", "transferred")), None)
-        reservation = current or next((row for row in reservations if self._identity_equivalent(row["checkout_id"], manifest.get("checkoutId"), connection=connection)), None)
+        reservation = current or next((row for row in reservations if row["checkout_id"] == manifest.get("checkoutId")), None)
         if (reservation is None or task["cwd"] != manifest.get("path")
-                or not self._identity_equivalent(reservation["checkout_id"], manifest.get("checkoutId"), connection=connection)
-                or not self._identity_equivalent(reservation["repository_id"], manifest.get("repositoryId"), connection=connection)
+                or reservation["checkout_id"] != manifest.get("checkoutId")
+                or reservation["repository_id"] != manifest.get("repositoryId")
                 or reservation["path"] != manifest.get("path") or reservation["access"] != ("read" if manifest["access"] == "read" else "write")):
             raise BoardError("PREPARATION_CONFLICT", "The continuation no longer owns its recorded checkout allocation")
         if reservation["state"] == "transferred":
             # The authorized helper still owns it. Its normal settlement restores
             # this reservation; a manual continuation cannot take it back early.
             return
-        variants = self._identity_variants(manifest["checkoutId"], connection=connection)
         conflicts = connection.execute(
-            "SELECT * FROM workspace_reservations WHERE checkout_id IN " + self._identity_placeholders(variants)
-            + " AND holder_task_id!=?"
+            "SELECT * FROM workspace_reservations WHERE checkout_id=? AND holder_task_id!=?"
             " AND (state='held' OR (?='released' AND state='transferred')) AND (access='write' OR ?='write')",
-            (*variants, task["task_id"], reservation["state"], "read" if manifest["access"] == "read" else "write"),
+            (manifest["checkoutId"], task["task_id"], reservation["state"], "read" if manifest["access"] == "read" else "write"),
         ).fetchall()
         if conflicts:
             raise BoardError("PREPARATION_CONFLICT", "Another owner holds the continuation checkout; wait for release before continuing",
@@ -1767,14 +1689,13 @@ class WorkflowCoordinator:
     @contextmanager
     def _submission_preparation(self, request_id, intent, *, shared_locks=None):
         module = workspace_module()
-        with workspace_identity.aliases(self._workspace_aliases()):
-            preparation = getattr(module, "submission_preparation", None)
-            if preparation is None:
-                # The test workspace stand-in has no physical allocation.
-                yield {"manifest": module.prepare(self.board.directory, request_id, intent), "newAllocation": False}
-            else:
-                with preparation(self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
-                    yield prepared
+        preparation = getattr(module, "submission_preparation", None)
+        if preparation is None:
+            # The test workspace stand-in has no physical allocation.
+            yield {"manifest": module.prepare(self.board.directory, request_id, intent), "newAllocation": False}
+        else:
+            with preparation(self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
+                yield prepared
 
     def _revoke_submission_allocation(self, request_id, manifest, original_error):
         """Preserve admission failure while revoking this call's unregistered checkout.
@@ -2526,9 +2447,8 @@ class WorkflowCoordinator:
             manifest = item["manifest"]
             access = "read" if item["executionWorkspace"]["access"] == "read" else "write"
             transfer_from = None
-            if access == "write" and self._identity_equivalent(
-                manifest.get("checkoutId"), json.loads(run_row["workspace_manifest_json"] or "{}").get("checkoutId"), connection=connection
-            ):
+            if access == "write" and manifest.get("checkoutId") == json.loads(
+                    run_row["workspace_manifest_json"] or "{}").get("checkoutId"):
                 # Sequential reuse of the parent's checkout requires stopped-parent proof
                 # and an explicit Host transfer.
                 if not self._stopped_parent(connection, run_row["run_id"]):
@@ -2539,7 +2459,7 @@ class WorkflowCoordinator:
                         parentRunId=run_row["run_id"],
                     )
                 transfer_from = run_row["run_id"]
-            child_task = self._admit_helper_task(
+            self._admit_helper_task(
                 connection,
                 helper_task_id=helper_task_id,
                 item=item,
@@ -3813,14 +3733,12 @@ class WorkflowCoordinator:
             run_id = target_id
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             if duplicate is None:
-                response, artifact, integration = self._accept_record(
+                response, _, _ = self._accept_record(
                     connection, owner_run_id=owner_run_id, run_row=run_row, task=task, actor=actor, now=now,
                     artifact_id=artifact_id, note=note, command_id=command_id, request_key=request_key,
                     verification=verification, not_required=not_required)
             else:
                 response = duplicate
-                artifact = None
-                integration = None
             head = self.board._head_of(connection)
         self.board._notify(head)
         response = dict(response)
@@ -3914,8 +3832,7 @@ class WorkflowCoordinator:
         bound to the acceptance note.
         """
         module = workspace_module()
-        verification = self._workspace_call(
-            module.integration_verify,
+        verification = module.integration_verify(
             manifest, original_input=original_input, final_input=final_input,
             path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
             repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
@@ -3946,8 +3863,7 @@ class WorkflowCoordinator:
                 paths=unrecorded,
                 verification=verification,
             )
-        verification = self._workspace_call(
-            module.integration_verify,
+        verification = module.integration_verify(
             manifest, original_input=original_input, final_input=final_input,
             path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
             repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
@@ -4262,7 +4178,7 @@ class WorkflowCoordinator:
                     or record.get("manifestSha256") != manifest["manifestSha256"]):
                 continue
             try:
-                self._workspace_call(module.verify_sealed_output, manifest, manifest, record)
+                module.verify_sealed_output(manifest, manifest, record)
             except BoardError:
                 continue
             values = record.get("adoptedPaths")
@@ -4325,10 +4241,8 @@ class WorkflowCoordinator:
         if seal_work is not None:
             manifest, allowed, attempt_id = seal_work
             try:
-                sealed_record = self._workspace_call(
-                    workspace_module().host_seal,
-                    self.board.directory, manifest, target_id, attempt_id, allowed_paths=allowed,
-                )
+                sealed_record = workspace_module().host_seal(
+                    self.board.directory, manifest, target_id, attempt_id, allowed_paths=allowed)
             except BoardError as error:
                 if error.code == "WORKSPACE_SCOPE_VIOLATION":
                     raise BoardError(
@@ -4939,16 +4853,15 @@ class WorkflowCoordinator:
                 raise BoardError("NOT_READY", "Workspace resolution requires the goal's fixed original input")
             original_commit = json.loads(original["manifest_json"])["inputCommit"]
         try:
-            result = self._workspace_call(
-                workspace_module().resolve,
-                self.board.directory, manifest, task_id=target_id, attempt_id=conflict["attempt_id"], action=action,
-                paths=paths, observed_fingerprint=observed, reason=reason, actor=actor,
+            result = workspace_module().resolve(
+                self.board.directory, manifest, task_id=target_id,
+                attempt_id=conflict["attempt_id"], action=action, paths=paths,
+                observed_fingerprint=observed, reason=reason, actor=actor,
             )
             resolved_artifact = result.get("artifact")
             if action != "abandon" and isinstance(resolved_artifact, dict):
-                resolved_artifact["cumulativePatch"] = self._workspace_call(
-                    workspace_module().cumulative_patch, manifest, resolved_artifact, original_commit,
-                )
+                resolved_artifact["cumulativePatch"] = workspace_module().cumulative_patch(
+                    manifest, resolved_artifact, original_commit)
         except BoardError as error:
             if error.code == "WORKSPACE_CONFLICT" and error.details.get("conflictingPaths"):
                 with self.db.write() as connection:
@@ -5216,11 +5129,10 @@ class WorkflowCoordinator:
         ).fetchone()["count"]):
             reasons.append("pending-continuations")
         if manifest.get("checkoutId"):
-            dependency_variants = self._identity_variants(manifest["checkoutId"], connection=connection)
             if int(connection.execute(
-                "SELECT COUNT(*) AS count FROM workspace_reservations WHERE checkout_id IN "
-                + self._identity_placeholders(dependency_variants) + " AND state IN ('held','transferred')"
-                " AND holder_task_id!=?", (*dependency_variants, run_row["run_id"]),
+                "SELECT COUNT(*) AS count FROM workspace_reservations WHERE checkout_id=?"
+                " AND state IN ('held','transferred') AND holder_task_id!=?",
+                (manifest["checkoutId"], run_row["run_id"]),
             ).fetchone()["count"]):
                 reasons.append("workspace-dependency")
         evidence = {
@@ -5296,11 +5208,10 @@ class WorkflowCoordinator:
             if not manifest:
                 raise BoardError("NOT_READY", "This run has no prepared workspace to clean up", runId=run_id)
             retained = self._allocation_provenance(connection, run_row)
-            plan_variants = self._identity_variants(manifest.get("checkoutId"), connection=connection)
             existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id IN "
-                + self._identity_placeholders(plan_variants) + " ORDER BY rowid DESC LIMIT 1",
-                (run_id, *plan_variants),
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=?"
+                " ORDER BY rowid DESC LIMIT 1",
+                (run_id, manifest.get("checkoutId")),
             ).fetchone()
             if existing is not None and existing["state"] in ("planned", "applying", "applied"):
                 # An applied plan is its own result; a live planned or resuming plan
@@ -5312,8 +5223,8 @@ class WorkflowCoordinator:
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
             sealed = self._latest_handoff(connection, run_row, manifest)
         module = workspace_module()
-        inspection = self._workspace_call(
-            module.cleanup_inspect, self.board.directory, manifest, sealed=sealed, retained=retained,
+        inspection = module.cleanup_inspect(
+            self.board.directory, manifest, sealed=sealed, retained=retained,
             allowed=self._board_adopted_paths(run_id, manifest))
         if inspection["allocation"] is not None:
             retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
@@ -5340,12 +5251,10 @@ class WorkflowCoordinator:
             run_row = self._target_run(connection, owner, target_id)
             run_id = run_row["run_id"]
             self._expect_revision(run_row, target_snapshot["revision"])
-            plan_variants = self._identity_variants(manifest.get("checkoutId"), connection=connection)
             existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id IN "
-                + self._identity_placeholders(plan_variants) + " AND state IN ('planned','applying','applied')"
-                " ORDER BY rowid DESC LIMIT 1",
-                (run_id, *plan_variants),
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=?"
+                " AND state IN ('planned','applying','applied') ORDER BY rowid DESC LIMIT 1",
+                (run_id, manifest.get("checkoutId")),
             ).fetchone()
             if existing is not None and (existing["state"] != "planned" or existing["expires_at"] >= now):
                 return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
@@ -5376,7 +5285,7 @@ class WorkflowCoordinator:
         return response
 
     def _expiry(self, seconds: int) -> str:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         moment = datetime.fromisoformat(self.now().replace("Z", "+00:00")) + timedelta(seconds=seconds)
         return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -5405,7 +5314,7 @@ class WorkflowCoordinator:
                        "expectedRevision": expected}
         with self.db.read() as connection:
             owner = self._run_row(connection, run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -5442,8 +5351,8 @@ class WorkflowCoordinator:
         path = Path(plan["path"])
         inspection = None
         if path.exists() or path.is_symlink():
-            inspection = self._workspace_call(
-                workspace_module().cleanup_inspect, self.board.directory, manifest, sealed=sealed,
+            inspection = workspace_module().cleanup_inspect(
+                self.board.directory, manifest, sealed=sealed,
                 retained=retained, allowed=self._board_adopted_paths(run_id, manifest))
             # The registered owner of this allocation may complete the same removal
             # while the eligibility is proven, or the checkout may already have been
@@ -5460,7 +5369,7 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             owner = self._run_row(connection, owner_run_id)
-            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -5484,8 +5393,7 @@ class WorkflowCoordinator:
         self.board._notify(head)
         removed = None
         if path.exists() or path.is_symlink():
-            removed = self._workspace_call(
-                workspace_module().cleanup_remove, self.board.directory, manifest, retained=retained)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
         from ... import private_dirs
         for goal_id in dict.fromkeys(private_goals):
             for adapter in private_dirs.ADAPTERS:
@@ -5541,11 +5449,10 @@ class WorkflowCoordinator:
         # The plan is bound to the physical allocation, not to whatever logical
         # turn/input snapshot currently runs on it; both must still agree here.
         retained = self._allocation_provenance(connection, run_row)
-        allocation = self._workspace_call(
-            workspace_module().resolve_allocation, self.board.directory, manifest, retained)
+        allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
         if (allocation is None or plan["workspace_id"] != allocation["workspaceId"]
-                or not self._identity_equivalent(plan["checkout_id"], allocation["checkoutId"], connection=connection)
-                or not self._identity_equivalent(plan["repository_id"], allocation["repositoryId"], connection=connection)
+                or plan["checkout_id"] != allocation["checkoutId"]
+                or plan["repository_id"] != allocation["repositoryId"]
                 or plan["path"] != allocation["path"]):
             raise BoardError("CONFLICT", "The cleanup plan no longer matches the run's workspace allocation",
                              planId=plan["plan_id"])
@@ -6033,10 +5940,10 @@ class WorkflowCoordinator:
             # Real seals bind the immutable execution manifest by digest; unlike
             # the early workspace double, they do not repeat checkoutId themselves.
             execution = json.loads(row["input_json"]).get("executionWorkspace") or {}
-            if (self._identity_equivalent(execution.get("checkoutId"), checkout_id, connection=connection)
+            if (execution.get("checkoutId") == checkout_id
                     and execution.get("manifestSha256") == sealed.get("manifestSha256")
                     and (sealed.get("checkoutId") is None
-                         or self._identity_equivalent(sealed.get("checkoutId"), checkout_id, connection=connection))):
+                         or sealed.get("checkoutId") == checkout_id)):
                 return sealed
         return None
 
@@ -6145,18 +6052,17 @@ class WorkflowCoordinator:
             if attempt is not None and (attempt["execution_state"] != "finished" or not attempt["shutdown_confirmed"]):
                 return None
             previous = json.loads(run["workspace_manifest_json"] or "{}")
-            checkout_variants = self._identity_variants(previous.get("checkoutId"), connection=connection) if previous.get("checkoutId") else ()
+            checkout_id = previous.get("checkoutId")
             reservations = connection.execute(
-                "SELECT * FROM workspace_reservations WHERE checkout_id IN "
-                + self._identity_placeholders(checkout_variants) + " AND state='held' ORDER BY reservation_id",
-                checkout_variants,
-            ).fetchall() if checkout_variants else []
+                "SELECT * FROM workspace_reservations WHERE checkout_id=? AND state='held' ORDER BY reservation_id",
+                (checkout_id,),
+            ).fetchall() if checkout_id else []
             own = [item for item in reservations if item["holder_task_id"] == row["run_id"]]
             owned_record = connection.execute(
-                "SELECT * FROM workspace_reservations WHERE checkout_id IN "
-                + self._identity_placeholders(checkout_variants) + " AND holder_task_id=? ORDER BY rowid DESC LIMIT 1",
-                (*checkout_variants, row["run_id"]),
-            ).fetchone() if checkout_variants else None
+                "SELECT * FROM workspace_reservations WHERE checkout_id=?"
+                " AND holder_task_id=? ORDER BY rowid DESC LIMIT 1",
+                (checkout_id, row["run_id"]),
+            ).fetchone() if checkout_id else None
             if not own and owned_record is not None and owned_record["state"] == "transferred":
                 # An authorized helper will return this ownership when it stops.
                 return None
@@ -6166,9 +6072,8 @@ class WorkflowCoordinator:
                 and (item["access"] == "write" or json.loads(run["execution_workspace_json"])["access"] != "read") for item in reservations
             ):
                 ownership_problem = {"code": "PREPARATION_CONFLICT", "message": "The continuation checkout is no longer exclusively owned; explicitly continue after its owner releases it"}
-            elif own[0]["access"] != ("read" if previous["access"] == "read" else "write") or any(own[0][key] != previous.get(field) if key not in ("checkout_id", "repository_id")
-                    else not self._identity_equivalent(own[0][key], previous.get(field), connection=connection)
-                    for key, field in (
+            elif own[0]["access"] != ("read" if previous["access"] == "read" else "write") or any(
+                    own[0][key] != previous.get(field) for key, field in (
                         ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"),
                         ("path", "path"),
                     )) or task["cwd"] != previous.get("path"):
@@ -6211,11 +6116,11 @@ class WorkflowCoordinator:
                         raise BoardError(before[-1]["code"], before[-1]["message"])
                     if recovered_attempt is not None:
                         module = workspace_module()
-                        self._workspace_call(module.verify, previous, require_unchanged=False)
+                        module.verify(previous, require_unchanged=False)
                         # Enumerate only Git's nonignored paths, then pass exact files
                         # to the existing snapshot API. A directory selector could
                         # accidentally select ignored secrets or runtime caches.
-                        included = self._workspace_call(module.recovery_inputs, previous)
+                        included = module.recovery_inputs(previous)
                         intent["includeUntracked"] = schemas.string_list({"includeUntracked": included}, "includeUntracked", limit=256)
                         with self.db.read() as connection:
                             if snapshot(connection, row["continuation_id"]) != before:
@@ -6224,13 +6129,9 @@ class WorkflowCoordinator:
                         manifest = previous
                     else:
                         self._cleanup_fence(intent.get("cwd"))
-                        manifest = self._workspace_call(
-                            workspace_module().prepare,
-                            self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent
-                        )
-                    if any((manifest.get(field) != previous.get(field)
-                            if field not in ("checkoutId", "repositoryId")
-                            else not self._identity_equivalent(manifest.get(field), previous.get(field)))
+                        manifest = workspace_module().prepare(
+                            self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent)
+                    if any(manifest.get(field) != previous.get(field)
                            for field in ("checkoutId", "checkoutRoot", "repositoryId", "path")):
                         raise BoardError("PREPARATION_CONFLICT", "The prepared continuation changed its allocated checkout")
                     with self.db.read() as connection:
@@ -6238,7 +6139,7 @@ class WorkflowCoordinator:
                             continue
                     # A recovered preparation may already have a manifest on disk.
                     # Recheck ownership before scanning its execution fingerprint.
-                    self._workspace_call(workspace_module().verify, manifest, require_unchanged=True)
+                    workspace_module().verify(manifest, require_unchanged=True)
                 except Exception as error:
                     if isinstance(error, BoardError) and error.code == "WORKSPACE_BUSY":
                         # Another worker is preparing the same continuation. Leave it
@@ -6284,12 +6185,10 @@ class WorkflowCoordinator:
                         " updated_at=?, revision=revision+1 WHERE run_id=?",
                         (frozen, manifest["workspaceId"], manifest["manifestSha256"], now, row["run_id"]),
                     )
-                    update_variants = self._identity_variants(manifest["checkoutId"], connection=connection)
                     connection.execute(
                         "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, updated_at=?, access=?"
-                        " WHERE holder_task_id=? AND checkout_id IN "
-                        + self._identity_placeholders(update_variants) + " AND state='held'",
-                        (manifest["workspaceId"], manifest["manifestSha256"], now, "read" if manifest["access"] == "read" else "write", row["run_id"], *update_variants),
+                        " WHERE holder_task_id=? AND checkout_id=? AND state='held'",
+                        (manifest["workspaceId"], manifest["manifestSha256"], now, "read" if manifest["access"] == "read" else "write", row["run_id"], manifest["checkoutId"]),
                     )
                     kind = "workflow.workspace_prepared"
                     event = {"continuationId": row["continuation_id"], "manifestSha256": manifest["manifestSha256"], "checkoutId": manifest["checkoutId"]}
@@ -6440,7 +6339,7 @@ class WorkflowCoordinator:
             return
         effective = result.get("workspaceManifest")
         if isinstance(effective, dict) and effective:
-            self._workspace_call(workspace_module().verify, effective, require_unchanged=False)
+            workspace_module().verify(effective, require_unchanged=False)
         partial = result.get("partialWorkspaceSeal")
         seal = partial or result.get("workspaceSeal")
         if isinstance(seal, dict):
@@ -6464,7 +6363,7 @@ class WorkflowCoordinator:
             if params.get("status") == "ok" or not params.get("shutdownConfirmed") or turn_row is None:
                 raise BoardError("WORKSPACE_INVALID", "A partial output requires a stopped failed attempt")
             bound = json.loads(turn_row["input_json"])["executionWorkspace"]
-            self._workspace_call(workspace_module()._artifact_binding, bound, bound, partial)
+            workspace_module()._artifact_binding(bound, bound, partial)
         if params.get("status") != "ok" or not params.get("shutdownConfirmed"):
             return
         if turn_row is None:
@@ -7201,12 +7100,10 @@ class WorkflowCoordinator:
                         break
                     parent_id = link["parent_run_id"]
                     continue
-                variants = self._identity_variants(reservation["checkout_id"], connection=connection)
                 parent_reservation = connection.execute(
-                    "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND checkout_id IN "
-                    + self._identity_placeholders(variants)
-                    + " AND state='transferred' ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                    (parent_id, *variants),
+                    "SELECT * FROM workspace_reservations WHERE holder_task_id=? AND checkout_id=?"
+                    " AND state='transferred' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                    (parent_id, reservation["checkout_id"]),
                 ).fetchone()
                 # A live descendant may still hold a checkout transferred through
                 # several generations. Never reclaim it before that owner stops.

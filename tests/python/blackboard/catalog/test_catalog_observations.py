@@ -1,8 +1,9 @@
 """Current native facts change without replacing user history or accepting late results."""
 from copy import deepcopy
+import json
 from unittest.mock import patch
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog import catalog_store
+from hey_my_buddy.blackboard.catalog import catalog as catalog_rules, catalog_store
 
 
 def catalog(adapter='dsh', models=('alpha',), status='complete', account_status=None):
@@ -25,6 +26,15 @@ class CatalogObservationTests(BoardTestCase):
             return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
                     [tuple(row) for row in db.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')])
 
+    def test_begin_freezes_harnesses_in_the_observation_on_first_request(self):
+        first = catalog_store.begin(self.e, 'same-request', harnesses=[{'adapter': 'dsh', 'revision': 1}])
+        repeated = catalog_store.begin(self.e, 'same-request', harnesses=[{'adapter': 'dsh', 'revision': 2}])
+        self.assertEqual(first, repeated)
+        with self.e.db.read() as db:
+            row = db.execute('SELECT harnesses_json FROM catalog_observations WHERE observation_id=?',
+                             (first['observationId'],)).fetchone()
+            self.assertEqual(json.loads(row['harnesses_json']), first['harnesses'])
+
     def test_identical_read_records_observation_and_confirmed_time_without_event(self):
         first = self.record(catalog())
         facts = self.table_facts()
@@ -39,8 +49,9 @@ class CatalogObservationTests(BoardTestCase):
         notify.assert_not_called()
         with self.e.db.read() as db:
             self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_profiles').fetchone()), profile)
-            self.assertEqual(db.execute("SELECT value FROM meta WHERE key='catalog-read-at:dsh'").fetchone()[0], self.clock.value)
-            self.assertEqual(db.execute("SELECT updated_at FROM catalog_current WHERE adapter='dsh'").fetchone()[0], self.clock.value)
+            current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE adapter='dsh'").fetchone()
+            self.assertEqual((current['read_at'], current['account_status'], current['updated_at']),
+                             (self.clock.value, 'confirmed', self.clock.value))
             self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
                                         (second['observationId'],)).fetchone()[0], self.clock.value)
 
@@ -105,6 +116,8 @@ class CatalogObservationTests(BoardTestCase):
 
     def test_unknown_reading_keeps_profiles_unless_it_restores_retained_availability(self):
         self.record(catalog())
+        with self.e.db.read() as db:
+            read_at = db.execute("SELECT read_at FROM catalog_current WHERE adapter='dsh'").fetchone()[0]
         facts = self.table_facts()
         self.record(catalog(models=('untrusted',), account_status='unknown'))
         self.assertEqual(self.table_facts(), facts)
@@ -114,7 +127,20 @@ class CatalogObservationTests(BoardTestCase):
         self.assertGreater(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
             row = db.execute('SELECT available FROM evaluation_profiles').fetchone()
+            current = db.execute("SELECT read_at,account_status FROM catalog_current WHERE adapter='dsh'").fetchone()
         self.assertEqual(row['available'], 1)
+        self.assertEqual((current['read_at'], current['account_status']), (read_at, 'confirmed'))
+
+    def test_first_trusted_read_grounds_a_retained_setting_missing_from_catalog(self):
+        self.record(catalog(models=('alpha',)))
+        with self.e.db.write() as db:
+            db.execute('DELETE FROM catalog_current')
+            db.execute("UPDATE evaluation_profiles SET enabled=1,unavailable_reason=NULL")
+        self.record(catalog(models=('beta',)))
+        with self.e.db.read() as db:
+            missing = db.execute("SELECT available,enabled,unavailable_reason FROM evaluation_profiles WHERE model='alpha'").fetchone()
+        self.assertEqual((missing['available'], missing['enabled'], missing['unavailable_reason']),
+                         (0, 1, catalog_rules.CONFIRMED_ABSENCE_REASON))
 
     def test_effort_retirement_changes_profile_once(self):
         payload = catalog()

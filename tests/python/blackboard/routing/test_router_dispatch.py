@@ -94,9 +94,9 @@ class RouterDispatchTestCase(BoardTestCase):
         with self.board_.store.db.read() as db:
             return db.execute("SELECT * FROM attempts").fetchall()
 
-    def meta(self, key):
+    def tool_policy(self, attempt_id):
         with self.board_.store.db.read() as db:
-            row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            row = db.execute("SELECT tool_policy_json FROM router_claims WHERE attempt_id=?", (attempt_id,)).fetchone()
             return json.loads(row[0]) if row is not None else None
 
 
@@ -378,7 +378,7 @@ class ClaimTests(RouterDispatchTestCase):
         self.assertEqual(document["profile"], {"adapter": "dsh", "provider": "fixture",
                                                "model": "alpha", "effort": "max"})
         # The claim froze the tool policy for this attempt.
-        self.assertEqual(self.meta("attempt-tool-policy:" + attempt["attemptId"]), {"systemSandbox": False})
+        self.assertEqual(self.tool_policy(attempt["attemptId"]), {"systemSandbox": False})
         with self.board_.store.db.read() as db:
             binding = router_sequence.claim(db, attempt["attemptId"])
         self.assertEqual(binding, {"taskId": result["runId"], "attemptId": attempt["attemptId"],

@@ -66,19 +66,32 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         self.assertEqual(self.decision_row(request["decisionId"])["profileId"], C)
 
     def test_disabled_selected_buddy_reroutes_once(self):
-        self.assert_retry("disabled", "已停用")
+        self.assert_retry("disabled", "disabled")
 
     def test_unavailable_selected_buddy_reroutes_once(self):
-        self.assert_retry("unavailable", "已不可用")
+        self.assert_retry("unavailable", "unavailable")
 
     def test_excluded_selected_buddy_reroutes_once(self):
-        self.assert_retry("excluded", "已被用户排除")
+        self.assert_retry("excluded", "excluded by the user")
 
     def test_capability_loss_reroutes_once(self):
-        self.assert_retry("capability", "不满足任务要求的能力")
+        self.assert_retry("capability", "missing a required task capability")
 
     def test_quota_loss_reroutes_without_adopting_exhausted_buddy(self):
-        self.assert_retry("quota", "额度边界")
+        self.assert_retry("quota", "quota limits")
+
+    def test_invalid_selection_with_unconfirmed_outer_stop_does_not_reroute(self):
+        request, first = self.start(three=True, governed=True)
+        self.invalidate(B, "disabled")
+        response = self.report(first, self.answer(first, profile_id=B), shutdown=False)
+        self.assertEqual(response["decision"]["outcome"], "changed", response)
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        self.assertEqual(self.current_task(request["decisionId"]), first["task"]["taskId"])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM router_dispatches").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='decision.selection_rerouted'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT shutdown_confirmed FROM attempts WHERE attempt_id=?",
+                                        (first["attempt"]["attemptId"],)).fetchone()[0], 0)
 
     def test_second_invalid_selection_reaches_host_with_reason(self):
         request, first = self.start(three=True, governed=True)
@@ -90,10 +103,10 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         response = self.report(second, self.answer(second, profile_id=C))
         self.assertEqual(response["decision"]["status"], "needs-host", response)
         view = self.decision_row(request["decisionId"])
-        self.assertIn("重新路由后", view["reason"])
-        self.assertIn("已被用户排除", view["reason"])
+        self.assertIn("after rerouting", view["reason"])
+        self.assertIn("excluded by the user", view["reason"])
         self.assertEqual(view["routingBoundary"]["kind"], "routing-changed")
-        self.assertIn("已被用户排除", view["routingBoundary"]["reason"])
+        self.assertIn("excluded by the user", view["routingBoundary"]["reason"])
         self.assertEqual([p["profileId"] for p in view["routingBoundary"]["candidates"]], [A, C])
         self.assertEqual([t["taskId"] for t in view["routerTrials"] if t["attemptId"]], [second["task"]["taskId"]])
         with self.board_.store.db.read() as db:

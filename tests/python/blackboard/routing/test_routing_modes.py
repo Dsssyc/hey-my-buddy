@@ -1,6 +1,5 @@
 import uuid
 """Single Router mode, pure legacy conversion and durable routing tests; no native model calls."""
-import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router
@@ -38,7 +37,8 @@ class RoutingModesTests(BoardTestCase):
         self.assertEqual(settings['defaultRoutingMode'], 'fast')
         self.assertEqual(settings['routingBudget'], 'brief')
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-        self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
 
 

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import private_state_dir
-from hey_my_buddy.blackboard.tasks import storage, workflow, workspace, workspace_identity
+from hey_my_buddy.blackboard.tasks import storage, workflow, workspace
 
 
 class StorageOrphanTests(WorkflowTestCase):
@@ -127,34 +127,16 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
 
     def retained_reference_forms(self, manifest, checkout):
-        # Private historical alias fixtures use the accepted B1 reader; no input
-        # manifest or recorded receipt is rewritten to its canonical identity.
-        aliases = []
-        git_dir = Path(workspace.inspect(str(checkout))['gitDir'])
-        with self.board_instance.store.db.write() as connection:
-            for delta in (0, 2):
-                facts = git_dir.stat()
-                old = workspace._sha(workspace_identity._json([str(git_dir), facts.st_dev + delta, facts.st_ino]))
-                entry = {'version': 1, 'source': 'fixed-input-and-inode', 'newId': manifest['checkoutId'],
-                         'anchors': [{'directory': str(git_dir), 'inode': facts.st_ino,
-                                      'legacyDevice': facts.st_dev + delta, 'workspaceId': manifest['workspaceId'],
-                                      'manifestSha256': manifest['manifestSha256'], 'role': 'checkoutId'}]}
-                connection.execute('INSERT INTO meta(key,value) VALUES (?,?)',
-                                   (workspace_identity.META_KEY_PREFIX + old, json.dumps(entry)))
-                aliases.append(old)
-            mapping = workspace_identity.load_alias_map(connection)
-            self.assertTrue(all(mapping[old] == manifest['checkoutId'] for old in aliases))
         return [('path', str(checkout)), ('path', str(checkout / '..' / 'checkout')),
                 ('path', str(checkout.parent)), ('path', str(checkout / 'retained.txt')),
-                *[('identity', value) for value in (manifest['checkoutId'], *aliases)],
+                ('identity', manifest['checkoutId']),
                 ('nested', {'target': {'path': str(checkout)}}),
-                ('nested', {'executionWorkspace': {'checkoutId': aliases[0]}}),
-                ('nested', {'executionWorkspace': {'checkoutId': aliases[1]}}),
+                ('nested', {'executionWorkspace': {'checkoutId': manifest['checkoutId']}}),
                 ('nested', {'workspaceId': manifest['workspaceId']}),
                 ('nested', {'manifestSha256': manifest['manifestSha256']}),
                 ('nested', {'output': str(checkout.parent / 'outputs' / 'retained.patch')})]
 
-    def test_all_integration_states_and_path_identity_alias_forms_are_retained(self):
+    def test_all_integration_states_and_path_identity_forms_are_retained(self):
         manifest, checkout, planned = self.orphan()
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         forms = self.retained_reference_forms(manifest, checkout)
@@ -173,7 +155,7 @@ class StorageOrphanTests(WorkflowTestCase):
                         rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
                                 if table == 'workflow_integrations' and row['integration_id'] == identity]
                         self.assertEqual(storage._allocation_reference_reasons(
-                            rows, manifest, None, mapping=workspace_identity.load_alias_map(connection)),
+                            rows, manifest, None),
                             ['workflow_integrations-reference'])
             self.assertIn('workflow_integrations-reference', storage.allocation_references(connection, manifest))
         row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
@@ -181,7 +163,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertIn('workflow_integrations-reference', row['reasons'])
         self.assert_retained(checkout, planned)
 
-    def test_cleanup_plan_states_and_path_identity_alias_forms_cannot_use_orphan_bypass(self):
+    def test_cleanup_plan_states_and_path_identity_forms_cannot_use_orphan_bypass(self):
         manifest, checkout, planned = self.orphan()
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         forms = self.retained_reference_forms(manifest, checkout)
@@ -201,7 +183,7 @@ class StorageOrphanTests(WorkflowTestCase):
                         rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
                                 if table == 'workspace_cleanup_plans' and row['plan_id'] == identity]
                         self.assertEqual(storage._allocation_reference_reasons(
-                            rows, manifest, None, mapping=workspace_identity.load_alias_map(connection)),
+                            rows, manifest, None),
                             ['workspace_cleanup_plans-reference'])
             self.assertIn('workspace_cleanup_plans-reference', storage.allocation_references(connection, manifest))
         row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
@@ -601,75 +583,37 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(calls, [str(checkout), str(checkout)])
         self.assertEqual(result['skipped'][0]['reasons'], ['STORAGE_CHANGED'])
 
-    def proven_source_checkout_alias(self):
-        intent = {'kind': 'existing', 'cwd': str(self.repo), 'access': 'write',
-                  'base': {'kind': 'working-tree'}, 'includeUntracked': [],
-                  'writeScope': ['.'], 'integrator': 'host:host-1'}
-        source = workspace.prepare(self.directory, 'raw-token-alias-source', intent)
-        git_dir = Path(workspace.inspect(str(self.repo))['gitDir'])
-        facts = git_dir.stat()
-        old = workspace._sha(workspace_identity._json([str(git_dir), facts.st_dev, facts.st_ino]))
-        canonical = workspace_identity.stable_identity(git_dir)
-        self.assertEqual(canonical, source['checkoutId'])
-        self.assertNotEqual(old, canonical)
-        entry = {'version': 1, 'source': 'fixed-input-and-inode', 'newId': canonical,
-                 'anchors': [{'directory': str(git_dir), 'inode': facts.st_ino,
-                              'legacyDevice': facts.st_dev, 'workspaceId': source['workspaceId'],
-                              'manifestSha256': source['manifestSha256'], 'role': 'sourceCheckoutId'}]}
-        with self.board_instance.store.db.write() as connection:
-            connection.execute('INSERT INTO meta(key,value) VALUES (?,?)',
-                               (workspace_identity.META_KEY_PREFIX + old, json.dumps(entry)))
-            mapping = workspace_identity.load_alias_map(connection)
-        self.assertEqual(mapping[old], canonical, 'the alias must pass the real path/inode/hash reader')
-        return old, canonical, mapping
-
-    def test_raw_request_reference_survives_an_unrelated_verified_identity_alias(self):
-        request_id, canonical, mapping = self.proven_source_checkout_alias()
-        manifest, _, _ = self.orphan(request_id)
-        self.assertNotEqual(canonical, manifest['checkoutId'])
-        self.assertFalse(workspace_identity.equivalent(request_id, manifest['checkoutId'], mapping=mapping))
-        body = json.dumps({'requestId': request_id})
-        self.assertEqual(json.loads(body), {'requestId': request_id})
-        rows = [('events', {'payload_json': body})]
-        self.assertEqual(storage._allocation_reference_reasons(rows, manifest, request_id, mapping=mapping),
-                         ['events-reference'], 'canonical identity must not replace an exact original request fact')
-
-    def test_raw_request_alias_reference_protects_only_its_orphan_during_plan_and_apply(self):
-        request_id, canonical, _ = self.proven_source_checkout_alias()
+    def test_raw_request_reference_protects_only_its_orphan_during_plan_and_apply(self):
+        request_id = 'raw-token-request'
         manifest, checkout, _ = self.orphan(request_id)
-        self.assertNotEqual(canonical, manifest['checkoutId'])
         request = json.loads((checkout.parent / 'request.json').read_text())
         self.assertEqual(request['requestId'], request_id)
         control = workspace.prepare(self.directory, 'raw-token-unreferenced-control', request['intent'])
         control_checkout = Path(control['checkoutRoot'])
-        self.assertNotEqual(canonical, control['checkoutId'])
         # The sole board reference is the original request string, not the
-        # candidate's path/manifest/workspace/checkout identity or the alias target.
+        # candidate's path/manifest/workspace/checkout identity.
         with self.board_instance.store.db.write() as connection:
             connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('raw-request',?,?)",
                                (json.dumps({'requestId': request_id}), '2026-01-01T00:00:00Z'))
-            self.assertEqual(workspace_identity.load_alias_map(connection)[request_id], canonical)
         planned = self.board_instance.call('storage_plan', {})
         row = next(row for row in planned['candidates'] if row['path'] == str(checkout))
         control_row = next(row for row in planned['candidates'] if row['path'] == str(control_checkout))
         self.assertTrue(control_row['eligible'], control_row['reasons'])
         result = self.apply(planned)
         self.assertTrue(checkout.is_dir(), 'the original request reference must preserve the actual checkout')
-        self.assertFalse(control_checkout.exists(), 'an unrelated proven orphan must remain reclaimable')
+        self.assertFalse(control_checkout.exists(), 'an unrelated orphan must remain reclaimable')
         self.assertEqual([removed['path'] for removed in result['removed']], [str(control_checkout)])
         self.assertFalse(row['eligible'])
         self.assertIn('events-reference', row['reasons'])
 
-    def test_late_raw_request_alias_reference_is_rechecked_inside_writer_fence(self):
-        request_id, canonical, _ = self.proven_source_checkout_alias()
+    def test_late_raw_request_reference_is_rechecked_inside_writer_fence(self):
+        request_id = 'late-raw-request'
         manifest, checkout, planned = self.orphan(request_id)
-        self.assertNotEqual(canonical, manifest['checkoutId'])
         original = storage.inspect
         inserted = []
         def insert_after_inventory(*args, **kwargs):
             result = original(*args, **kwargs)
             with self.board_instance.store.db.write() as connection:
-                self.assertEqual(workspace_identity.load_alias_map(connection)[request_id], canonical)
                 connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES ('late-raw-request',?,?)",
                                    (json.dumps({'requestId': request_id}), '2026-01-01T00:00:00Z'))
             inserted.append(True)

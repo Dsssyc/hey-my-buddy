@@ -58,10 +58,6 @@ CATALOG_REMEDY = "Run buddy adapters with refresh:true"
 #: enabled gate keeps its own separate reason.
 CATALOG_UNAVAILABLE_REASON = "catalog-unavailable"
 
-_READ_AT_PREFIX = "catalog-read-at:"
-_ACCOUNT_STATUS_PREFIX = "catalog-account-status:"
-_SCAN_AFTER_PREFIX = "catalog-scan-after:"
-
 #: The service's bounded native re-read uses its existing harness execution path.
 _catalog_reread: dict[str, Callable[[str], None]] = {}
 CATALOG_REREAD_JOIN_SECONDS = 55
@@ -96,12 +92,13 @@ def coordinate_catalog_reread(directory: Path | str, adapter: str, *, reader: Ca
             flight = _catalog_reread_flights.get(key)
             joined = flight is not None
             if flight is None:
-                row = db.execute('SELECT value FROM meta WHERE key=?', (_SCAN_AFTER_PREFIX + adapter,)).fetchone()
-                window = _parse_time(row[0]) if row else None
+                row = db.execute('SELECT scan_after FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+                window = _parse_time(row['scan_after']) if row else None
                 if window is not None and datetime.now(timezone.utc) < window:
                     return 'window'
-                db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                           (_SCAN_AFTER_PREFIX + adapter, _later(SCAN_SECONDS)))
+                db.execute('INSERT INTO harness_health(adapter,scan_after) VALUES(?,?) '
+                           'ON CONFLICT(adapter) DO UPDATE SET scan_after=excluded.scan_after',
+                           (adapter, _later(SCAN_SECONDS)))
                 flight = _CatalogRereadFlight()
                 _catalog_reread_flights[key] = flight
     if joined:
@@ -160,9 +157,9 @@ def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[s
 
 
 def catalog_read_at(db, adapter: str) -> str | None:
-    """When an actual trusted catalog reading was applied; legacy times prove nothing."""
-    row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
-    return row[0] if row is not None else None
+    """When an actual trusted catalog reading was applied."""
+    row = db.execute("SELECT read_at FROM catalog_current WHERE adapter=?", (adapter,)).fetchone()
+    return row['read_at'] if row is not None else None
 
 
 def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str, str]]:
@@ -211,7 +208,7 @@ def restore_retained_availability(db, adapter: str) -> int:
         (adapter,)).fetchone()
     identities = identities_from_payload(row[0] if row is not None else None, adapter)
     pending_efforts = {}
-    for key, value in _pending_map(db, adapter).items():
+    for key in _pending_map(db, adapter):
         provider, _, model = key.partition("\x1f")
         pending_efforts[(provider, model)] = pending_model_efforts(db, adapter, provider, model) or []
     restored = 0
@@ -233,16 +230,14 @@ def restore_retained_availability(db, adapter: str) -> int:
 
 def catalog_account_status(db, adapter: str) -> str:
     """The account-status fact of the last trusted reading; unknown without one."""
-    row = db.execute("SELECT value FROM meta WHERE key=?", (_ACCOUNT_STATUS_PREFIX + adapter,)).fetchone()
-    return row[0] if row is not None and row[0] in ACCOUNT_STATUSES else "unknown"
+    row = db.execute("SELECT account_status FROM catalog_current WHERE adapter=?", (adapter,)).fetchone()
+    return row['account_status'] if row is not None else "unknown"
 
 
 def note_confirmed_read(db, adapter: str, *, now: str, account_status: str) -> None:
     """Persist the fact that a trusted reading was applied for this harness."""
-    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-               (_READ_AT_PREFIX + adapter, now))
-    db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-               (_ACCOUNT_STATUS_PREFIX + adapter, account_status if account_status in ACCOUNT_STATUSES else "unknown"))
+    db.execute("UPDATE catalog_current SET read_at=?,account_status=? WHERE adapter=?",
+               (now, account_status, adapter))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -447,7 +442,7 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     confirmation stays acceptable (ADR-027 rule 2). When the route is missing or
     unavailable, the board borrows the service's own bounded native refresh for
     that one harness and re-checks once before rejecting (rule 3); that re-read
-    shares the harness's ``catalog-scan-after`` window and single flight with
+    shares the harness's ``scan_after`` window and single flight with
     the health scan, a concurrent request boundedly waits for an in-flight read
     and re-judges on its facts, and every outcome — including a window hit or a
     join that times out — re-judges on the facts as they are then recorded, so

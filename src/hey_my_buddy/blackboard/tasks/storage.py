@@ -228,7 +228,7 @@ def _workspace_reference_rows(connection):
     target ref can leave its checkout unchanged. Cleanup plans likewise retain
     their exact path and identity even after reservations have been released.
     Include durable inputs, results and receipts that can retain other physical
-    locations; identity alias metadata alone never counts as a reference.
+    locations.
     """
     for table in (
         'tasks', 'attempts', 'artifacts', 'objectives', 'resource_claims', 'messages',
@@ -243,32 +243,27 @@ def _workspace_reference_rows(connection):
 
 def allocation_references(connection, manifest: dict, request_id: str | None = None) -> list[str]:
     """An unregistered allocation has no retained board reference of any state."""
-    from . import workspace_identity
-    return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id,
-                                         mapping=workspace_identity.load_alias_map(connection))
+    return _allocation_reference_reasons(_workspace_reference_rows(connection), manifest, request_id)
 
 
-def _allocation_reference_reasons(rows, manifest, request_id, *, mapping=None):
-    return _allocation_reference_sets(rows, [(manifest, request_id)], mapping=mapping)[0]
+def _allocation_reference_reasons(rows, manifest, request_id):
+    return _allocation_reference_sets(rows, [(manifest, request_id)])[0]
 
 
-def _allocation_reference_sets(rows, allocations, *, mapping=None):
+def _allocation_reference_sets(rows, allocations):
     """One streaming pass, one parse per structured field, bounded by a row.
 
     Exact tokens and normalized ancestor paths match every candidate together.
     No state filter is safe: historical receipts and malformed structured facts
     can still retain a location. Only the reason sets survive each input row.
     """
-    from . import workspace_identity
     if not allocations:
         return []
-    if mapping is None:
-        mapping = workspace_identity.active_aliases()
     reasons = [set() for _ in allocations]
     tokens, paths = {}, {}
     for index, (manifest, request_id) in enumerate(allocations):
         for token in (manifest['workspaceId'], request_id, manifest.get('manifestSha256'),
-                      workspace_identity.canonical(manifest['checkoutId'], mapping=mapping)):
+                      manifest['checkoutId']):
             if isinstance(token, str):
                 tokens.setdefault(token, set()).add(index)
         paths.setdefault(str(Path(manifest['checkoutRoot']).parent), set()).add(index)
@@ -281,9 +276,7 @@ def _allocation_reference_sets(rows, allocations, *, mapping=None):
             for item in value:
                 yield from matches(item)
         elif isinstance(value, str):
-            # An original fact remains exact even when it also names an alias.
             yield from tokens.get(value, ())
-            yield from tokens.get(workspace_identity.canonical(value, mapping=mapping), ())
             if os.path.isabs(value):
                 for path in {value, os.path.normpath(value)}:
                     while True:
@@ -314,7 +307,7 @@ def _allocation_reference_sets(rows, allocations, *, mapping=None):
 
 def _orphan_workspace(store, directory: Path) -> dict:
     """Only the original allocation record can prove an orphan's exact checkout."""
-    from . import workspace, workspace_identity
+    from . import workspace
     state = store.directory.resolve()
     path = directory / 'checkout'
     result = {'path': str(path), 'orphan': True, 'runId': None, 'reasons': [],
@@ -341,8 +334,7 @@ def _orphan_workspace(store, directory: Path) -> dict:
             raise BoardError('STORAGE_UNSAFE', 'Original allocation records do not prove this checkout')
         result['manifest'] = manifest
         result['allocationRequestId'] = request['requestId']
-        with workspace_identity.board_aliases(state):
-            proof = workspace.cleanup_inspect(state, manifest)
+        proof = workspace.cleanup_inspect(state, manifest)
         result['reasons'].extend(proof['reasons'])
         result['proof'] = proof
         repository = Path(manifest['snapshot']['repositoryPath'])
@@ -526,12 +518,10 @@ def inspect(store) -> dict:
             orphan_inputs.append(_orphan_workspace(store, directory))
     pending = [item for item in orphan_inputs if not item['reasons']]
     if pending:
-        from . import workspace_identity
         with store.db.read() as connection:
             references = _allocation_reference_sets(
                 _workspace_reference_rows(connection),
-                [(item['manifest'], item['allocationRequestId']) for item in pending],
-                mapping=workspace_identity.load_alias_map(connection))
+                [(item['manifest'], item['allocationRequestId']) for item in pending])
         for item, reasons in zip(pending, references):
             item['reasons'].extend(reasons)
     for orphan in orphan_inputs:

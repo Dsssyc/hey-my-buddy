@@ -184,36 +184,6 @@ def dependencies(connection, members):
                 reusable[group] = bool(event[7]) and all(
                     length is None or length <= TEXT_BOUND for length in (event[2], event[5])
                 )
-            # Python identity presentation also reads the alias proof and kept
-            # reason. Only identity meta affects these groups; unrelated meta
-            # commits must not become an invalidation signal.
-            alias = connection.execute(
-                "SELECT " + _bounded("value") + " FROM meta WHERE key=?",
-                ("workspace-identity:" + row["project_id"],),
-            ).fetchone()
-            report_json = "CASE WHEN json_valid(report.value) THEN report.value ELSE '{}' END"
-            reason = connection.execute(
-                "SELECT " + _bounded("reason.value", kind="reason.type") + ","
-                " (json_valid(report.value) AND json_type(" + report_json + ")='object' AND "
-                + _unique_keys(report_json, "cache_key.key='kept'") +
-                " AND (json_type(" + report_json + ",'$.kept') IS NULL"
-                " OR json_type(" + report_json + ",'$.kept')='object')"
-                " AND (reason.type IS NULL OR reason.type IN ('text','null')) AND "
-                + _unique_keys(report_json, "cache_key.key=?", path="$.kept") + ")"
-                " FROM meta report LEFT JOIN json_each(" + report_json + ",'$.kept') reason ON reason.key=?"
-                " WHERE report.key='workspace-identity-migration' LIMIT 1",
-                (row["project_id"], row["project_id"]),
-            ).fetchone()
-            # An absent reason is the same projection whether the report is
-            # absent or gained unrelated entries/proof. Safety is checked below,
-            # independently of this value marker, so ambiguous JSON still cannot
-            # hit an old entry with an absent reason.
-            reason_marker = tuple(reason[:3]) if reason and reason[2] is not None else None
-            groups[group].append(("identity", tuple(alias) if alias else None, reason_marker))
-            if alias and alias[1] > TEXT_BOUND:
-                reusable[group] = False
-            if reason and (not reason[3] or (reason[1] is not None and reason[1] > TEXT_BOUND)):
-                reusable[group] = False
 
         else:
             row = connection.execute(

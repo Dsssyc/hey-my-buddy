@@ -80,12 +80,12 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
     def scan_marker(self):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT value FROM meta WHERE key='catalog-scan-after:dsh'").fetchone()
-        return row[0] if row else None
+            row = db.execute("SELECT scan_after FROM harness_health WHERE adapter='dsh'").fetchone()
+        return row['scan_after'] if row else None
 
     def expire_reread_window(self):
         with self.board.store.db.write() as db:
-            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
 
     def reject_missing(self, identity=None):
         with self.assertRaises(BoardError) as rejected:
@@ -183,8 +183,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:dsh',?)"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_later(60),))
+            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(60),))
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         self.reject_missing()
@@ -340,8 +339,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         # rejection.
         self.evaluation.record_catalog(reading())
         with self.board.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('catalog-scan-after:dsh',?)"
-                       " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_later(120),))
+            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(120),))
         marker = self.scan_marker()
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))

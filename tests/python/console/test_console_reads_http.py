@@ -18,8 +18,8 @@ import unittest
 from datetime import datetime, timezone
 from unittest import mock
 
-from console.test_console import Browser, ConsoleTestCase, http_call
-from blackboard.tasks.test_workflow import WorkflowTestCase, CONFIGURATION
+from console.test_console import Browser, ConsoleTestCase
+from blackboard.tasks.test_workflow import WorkflowTestCase
 
 from hey_my_buddy.blackboard.store import backup
 
@@ -101,8 +101,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         etag = recomputed("raw SQL")
         # A raw SQL change that reaches the visible Router setting.
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO meta(key,value) VALUES('router_retry_interval_seconds','601')"
-                               " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            connection.execute("UPDATE router_settings SET retry_interval_seconds=601 WHERE id=1")
         etag = changed("Router setting")
         # A harness health observation revision.
         with board.store.db.write() as connection:
@@ -355,8 +354,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         replacement = board.store.directory / "replacement.sqlite3"
         with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
             source.backup(target)
-            target.execute("INSERT INTO meta(key,value) VALUES('router_retry_interval_seconds','997')"
-                           " ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            target.execute("UPDATE router_settings SET retry_interval_seconds=997 WHERE id=1")
             target.commit()
         os.replace(replacement, board.store.db.path)
         status, _headers, body = browser.get(

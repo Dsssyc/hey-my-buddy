@@ -133,7 +133,7 @@ def claim(connection, attempt_id: str) -> dict | None:
             "decisionId": row["decision_id"], "routerIndex": row["router_index"], "profileId": row["profile_id"]}
 
 
-def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str) -> dict:
+def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str, tool_policy: dict) -> dict:
     """Bind one attempt to its dispatch and append the atomic ``router.claimed`` fact.
 
     The binding is immutable per attempt: an identical replay returns the recorded
@@ -150,8 +150,9 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
         raise BoardError("INVALID_ARGUMENT", "an attempt may only claim a frozen dispatch", taskId=task_id)
     request = connection.execute("SELECT request_id FROM decision_requests WHERE decision_id=?",
                                  (dispatch_document["decisionId"],)).fetchone()
-    stored, created = _store(connection, "router_claims", "attempt_id", {
+    _, created = _store(connection, "router_claims", "attempt_id", {
         "attempt_id": attempt_id, "task_id": task_id, "generation": generation,
+        "tool_policy_json": canonical_json(tool_policy),
     })
     if created:
         from .router_history import _append_event

@@ -73,7 +73,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 board.close()
                 self._stack.remove(board)
 
-    def test_publication_rejects_usage_mismatch_and_unbound_old_attempts(self):
+    def test_publication_rejects_usage_mismatch_and_missing_frozen_policy(self):
         for number, missing_policy in enumerate((False, True)):
             with self.subTest(missing_policy=missing_policy):
                 board = InProcessBoard(self.directory / f'unbound-{number}')
@@ -83,8 +83,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 output = stopped_answer(claim)
                 if missing_policy:
                     with board.store.db.write() as connection:
-                        connection.execute('DELETE FROM meta WHERE key=?',
-                                           ('attempt-tool-policy:' + claim['attempt']['attemptId'],))
+                        connection.execute("UPDATE router_claims SET tool_policy_json='null' WHERE attempt_id=?",
+                                           (claim['attempt']['attemptId'],))
                 else:
                     output['usage']['toolCalls'] = 1
                 board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],

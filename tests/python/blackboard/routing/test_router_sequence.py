@@ -286,13 +286,15 @@ class RecordClaimTests(RouterSequenceTestCase):
         with self.board_.store.db.write() as db:
             self.seed_attempt(db, attempt_id, task_id, generation)
             return router_sequence.record_claim(db, task_id=task_id, attempt_id=attempt_id,
-                                                generation=generation, now=now)
+                                                generation=generation, now=now, tool_policy={"systemSandbox": False})
 
     def test_claim_binds_the_attempt_and_appends_one_atomic_event(self):
         self.reserved_claim_setup()
         stored = self.claim("att-1")
         self.assertEqual(stored, {"taskId": "task-alpha", "attemptId": "att-1", "generation": 1,
                                   "decisionId": "dec-1", "routerIndex": 0, "profileId": ALPHA["profileId"]})
+        policy = json.loads(json.loads(self.stored("router_claims", "attempt_id", "att-1"))["tool_policy_json"])
+        self.assertEqual(policy, {"systemSandbox": False})
         events = self.events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0], {"profileId": ALPHA["profileId"], "plane": "work", "requestId": "pick-1",
@@ -326,6 +328,17 @@ class RecordClaimTests(RouterSequenceTestCase):
         self.assertEqual(second["profileId"], BRAVO["profileId"])
         self.assertEqual(len(self.events()), 2)
 
+    def test_frozen_tool_policy_cannot_be_replaced_by_a_replayed_claim(self):
+        self.reserved_claim_setup()
+        self.claim("att-1")
+        with self.board_.store.db.write() as db, self.assertRaises(BoardError) as caught:
+            router_sequence.record_claim(db, task_id="task-alpha", attempt_id="att-1", generation=1,
+                                         now=T0, tool_policy={"systemSandbox": True})
+        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertEqual(json.loads(json.loads(self.stored("router_claims", "attempt_id", "att-1"))["tool_policy_json"]),
+                         {"systemSandbox": False})
+        self.assertEqual(len(self.events()), 1)
+
     def test_claim_requires_a_frozen_dispatch_and_a_positive_generation(self):
         with self.assertRaises(BoardError) as caught:
             self.claim("att-orphan")
@@ -343,7 +356,7 @@ class RecordClaimTests(RouterSequenceTestCase):
             with self.board_.store.db.write() as db:
                 self.seed_attempt(db, "att-rollback", "task-alpha", 1)
                 router_sequence.record_claim(db, task_id="task-alpha", attempt_id="att-rollback",
-                                             generation=1, now=T0)
+                                             generation=1, now=T0, tool_policy={"systemSandbox": False})
                 raise AssertionError("rollback")
         self.assertIsNone(self.stored("router_claims", "attempt_id", "att-rollback"))
         self.assertEqual(self.events(), [])
@@ -400,12 +413,12 @@ class RelationalBindingTests(RouterSequenceTestCase):
             with self.subTest(task_id=task_id, generation=generation), self.assertRaises(sqlite3.IntegrityError):
                 with self.board_.store.db.write() as db:
                     router_sequence.record_claim(db, task_id="task-alpha", attempt_id="wrong-binding",
-                                                 generation=1, now=T0)
+                                                 generation=1, now=T0, tool_policy={"systemSandbox": False})
                     self.seed_attempt(db, "wrong-binding", task_id, generation)
             self.assertIsNone(self.stored("router_claims", "attempt_id", "wrong-binding"))
             self.assertEqual(self.events(), [])
         with self.board_.store.db.write() as db:
-            router_sequence.record_claim(db, task_id="task-alpha", attempt_id="actual-binding", generation=1, now=T0)
+            router_sequence.record_claim(db, task_id="task-alpha", attempt_id="actual-binding", generation=1, now=T0, tool_policy={"systemSandbox": False})
             self.seed_attempt(db, "actual-binding", "task-alpha", 1)
         self.assertEqual(len(self.events()), 1)
 
@@ -415,17 +428,17 @@ class RelationalBindingTests(RouterSequenceTestCase):
             # Both candidate attempts are absent: the second INSERT must fail
             # immediately on router_claims, independently of attempts' UNIQUE
             # and its deferred composite FK. Bind the first before committing.
-            db.execute("INSERT INTO router_claims(attempt_id,task_id,generation)"
-                       " VALUES('first-pending','task-alpha',1)")
+            db.execute("INSERT INTO router_claims(attempt_id,task_id,generation,tool_policy_json)"
+                       " VALUES('first-pending','task-alpha',1,'{}')")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE task_id='task-alpha'").fetchone()[0], 0)
             with self.assertRaisesRegex(sqlite3.IntegrityError,
                                         r"UNIQUE constraint failed: router_claims.task_id, router_claims.generation"):
-                db.execute("INSERT INTO router_claims(attempt_id,task_id,generation)"
-                           " VALUES('second-pending','task-alpha',1)")
+                db.execute("INSERT INTO router_claims(attempt_id,task_id,generation,tool_policy_json)"
+                           " VALUES('second-pending','task-alpha',1,'{}')")
             self.seed_attempt(db, "first-pending", "task-alpha", 1)
         with self.board_.store.db.read() as db:
             self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM router_claims")],
-                             [("first-pending", "task-alpha", 1)])
+                             [("first-pending", "task-alpha", 1, "{}")])
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_outcome_event_sequence_cannot_be_shared_by_two_receipts(self):

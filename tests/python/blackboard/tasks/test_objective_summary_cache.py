@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import copy
 import shutil
 import sqlite3
@@ -264,35 +263,24 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.read(), initial)
             self.assert_recomputed(counter, [])
 
-    def test_project_alias_and_raw_source_event_correction_affect_query_membership(self):
-        group=self.fixture.macros[1]
-        root=self.root_for(group)
-        directory=self.root / "fictional-identity-anchor"
-        directory.mkdir()
-        path=str(directory)
-        inode=directory.stat().st_ino
-        encode=lambda values:json.dumps(values,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()
-        old=hashlib.sha256(encode([path,7,inode])).hexdigest()
-        new=hashlib.sha256(encode([path,inode])).hexdigest()
-        entry={"version":1,"source":"fixed-input-and-inode","newId":new,"anchors":[
-            {"directory":path,"inode":inode,"manifestSha256":"a"*64,"workspaceId":"fictional-identity-workspace","role":"repositoryId","legacyDevice":7}]}
-        encoded=json.dumps(entry)
-        self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?",(old,group))
-        self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.repositoryId',?) WHERE run_id=? AND kind='input'",(old,root))
-        self.assertEqual(self.read(projectId=new)["total"],0)
+    def test_project_id_and_raw_source_event_correction_affect_query_membership(self):
+        group = self.fixture.macros[1]
+        root = self.root_for(group)
+        project = "fictional-corrected-project"
+        self.assertEqual(self.read(projectId=project)["total"], 0)
         self.read()
-        with patch.object(objectives,"_summary",wraps=objectives._summary) as counter:
-            self.sql("INSERT INTO meta(key,value) VALUES(?,?)",("workspace-identity:"+old,encoded))
-            self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?)",(json.dumps({"version":1,"entries":{old:encoded}}),))
-            self.assertEqual(self.rows()[group]["project"]["id"],new)
-            self.assert_recomputed(counter,[group])
-            self.assertEqual(self.rows(projectId=new)[group]["matchingRuns"],1)
-            self.assert_recomputed(counter,[group])
-            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.governed.sourceHostId','fictional-corrected-source') WHERE task_id=? AND kind='task.submitted'",(root,))
-            self.assertEqual(self.rows(query="fictional-corrected-source")[group]["matchingRuns"],1)
-            self.assert_recomputed(counter,[group])
+        with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
+            self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
+            self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.repositoryId',?) WHERE run_id=? AND kind='input'", (project, root))
+            self.assertEqual(self.rows()[group]["project"]["id"], project)
+            self.assert_recomputed(counter, [group])
+            self.assertEqual(self.rows(projectId=project)[group]["matchingRuns"], 1)
+            self.assert_recomputed(counter, [group])
+            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.governed.sourceHostId','fictional-corrected-source') WHERE task_id=? AND kind='task.submitted'", (root,))
+            self.assertEqual(self.rows(query="fictional-corrected-source")[group]["matchingRuns"], 1)
+            self.assert_recomputed(counter, [group])
 
-    def test_objective_metadata_description_and_identity_reason_raw_corrections(self):
+    def test_objective_metadata_and_description_raw_corrections(self):
         group = self.fixture.macros[0]
         first = self.root_for(group)
         with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
@@ -307,12 +295,6 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.description','Fictional corrected description') WHERE kind='workflow.objective_created' AND task_id=?", (first,))
             self.assertEqual(self.rows()[group]["description"], "Fictional corrected description")
-            self.assert_recomputed(counter, [group])
-            self.sql("UPDATE objectives SET project_id='fictional-unproved-id' WHERE objective_id=?", (group,))
-            self.rows()
-            counter.reset_mock()
-            self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?)", (json.dumps({"kept": {"fictional-unproved-id": "fictional-proof-missing"}}),))
-            self.assertEqual(self.rows()[group]["project"]["identityReason"], "fictional-proof-missing")
             self.assert_recomputed(counter, [group])
 
     def test_first_description_run_is_reselected_after_raw_creation_order_change(self):
@@ -360,46 +342,15 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
         self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (payload.replace(json.dumps(group), json.dumps(other)), root))
         self.assertIsNone(self.rows()[group]["description"])
 
-    def test_duplicate_kept_top_level_keys_use_existing_python_identity_reason(self):
-        group = self.fixture.macros[0]
-        project = "fictional-json-project"
-        self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
-        for key in ('"kept"', '"ke\\u0070t"'):
-            with self.subTest(key=key):
-                payload = '{"kept":{' + json.dumps(project) + ':"fixed"},' + key + ':{' + json.dumps(project) + ':"old"}}'
-                self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (payload,))
-                self.assertEqual(self.rows()[group]["project"]["identityReason"], "old")
-                self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (payload.replace('"old"', '"new"'),))
-                self.assertEqual(self.rows()[group]["project"]["identityReason"], "new")
-                with self.store.db.read() as connection:
-                    self.assertEqual(objectives._summary(connection, group, [], [])["project"]["identityReason"], "new")
-
-    def test_duplicate_project_keys_in_kept_only_disable_affected_project_reuse(self):
-        group = self.fixture.macros[0]
-        project = "fictional-json-project"
-        self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
-        for key in (json.dumps(project), '"\\u0066ictional-json-project"'):
-            with self.subTest(key=key):
-                payload = '{"kept":{' + json.dumps(project) + ':"fixed",' + key + ':"old"}}'
-                self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (payload,))
-                self.assertEqual(self.rows()[group]["project"]["identityReason"], "old")
-                self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (payload.replace('"old"', '"new"'),))
-                with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
-                    self.assertEqual(self.rows()[group]["project"]["identityReason"], "new")
-                    self.assert_recomputed(counter, [group])
-
-    def test_unconsumed_duplicate_json_keys_and_unrelated_report_changes_keep_reuse(self):
+    def test_unconsumed_duplicate_json_keys_and_unrelated_meta_changes_keep_reuse(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
         project = "fictional-json-project"
         self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
         event = '{"objectiveId":' + json.dumps(group) + ',"noise":"one","noise":"two","description":"fixed"}'
         self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (event, root))
-        report = '{"noise":"one","noise":"two","kept":{"fictional-other":"one","fictional-other":"two",' + json.dumps(project) + ':"fixed"}}'
-        self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?)", (report,))
         expected = self.read()
         with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
-            self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (report.replace('"two"', '"new"'),))
             self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (event.replace('"two"', '"new"'), root))
             self.sql("INSERT INTO meta(key,value) VALUES('fictional-unrelated-commit','1')")
             self.assertEqual(self.read(), expected)
@@ -426,41 +377,6 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
                     with self.store.db.read() as connection:
                         self.assertEqual(objectives._summary(connection, group, [], [])["description"], value)
 
-    def test_identity_reason_type_precision_nul_and_size_boundaries_preserve_summary(self):
-        group = self.fixture.macros[0]
-        project = "fictional-json-project"
-        self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
-        self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration','{}')")
-        cases = (
-            ("x" * memo.TEXT_BOUND, "x" * (memo.TEXT_BOUND - 1) + "y"),
-            ("x" * (memo.TEXT_BOUND + 1), "x" * memo.TEXT_BOUND + "y"),
-            ("fixed\0old", "fixed\0new"),
-            (92233720368547758080, 92233720368547758081),
-            ({"fictional": 1}, '{"fictional":1}'),
-            (None, True),
-        )
-        for before, after in cases:
-            with self.subTest(before_type=type(before).__name__, size=len(str(before))):
-                for value in (before, after):
-                    self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (json.dumps({"kept": {project: value}}),))
-                    cached = self.rows()[group]
-                    with self.store.db.read() as connection:
-                        direct = objectives._summary(connection, group, [], [])
-                    self.assertEqual(cached["project"], direct["project"])
-                    self.assertEqual(cached["project"].get("identityReason"), value if value else None)
-
-    def test_kept_container_type_changes_do_not_freeze_previous_identity_reason(self):
-        group = self.fixture.macros[0]
-        project = "fictional-json-project"
-        self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
-        self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration','{}')")
-        for kept in ({project: "old"}, None, [], "old", {project: "new"}):
-            with self.subTest(kept=kept):
-                self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (json.dumps({"kept": kept}),))
-                with self.store.db.read() as connection:
-                    direct = objectives._summary(connection, group, [], [])
-                self.assertEqual(self.rows()[group]["project"], direct["project"])
-
     def test_standalone_title_task_and_summary_nul_suffix_corrections(self):
         root = self.root_for(self.fixture.macros[1])
         group = "run:" + root
@@ -477,22 +393,19 @@ class ObjectiveSummaryCacheTests(unittest.TestCase):
                 self.sql(statement, ("fixed\0new", root))
                 self.assertEqual(self.rows()[group][field], "fixed\0new")
 
-    def test_huge_unrelated_report_and_event_fields_are_not_copied_into_marker(self):
+    def test_huge_unrelated_event_fields_are_not_copied_into_marker(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
         project = "fictional-json-project"
         self.sql("UPDATE objectives SET project_id=? WHERE objective_id=?", (project, group))
         padding = "fictional-unconsumed-padding-" * 80000
-        report = json.dumps({"padding": padding, "kept": {project: "fixed"}})
         event = json.dumps({"padding": padding, "objectiveId": group, "description": "fixed"})
-        self.sql("INSERT INTO meta(key,value) VALUES('workspace-identity-migration',?)", (report,))
         self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (event, root))
         expected = self.read()
         encoded = json.dumps(list(memo.for_store(self.store).entries.values()))
         self.assertNotIn("fictional-unconsumed-padding", encoded)
         self.assertLess(len(encoded), 100000)
         with patch.object(objectives, "_summary", wraps=objectives._summary) as counter:
-            self.sql("UPDATE meta SET value=? WHERE key='workspace-identity-migration'", (report.replace("padding-", "padding!"),))
             self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.objective_created' AND task_id=?", (event.replace("padding-", "padding!"), root))
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])

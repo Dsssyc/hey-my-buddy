@@ -4,7 +4,7 @@ import os
 import threading
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PATH_HINTS, _later
+from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PATH_HINTS
 from support import BoardTestCase, FakeClock
 
 
@@ -275,9 +275,12 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.addCleanup(self.probe.stop)
 
     def set_read_at(self, seconds_ago):
+        with self.board.db.read() as db:
+            recorded = db.execute("SELECT 1 FROM catalog_current WHERE adapter='codex'").fetchone()
+        if recorded is None:
+            self.record_native('confirmed')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('catalog-read-at:codex',?) "
-                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (_stamp(seconds_ago),))
+            db.execute("UPDATE catalog_current SET read_at=? WHERE adapter='codex'", (_stamp(seconds_ago),))
 
     def pass_throttles(self):
         with self.board.db.write() as db:
@@ -286,7 +289,7 @@ class CatalogShelfLifeTests(BoardTestCase):
     def expire_catalog_throttle(self):
         """The bounded catalog re-read cadence (SCAN_SECONDS) has passed."""
         with self.board.db.write() as db:
-            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:codex'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='codex'")
 
     def record_native(self, account_status, *, observed_seconds_ago=None):
         from hey_my_buddy.blackboard.catalog import catalog_store
@@ -303,21 +306,20 @@ class CatalogShelfLifeTests(BoardTestCase):
         with self.board.db.read() as db:
             row = db.execute("SELECT status, reason FROM catalog_current WHERE adapter='codex'").fetchone()
             profiles = db.execute("SELECT profile_id, available FROM evaluation_profiles WHERE adapter='codex'").fetchall()
-            read_at = db.execute("SELECT value FROM meta WHERE key='catalog-read-at:codex'").fetchone()
+            read_at = db.execute("SELECT read_at FROM catalog_current WHERE adapter='codex'").fetchone()
         return row, profiles, (read_at[0] if read_at else None)
 
     def test_throttled_scan_still_rereads_a_stale_catalog_once(self):
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex'])
-        # scanAfter stays in the future: no artificial throttle bypass.
+        # Expire the shared scan window to allow the next stale catalog read.
         self.set_read_at(6 * 3600 + 1)
         self.expire_catalog_throttle()
         result = self.health.refresh('codex')
         self.assertEqual(result['status'], 'ready')
-        self.assertEqual(self.native.call_count, 1, 'A throttled scan reprobes nothing')
+        self.assertEqual(self.native.call_count, 1, 'An unchanged harness reprobes nothing')
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'The stale catalog is re-read once')
-        # The re-read cadence stays bounded: while the catalog-scan window from
-        # that re-read is open, an immediate call does not spawn again.
+        # The re-read cadence stays bounded while the shared scan window is open.
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
 
@@ -346,11 +348,27 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
 
+    def test_health_only_scan_does_not_consume_a_catalog_reread_window(self):
+        from hey_my_buddy.blackboard.catalog.catalog import coordinate_catalog_reread
+        self.health.refresh('codex')
+        self.set_read_at(60)
+        self.expire_catalog_throttle()
+        first = list(self.refreshed)
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, first, 'A fresh catalog is not reread by a health-only scan')
+        calls = []
+        self.assertEqual(coordinate_catalog_reread(self.board.directory, 'codex',
+                         reader=lambda: calls.append('native-read'), wait=True), 'started')
+        self.assertEqual(calls, ['native-read'])
+        self.assertEqual(coordinate_catalog_reread(self.board.directory, 'codex',
+                         reader=lambda: calls.append('duplicate'), wait=True), 'window')
+        self.assertEqual(calls, ['native-read'])
+
     def test_unparseable_read_time_counts_as_expired(self):
         self.health.refresh('codex')
+        self.record_native('confirmed')
         with self.board.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('catalog-read-at:codex','not-a-time') "
-                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            db.execute("UPDATE catalog_current SET read_at='not-a-time' WHERE adapter='codex'")
         self.expire_catalog_throttle()
         self.pass_throttles()
         self.health.refresh('codex')
@@ -394,8 +412,8 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'A confirmed catalog needs no further re-read')
 
     def test_stale_reread_failure_returns_the_post_callback_record(self):
-        # Host reproduction: the health scan stays throttled, the catalog is past
-        # its shelf life, and the bounded re-read's native failure invalidates
+        # Host reproduction: the catalog is past its shelf life, and the bounded
+        # re-read's native failure invalidates
         # the harness. refresh must answer with the record after the callback,
         # never with the stale pre-reread ready record.
         self.health.refresh('codex')
@@ -418,7 +436,7 @@ class CatalogShelfLifeTests(BoardTestCase):
 class SharedStaleCatalogFlightTests(BoardTestCase):
     """A health stale read and an explicit validation re-read share one flight.
 
-    Both go through the same claim of the ``catalog-scan-after`` window, so one
+    Both go through the same claim of the ``scan_after`` window, so one
     harness gets one bounded native read per window however it was triggered:
     the explicit side boundedly joins a health read in flight, and a health scan
     that finds an explicit read in flight starts none of its own.
@@ -448,12 +466,11 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
                                'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
 
     def prime_ready_health(self, health):
-        """One ready health record plus a shelf-expired catalog and an open window."""
+        """One ready health record plus a shelf-expired catalog and a due window."""
         self.evaluation.record_catalog(self.reading(('alpha',)))
         health.refresh('dsh', force=True)
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after=? WHERE adapter='dsh'", (_later(3600),))
-            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+            db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
         # The confirmed read time stays at the FakeClock epoch, far in the past.
 
     def test_an_explicit_request_joins_a_health_stale_read_in_flight(self):
@@ -745,8 +762,8 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
             first = health.refresh('dsh')
             self.assertTrue(first['available'])
             with board.store.db.write() as db:
-                db.execute("UPDATE meta SET value=? WHERE key='catalog-read-at:dsh'", (_stamp(6 * 3600 + 1),))
-                db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+                db.execute("UPDATE catalog_current SET read_at=? WHERE adapter='dsh'", (_stamp(6 * 3600 + 1),))
+                db.execute("UPDATE harness_health SET scan_after=NULL WHERE adapter='dsh'")
             again = health.refresh('dsh')
         self.assertFalse(again['available'], 'The failed native re-read speaks through the record')
         self.assertEqual(again['reasonCode'], 'CATALOG_UNAVAILABLE')

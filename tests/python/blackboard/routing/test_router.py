@@ -163,14 +163,14 @@ class RouterPublicationTests(WorkflowTestCase):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         board = self.board()
         self.seed(board)
-        snapshot = board.call('console_snapshot', {})
         board.console_call('user_policy_publish', {
             'commandId': 'budget-change',
             'configuration': {'routingBudget': 'deep'}})
         configured = board.call('console_snapshot', {})['configuration']
         self.assertEqual(configured['routingBudget'], 'deep')
         self.assertEqual(configured['routerProfileIds'], [PROFILE_ID])
-        self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
 
     def test_budget_update_does_not_change_selection_request_replay(self):
         board = self.board()
@@ -178,7 +178,7 @@ class RouterPublicationTests(WorkflowTestCase):
         params = {'requestId': 'stable-budget-request', 'task': 'choose'}
         original = board.call('selection_request', params)
         with board.store.db.write() as connection:
-            connection.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('router_budget_preset','deep')")
+            connection.execute("UPDATE router_settings SET budget_preset='deep' WHERE id=1")
         replay = board.call('selection_request', params)
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['decisionId'], original['decisionId'])

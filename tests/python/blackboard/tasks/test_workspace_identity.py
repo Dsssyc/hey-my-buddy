@@ -1,29 +1,19 @@
-"""Restart identity and retained aliases exercised with real private Git facts."""
+"""Restart-stable identity exercised with real private Git facts."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-import hashlib
-import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import sqlite3
 import tempfile
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace, workspace_identity
-from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 
 
 class WorkspaceIdentityFixture(WorkflowTestCase):
-    """Real workspaces with only the retired device-dependent hash substituted.
-
-    The old hash is copied literally from the previous implementation. Preparing
-    and recording inputs still runs the real Git and blackboard paths; a device
-    change does not rewrite the saved manifests or manufacture inode evidence.
-    """
+    """Real Git workspaces under a private board."""
 
     reuse_repository_template = False
     _repository_template = None
@@ -68,59 +58,11 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
         self.git(path, "commit", "-qm", "base")
         return path
 
-    @contextmanager
-    def legacy(self, device_delta=2):
-        def old_identity(path):
-            facts = path.stat()
-            payload = json.dumps([str(path), facts.st_dev + device_delta, facts.st_ino],
-                                 sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-            return hashlib.sha256(payload).hexdigest()
-
-        # Historical captures predate the new fail-closed reservation gate too.
-        # Only capture uses retired admission; every post-upgrade action runs the
-        # real current gate, including the unprovable-holder regression.
-        with patch.object(workspace, "_identity", side_effect=old_identity), patch.object(
-                workflow_module.WorkflowCoordinator, "_unproven_checkout_holder", return_value=None):
-            yield
-
-    def legacy_run(self, board=None, *, request_id="legacy", device_delta=2,
-                   kind="worktree", access="write", objective=None):
-        board = board or self.board()
-        with self.legacy(device_delta):
-            run = self.submit(board, request_id=request_id, cwd=str(self.repo),
-                              executionWorkspace={"kind": kind, "access": access},
-                              objective=objective or {"title": request_id + " macro"})
-        return board, run, self.manifest(board, run["runId"])
-
-    def manifest(self, board, run_id):
-        with board.store.db.read() as connection:
-            return json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)
-            ).fetchone()[0])
-
-    def register_aliases(self, board, manifest):
-        actual = workspace.inspect(manifest["path"])
-        directories = {"checkoutId": Path(actual["gitDir"]),
-                       "repositoryId": Path(actual["repositoryPath"])}
-        with board.store.db.write() as connection:
-            for role, directory in directories.items():
-                old = manifest[role]
-                entry = {"version": 1, "newId": actual[role], "source": "fixed-input-and-inode",
-                         "anchors": [{"directory": str(directory), "inode": directory.stat().st_ino,
-                                      "legacyDevice": directory.stat().st_dev + 2,
-                                      "manifestSha256": manifest["manifestSha256"],
-                                      "workspaceId": manifest["workspaceId"], "role": role}]}
-                connection.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)",
-                                   (workspace_identity.META_KEY_PREFIX + old, json.dumps(entry)))
-
     def fixed_files(self):
         return {str(path.relative_to(self.directory)): path.read_bytes()
                 for path in (self.directory / "workspaces").rglob("*")
                 if path.is_file() and path.suffix in {".json", ".patch"}}
 
-    def aliases(self, board):
-        with board.store.db.read() as connection:
-            return workspace_identity.load_alias_map(connection)
 
 
 class WorkspaceIdentityTests(WorkspaceIdentityFixture):
@@ -150,73 +92,3 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
         replaced = workspace.inspect(str(self.repo))
         self.assertNotEqual(replaced["checkoutId"], first["checkoutId"])
         self.assertNotEqual(replaced["repositoryId"], first["repositoryId"])
-
-    def test_old_manifest_verifies_without_a_coordinator_thread_context(self):
-        board, _run, manifest = self.legacy_run()
-        before_files = self.fixed_files()
-        self.register_aliases(board, manifest)
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
-            verified = workspace.verify(manifest)
-        self.assertTrue(verified["unchanged"])
-        self.assertEqual(self.fixed_files(), before_files)
-        with self.assertRaises(BoardError):
-            with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory / "unrelated-board")}):
-                workspace.verify(manifest)
-
-    def test_registered_alias_cannot_verify_a_copied_git_directory(self):
-        board, _run, manifest = self.legacy_run(kind="existing")
-        self.register_aliases(board, manifest)
-        mapping = self.aliases(board)
-        directory = self.repo / ".git"
-        retained = self.directory / "original-git"
-        directory.rename(retained)
-        shutil.copytree(retained, directory)
-        self.assertNotEqual(directory.stat().st_ino, retained.stat().st_ino)
-        self.assertEqual(self.git(self.repo, "rev-parse", manifest["snapshot"]["inputRef"]),
-                         manifest["inputCommit"])
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
-            with workspace_identity.aliases(mapping):
-                with self.assertRaises(BoardError):
-                    workspace.verify(manifest, require_unchanged=False)
-
-    def test_valid_alias_cannot_bypass_fixed_manifest_checksum(self):
-        board, _run, manifest = self.legacy_run()
-        self.register_aliases(board, manifest)
-        mapping = self.aliases(board)
-        modified = dict(manifest, inputTree="0" * 40)
-        with patch.dict(os.environ, {"BUDDY_STATE_DIR": str(self.directory)}):
-            with workspace_identity.aliases(mapping):
-                with self.assertRaises(BoardError) as caught:
-                    workspace.verify(modified, require_unchanged=False)
-        self.assertEqual(caught.exception.code, "WORKSPACE_MANIFEST_CHANGED")
-
-    def test_python_alias_loader_rejects_independently_drifted_anchor_hashes(self):
-        directory = self.repo / ".git"
-        inode, device = directory.stat().st_ino, directory.stat().st_dev + 2
-        old = hashlib.sha256(workspace_identity._json([str(directory), device, inode])).hexdigest()
-        new = workspace_identity.stable_identity(directory)
-        valid = {"version": 1, "newId": new, "source": "fixed-input-and-inode", "anchors": [{
-            "directory": str(directory), "inode": inode, "legacyDevice": device,
-            "manifestSha256": "a" * 64, "workspaceId": "ws-proof", "role": "repositoryId"}]}
-        # No SQL projection/report participates: this directly exercises Python
-        # loading from valid-shaped persisted meta and each SHA comparison.
-        with sqlite3.connect(":memory:") as connection:
-            connection.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
-            key = workspace_identity.META_KEY_PREFIX + old
-            connection.execute("INSERT INTO meta VALUES(?,?)", (key, json.dumps(valid)))
-            self.assertEqual(workspace_identity.load_alias_map(connection), {old: new})
-            for field in ("legacyDevice", "newId", "directory", "oldKey"):
-                with self.subTest(field=field):
-                    entry = json.loads(json.dumps(valid))
-                    changed_key = key
-                    if field == "legacyDevice":
-                        entry["anchors"][0][field] += 1  # Only the old-anchor hash changes.
-                    elif field == "newId":
-                        entry[field] = "f" * 64  # Only the new-anchor hash changes.
-                    elif field == "directory":
-                        entry["anchors"][0][field] += "-drifted"
-                    else:
-                        changed_key = workspace_identity.META_KEY_PREFIX + "b" * 64
-                    connection.execute("UPDATE meta SET key=?,value=?", (changed_key, json.dumps(entry)))
-                    self.assertEqual(workspace_identity.load_alias_map(connection), {}, field)
-                    connection.execute("UPDATE meta SET key=?,value=?", (key, json.dumps(valid)))
