@@ -15,6 +15,7 @@ import uuid
 
 from buddy.harnesses.dsh.test_native_run import NativeRunCase as DshNativeCase
 from buddy.harnesses.zcode.test_native_run import NativeRunCase as ZcodeNativeCase
+from blackboard.routing.test_router_prompt import candidate as router_candidate
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
@@ -51,7 +52,7 @@ class _ReviewCases:
     def document(self) -> dict:
         return {"domainNodes": [], "routingMode": "review", "task": "Choose the legal buddy",
                 "buddy": {"harness": self.harness},
-                "buddies": [{"buddyId": "legal"}], "outputSchema": SCHEMA,
+                "buddies": [router_candidate()], "outputSchema": SCHEMA,
                 "budget": {"timeoutSeconds": 10, "toolCalls": 0}}
 
     def test_inline_review_returns_a_structured_answer_under_read(self):
