@@ -44,6 +44,11 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
         await expect(live).toContainText("模型输出中");
         await expect(live).toContainText("上报");
         await expectTextUncut(live.locator("span"));
+        const phase = (await live.getByText("模型输出中").boundingBox())!;
+        const reported = (await live.getByText(/^上报/).boundingBox())!;
+        expect(reported.x).toBeGreaterThanOrEqual(phase.x + phase.width);
+        expect(reported.x - phase.x - phase.width).toBeLessThanOrEqual(phase.height);
+        expect(Math.abs(reported.y - phase.y)).toBeLessThan(phase.height);
         await live.getByText("模型输出中").focus();
         await page.keyboard.press("Tab");
         await page.keyboard.press("Shift+Tab");
@@ -67,6 +72,36 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
       await expect.poll(() => commands).toEqual([{ operation: state === "running" ? "task_cancel" : "maintenance_start",
         params: state === "running" ? { runId: taskId } : {} }]);
       if (state === "running") await expect(row.getByRole("button", { name: "正在停止" })).toBeDisabled();
+    });
+  });
+}
+
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
+  test.describe(`maintenance history ${theme} ${width}px`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: 1200 }, reducedMotion: "reduce" });
+    test("shows no future run or retry on a failure followed by a completed batch", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await page.route("**/api/console", async route => {
+        const response = await route.fetch();
+        const snapshot = await response.json();
+        const latest = snapshot.maintenance.runs[0];
+        snapshot.maintenance.runs = [latest, { ...latest, maintenanceRunId: "maintenance-old-failure",
+          taskId: "maintenance-old-task", state: "failed",
+          reason: { code: "router-budget-exhausted", params: {} },
+          startedAt: "2026-09-26T06:00:00Z", finishedAt: "2026-09-26T06:05:01Z",
+        }];
+        await route.fulfill({ response, json: snapshot });
+      });
+      await open(page, "#buddies/roles");
+      const records = page.locator('[data-slot="maintenance-record"]');
+      await expect(records).toHaveCount(2);
+      const older = records.nth(1);
+      await older.scrollIntoViewIfNeeded();
+      await expect(older).toContainText("Router 超出了这次调用的时限或工具调用上限。");
+      await expect(older.getByRole("definition")).toHaveCount(3);
+      await expect(older.locator('[data-slot="maintenance-retry"]')).toHaveCount(0);
+      await expect(older.getByRole("button", { name: "立即运行" })).toHaveCount(0);
+      await expectNoSidewaysScroll(page);
     });
   });
 }

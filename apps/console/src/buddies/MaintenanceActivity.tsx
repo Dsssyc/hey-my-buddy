@@ -34,7 +34,7 @@ export function MaintenanceActivity({ taskId, api }: { taskId: string; api: Cons
     return () => { controller.abort(); clearTimeout(timer); };
   }, [taskId, api, visible]);
   return <div>
-    <LiveActivity activity={reading?.activity ?? null} stuck={false} nowMs={reading?.at ?? Date.now()} />
+    <LiveActivity className="w-fit" activity={reading?.activity ?? null} stuck={false} nowMs={reading?.at ?? Date.now()} />
     {error && <p role="alert" className="mt-1 text-fail">{error}</p>}
   </div>;
 }

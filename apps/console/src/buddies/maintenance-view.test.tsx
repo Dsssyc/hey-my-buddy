@@ -59,6 +59,19 @@ describe("maintenance controls", () => {
     await userEvent.click(within(row).getByRole("button", { name: "立即运行" }));
     expect(f.command).toHaveBeenCalledWith("maintenance_start", {}, "csrf");
   });
+  it("keeps an older failure as history when a newer batch completed", async () => {
+    const data = state();
+    const failed = maintenanceRun("failed");
+    const completed = { ...failed, maintenanceRunId: "m2", taskId: "maintain-2", state: "completed" as const,
+      reason: null, startedAt: "2026-10-28T01:00:00Z", finishedAt: "2026-10-28T01:05:00Z" };
+    data.maintenance!.runs = [completed, failed];
+    await openRoles(fixture(data));
+    const older = within(document.querySelectorAll('[data-slot="maintenance-record"]')[1] as HTMLElement);
+    expect(older.getByText("Router 超出了这次调用的时限或工具调用上限。")).toBeTruthy();
+    expect(older.getByText("120")).toBeTruthy();
+    expect(older.queryByText(/下次自动运行/)).toBeNull();
+    expect(older.queryByRole("button", { name: "立即运行" })).toBeNull();
+  });
   it("keeps progress unknown when only the phase has been reported", async () => {
     const data = state(); data.maintenance!.runs = [maintenanceRun("running")];
     const f = fixture(data);

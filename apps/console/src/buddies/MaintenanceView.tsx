@@ -98,7 +98,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
     </Section>
     <Section name={t("maintenance.records")}>
       {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <ul className="divide-y divide-line">
-        {runs.map(run => {
+        {runs.map((run, index) => {
           const buddy = run.buddy;
           return <li key={run.maintenanceRunId} className="space-y-2 py-3 first:pt-0 text-xs" data-slot="maintenance-record">
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -116,7 +116,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
                 <div key={name} className="flex gap-2"><dt>{t(`maintenance.${name}`)}</dt><dd>{n == null ? t("maintenance.unknown") : formatNumber(n)}</dd></div>)}
             </dl>)}
             {run.reason && <p className="wrap-anywhere text-fail">{reasonText(run.reason)}</p>}
-            {run.state === "failed" && <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-slot="maintenance-retry">
+            {index === 0 && run.state === "failed" && <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-slot="maintenance-retry">
               <span className="text-ink2">{!snapshot.configuration?.maintenanceBuddyId ? t("maintenance.notConfigured") : run.finishedAt && snapshot.configuration.maintenanceIntervalSeconds !== undefined
                 ? t("maintenance.nextRun", { when: formatDateTime(Date.parse(run.finishedAt) + snapshot.configuration.maintenanceIntervalSeconds * 1000) })
                 : t("maintenance.unknown")}</span>
