@@ -2422,7 +2422,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
             "maintenanceRunId": "preview-maintenance-0", "triggerType": "interval",
             "buddy": {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"},
             "buddyId": "dsh:deepseek-official:deepseek-flash:max", "taskId": "preview-run-maintenance-0",
-            "state": "failed", "reason": {"code": "answer-shape", "params": {"errors": ["summary-citation-outside-batch"]}},
+            "state": "failed", "reason": reason("answer-shape", errors=["summary-citation-outside-batch"]),
             "startedAt": instant(5, 30), "finishedAt": instant(5, 32),
             "usage": {"attempts": [{"attemptId": "preview-maintenance-attempt-0", "elapsedMs": 120000,
                                     "toolCalls": 0, "tokenUsage": None}]},

@@ -79,9 +79,12 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
         {config?.maintenanceIntervalSeconds !== undefined && !validInterval && <p className="text-xs text-fail" role="alert">{t("maintenance.intervalInvalid")}</p>}
       </div>
     </Section>
-    <Section name={snapshot.maintenance ? t("maintenance.pending", { n: snapshot.maintenance.pendingCount }) : t("maintenance.unknown")}>
-      <Hint text={dirty ? t("maintenance.unsaved") : undefined}><Button variant="outline" size="sm" disabled={actionLocked || dirty}
-        onClick={() => void command("maintenance_start", {})}>{t("maintenance.now")}</Button></Hint>
+    <Section name={t("maintenance.now")}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Hint text={dirty ? t("maintenance.unsaved") : undefined}><Button variant="outline" size="sm" disabled={actionLocked || dirty}
+          onClick={() => void command("maintenance_start", {})}>{t("maintenance.now")}</Button></Hint>
+        <span data-slot="maintenance-pending" className="text-xs whitespace-nowrap text-ink2">{snapshot.maintenance ? t("maintenance.pending", { n: snapshot.maintenance.pendingCount }) : t("maintenance.unknown")}</span>
+      </div>
       {feedbackScope === "maintenance" && note && <p role="status" className="mt-2 text-xs">{note}</p>}
       {feedbackScope === "maintenance" && error && <p role="alert" className="mt-2 text-xs text-fail">{error}</p>}
     </Section>

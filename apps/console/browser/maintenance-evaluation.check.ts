@@ -17,6 +17,10 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
       await plane.evaluate(node => node.scrollIntoView({ block: "start" }));
       await expectNoSidewaysScroll(page);
       await expectTextUncut(plane.locator("[data-slot=domain-row] p"));
+      const action = plane.getByRole("group", { name: "立即维护", exact: true });
+      const actionLabel = action.locator(":scope > div").first().locator("span").first();
+      expect(await actionLabel.evaluate(node => node.getClientRects().length)).toBe(1);
+      await expectTextUncut(action.locator('[data-slot="maintenance-pending"]'));
       const destination = process.env.HMB_ROUTE_SCREENSHOTS;
       if (destination) { await mkdir(destination, { recursive: true }); await page.screenshot({ path: join(destination, `maintenance-${theme}-${width}.png`), fullPage: true }); }
       await plane.getByRole("button", { name: "选择 buddy" }).click();
