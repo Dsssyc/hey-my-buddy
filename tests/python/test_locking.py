@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 
 from hey_my_buddy import locking
@@ -39,6 +40,37 @@ class LockingTests(unittest.TestCase):
         locking.lock(second, shared=True)
         with self.assertRaises(BlockingIOError):
             locking.lock(writer, blocking=False)
+
+    @unittest.skipUnless(os.name == "nt", "Windows msvcrt has a finite blocking-lock retry window")
+    def test_blocking_owner_waits_beyond_the_crt_retry_window(self):
+        first, second = self.open(), self.open()
+        locking.lock(first)
+        entered, finished = threading.Event(), threading.Event()
+        errors = []
+
+        def acquire():
+            entered.set()
+            try:
+                locking.lock(second)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        contender = threading.Thread(target=acquire)
+        contender.start()
+        try:
+            self.assertTrue(entered.wait(5), "the contender never attempted its lock")
+            # LK_LOCK retries once a second, ten times, then raises EDEADLK.
+            # Hold across that documented finite window, not a machine-speed guess.
+            returned_while_held = finished.wait(11)
+        finally:
+            locking.unlock(first)
+            contender.join(30)
+        self.assertFalse(contender.is_alive(), "the contender did not acquire the released lock")
+        self.assertFalse(returned_while_held, errors)
+        self.assertEqual(errors, [])
+        self.assertTrue(finished.is_set())
 
     @unittest.skipUnless(os.name == "posix", "raw fcntl.flock interoperability requires POSIX")
     def test_it_interoperates_with_a_raw_flock_holder(self):

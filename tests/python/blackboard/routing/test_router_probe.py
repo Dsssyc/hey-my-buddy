@@ -261,7 +261,7 @@ class RouterProbeTests(unittest.TestCase):
                 sentinel = next(self.root.glob("outside-*.txt"))
                 self.assertNotIn(marker, report["request"]["prompt"])
                 self.assertNotIn(sentinel.read_text(encoding="utf-8").strip(), report["request"]["prompt"])
-                self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o777, 0o600)  # native policy, not file modes, must deny writes
+                assert_private_path(self, self.root / "frozen/marker.txt", 0o600)
 
     def test_explicit_execute_refuses_unimplemented_entry_without_start(self):
         for harness in ("dsh", "zcode"):

@@ -180,10 +180,15 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?", (run_id,)).fetchone()[0], 1)
             store = BoardStore(self.directory)
             try:
-                prune_old_runtimes(store)
+                pruned = prune_old_runtimes(store)
             finally:
                 store.db.close()
-            self.assertFalse(first.exists(), "finished execution no longer pins its original runtime")
+            if os.name == "nt":
+                self.assertTrue(first.exists(), "Windows retains runtimes without a complete usage observation")
+                skipped = next(item for item in pruned["skipped"] if item["path"] == str(first))
+                self.assertEqual(skipped["reasons"], ["process-inspection-unavailable"])
+            else:
+                self.assertFalse(first.exists(), "finished execution no longer pins its original runtime")
 
     def test_same_contract_failure_rolls_back_runtime_without_losing_post_start_event(self):
         first = self.private_runtime("rollback-one", 1)

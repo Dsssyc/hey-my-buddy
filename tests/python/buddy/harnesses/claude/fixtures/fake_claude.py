@@ -4,7 +4,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -50,11 +49,8 @@ def write_state(update):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tests poll while the mock is running. Publish a complete old/new snapshot
     # instead of exposing the empty interval created by write_text truncation.
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name+".", delete=False,
-                                     encoding="utf-8", newline="\n") as stream:
-        json.dump(state, stream)
-        temporary = stream.name
-    os.replace(temporary, path)
+    from hey_my_buddy.private_files import publish_bytes
+    publish_bytes(path, json.dumps(state).encode("utf-8"))
 
 
 def argv_value(flag):
@@ -331,7 +327,11 @@ def run_turn(case):
             server_name, server = next(iter(mounted.items()))
             config_path = server["args"][-1]
             configuration = json.loads(Path(config_path).read_text(encoding="utf-8"))
-            journal = [json.loads(line) for line in Path(configuration["inquiryJournalPath"]).read_text(encoding="utf-8").splitlines()]
+            from hey_my_buddy.protocol.inquiry_journal import MAX_JOURNAL_BYTES, read_shared_snapshot
+            snapshot = read_shared_snapshot(configuration["inquiryJournalPath"], MAX_JOURNAL_BYTES)
+            if snapshot is None:
+                raise RuntimeError("fixture inquiry journal could not be read")
+            journal = [json.loads(line) for line in snapshot.decode("utf-8").splitlines()]
             question = next(item for item in journal if item.get("state") == "queued")
             answer = {"inquiryId": question["inquiryId"], "answer": "42"}
             if case in ("inquiry-signed-refusal", "inquiry-forged-refusal"):

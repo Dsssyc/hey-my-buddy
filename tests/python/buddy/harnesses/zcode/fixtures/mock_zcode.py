@@ -16,6 +16,10 @@ import sys
 import threading
 import time
 from pathlib import Path
+from hey_my_buddy.paths import native_path
+
+# JSONL is UTF-8 even when the Windows console uses another code page.
+sys.stdin.reconfigure(encoding="utf-8")
 
 if "--version" in sys.argv:
     if os.environ.get("HMB_ZCODE_TEST_CASE") == "slow-version":
@@ -51,17 +55,17 @@ def send(value):
 def wait_file(name, timeout=20.0):
     """Block until the test creates a coordination file, always bounded."""
     path = log_dir / name
-    log_dir.mkdir(parents=True, exist_ok=True)
+    native_path(log_dir).mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and not path.exists():
+    while time.monotonic() < deadline and not native_path(path).exists():
         time.sleep(0.02)
-    return path.exists()
+    return native_path(path).exists()
 
 
 def record_commands():
     try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "commands.jsonl").write_text("".join(json.dumps(item) + "\n" for item in commands), encoding="utf-8", newline="\n")
+        native_path(log_dir).mkdir(parents=True, exist_ok=True)
+        native_path(log_dir / "commands.jsonl").write_text("".join(json.dumps(item) + "\n" for item in commands), encoding="utf-8", newline="\n")
     except OSError:
         pass
 
@@ -282,7 +286,7 @@ def inquiry_turn():
         # The finish receipt is already accepted when the Host question arrives;
         # the turn settles and the late question honestly becomes unavailable.
         native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        (log_dir / "finish-accepted").touch()
+        native_path(log_dir / "finish-accepted").touch()
         wait_file("late-asked")
         settle_turn()
         return
@@ -313,7 +317,7 @@ def inquiry_turn():
         # The root never checkpoints; the completed finish is refused with the
         # question, and the root honestly settles on assistance instead.
         first = native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
-        (log_dir / "finish-refusal.json").write_text(first[1] or "", encoding="utf-8", newline="\n")
+        native_path(log_dir / "finish-refusal.json").write_text(first[1] or "", encoding="utf-8", newline="\n")
         native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
         settle_turn()
         return
@@ -437,8 +441,8 @@ def handle_message(message):
     method, params, request_id = message["method"], message.get("params", {}), message["id"]
     methods.append(method)
     try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "methods.jsonl").write_text("".join(item + "\n" for item in methods), encoding="utf-8", newline="\n")
+        native_path(log_dir).mkdir(parents=True, exist_ok=True)
+        native_path(log_dir / "methods.jsonl").write_text("".join(item + "\n" for item in methods), encoding="utf-8", newline="\n")
     except OSError:
         pass
     if method == "runtime/capabilities":
@@ -450,10 +454,10 @@ def handle_message(message):
         assert "titleGenerationEnabled" not in params
         workspace, mcp = params["workspace"], params.get("mcpServers", [])
         if method == "session/resume":
-            if not state.exists() or case == "resume-missing":
+            if not native_path(state).exists() or case == "resume-missing":
                 send({"id": request_id, "error": {"code": -32004, "message": "Session not found"}})
                 return
-            stored = json.loads(state.read_text(encoding="utf-8"))
+            stored = json.loads(native_path(state).read_text(encoding="utf-8"))
             if stored["sessionId"] != params["sessionId"] or not mcp:
                 raise RuntimeError("native resume lost its exact identity or MCP reinjection")
             session_id, selection, permission_mode = stored["sessionId"], stored["selection"], stored["permissionMode"]
@@ -499,10 +503,10 @@ def handle_message(message):
     elif method == "session/send":
         prompt_input_id = params["inputId"]
         send({"id": request_id, "result": {"sessionId": session_id, "accepted": True, "stateRevision": 1}})
-        state.parent.mkdir(parents=True, exist_ok=True)
+        native_path(state.parent).mkdir(parents=True, exist_ok=True)
         if case == "mode-plan-required":
             assert plan_active, "resuming a plan session must reapply plan before input"
-        state.write_text(json.dumps({"sessionId": session_id, "selection": selection, "permissionMode": permission_mode}), encoding="utf-8", newline="\n")
+        native_path(state).write_text(json.dumps({"sessionId": session_id, "selection": selection, "permissionMode": permission_mode}), encoding="utf-8", newline="\n")
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
@@ -568,7 +572,7 @@ def handle_message(message):
             # can never hang the suite. No question may end or restart this turn.
             release = log_dir / "release-turn"
             deadline = time.monotonic() + 20.0
-            while time.monotonic() < deadline and not release.exists():
+            while time.monotonic() < deadline and not native_path(release).exists():
                 if case == "live-activity":
                     send({"method": "v4/telemetry/event", "params": {
                         "kind": "model-delta", "text": "fixture-private-progress",
@@ -580,8 +584,8 @@ def handle_message(message):
             accepted = finish("completed")[0] if case == "attention-after-finish" else None
             answers = interactive_attention()
             try:
-                log_dir.mkdir(parents=True, exist_ok=True)
-                (log_dir / "interaction-responses.json").write_text(json.dumps(answers), encoding="utf-8", newline="\n")
+                native_path(log_dir).mkdir(parents=True, exist_ok=True)
+                native_path(log_dir / "interaction-responses.json").write_text(json.dumps(answers), encoding="utf-8", newline="\n")
             except OSError:
                 pass
             if case == "attention-after-finish":

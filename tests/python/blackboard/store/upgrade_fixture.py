@@ -64,6 +64,9 @@ def load_fixture(state: Path) -> dict:
     repository = fixture_root / "repository"
     repository.mkdir(parents=True)
     _git(repository, "init", "--quiet")
+    # The fixed Git objects and fingerprints describe exact bytes; a machine's
+    # autocrlf default must not rewrite them while restoring the worktrees.
+    _git(repository, "config", "core.autocrlf", "false")
     # One hash-object invocation per object type writes the whole fixed stock and
     # reports one oid per input line, in order; each is still verified against
     # the fixture's recorded oid.
@@ -92,11 +95,23 @@ def load_fixture(state: Path) -> dict:
         def path(value):
             return json.dumps(str(value), ensure_ascii=ascii_json)[1:-1] if json_payload else str(value)
 
-        paths = {"<fixture-root>/state": path(state), "<fixture-root>": path(fixture_root)}
+        def substitute(match):
+            token = match[0]
+            if not token.startswith('<fixture-root>'):
+                return bindings.get(token, token)
+            # Bind the complete template path, including its separators and
+            # digest components. Never interpret tokens in the private root.
+            relative = token.removeprefix('<fixture-root>')
+            if relative == '/state' or relative.startswith('/state/'):
+                root, relative = state, relative.removeprefix('/state')
+            else:
+                root = fixture_root
+            relative = re.sub(r'[0-9a-f]{64}', lambda digest: bindings.get(digest[0], digest[0]), relative)
+            return path(root.joinpath(*relative.lstrip('/').split('/')) if relative else root)
+
         # Substitute each source token once; a private directory name can itself
         # contain a placeholder or a hex digest without being interpreted again.
-        return re.sub(r"<fixture-root>/state|<fixture-root>|[0-9a-f]{64}",
-                      lambda match: paths.get(match[0], bindings.get(match[0], match[0])), text)
+        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|[0-9a-f]{64}", substitute, text)
 
     for template in resources["checkouts"].values():
         _git(repository, "worktree", "add", "--quiet", "--detach", replace(template), commit)

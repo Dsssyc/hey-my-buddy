@@ -331,7 +331,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 cleanup_attempt_credentials(Path(env["HMB_STATE_DIR"]), name, "task", "attempt")
                 self.assert_partition(context, name)
 
-    def test_execution_entry_journals_each_offline_fast_router_native_tree(self):
+    def test_execution_entry_owns_each_offline_fast_router_native_tree(self):
         setups = ((dsh_tests.DshNoToolTests, "dsh"),
                   (zcode_fast_tests.NoToolFakeProtocolTests, "zcode"),
                   (codex_fast_tests.NoToolCodexTests, "codex"))
@@ -398,6 +398,22 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     "        'processGroupId': os.getpgrp(), 'jobName': None}\n"
                     f"fsync_json(marker, {{'taskId': {task_id!r}, 'attemptId': {attempt_id!r}, "
                     "'generation': 1, 'processIdentity': process_record})\n"
+                    "if os.name == 'nt':\n"
+                    "    from hey_my_buddy.protocol.windows_process import WindowsAPI\n"
+                    "    original_assign = WindowsAPI.assign\n"
+                    "    observations = []\n"
+                    "    def observe_assign(api, job, process):\n"
+                    "        original_assign(api, job, process)\n"
+                    "        root_job = api.open_job(job_name)\n"
+                    "        try:\n"
+                    "            members = api.process_identities(root_job)\n"
+                    "        finally:\n"
+                    "            api.close(root_job)\n"
+                    "        identity = {'pid': process.pid, 'startedAt': process_identity.process_start(\n"
+                    "            process.pid, include_exited=True), 'jobName': job_name}\n"
+                    "        observations.append({'identity': identity, 'rootJobMembers': members})\n"
+                    f"        fsync_json(Path({str(fixture.root / 'native-job-observations.json')!r}), observations)\n"
+                    "    WindowsAPI.assign = observe_assign\n"
                     "harness_health.HARNESSES = ()\n"
                     "class OfflineClient:\n"
                     "    def __init__(self, *args, **kwargs): pass\n"
@@ -441,11 +457,20 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 journal_path = native_process_journal_path(
                     receipt_directory(state, harness, task_id, attempt_id), root_identity)
                 binding = {"taskId": task_id, "attemptId": attempt_id, "generation": 1}
-                self.assertTrue(native_path(journal_path).is_file(), journal_path)
-                native = read_native_process_journal(journal_path, binding)
-                self.assertIsNotNone(native)
-                self.assertEqual(native["pending"], 0, native)
-                self.assertTrue(native["identities"], native)
+                if os.name == "nt":
+                    self.assertFalse(native_path(journal_path).exists(), "Windows stop evidence comes from the root Job")
+                    observations = json.loads((fixture.root / "native-job-observations.json").read_text(encoding="utf-8"))
+                    self.assertTrue(observations)
+                    for observation in observations:
+                        identity = observation["identity"]
+                        self.assertIn({key: identity[key] for key in ("pid", "startedAt")},
+                                      observation["rootJobMembers"], observation)
+                else:
+                    self.assertTrue(native_path(journal_path).is_file(), journal_path)
+                    native = read_native_process_journal(journal_path, binding)
+                    self.assertIsNotNone(native)
+                    self.assertEqual(native["pending"], 0, native)
+                    self.assertTrue(native["identities"], native)
 
     def test_dsh_coding_and_reconstructed_claude_continuation(self):
         fixture = self.fixture(dsh_coding_tests.DshRoleCase)

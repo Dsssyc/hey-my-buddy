@@ -140,6 +140,7 @@ def serve():
     import c_two as cc
     from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
     from hey_my_buddy.private_dirs import context_root
+    from hey_my_buddy.paths import native_path
     from support import shutdown_private_rpc
 
     fixture = ZcodeFixtureCase()
@@ -181,12 +182,17 @@ def serve():
                     handle = fixture.adapter.start(context)
                     fixture.own_handle(handle)
                     channel = fixture.ready_channel(handle)
-                    fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
-                                        "holder must use its own actual process-level IPC domain")
+                    if os.name == 'nt':
+                        fixture.assertIsNone(cc.local_endpoint_context().root,
+                                             "Windows uses C-Two's named-pipe domain")
+                    else:
+                        fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
+                                            "holder must use its own actual process-level IPC domain")
                     facts = {"attemptId": context.attempt_id, "ownerPid": os.getpid(),
                              "controllerPid": handle.pid,
                              "state": str(state), "runtime": str(runtime), "home": str(home),
-                             "ipcRoot": str(cc.local_endpoint_context().root),
+                             "ipcRoot": cc.local_endpoint_context().root,
+                             "ipcNamespace": cc.local_endpoint_context().namespace_id,
                              "live": handle.exit_code is None}
                 elif operation == "live":
                     channel = fixture.ready_channel(handle)
@@ -199,7 +205,7 @@ def serve():
                 elif operation == "finish-accepted":
                     fixture.assertIsNotNone(fixture.wait_file(context, "finish-accepted"))
                 elif operation == "late-asked":
-                    next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("late-asked").touch()
+                    next(native_path(context_root(context, "zcode")).glob("run-*/native-logs")).joinpath("late-asked").touch()
                 elif operation == "collect":
                     fixture.assertIsNotNone(handle.wait(40), "controller did not exit")
                     outcome = fixture.adapter.collect(handle, context)

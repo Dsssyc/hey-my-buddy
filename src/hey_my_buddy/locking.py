@@ -9,18 +9,15 @@ non-blocking attempt on a held lock raises ``BlockingIOError``, as ``fcntl`` did
 from __future__ import annotations
 
 import errno
+import os
 
 import portalocker
 
 
-class _Descriptor:
-    __slots__ = ("fd",)
-
-    def __init__(self, fd: int):
-        self.fd = fd
-
-    def fileno(self) -> int:
-        return self.fd
+if os.name == 'nt':
+    # portalocker 3.2 defaults exclusive locks to msvcrt.LK_LOCK, which gives
+    # up after ten retries. Use its Win32 implementation for both lock kinds.
+    from portalocker.portalocker import Win32Locker
 
 
 def lock(fd: int, *, shared: bool = False, blocking: bool = True) -> None:
@@ -28,10 +25,16 @@ def lock(fd: int, *, shared: bool = False, blocking: bool = True) -> None:
     if not blocking:
         flags |= portalocker.LockFlags.NON_BLOCKING
     try:
-        portalocker.lock(_Descriptor(fd), flags)
+        if os.name == 'nt':
+            Win32Locker().lock(fd, flags)
+        else:
+            portalocker.lock(fd, flags)
     except portalocker.exceptions.AlreadyLocked as error:
         raise BlockingIOError(errno.EAGAIN, "the file is locked by another owner") from error
 
 
 def unlock(fd: int) -> None:
-    portalocker.unlock(_Descriptor(fd))
+    if os.name == 'nt':
+        Win32Locker().unlock(fd)
+    else:
+        portalocker.unlock(fd)

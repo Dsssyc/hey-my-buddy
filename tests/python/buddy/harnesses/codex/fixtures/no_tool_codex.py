@@ -9,6 +9,8 @@ from pathlib import Path
 
 from protocol_items import item_frames
 
+sys.stdin.reconfigure(encoding="utf-8")
+
 
 def send(value):
     sys.stdout.write(json.dumps(value, separators=(",", ":")) + "\n")
