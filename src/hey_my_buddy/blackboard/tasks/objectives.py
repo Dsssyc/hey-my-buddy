@@ -603,11 +603,19 @@ def _span(kind: str, span_id: str, run_id: str, start: Any, end: Any, state: str
 
 
 def _attempt_state(attempt) -> tuple[str, bool, bool]:
-    """(state, shutdownConfirmed, uncertain) from the attempt's own recorded facts."""
+    """(state, shutdownConfirmed, uncertain) from the attempt's own recorded facts.
+
+    A confirmed stop settles the end whatever ownership says: a lease may have
+    expired and marked the attempt's ownership uncertain before the worker
+    reported in, but its recorded result and stop evidence are the later fact.
+    Without that evidence neither an uncertain ownership nor an unconfirmed
+    finish may claim an end.
+    """
     finished = attempt["execution_state"] == "finished"
     confirmed = finished and attempt["shutdown_confirmed"] == 1
-    uncertain = (attempt["execution_state"] == "uncertain" or attempt["ownership"] == "uncertain"
-                 or (finished and not confirmed))
+    uncertain = not confirmed and (
+        attempt["execution_state"] == "uncertain" or attempt["ownership"] == "uncertain" or finished
+    )
     return attempt["execution_state"], confirmed, uncertain
 
 
