@@ -39,7 +39,7 @@ class UpgradeTests(BoardTestCase):
                      mock.patch.object(upgrade, 'command', return_value=health) as command:
                     self.assertEqual(upgrade.start(state, target), health)
                 popen.assert_called_once()
-                self.assertEqual(popen.call_args.kwargs['creationflags'], 0x01000208)
+                self.assertEqual(popen.call_args.kwargs['creationflags'], 0x09000200)
                 self.assertNotIn('start_new_session', popen.call_args.kwargs)
                 self.assertEqual(popen.call_args.kwargs['cwd'], target)
                 # Readiness is the probe's own health request, not a second one.

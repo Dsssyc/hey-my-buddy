@@ -15,12 +15,12 @@ class ServiceProcessTests(unittest.TestCase):
         self.assertIs(child, popen.return_value)
         popen.assert_called_once_with(["python", "-m", "daemon"], close_fds=True, start_new_session=True)
 
-    def test_windows_service_detaches_and_leaves_the_callers_job(self):
+    def test_windows_service_has_no_window_and_leaves_the_callers_job(self):
         with mock.patch.object(service_process, "os", SimpleNamespace(name="nt")), \
              mock.patch.object(service_process.subprocess, "Popen") as popen:
             service_process.independent_service_popen(["python", "-m", "daemon"], close_fds=True)
         popen.assert_called_once_with(["python", "-m", "daemon"], close_fds=True,
-                                     creationflags=0x01000208)
+                                     creationflags=0x09000200)
 
     def test_windows_breakaway_denial_keeps_system_reason_and_never_retries(self):
         failure = OSError(5, "breakaway denied")
