@@ -9,6 +9,7 @@ from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
 from ..harnesses.controller import read_plain_evidence
 from ...errors import BoardError
 from ...private_dirs import ensure_private_dir
+from ...paths import native_path
 from .turn_io import private_json, canonical_json
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
@@ -91,12 +92,12 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
     # the controller's mutable on-disk configuration after it has run.
     for number in (1, 2):
         source = binding.private_root / f"call-{number}"
-        if not source.exists():
+        if not native_path(source).exists():
             continue
-        if not source.is_dir():
+        if not native_path(source).is_dir():
             raise BoardError("PRIVATE_PATH_UNSAFE", "No-tool call source is not a directory", path=str(source))
         pair = [source / name for name in ("request.json", "result.json")]
-        if not all(path.exists() for path in pair):
+        if not all(native_path(path).exists() for path in pair):
             continue
         values = [read_plain_evidence(path) for path in pair]
         target = ensure_private_dir(binding.evidence_root / f"call-{number}")

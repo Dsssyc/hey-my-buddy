@@ -30,6 +30,9 @@ from pathlib import Path
 from typing import Iterator
 import zstandard
 
+from ....paths import native_path
+from ....private_files import open_read
+
 from ....json_codec import decode_strict_json
 
 #: The record file suffixes and header version the lookup and fold accept.
@@ -86,12 +89,12 @@ class RecordStream:
             self.truncated = True
 
     def _plain(self) -> Iterator[bytes]:
-        with self.path.open("rb") as handle:
+        with open_read(self.path) as handle:
             while chunk := handle.read(262144):
                 yield chunk
 
     def _decompressed(self) -> Iterator[bytes]:
-        with self.path.open("rb") as handle:
+        with open_read(self.path) as handle:
             reader = zstandard.ZstdDecompressor().stream_reader(handle)
             while chunk := reader.read(262144):
                 yield chunk
@@ -183,8 +186,9 @@ def record_candidates(root: Path, session_id: str) -> list[Path]:
     paths.extend(root / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
     # DSH can put a session directory under one encoded working-directory
     # component. Inspect that one level, then only the target session's names.
-    for work_dir in root.iterdir():
-        if work_dir.is_symlink() or not work_dir.is_dir():
+    for name in sorted(path.name for path in native_path(root).iterdir()):
+        work_dir = root / name
+        if native_path(work_dir).is_symlink() or not native_path(work_dir).is_dir():
             continue
         paths.extend(work_dir / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
 
@@ -192,9 +196,9 @@ def record_candidates(root: Path, session_id: str) -> list[Path]:
         current = root
         for part in path.relative_to(root).parts[:-1]:
             current /= part
-            if current.is_symlink() or not current.is_dir():
+            if native_path(current).is_symlink() or not native_path(current).is_dir():
                 return False
-        return not path.is_symlink() and path.is_file()
+        return not native_path(path).is_symlink() and native_path(path).is_file()
 
     return sorted(path for path in paths if regular_candidate(path))
 
@@ -294,7 +298,7 @@ def session_record_facts(sessions_root: Path, session_ids) -> dict | None:
     """
     sessions = frozenset(s for s in session_ids if isinstance(s, str) and s)
     root = Path(sessions_root)
-    if not sessions or not root.is_dir():
+    if not sessions or not native_path(root).is_dir():
         return None
     acc = RecordAccumulator()
     try:
@@ -411,7 +415,7 @@ def freeze_session_records(sessions_root: Path, session_id: str) -> RecordBaseli
     read makes the baseline unreliable.
     """
     root = Path(sessions_root)
-    if not root.is_dir():
+    if not native_path(root).is_dir():
         return RecordBaseline(session_id=session_id, files=(), reliable=True)
     matched, reliable = _matching_files(root, session_id)
     return RecordBaseline(
@@ -444,7 +448,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
     subtracting cumulative counters.
     """
     root = Path(sessions_root)
-    if not root.is_dir():
+    if not native_path(root).is_dir():
         return _unknown_resumed_facts(baseline, "sessions-root-missing", 0)
     try:
         records_read = len(record_candidates(root, baseline.session_id))

@@ -13,6 +13,7 @@ from .db import (ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, 
                  ROUTER_REQUESTS_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
                  WORKFLOW_RUNS_DDL, WORKFLOW_TURNS_DDL, canonical_json, sha256_text)
 from ... import private_dirs
+from ...paths import native_path
 from ...errors import BoardError
 
 # Task and attempt identity already live in the event columns.
@@ -479,8 +480,8 @@ def cleanup_legacy_layout(state: Path) -> dict:
             if directory:
                 deleted = private_dirs.remove_tree(path)
             else:
-                deleted = path.exists()
-                path.unlink(missing_ok=True)
+                deleted = native_path(path).exists()
+                native_path(path).unlink(missing_ok=True)
             if deleted:
                 removed.append(relative)
         except (BoardError, OSError) as error:

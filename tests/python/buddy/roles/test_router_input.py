@@ -12,6 +12,8 @@ from unittest import mock
 
 from hey_my_buddy.buddy.roles import router_input
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import read_bytes
 
 
 class FrozenTreeEntryTests(unittest.TestCase):
@@ -34,6 +36,32 @@ class FrozenTreeEntryTests(unittest.TestCase):
         return subprocess.run(["git", "-C", str(self.checkout), *arguments],
                               input=input, env=self.environment, capture_output=True,
                               check=True).stdout
+
+    def test_long_mirror_is_verified_without_windows_readonly_and_discarded(self):
+        name = 'deep/' + '/'.join(['directory-' + 'a' * 45] * 4) + '/tool.py'
+        tree = self.object_id
+        subtree = self.git('mktree', input=b'100755 blob ' + tree + b'\ttool.py\n').strip()
+        for part in reversed(name.split('/')[:-1]):
+            subtree = self.git('mktree', input=b'040000 tree ' + subtree + b'\t' + part.encode() + b'\n').strip()
+        self.manifest['inputTree'] = subtree.decode()
+        directory = self.root / 'long-mirror'
+        directory.mkdir()
+        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+        path = frozen / name
+        self.assertGreater(len(str(path)), 260)
+        self.assertEqual(read_bytes(path), b'frozen bytes')
+        metadata = native_path(path).stat()
+        if os.name == 'nt':
+            self.assertFalse(metadata.st_file_attributes & 1)
+        else:
+            self.assertEqual(metadata.st_mode & 0o777, 0o555)
+        self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        native_path(path).chmod(0o644)
+        self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        native_path(path).write_bytes(b'changed')
+        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        router_input.discard(frozen)
+        self.assertFalse(frozen.exists())
 
     def assert_refused_after_materializing_a_file(self, entry, message):
         directory = self.root / "review"

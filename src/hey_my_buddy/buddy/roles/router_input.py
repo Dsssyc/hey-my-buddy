@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from ...errors import BoardError
 from ...blackboard.tasks import workspace
 from ...private_dirs import directory_mode, remove_tree
+from ...paths import native_path
+from ...private_files import open_read
 
 
 def _remaining(deadline: float) -> float:
@@ -26,18 +28,21 @@ def digest(root: Path, *, deadline: float) -> str:
 
 def _digest(root: Path, deadline: float) -> str:
     value = hashlib.sha256()
-    for directory, names, files in os.walk(root, followlinks=False):
+    filesystem_root = native_path(root)
+    for directory, names, files in os.walk(filesystem_root, followlinks=False):
         _remaining(deadline)
         names.sort()
         for name in sorted(names + files):
-            path = Path(directory) / name
+            path = root / Path(directory).relative_to(filesystem_root) / name
             value.update(path.relative_to(root).as_posix().encode() + b"\0")
-            value.update(str(path.lstat().st_mode & 0o777).encode() + b"\0")
-            if path.is_symlink():
-                value.update(b"link\0" + os.readlink(path).encode())
-            elif path.is_file():
+            # The snapshot binds names, kinds and bytes. Windows cannot express
+            # POSIX execute/read-only modes; permissions are materialization
+            # policy rather than portable input content.
+            if native_path(path).is_symlink():
+                value.update(b"link\0" + os.readlink(native_path(path)).encode())
+            elif native_path(path).is_file():
                 value.update(b"file\0")
-                with path.open('rb') as stream:
+                with open_read(path) as stream:
                     for block in iter(lambda: stream.read(65536), b''):
                         _remaining(deadline)
                         value.update(block)
@@ -53,7 +58,7 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
         # Public standalone selection has no filesystem input. Freeze an empty
         # private directory rather than borrowing any caller checkout.
         root = directory / "frozen-input"
-        root.mkdir(mode=directory_mode())
+        native_path(root).mkdir(mode=directory_mode())
         try:
             return root, _digest(root, deadline)
         except BoardError:
@@ -70,7 +75,7 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
         raise BoardError(code, "The frozen Router input could not be verified") from None
     _remaining(deadline)
     root = directory / "frozen-input"
-    root.mkdir(mode=directory_mode())
+    native_path(root).mkdir(mode=directory_mode())
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_TERMINAL_PROMPT="0")
     def git(*arguments):
@@ -124,27 +129,29 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
                 continue
             metadata, raw_path = entry.split(b"\t", 1)
             mode, kind, object_id = metadata.decode('ascii').split()
-            relative = PurePosixPath(os.fsdecode(raw_path))
-            if relative.is_absolute() or any(part in ("..", ".git") for part in relative.parts):
-                raise BoardError("router-input-unavailable", "A frozen tree path is unsafe: absolute paths, parent traversal and Git metadata are forbidden")
+            try:
+                relative = PurePosixPath(workspace._relative(os.fsdecode(raw_path)))
+            except BoardError as error:
+                raise BoardError("router-input-unavailable", "A frozen tree path is unsafe: absolute paths, parent traversal and Git metadata are forbidden") from error
             if kind != "blob":
                 raise BoardError("router-input-unavailable", "Frozen Router input with submodules is not supported")
             path = root.joinpath(*relative.parts)
-            path.parent.mkdir(parents=True, exist_ok=True)
+            native_path(path.parent).mkdir(parents=True, exist_ok=True)
             contents = blob(object_id)
             if mode == "120000":
-                path.symlink_to(os.fsdecode(contents))
+                native_path(path).symlink_to(os.fsdecode(contents))
                 links.append(path)
             else:
-                path.write_bytes(contents)
-                path.chmod(0o555 if mode == "100755" else 0o444)
+                native_path(path).write_bytes(contents)
+                if os.name != 'nt':
+                    path.chmod(0o555 if mode == "100755" else 0o444)
         for link in links:
             _remaining(deadline)
             try:
-                resolved = link.resolve(strict=True)
+                resolved = native_path(link).resolve(strict=True)
             except FileNotFoundError:
-                resolved = link.resolve(strict=False)
-            if not resolved.is_relative_to(root.resolve()):
+                resolved = native_path(link).resolve(strict=False)
+            if not resolved.is_relative_to(native_path(root).resolve()):
                 raise BoardError("router-input-unavailable", "A frozen symlink escapes the Router checkout")
         result = root, _digest(root, deadline)
         _remaining(deadline)

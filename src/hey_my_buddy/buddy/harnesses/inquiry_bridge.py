@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 
 from ... import locking
+from ...paths import native_path
 from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES,
                                          inquiry_delivery_facts, read_inquiry_journal, read_shared_snapshot)
 from ...errors import BoardError
@@ -216,7 +217,7 @@ class InquiryBridge:
         merged = {**self.entries.get(inquiry_id, {}), **record}
         raw = (canonical_json({**record, "version": INQUIRY_JOURNAL_VERSION}) + "\n").encode()
         try:
-            fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            fd = os.open(native_path(self.journal_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
         except OSError:
             self.error = self.error or "journal-unavailable: the inquiry record could not be appended durably"
             self._publish()

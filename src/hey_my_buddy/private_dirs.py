@@ -10,7 +10,7 @@ import stat
 import tempfile
 import secrets
 
-from .paths import is_absolute_path
+from .paths import is_absolute_path, native_path, windows_path
 from .protocol.harness_names import ADAPTER_NAMES as ADAPTERS
 from .errors import BoardError
 
@@ -28,7 +28,7 @@ def linked(path: Path) -> bool:
     """Inspect the directory entry itself, including Windows reparse points."""
     path = Path(path)
     try:
-        metadata = path.lstat()
+        metadata = native_path(path).lstat()
     except FileNotFoundError:
         return False
     return (stat.S_ISLNK(metadata.st_mode)
@@ -36,7 +36,7 @@ def linked(path: Path) -> bool:
 
 
 def _absolute(path: Path) -> Path:
-    path = Path(path).absolute()
+    path = Path(windows_path(path, extended=False)) if os.name == 'nt' else Path(path).absolute()
     if not is_absolute_path(path):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path must be absolute')
     if '..' in path.parts:
@@ -132,15 +132,15 @@ def ensure_private_dir(path: Path) -> Path:
     path = _absolute(path)
     missing = []
     current = path
-    while not current.exists():
+    while not native_path(current).exists():
         missing.append(current)
         current = current.parent
     for directory in reversed(missing):
         try:
-            directory.mkdir(mode=directory_mode())
+            native_path(directory).mkdir(mode=directory_mode())
         except FileExistsError:
             pass
-    if not path.is_dir():
+    if not native_path(path).is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
     return path
 
@@ -149,8 +149,8 @@ def make_temporary_dir(*, prefix: str, directory: Path) -> Path:
     """Keep Windows temporary directories inheriting their parent's ACL too."""
     if os.name != 'nt':
         return Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
-    path = Path(directory) / (prefix + secrets.token_urlsafe(6))
-    path.mkdir()
+    path = _absolute(directory) / (prefix + secrets.token_urlsafe(6))
+    native_path(path).mkdir()
     return path
 
 
@@ -158,30 +158,30 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
     """Remove one real tree, retaining exact files or subtrees and their parents."""
     path = _absolute(path)
     keep = frozenset(_absolute(item) for item in keep)
-    if not path.exists() and not linked(path):
+    if not native_path(path).exists() and not linked(path):
         return False
     if linked(path):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Refusing to remove a linked private root', path=str(path))
-    if not path.is_dir():
+    if not native_path(path).is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private removal target is not a directory', path=str(path))
     def descend(directory: Path) -> bool:
-        with os.scandir(directory) as entries:
-            children = [Path(entry.path) for entry in entries]
+        with os.scandir(native_path(directory)) as entries:
+            children = [directory / entry.name for entry in entries]
         retained = False
         for child in children:
             if linked(child):
-                if child.is_junction():
-                    child.rmdir()
+                if native_path(child).is_junction():
+                    native_path(child).rmdir()
                 else:
-                    child.unlink()
+                    native_path(child).unlink()
             elif child in keep:
                 retained = True
-            elif child.is_dir():
+            elif native_path(child).is_dir():
                 retained = not descend(child) or retained
             else:
-                child.unlink()
+                native_path(child).unlink()
         if not retained:
-            directory.rmdir()
+            native_path(directory).rmdir()
         return not retained
 
     return descend(path)
@@ -192,28 +192,28 @@ def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt
     root = attempt_root(state, adapter, task_id, attempt_id)
     if linked(root):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is linked', path=str(root))
-    if not root.exists():
+    if not native_path(root).exists():
         return {'count': 0, 'paths': []}
-    if not root.is_dir():
+    if not native_path(root).is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is not a directory', path=str(root))
     removed = []
     def inspect(directory: Path) -> None:
-        with os.scandir(directory) as entries:
-            children = [Path(entry.path) for entry in entries]
+        with os.scandir(native_path(directory)) as entries:
+            children = [directory / entry.name for entry in entries]
         for child in children:
             if linked(child):
                 if child.name in _CREDENTIAL_FILES:
-                    if child.is_junction():
-                        child.rmdir()
+                    if native_path(child).is_junction():
+                        native_path(child).rmdir()
                     else:
-                        child.unlink()
+                        native_path(child).unlink()
                     removed.append(str(child))
-            elif child.is_dir():
+            elif native_path(child).is_dir():
                 if child.name in _CREDENTIAL_FILES:
                     raise BoardError('PRIVATE_PATH_UNSAFE', 'Credential path is a directory', path=str(child))
                 inspect(child)
             elif child.name in _CREDENTIAL_FILES:
-                child.unlink()
+                native_path(child).unlink()
                 removed.append(str(child))
 
     inspect(root)

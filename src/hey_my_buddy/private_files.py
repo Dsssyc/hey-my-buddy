@@ -10,6 +10,8 @@ import io
 import uuid
 from pathlib import Path
 
+from .paths import native_path
+
 
 def sync_directory(path: Path, *, follow_symlinks: bool = True) -> None:
     if os.name == "nt":
@@ -65,12 +67,12 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False) -> Non
                 api.rename(stream.fileno(), path)
         if immutable:
             try:
-                os.link(temporary, path)
+                os.link(native_path(temporary), native_path(path))
             except FileExistsError:
                 if read_bytes(path) != content:
                     raise
         elif os.name != 'nt':
             os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        native_path(temporary).unlink(missing_ok=True)
     sync_directory(path.parent)

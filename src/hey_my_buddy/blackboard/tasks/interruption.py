@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 
 from ...errors import BoardError
+from ...paths import native_path
 from ...protocol import process_identity as processes
 
 
@@ -144,8 +145,8 @@ def _cleanup_dead_material(board, attempt, identity, observation):
                                                  stopped_evidence=observation)
             if outcome['status'] == 'unverified':
                 raise BoardError('LIVE_CLEANUP_UNVERIFIED', outcome['reason'])
-            (directory / LIVE).unlink(missing_ok=True)
-        elif (directory / LIVE).exists():
+            native_path(directory / LIVE).unlink(missing_ok=True)
+        elif native_path(directory / LIVE).exists():
             raise BoardError('LIVE_CLEANUP_UNVERIFIED', 'Execution identity was not captured')
         board.clear_execution_issue(attempt['attempt_id'], 'endpoint-cleanup')
     except Exception as error:
@@ -179,7 +180,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                 stopped_evidence = json.loads(proof['detail_json'])
             # Intent is fsynced before creation. Its absence closes the admission
             # commit -> startup-material crash window without any elapsed-time guess.
-            elif attempt['execution_state'] == 'uncertain' and not (
+            elif attempt['execution_state'] == 'uncertain' and not native_path(
                     _evidence_directory(board, attempt) / 'spawn.intent').exists():
                 return board.release_execution(attempt['attempt_id'], reason='execution-process-not-created')
             else:

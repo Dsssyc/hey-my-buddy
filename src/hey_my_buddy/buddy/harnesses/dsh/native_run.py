@@ -35,6 +35,8 @@ from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
 from ....protocol.owned_process import WindowsCommandLineTooLong
 from ....private_dirs import ensure_private_dir
+from ....paths import native_path
+from ....private_files import read_bytes, open_read
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
 from ...roles.attention import AttentionRecorder
@@ -416,7 +418,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         "storageScope": "task-shared-sessions", "storageOwner": "hey-my-buddy-micro-task",
         "nativeAppVisibility": "not-listed-in-native-app",
         "credentialsStore": "harness-user-store",
-        "bindingPresent": binding is not None and binding.is_file(),
+        "bindingPresent": binding is not None and native_path(binding).is_file(),
         "note": note,
     }
 
@@ -923,7 +925,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 # a missing or foreign binding fails the run before any process
                 # exists, inside the same honest error result as every other stage.
                 try:
-                    binding = decode_strict_json(_binding_path(native_root, previous).read_bytes())
+                    binding = decode_strict_json(read_bytes(_binding_path(native_root, previous)))
                 except (OSError, ValueError):
                     raise NativeError("native-resume-unavailable",
                                       "the previous native session has no private micro task binding") from None
@@ -1614,7 +1616,7 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
     def retain(kind: str, name: str, value: dict) -> None:
         target = invocation_root / name
         private_json(target, value, exclusive=True)
-        raw = target.read_bytes()
+        raw = read_bytes(target)
         refs.append(EvidenceRef(kind=kind, location=str(target), size_bytes=len(raw),
                                 sha256=hashlib.sha256(raw).hexdigest()))
 
@@ -1639,9 +1641,9 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
     facts_path = connection_facts.get("factsPath")
     if facts_path is not None:
         facts_file = Path(facts_path)
-        facts_size = facts_file.stat().st_size
+        facts_size = native_path(facts_file).stat().st_size
         if facts_size:
-            with facts_file.open("rb") as handle:
+            with open_read(facts_file) as handle:
                 digest = hashlib.file_digest(handle, "sha256").hexdigest()
             refs.append(EvidenceRef(kind="acp-connection-facts", location=facts_path,
                                     size_bytes=facts_size, sha256=digest))
@@ -1655,9 +1657,9 @@ def _evidence_refs(client: AcpClient | None, invocation_root: Path, state: _RunS
     stderr = client.stderr_tail()
     if stderr:
         target = Path(stderr_mirror) if stderr_mirror else invocation_root / "native-stderr.log"
-        with target.open("x", encoding="utf-8") as handle:
+        with native_path(target).open("x", encoding="utf-8") as handle:
             handle.write(stderr)
-        raw = target.read_bytes()
+        raw = read_bytes(target)
         refs.append(EvidenceRef(kind="native-stderr", location=str(target),
                                 size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
     return tuple(refs)

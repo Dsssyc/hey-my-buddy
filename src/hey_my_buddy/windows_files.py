@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-import errno
 import ntpath
 import os
 from pathlib import Path
 import struct
 
 from .errors import BoardError
+from .paths import native_path, windows_path
 
 FILE_READ_ATTRIBUTES = 0x0080
 GENERIC_READ = 0x80000000
@@ -75,14 +75,10 @@ class WindowsFileAPI:
 
     @staticmethod
     def _os_error(code):
-        if code in (2, 3):
-            return FileNotFoundError(errno.ENOENT, "Windows path does not exist")
-        if code in (80, 183):
-            return FileExistsError(errno.EEXIST, "Windows path already exists")
         return ctypes.WinError(code)
 
     def _open(self, path, access, disposition, *, share_delete=False):
-        return self._call(self.win32file.CreateFile, str(path), access,
+        return self._call(self.win32file.CreateFile, windows_path(path), access,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | (FILE_SHARE_DELETE if share_delete else 0),
                           None, disposition,
                           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
@@ -114,7 +110,7 @@ class WindowsFileAPI:
         return ntpath.basename(self.final_path(handle).rstrip("\\"))
 
     def long_path(self, path):
-        return self._call(self.win32file.GetLongPathName, str(path))
+        return self._call(self.win32file.GetLongPathName, windows_path(path))
 
     def file_type(self, handle):
         return self._call(self.win32file.GetFileType, handle)
@@ -131,7 +127,7 @@ class WindowsFileAPI:
 
     def rename(self, descriptor, target):
         """Replace a name using the still-open, synchronized writer handle."""
-        name = str(Path(target).absolute()).encode('utf-16-le')
+        name = windows_path(target).encode('utf-16-le')
         # The Win32 entry point consumes a terminated WCHAR path while forming
         # the native rename request. FileNameLength excludes that terminator.
         size = _RenameInfo.FileName.offset + len(name) + 2
@@ -148,7 +144,7 @@ class WindowsFileAPI:
         self._call(handle.Close)
 
     def mkdir(self, path):
-        os.mkdir(path)
+        os.mkdir(windows_path(path))
 
     def readlink(self, handle):
         # Python's Windows os.readlink returns the substitute path, which can
@@ -158,10 +154,10 @@ class WindowsFileAPI:
         return _link_print_name(raw)
 
     def symlink(self, target, path, *, directory=False):
-        os.symlink(target, path, target_is_directory=directory)
+        os.symlink(target, windows_path(path), target_is_directory=directory)
 
     def link(self, source, target):
-        os.link(source, target)
+        os.link(windows_path(source), windows_path(target))
 
 
 READ_CONTROL = 0x00020000
@@ -223,7 +219,7 @@ def check_state_root(path, *, create=False):
         if linked(component):
             raise BoardError('PRIVATE_PATH_UNSAFE', 'State root contains a linked component', path=str(component))
     if create:
-        path.mkdir(parents=True, exist_ok=True)
+        native_path(path).mkdir(parents=True, exist_ok=True)
     api = WindowsFileAPI()
     handle = api._open(path, READ_CONTROL | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:

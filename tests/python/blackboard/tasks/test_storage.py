@@ -11,10 +11,37 @@ from unittest import mock, skipIf
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy import private_dirs, locking, process_observation as observation
 from hey_my_buddy.blackboard.tasks import storage
+from hey_my_buddy.private_files import publish_bytes, read_bytes
 from support import BoardTestCase
 from process_observation_fakes import native_references, proc_references, process, processes
 
 class StorageTests(BoardTestCase):
+    def test_deep_inventory_exclusion_and_pending_tomb_keep_ordinary_paths(self):
+        root = self.directory / 'long-storage'
+        deep = root
+        while len(str(deep)) < 310:
+            deep /= 'directory-' + 'a' * 35
+        private_dirs.ensure_private_dir(deep)
+        excluded = deep / 'excluded.json'
+        publish_bytes(deep / 'evidence.json', b'payload')
+        publish_bytes(excluded, b'excluded')
+        size, fingerprint, safe = storage.tree_info(root, excluded=frozenset({excluded}))
+        self.assertEqual((size, safe), (len(b'payload'), True))
+        self.assertEqual(storage.tree_info(root, excluded=frozenset({excluded})), (size, fingerprint, safe))
+        publish_bytes(deep / 'evidence.json', b'changed')
+        self.assertNotEqual(storage.tree_info(root)[1], fingerprint)
+        metadata = root.lstat()
+        tomb = root.with_name('.reclaim-long-storage')
+        receipt = self.directory / 'long-storage-receipt.json'
+        result = {'removed': [], 'removedBytes': 0, 'pending': {
+            'id': 'deep', 'path': str(root), 'tomb': str(tomb), 'bytes': 15,
+            'fingerprint': storage.tree_info(root)[1], 'device': metadata.st_dev, 'inode': metadata.st_ino}}
+        storage._finish_pending(result, receipt)
+        self.assertFalse(root.exists())
+        self.assertFalse(tomb.exists())
+        self.assertEqual(result['removed'][0]['path'], str(root))
+        self.assertNotIn('\\\\?\\', read_bytes(receipt).decode())
+
     def test_session_record_inventory_is_disjoint_protected_and_does_not_follow_links(self):
         board = self.board()
         first = private_dirs.session_record_path(board.directory, 'run:orphan', 'first')

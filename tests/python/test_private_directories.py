@@ -7,11 +7,50 @@ from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy import private_dirs
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import publish_bytes, read_bytes
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_long_tree_keeps_ordinary_subtree_and_file_paths(self):
+        root = self.directory / 'long-private'
+        deep = root
+        while len(str(deep)) < 310:
+            deep /= 'directory-' + 'a' * 35
+        kept = private_dirs.ensure_private_dir(deep / 'kept')
+        leaf = deep / 'kept.json'
+        publish_bytes(kept / 'evidence.json', b'kept subtree')
+        publish_bytes(leaf, b'kept file')
+        publish_bytes(deep / 'removed.json', b'remove')
+        self.assertNotIn('\\\\?\\', str(kept))
+        self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({kept, leaf})))
+        self.assertEqual(read_bytes(kept / 'evidence.json'), b'kept subtree')
+        self.assertEqual(read_bytes(leaf), b'kept file')
+        self.assertFalse(native_path(deep / 'removed.json').exists())
+        self.assertTrue(private_dirs.remove_tree(root))
+        self.assertFalse(root.exists())
+
+    def test_scandir_path_spelling_cannot_change_keep_comparisons(self):
+        if os.name == 'nt':
+            self.skipTest('Windows native scandir spelling is covered by the long-tree test')
+        root = private_dirs.ensure_private_dir(self.directory / 'spelling')
+        kept = root / 'kept.json'
+        publish_bytes(kept, b'retain')
+        publish_bytes(root / 'removed.json', b'remove')
+        real_scandir = os.scandir
+        class Entries:
+            def __init__(self, path): self.source = real_scandir(path)
+            def __enter__(self):
+                return [SimpleNamespace(name=entry.name, path='//' + entry.path.lstrip('/'))
+                        for entry in self.source]
+            def __exit__(self, *args): self.source.close()
+        with mock.patch.object(private_dirs.os, 'scandir', Entries):
+            self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({kept})))
+        self.assertEqual(list(root.iterdir()), [kept])
+        self.assertEqual(read_bytes(kept), b'retain')
+
     def test_concurrent_private_directory_creator_is_accepted_and_checked(self):
         if os.name == 'nt':
             self.skipTest('POSIX mkdir race; Windows inherits the parent ACL')

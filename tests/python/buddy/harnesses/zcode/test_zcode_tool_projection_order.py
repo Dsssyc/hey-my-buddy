@@ -8,6 +8,8 @@ from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
+from hey_my_buddy import private_dirs
+from hey_my_buddy.private_files import publish_bytes
 
 
 BINDING = {"harness": "zcode", "taskId": "projection", "attemptId": "attempt", "generation": 1}
@@ -18,6 +20,7 @@ class NativeProjectionTests(unittest.TestCase):
     def setUp(self):
         self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
+        self.addCleanup(private_dirs.remove_tree, Path(self.private.name))
         self.state_dir = Path(self.private.name) / "state"
         self.facts = ZcodeToolFacts(BINDING, state_dir=self.state_dir)
         self.facts.add_root("session", "turn")
@@ -203,9 +206,26 @@ class NativeProjectionTests(unittest.TestCase):
 
 
 class NativeDenialTests(unittest.TestCase):
+    def test_long_native_log_settles_permission_denial(self):
+        container = self.log_dir / 'long-logs'
+        self.addCleanup(private_dirs.remove_tree, container)
+        self.log_dir = container
+        while len(str(self.log_dir)) < 310:
+            self.log_dir /= 'native-log-' + 'a' * 35
+        private_dirs.ensure_private_dir(self.log_dir)
+        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir, state_dir=self.state_dir)
+        self.facts.add_root('session', 'turn')
+        self.frame('scheduled', 'write', 'Write')
+        publish_bytes(self.log_dir / 'zcode-long.jsonl', (json.dumps(self.denial('write', 'Write')) + '\n').encode())
+        package = self.complete()
+        self.assertEqual(package['unsettledToolCalls'], 0)
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual(calls[0]['phases'], ['end', 'start'])
+
     def setUp(self):
         self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
+        self.addCleanup(private_dirs.remove_tree, Path(self.private.name))
         self.log_dir = Path(self.private.name)
         self.state_dir = self.log_dir / "state"
         self.log = self.log_dir / "zcode-2026-10-20.jsonl"

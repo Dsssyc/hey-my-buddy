@@ -23,6 +23,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.dsh import session_records
+from hey_my_buddy import private_dirs
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import publish_bytes
 from hey_my_buddy.buddy.harnesses.dsh.session_records import (
     freeze_session_records,
     record_candidates,
@@ -106,6 +109,26 @@ class SessionRecordCase(unittest.TestCase):
 
 
 class FreshFoldTests(SessionRecordCase):
+    def test_long_nested_record_retains_ordinary_resume_boundary(self):
+        container = self.root / 'long-records'
+        self.addCleanup(private_dirs.remove_tree, container)
+        self.sessions = container / 'sessions'
+        nested = self.sessions
+        while len(str(nested)) < 310:
+            nested /= 'encoded-cwd-' + 'a' * 35
+        # The native layout has one encoded cwd component beneath sessions.
+        self.sessions = nested.parent
+        path = private_dirs.ensure_private_dir(nested / SESSION) / 'session.v3.jsonl'
+        publish_bytes(path, ''.join(json.dumps(event) + '\n' for event in turn_one()).encode())
+        self.assertEqual(record_candidates(self.sessions, SESSION), [path])
+        self.assertEqual(session_record_facts(self.sessions, [SESSION])['usage']['inputTokens'], 100)
+        baseline = freeze_session_records(self.sessions, SESSION)
+        self.assertEqual(baseline.files[0].path, str(path))
+        self.assertNotIn('\\\\?\\', baseline.files[0].path)
+        with native_path(path).open('ab') as stream:
+            stream.write(''.join(json.dumps(event) + '\n' for event in turn_two_append()).encode())
+        self.assertEqual(resumed_session_record_facts(self.sessions, baseline)['usage']['inputTokens'], 40)
+
     def test_a_later_turn_clears_the_previous_quota_failure_and_activity(self):
         first = turn_one()
         first[-1] = {"type": "turn/end", "seq": 3, "data": {
