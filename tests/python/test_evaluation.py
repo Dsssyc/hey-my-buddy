@@ -188,6 +188,18 @@ class EvaluationTestCase(BoardTestCase):
 
     def review_modelled_task(self, board, run_id: str, verdict: str = "accepted"):
         view = board.call("workflow_get", {"runId": run_id})
+        if verdict == "accepted":
+            # An accepted goal must hold a verified integration record or an explicit
+            # not-required decision bound to its final artifact.
+            board.store.workflow.integration_record({
+                "runId": run_id,
+                "commandId": f"integration-{run_id}",
+                "expectedRevision": view["revision"],
+                "artifactId": view["finalArtifactId"],
+                "notRequired": True,
+                "reason": "evaluation fixture output is reviewed without a separate repository target",
+                **self.model_controls[run_id],
+            })
         return board.call("workflow_acknowledge", {
             "runId": run_id, "artifactId": view["finalArtifactId"], "note": "reviewed the sealed result",
             "verdict": verdict, **self.model_controls[run_id],

@@ -190,6 +190,18 @@ class WorkflowTestCase(BoardTestCase):
         params.update(self.control(view))
         return board.call("workflow_continue", params)
 
+    def record_integration(self, board, view, *, artifact_id=None, command_id="integration-1", reason=None):
+        """Explicit not-required integration: this fixture has no separate Git target."""
+        return board.store.workflow.integration_record({
+            "runId": view["runId"],
+            "commandId": command_id,
+            "expectedRevision": view["revision"],
+            "artifactId": artifact_id or view["finalArtifactId"],
+            "notRequired": True,
+            "reason": reason or "this fixture is reviewed without a separate repository target",
+            **self.control(view),
+        })
+
 
 class LifecycleTests(WorkflowTestCase):
     def test_yield_approve_helper_continuation_and_acknowledgement(self):
@@ -256,6 +268,7 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(kinds[0], "output")
         self.assertIn("input", kinds)
 
+        self.record_integration(board, delivered)
         acknowledged = board.call(
             "workflow_acknowledge",
             {
@@ -731,6 +744,7 @@ class WorkspaceTests(WorkflowTestCase):
         audit = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         reservation = audit["audit"]["reservations"][0]
         self.assertEqual(reservation["state"], "held")
+        self.record_integration(board, delivered)
         board.call(
             "workflow_acknowledge",
             {"runId": run_id, "note": "ok", "verdict": "accepted", **self.control(delivered)},
@@ -1308,6 +1322,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "delivered")
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
+        self.record_integration(board, view)
         return submitted, view, output
 
     def test_premature_acknowledgement_at_a_host_boundary_is_refused(self):
@@ -1436,6 +1451,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         delivered = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(delivered["state"], "delivered")
         new_output = [row for row in delivered["artifacts"] if row["kind"] == "output"][0]
+        self.record_integration(board, delivered, command_id="integration-2")
         accepted = board.call(
             "workflow_acknowledge",
             {"runId": submitted["runId"], "note": "now it is good", **self.control(submitted)},

@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import tempfile
@@ -595,13 +596,75 @@ def prepare(state_dir: Path, request_id: str, intent: dict) -> dict:
             return manifest
 
 
-def _output_entries(root, manifest, observation):
+#: Bounded per-path evidence for one scope violation. A failed seal keeps this
+#: record so a Host can restore, adopt or abandon the exact observed site later
+#: without turning the failed working tree into an authorized baseline.
+SCOPE_EVIDENCE_LIMIT = 256
+#: Bounded per-path content binding of one sealed output. Keeping the blob
+#: identity of every changed path lets integration verification compare the
+#: immutable artifact with an actual target checkout independently of the
+#: artifact's own repository.
+OUTPUT_ENTRY_LIMIT = 512
+RESOLUTION_ACTIONS = ("restore", "adopt", "abandon")
+INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge", "not-required")
+
+
+def _entry_state(entries, path):
+    item = entries.get(path)
+    return None if item is None else {"mode": item[0], "oid": item[1]}
+
+
+def _observed_file(root, path):
+    """The current managed state of one path as mode plus content digest.
+
+    The digest is the raw sha256 of the file bytes, so a later compare-and-swap
+    never depends on Git objects that a failed worker could have moved.
+    """
+    item = _file(root, path)
+    if item is None:
+        return None
+    mode, data = item
+    return {"mode": mode, "sha256": _sha(data)}
+
+
+def _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes):
+    """Bounded, content-addressed evidence for one out-of-scope failure site."""
+    initial = _entries(root, manifest["inputCommit"])
+    initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
+    ordered = sorted(violations)
+    entries = []
+    for path in ordered[:SCOPE_EVIDENCE_LIMIT]:
+        entries.append({
+            "path": path,
+            "authorized": _entry_state(initial, path),
+            "authorizedIndex": _entry_state(initial_index, path),
+            "observed": _observed_file(root, path),
+            "observedIndex": _entry_state(observation["index"], path),
+            "changed": path in changed,
+            "indexChanged": path in index_changes,
+            "excludedChanged": path in excluded_changes,
+        })
+    return {
+        "version": 1,
+        "workspaceId": manifest["workspaceId"],
+        "manifestSha256": manifest["manifestSha256"],
+        "observedFingerprint": observation["fingerprint"],
+        "writeScope": list(manifest["writeScope"]),
+        "blockingPaths": ordered,
+        "changedPaths": list(changed),
+        "truncated": len(ordered) > SCOPE_EVIDENCE_LIMIT,
+        "entries": entries,
+    }
+
+
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False):
     initial = _entries(root, manifest["inputCommit"])
     initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
     excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
     scope = manifest["writeScope"]
     entries = dict(observation["tracked"])
     violations = set()
+    adopted = set()
     excluded_changes = set()
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
@@ -614,6 +677,9 @@ def _output_entries(root, manifest, observation):
         entry = [item[0], _blob(root, item[1], write=True)]
         if _in_scope(path, scope) or initial.get(path) == entry:
             entries[path] = entry
+        elif allow_outside_scope:
+            entries[path] = entry
+            adopted.add(path)
         else:
             violations.add(path)
     for path in excluded.keys() - observation["untracked"].keys():
@@ -621,11 +687,24 @@ def _output_entries(root, manifest, observation):
     changed = sorted(path for path in initial.keys() | entries.keys() if initial.get(path) != entries.get(path))
     index_changes = {path for path in initial_index.keys() | observation["index"].keys()
                      if initial_index.get(path) != observation["index"].get(path)}
-    violations.update(path for path in set(changed) | index_changes | excluded_changes if not _in_scope(path, scope))
+    outside = {path for path in set(changed) | index_changes | excluded_changes if not _in_scope(path, scope)}
+    if allow_outside_scope:
+        # An explicitly adopted site promotes these exact paths; the record keeps
+        # them named as adopted so a later reader never mistakes them for authorized.
+        adopted |= outside
+    else:
+        violations |= outside
     if violations:
+        evidence = _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes)
         raise BoardError("WORKSPACE_SCOPE_VIOLATION", "Managed workspace paths contain changes outside the declared write scope",
-                         paths=sorted(violations), changedPaths=changed)
-    return entries, changed, sorted(excluded_changes)
+                         paths=sorted(violations), changedPaths=changed, evidence=evidence)
+    return entries, changed, sorted(excluded_changes), sorted(adopted)
+
+
+def _changed_entries(entries, changed):
+    """Per-path output binding, including deletions, bounded for verification."""
+    bounded = changed[:OUTPUT_ENTRY_LIMIT]
+    return {path: entries.get(path) for path in bounded}, len(changed) > OUTPUT_ENTRY_LIMIT
 
 
 def _finish_output(repository, output, directory):
@@ -686,7 +765,16 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
                     raise BoardError("WORKSPACE_CHANGED", "Read-only input changed before it could be sealed")
                 entries, changed, excluded_changes = _entries(root, manifest["inputTree"]), [], []
             else:
-                entries, changed, excluded_changes = _output_entries(root, manifest, observation)
+                try:
+                    entries, changed, excluded_changes, _adopted = _output_entries(root, manifest, observation)
+                except BoardError as error:
+                    # The failed site keeps a durable, bounded record of exactly
+                    # which managed paths diverged and from which authorized state.
+                    # It is evidence for a Host decision, never a new baseline.
+                    if error.code == "WORKSPACE_SCOPE_VIOLATION" and isinstance(error.details.get("evidence"), dict):
+                        _record_scope_evidence(directory, error.details["evidence"], task_id, attempt_id)
+                    raise
+            changed_entries, truncated = _changed_entries(entries, changed)
             tree = _tree(root, entries)
             if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
@@ -694,6 +782,7 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
             patch_data = _diff(repository, manifest["inputCommit"], commit)
             snapshot = {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
                         "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
+                        "changedEntries": changed_entries, "changedEntriesTruncated": truncated,
                         "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
                         "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
                         "workspaceId": workspace_id, "taskId": task_id, "attemptId": attempt_id,
@@ -712,3 +801,604 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
             _write_once(directory / "pending.json", _json(output))
             _write_once(directory / "output.patch", patch_data)
             return _finish_output(repository, output, directory)
+
+
+# -- scope failure evidence and Host-directed recovery ------------------------
+def _record_scope_evidence(directory, evidence, task_id, attempt_id):
+    """Keep one bounded failure-site record per observed workspace fingerprint."""
+    record = dict(evidence, taskId=task_id, attemptId=attempt_id)
+    folder = directory / "scope-conflicts"
+    _mkdir(folder)
+    _write_once(folder / f"{record['observedFingerprint']}.json", _json(record))
+
+
+def _scope_records(workspace_dir, manifest, task_id, attempt_id):
+    folder = workspace_dir / "outputs" / _sha(_json([task_id, attempt_id])) / "scope-conflicts"
+    if not folder.exists():
+        return []
+    if folder.is_symlink() or not folder.is_dir():
+        raise BoardError("WORKSPACE_CONFLICT", "The scope evidence path is not a regular directory", path=str(folder))
+    records = []
+    for path in sorted(folder.glob("*.json")):
+        record = _record(path)
+        if not isinstance(record, dict):
+            raise BoardError("INVALID_WORKSPACE", "Malformed scope failure evidence", path=str(path))
+        if (record.get("taskId") != task_id or record.get("attemptId") != attempt_id
+                or record.get("workspaceId") != manifest["workspaceId"]
+                or record.get("manifestSha256") != manifest["manifestSha256"]):
+            continue
+        records.append((path.stat().st_mtime_ns, path.name, record))
+    records.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [record for _, _, record in records]
+
+
+def scope_conflicts(state_dir, manifest: dict, task_id: str, attempt_id: str) -> list[dict]:
+    """The durable out-of-scope failure-site evidence of one stopped attempt.
+
+    Records are read-only evidence; they are never a workspace baseline. The
+    caller holds the checkout reservation and rechecks the owner around this call.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
+            raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
+        workspace_dir = Path(state_dir).resolve() / "workspaces" / manifest["workspaceId"]
+        return _scope_records(workspace_dir, manifest, task_id, attempt_id)
+
+
+def normalize_scope(values) -> list[str]:
+    """Normalize one explicit relative write scope, rejecting escapes."""
+    with _errors():
+        if not isinstance(values, list):
+            raise BoardError("INVALID_WORKSPACE", "writeScope must be a list")
+        return sorted({_relative(value, allow_root=True) for value in values})
+
+
+def _conflict_index(records):
+    entries = {}
+    for record in records:
+        for entry in record.get("entries") or []:
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                raise BoardError("INVALID_WORKSPACE", "Malformed scope failure evidence")
+            entries.setdefault(entry["path"], entry)
+    return entries
+
+
+def _entry_state_matches(current, expected):
+    return current == expected
+
+
+def _entry_is_authorized(root, entry, current):
+    authorized = entry.get("authorized")
+    if authorized is None:
+        return current is None
+    if not isinstance(current, dict) or current.get("mode") != authorized.get("mode"):
+        return False
+    item = _file(root, entry["path"])
+    return item is not None and _blob(root, item[1]) == authorized.get("oid")
+
+
+def _entry_matches(root, entry, index_entries):
+    """Compare-and-swap test: the recorded site or its already-authorized state."""
+    current = _observed_file(root, entry["path"])
+    if not _entry_state_matches(current, entry.get("observed")) and not _entry_is_authorized(root, entry, current):
+        return False
+    index = _entry_state(index_entries, entry["path"])
+    return index == entry.get("observedIndex") or index == entry.get("authorizedIndex")
+
+
+def _write_path(root, path, entry):
+    with _parent(root, path, create=True) as (parent, name):
+        try:
+            os.unlink(name, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        except IsADirectoryError as error:
+            raise BoardError("WORKSPACE_UNSUPPORTED", "A managed path is now a directory", path=path) from error
+        if entry is None:
+            return
+        data = _git(root, "cat-file", "blob", entry["oid"])
+        if entry["mode"] == "120000":
+            os.symlink(os.fsdecode(data), name, dir_fd=parent)
+        else:
+            mode = 0o755 if entry["mode"] == "100755" else 0o644
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(data)
+                os.fchmod(stream.fileno(), mode)
+
+
+def _restore_index(root, entries):
+    """Set exact index entries in one plumbing call; never refresh the worktree."""
+    payload = b""
+    for path, entry in sorted(entries.items()):
+        if entry is None:
+            payload += b"0 " + b"0" * 40 + b"\t" + os.fsencode(path) + b"\0"
+        else:
+            payload += entry["mode"].encode() + b" " + entry["oid"].encode() + b"\t" + os.fsencode(path) + b"\0"
+    if payload:
+        _git(root, "update-index", "-z", "--index-info", data=payload)
+
+
+def _blocking_paths(root, manifest, observation):
+    try:
+        _output_entries(root, manifest, observation)
+    except BoardError as error:
+        if error.code != "WORKSPACE_SCOPE_VIOLATION":
+            raise
+        return list(error.details.get("paths") or [])
+    return []
+
+
+def _reset_site(root, manifest, observation):
+    """Return every managed path to the authorized input content and index state."""
+    initial = _entries(root, manifest["inputCommit"])
+    initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
+    excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
+    current_index = _entries(root)
+    selected = set(observation["tracked"]) | set(initial) | set(current_index) | set(initial_index)
+    for path, fingerprint in observation["untracked"].items():
+        if path in excluded and excluded[path] == fingerprint:
+            continue
+        selected.add(path)
+    for path in sorted(selected):
+        _write_path(root, path, _entry_state(initial, path))
+    _restore_index(root, {path: _entry_state(initial_index, path) for path in sorted(selected)
+                          if _entry_state(current_index, path) != _entry_state(initial_index, path)})
+    # An excluded cache was never captured by content, so a modified one cannot be
+    # returned mechanically; it is reported instead of being silently accepted.
+    remaining = sorted(path for path, fingerprint in excluded.items()
+                       if observation["untracked"].get(path) != fingerprint)
+    return sorted(selected), remaining
+
+
+def _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data):
+    changed_entries, truncated = _changed_entries(entries, changed)
+    return {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
+            "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
+            "changedEntries": changed_entries, "changedEntriesTruncated": truncated,
+            "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
+            "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
+            "workspaceId": manifest["workspaceId"], "taskId": task_id, "attemptId": attempt_id,
+            "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"],
+            "commit": commit, "diffSha256": _sha(patch_data)}
+
+
+def _finish_record(repository, record, directory, *, ref_name, ref_kind, record_name, patch_name, bindings):
+    expected_tree = _line(repository, "rev-parse", record["commit"] + "^{tree}")
+    expected_ref = f"refs/buddy/workspaces/{record['workspaceId']}/{ref_kind}/{ref_name}"
+    if (expected_tree != record["tree"] or _sha(_json(record["snapshot"])) != record["snapshotSha256"]
+            or any(record.get(key) != record["snapshot"].get(key) for key in bindings)
+            or record["ref"] != expected_ref or record["diffPath"] != str(directory / patch_name)):
+        raise BoardError("WORKSPACE_CONFLICT", "The resolved workspace record is inconsistent")
+    patch_path = directory / patch_name
+    patch_data = _read(patch_path)
+    if patch_data is None:
+        patch_data = _diff(repository, record["inputCommit"], record["commit"])
+    if _sha(patch_data) != record["diffSha256"]:
+        raise BoardError("WORKSPACE_CONFLICT", "The immutable resolved diff changed", path=str(patch_path))
+    _write_once(patch_path, patch_data)
+    _pin(repository, record["ref"], record["commit"])
+    _write_once(directory / record_name, _json(record))
+    return record
+
+
+_RECORD_BINDINGS = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit",
+                    "commit", "tree", "changedPaths", "includedUntracked", "diffSha256")
+
+
+def _replay_record(directory, names, *, task_id, attempt_id, manifest):
+    """An already published record of the same identity, or None."""
+    for name in names:
+        record = _record(directory / name)
+        if record is None:
+            continue
+        if (record.get("taskId") != task_id or record.get("attemptId") != attempt_id
+                or record.get("manifestSha256") != manifest["manifestSha256"]
+                or record.get("workspaceId") != manifest["workspaceId"]):
+            raise BoardError("WORKSPACE_CONFLICT", "This resolution identity belongs to a different attempt or input")
+        return record
+    return None
+
+
+def _resolution_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, action, actor, reason, conflict_fingerprint):
+    workspace_id = manifest["workspaceId"]
+    output_id = _sha(_json([task_id, attempt_id]))
+    names = (f"resolve-{action}.json", f"resolve-{action}-pending.json")
+    existing = _replay_record(directory, names, task_id=task_id, attempt_id=attempt_id, manifest=manifest)
+    if existing is not None:
+        return _finish_record(repository, existing, directory, ref_name=f"{output_id}-{action}",
+                              ref_kind="resolutions", record_name=f"resolve-{action}.json",
+                              patch_name=f"resolve-{action}.patch", bindings=_RECORD_BINDINGS)
+    entries, changed, excluded_changes, adopted = _output_entries(root, manifest, observation,
+                                                                  allow_outside_scope=(action == "adopt"))
+    tree = _tree(root, entries)
+    if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
+        raise BoardError("WORKSPACE_CHANGED", "The workspace changed during resolution sealing")
+    commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " resolution " + output_id)
+    patch_data = _diff(repository, manifest["inputCommit"], commit)
+    snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
+    snapshot["adoptedPaths"] = adopted
+    record = {"version": 1, "kind": "resolution", "action": action, "actor": actor, "reason": reason,
+              "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
+              "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
+              "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
+              "tree": tree, "changedPaths": changed, "adoptedPaths": adopted,
+              "includedUntracked": snapshot["includedUntracked"],
+              "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
+              "ref": f"refs/buddy/workspaces/{workspace_id}/resolutions/{output_id}-{action}",
+              "diffPath": str(directory / f"resolve-{action}.patch"), "diffSha256": _sha(patch_data)}
+    _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/resolution-{output_id}-{action}", commit)
+    _write_once(directory / f"resolve-{action}-pending.json", _json(record))
+    _write_once(directory / f"resolve-{action}.patch", patch_data)
+    return _finish_record(repository, record, directory, ref_name=f"{output_id}-{action}", ref_kind="resolutions",
+                          record_name=f"resolve-{action}.json", patch_name=f"resolve-{action}.patch",
+                          bindings=_RECORD_BINDINGS)
+
+
+def _abandoned_record(root, manifest, repository, directory, observation, *, task_id, attempt_id, actor, reason, conflict_fingerprint):
+    """Preserve the abandoned site as immutable evidence before returning input."""
+    workspace_id = manifest["workspaceId"]
+    output_id = _sha(_json([task_id, attempt_id]))
+    names = ("abandoned.json", "abandoned-pending.json")
+    existing = _replay_record(directory, names, task_id=task_id, attempt_id=attempt_id, manifest=manifest)
+    if existing is not None:
+        return _finish_record(repository, existing, directory, ref_name=output_id, ref_kind="abandoned",
+                              record_name="abandoned.json", patch_name="abandoned.patch", bindings=_RECORD_BINDINGS)
+    entries = dict(observation["tracked"])
+    for path in observation["untracked"]:
+        item = _file(root, path)
+        if item is None:
+            raise BoardError("WORKSPACE_CHANGED", "A managed path disappeared during evidence capture", path=path)
+        entries[path] = [item[0], _blob(root, item[1], write=True)]
+    initial = _entries(root, manifest["inputCommit"])
+    changed = sorted(path for path in set(initial) | set(entries) if initial.get(path) != entries.get(path))
+    tree = _tree(root, entries)
+    commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
+    patch_data = _diff(repository, manifest["inputCommit"], commit)
+    snapshot = _snapshot_record(manifest, observation, tree, entries, changed, [], task_id, attempt_id, commit, patch_data)
+    record = {"version": 1, "kind": "abandoned-site", "action": "abandon", "actor": actor, "reason": reason,
+              "conflictFingerprint": conflict_fingerprint, "workspaceId": workspace_id, "taskId": task_id,
+              "attemptId": attempt_id, "manifestSha256": manifest["manifestSha256"],
+              "baseCommit": manifest["baseCommit"], "inputCommit": manifest["inputCommit"], "commit": commit,
+              "tree": tree, "changedPaths": changed, "includedUntracked": snapshot["includedUntracked"],
+              "snapshot": snapshot, "snapshotSha256": _sha(_json(snapshot)),
+              "ref": f"refs/buddy/workspaces/{workspace_id}/abandoned/{output_id}",
+              "diffPath": str(directory / "abandoned.patch"), "diffSha256": _sha(patch_data)}
+    _pin(repository, f"refs/buddy/workspaces/{workspace_id}/retained/abandoned-{output_id}", commit)
+    _write_once(directory / "abandoned-pending.json", _json(record))
+    _write_once(directory / "abandoned.patch", patch_data)
+    return _finish_record(repository, record, directory, ref_name=output_id, ref_kind="abandoned",
+                          record_name="abandoned.json", patch_name="abandoned.patch", bindings=_RECORD_BINDINGS)
+
+
+def _resolution_result(action, state, artifact, resolved, preserved, remaining, observed_fingerprint, resolved_fingerprint):
+    return {
+        "action": action,
+        "state": state,
+        "artifact": artifact,
+        "resolvedPaths": sorted(resolved)[:SCOPE_EVIDENCE_LIMIT],
+        "preservedPaths": sorted(preserved)[:SCOPE_EVIDENCE_LIMIT],
+        "remainingPaths": sorted(remaining)[:SCOPE_EVIDENCE_LIMIT],
+        "observedFingerprint": observed_fingerprint,
+        "resolvedFingerprint": resolved_fingerprint,
+    }
+
+
+def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, reason: str = "", actor: str = ""):
+    """Mechanically settle one recorded out-of-scope failure site.
+
+    ``restore`` returns the selected paths to their authorized content while
+    preserving every other legal change, ``adopt`` explicitly promotes the exact
+    recorded site into a new immutable output, and ``abandon`` preserves the whole
+    failed site as evidence and returns the checkout to its authorized input state.
+    Compare-and-swap failures preserve the site and report the conflicting paths.
+    All Git work happens here, outside any database transaction; the caller
+    rechecks owner, revision and workspace identity before recording the result.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        if action not in RESOLUTION_ACTIONS:
+            raise BoardError("INVALID_WORKSPACE", "Resolution action must be restore, adopt or abandon")
+        if not isinstance(observed_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", observed_fingerprint) is None:
+            raise BoardError("INVALID_WORKSPACE", "observedFingerprint must be a workspace fingerprint")
+        if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
+            raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
+        if paths is None:
+            selected_paths = []
+        elif isinstance(paths, list) and all(isinstance(value, str) for value in paths):
+            selected_paths = sorted({_relative(value) for value in paths})
+        else:
+            raise BoardError("INVALID_WORKSPACE", "paths must be a list of relative workspace paths")
+        workspace_id = manifest["workspaceId"]
+        workspace_dir = Path(state_dir).resolve() / "workspaces" / workspace_id
+        if workspace_dir.is_symlink() or _record(workspace_dir / "manifest.json") != manifest:
+            raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
+        with _lock(workspace_dir):
+            output_id = _sha(_json([task_id, attempt_id]))
+            directory = workspace_dir / "outputs" / output_id
+            _mkdir(directory)
+            records = _scope_records(workspace_dir, manifest, task_id, attempt_id)
+            if not records:
+                raise BoardError("WORKSPACE_CONFLICT", "No recorded scope failure evidence exists for this attempt", attemptId=attempt_id)
+            entries = _conflict_index(records)
+            blocking = sorted({path for record in records for path in record.get("blockingPaths") or []})
+            root = Path(manifest["checkoutRoot"])
+            repository = Path(manifest["snapshot"]["repositoryPath"])
+            if _identity(repository) != manifest["repositoryId"]:
+                raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
+            verify(manifest, require_unchanged=False)
+            observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
+            if observation["fingerprint"] != observed_fingerprint:
+                raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
+                                 observedFingerprint=observed_fingerprint, currentFingerprint=observation["fingerprint"])
+            if action == "adopt":
+                if selected_paths:
+                    raise BoardError("INVALID_WORKSPACE", "Adoption binds the whole recorded site and takes no path selection")
+                if observed_fingerprint != records[0]["observedFingerprint"]:
+                    raise BoardError("WORKSPACE_CONFLICT", "Adoption must bind the exact recorded failure site",
+                                     recordedFingerprint=records[0]["observedFingerprint"])
+                record = _resolution_record(root, manifest, repository, directory, observation,
+                                            task_id=task_id, attempt_id=attempt_id, action="adopt", actor=actor,
+                                            reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+                return _resolution_result("adopt", "adopted", record, blocking, [], [],
+                                          observation["fingerprint"], record["snapshot"]["observationSha256"])
+            if action == "abandon":
+                if selected_paths:
+                    raise BoardError("INVALID_WORKSPACE", "Abandon returns the whole site and takes no path selection")
+                evidence = _abandoned_record(root, manifest, repository, directory, observation,
+                                             task_id=task_id, attempt_id=attempt_id, actor=actor,
+                                             reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+                reset, remaining = _reset_site(root, manifest, observation)
+                after = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
+                remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after)))
+                return _resolution_result("abandon", "abandoned" if not remaining else "open", evidence,
+                                          reset, [], remaining, observation["fingerprint"], after["fingerprint"])
+            selected = selected_paths or blocking
+            unknown = [path for path in selected if path not in entries]
+            if unknown:
+                raise BoardError("INVALID_WORKSPACE", "Selected paths have no recorded failure evidence", paths=unknown[:32])
+            if not selected:
+                raise BoardError("WORKSPACE_CONFLICT", "The recorded failure site has no blocking path to restore")
+            index = _entries(root)
+            conflicting = [path for path in selected if not _entry_matches(root, entries[path], index)]
+            if conflicting:
+                raise BoardError("WORKSPACE_CONFLICT", "Selected paths changed after the recorded failure; the site is preserved",
+                                 conflictingPaths=sorted(conflicting)[:32])
+            for path in selected:
+                _write_path(root, path, entries[path].get("authorized"))
+            _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
+                                  if _entry_state(index, path) != entries[path].get("authorizedIndex")})
+            after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True)
+            remaining = _blocking_paths(root, manifest, after)
+            preserved = sorted(set(entries) - set(selected))
+            if remaining:
+                # A partial restore is progress, not a completed baseline: the
+                # remaining out-of-scope paths stay visible for another decision.
+                return _resolution_result("restore", "open", None, selected, preserved, remaining,
+                                          observation["fingerprint"], after["fingerprint"])
+            record = _resolution_record(root, manifest, repository, directory, after,
+                                        task_id=task_id, attempt_id=attempt_id, action="restore", actor=actor,
+                                        reason=reason, conflict_fingerprint=records[0]["observedFingerprint"])
+            return _resolution_result("restore", "restored", record, selected, preserved, [],
+                                      observation["fingerprint"], record["snapshot"]["observationSha256"])
+
+
+# -- integration verification -------------------------------------------------
+def _tree_entry(root, commit, path):
+    for record in _git(root, "ls-tree", "-z", commit, "--", path).split(b"\0"):
+        if not record:
+            continue
+        metadata, _, name = record.partition(b"\t")
+        if os.fsdecode(name) != path:
+            continue
+        mode, _kind, oid = metadata.decode().split()
+        return {"mode": mode, "oid": oid}
+    return None
+
+
+def _is_ancestor(root, ancestor, descendant):
+    try:
+        _git(root, "merge-base", "--is-ancestor", ancestor, descendant)
+    except BoardError:
+        return False
+    return True
+
+
+def integration_verify(artifact: dict, *, path: str, ref: str, strategy: str, before_commit: str,
+                       repository_id: str | None = None, checkout_id: str | None = None,
+                       adjusted_paths=None, reason: str | None = None) -> dict:
+    """Verify that one immutable artifact is actually present in a real target.
+
+    The target checkout identity, the resolved ``ref`` commit and both before and
+    after trees come from the repository itself, never from the caller. The
+    artifact is bound by the blob identity of every changed path, so a cherry-pick
+    or an explicitly adjusted integration is verified by content rather than by a
+    client-supplied SHA.
+    """
+    with _errors():
+        if strategy not in ("patch", "cherry-pick", "merge"):
+            raise BoardError("INVALID_WORKSPACE", "A verified integration uses patch, cherry-pick or merge")
+        if not isinstance(artifact, dict):
+            raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
+        snapshot = artifact.get("snapshot") if isinstance(artifact.get("snapshot"), dict) else {}
+        changed = snapshot.get("changedEntries")
+        if not isinstance(changed, dict) or snapshot.get("changedEntriesTruncated"):
+            raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact carries no bounded per-path output binding to verify")
+        if not isinstance(before_commit, str) or not before_commit:
+            raise BoardError("INVALID_WORKSPACE", "beforeCommit is required to bind a verified integration")
+        adjustments = sorted({_relative(value) for value in (adjusted_paths or [])})
+        unknown_adjustments = [value for value in adjustments if value not in changed]
+        if unknown_adjustments:
+            raise BoardError("INVALID_WORKSPACE", "Adjusted paths must be artifact output paths", paths=unknown_adjustments[:32])
+        if adjustments and not (isinstance(reason, str) and reason.strip()):
+            raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit reason")
+        identity = inspect(path)
+        if repository_id is not None and identity["repositoryId"] != repository_id:
+            raise BoardError("WORKSPACE_CHANGED", "The integration target repository changed",
+                             expectedRepositoryId=repository_id, actualRepositoryId=identity["repositoryId"])
+        if checkout_id is not None and identity["checkoutId"] != checkout_id:
+            raise BoardError("WORKSPACE_CHANGED", "The integration target checkout changed",
+                             expectedCheckoutId=checkout_id, actualCheckoutId=identity["checkoutId"])
+        root = Path(identity["checkoutRoot"])
+        before = _commit(root, before_commit)
+        after = _commit(root, ref)
+        before_tree = _line(root, "rev-parse", before + "^{tree}")
+        after_tree = _line(root, "rev-parse", after + "^{tree}")
+        source = artifact.get("commit")
+        artifact_ancestor = False
+        if isinstance(source, str) and source:
+            try:
+                _commit(root, source)
+            except BoardError:
+                artifact_ancestor = False
+            else:
+                artifact_ancestor = _is_ancestor(root, source, after)
+        matching, differing, missing = [], [], []
+        for name in sorted(changed):
+            expected = changed.get(name)
+            actual = _tree_entry(root, after, name)
+            if expected is None:
+                if actual is None:
+                    matching.append(name)
+                else:
+                    differing.append({"path": name, "artifactOid": None, "targetOid": actual["oid"],
+                                      "targetMode": actual["mode"]})
+                continue
+            if not isinstance(expected, list) or len(expected) != 2:
+                raise BoardError("INVALID_WORKSPACE", "The artifact output binding is malformed", path=name)
+            if actual is None:
+                missing.append(name)
+            elif actual == {"mode": expected[0], "oid": expected[1]}:
+                matching.append(name)
+            else:
+                differing.append({"path": name, "artifactMode": expected[0], "artifactOid": expected[1],
+                                  "targetMode": actual["mode"], "targetOid": actual["oid"]})
+        unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
+        verification = {
+            "verified": bool(_is_ancestor(root, before, after) and not unrecorded),
+            "strategy": strategy,
+            "target": {"kind": "checkout", "path": identity["checkoutRoot"], "checkoutId": identity["checkoutId"],
+                       "repositoryId": identity["repositoryId"], "ref": ref},
+            "beforeCommit": before, "beforeTree": before_tree, "afterCommit": after, "afterTree": after_tree,
+            "sourceCommit": source, "sourceTree": artifact.get("tree"),
+            "artifactAncestor": artifact_ancestor,
+            "matchingPaths": matching[:OUTPUT_ENTRY_LIMIT],
+            "differingPaths": differing[:OUTPUT_ENTRY_LIMIT],
+            "missingPaths": missing[:OUTPUT_ENTRY_LIMIT],
+            "adjustments": adjustments[:OUTPUT_ENTRY_LIMIT],
+            "unrecordedPaths": unrecorded[:OUTPUT_ENTRY_LIMIT],
+            "reason": reason,
+        }
+        return verification
+
+
+# -- cleanup of one registered disposable checkout ----------------------------
+def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None) -> dict:
+    """Eligibility facts for removing exactly one registered Buddy worktree.
+
+    Only a linked worktree created under this state directory's ``workspaces``
+    area is ever a cleanup target. The source checkout, a sibling directory, an
+    unknown path and a worktree without this preparation's lock are all reported
+    as retention reasons instead of being deleted.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        state_dir = Path(state_dir).resolve()
+        workspace_id = manifest["workspaceId"]
+        checkout_root = Path(manifest["checkoutRoot"])
+        expected = state_dir / "workspaces" / workspace_id / "checkout"
+        result = {"eligible": False, "reasons": [], "workspaceId": workspace_id, "kind": manifest["kind"],
+                  "checkoutId": manifest["checkoutId"], "repositoryId": manifest["repositoryId"],
+                  "path": str(checkout_root), "cwd": manifest["path"], "worktree": False, "locked": None,
+                  "unsealedPaths": [], "refs": [], "sealedObservation": None}
+        if manifest["kind"] != "worktree":
+            result["reasons"].append("not-a-managed-worktree")
+        if checkout_root != expected:
+            result["reasons"].append("unsafe-path")
+        if result["reasons"]:
+            return result
+        try:
+            actual = inspect(str(checkout_root))
+        except BoardError:
+            result["reasons"].append("checkout-missing")
+            return result
+        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
+            if actual[field] != manifest[field]:
+                result["reasons"].append("identity-changed")
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        record = _worktree_record(repository, checkout_root)
+        if not record or record.get("locked") != "buddy:" + workspace_id or "detached" not in record:
+            result["reasons"].append("unregistered-checkout")
+        else:
+            result["worktree"] = True
+            result["locked"] = record.get("locked")
+        result["refs"] = [os.fsdecode(line) for line in
+                          _git(repository, "for-each-ref", "--format=%(refname)",
+                               f"refs/buddy/workspaces/{workspace_id}/").splitlines()][:64]
+        if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
+            result["reasons"].append("no-sealed-output")
+            return result
+        snapshot = sealed["snapshot"]
+        result["sealedObservation"] = snapshot.get("observationSha256")
+        observation = _stable_observation(Path(manifest["checkoutRoot"]), manifest["snapshot"]["executionSelectors"])
+        unsealed = []
+        try:
+            entries_now, changed, excluded_changes, _adopted = _output_entries(Path(manifest["checkoutRoot"]), manifest, observation)
+            # Compare the actual per-path output bindings: a modified file that was
+            # already part of the sealed change set is still a new unsealed change.
+            changed_entries, truncated = _changed_entries(entries_now, changed)
+            expected_entries = snapshot.get("changedEntries") if isinstance(snapshot.get("changedEntries"), dict) else {}
+            if truncated or snapshot.get("changedEntriesTruncated"):
+                unsealed = sorted(set(changed) | set(snapshot.get("changedPaths") or []))
+            else:
+                unsealed = sorted(
+                    path for path in set(changed_entries) | set(expected_entries)
+                    if changed_entries.get(path) != expected_entries.get(path)
+                )
+            if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
+                unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
+        except BoardError as error:
+            if error.code != "WORKSPACE_SCOPE_VIOLATION":
+                raise
+            unsealed = list(error.details.get("paths") or [])
+        if unsealed or observation["fingerprint"] != snapshot.get("observationSha256"):
+            result["reasons"].append("unsealed-changes")
+            result["unsealedPaths"] = unsealed[:32]
+        result["eligible"] = not result["reasons"]
+        return result
+
+
+def cleanup_remove(state_dir, manifest: dict) -> dict:
+    """Delete exactly the registered linked worktree of one cleanup plan.
+
+    The caller has rechecked acceptance, integration, shutdown and dependency
+    evidence. This function only proves the exact path still is this
+    preparation's own locked worktree and then removes that one path; no parent
+    directory, source checkout, outputs directory or Git reference is touched.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        state_dir = Path(state_dir).resolve()
+        workspace_id = manifest["workspaceId"]
+        checkout_root = Path(manifest["checkoutRoot"])
+        expected = state_dir / "workspaces" / workspace_id / "checkout"
+        if manifest["kind"] != "worktree" or checkout_root != expected:
+            raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable Buddy checkout",
+                             path=str(checkout_root))
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        actual = inspect(str(checkout_root))
+        for field in ("checkoutRoot", "checkoutId", "repositoryId"):
+            if actual[field] != manifest[field]:
+                raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
+        record = _worktree_record(repository, checkout_root)
+        if not record or record.get("locked") != "buddy:" + workspace_id:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this preparation's registered worktree",
+                             path=str(checkout_root))
+        _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
+        _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
+        if checkout_root.exists():
+            raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
+        _git(repository, "worktree", "prune", allowed=(0, 1))
+        return {"removed": True, "path": str(checkout_root), "repositoryPath": str(repository),
+                "workspaceId": workspace_id, "checkoutId": manifest["checkoutId"]}

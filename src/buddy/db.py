@@ -764,6 +764,122 @@ CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_rese
     """
 CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reservations(holder_task_id, state);
 """,
+    # Append-only authorization scope per governed run. ``scope_version`` is a
+    # per-run monotonic counter, deliberately distinct from the input snapshot it
+    # happened to see: a later amendment never rewrites an earlier scope, an
+    # earlier input manifest or the original submission. Version 1 is recorded
+    # when the run is attached; a new row is only added for an approved stage.
+    """
+CREATE TABLE IF NOT EXISTS workflow_scope_versions (
+    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    scope_version       INTEGER NOT NULL,
+    command_id          TEXT,
+    actor               TEXT NOT NULL,
+    reason              TEXT,
+    write_scope_json    TEXT NOT NULL,
+    manifest_sha256     TEXT,
+    stopped_evidence_json TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    PRIMARY KEY (run_id, scope_version)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_scope_versions_run_idx ON workflow_scope_versions(run_id, scope_version);
+""",
+    # Durable evidence of a failed seal that found managed changes outside the
+    # authorized write scope, plus the Host's later restore/adopt/abandon decision.
+    # The failed site stays on disk and is never promoted to a baseline by itself.
+    """
+CREATE TABLE IF NOT EXISTS workflow_workspace_conflicts (
+    conflict_id             TEXT PRIMARY KEY,
+    run_id                  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    attempt_id              TEXT NOT NULL,
+    turn_id                 TEXT,
+    manifest_sha256         TEXT NOT NULL,
+    observed_fingerprint    TEXT NOT NULL,
+    blocking_paths_json     TEXT NOT NULL,
+    evidence_json           TEXT NOT NULL,
+    state                   TEXT NOT NULL CHECK (state IN ('open','restored','adopted','abandoned')),
+    action                  TEXT CHECK (action IN ('restore','adopt','abandon')),
+    resolved_paths_json     TEXT NOT NULL DEFAULT '[]',
+    conflicting_paths_json  TEXT NOT NULL DEFAULT '[]',
+    artifact_id             TEXT,
+    output_commit           TEXT,
+    output_tree             TEXT,
+    actor                   TEXT,
+    reason                  TEXT,
+    command_id              TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    UNIQUE(run_id, attempt_id, observed_fingerprint)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_workspace_conflicts_run_idx ON workflow_workspace_conflicts(run_id, state);
+""",
+    # One immutable integration record per (artifact, target, strategy). The
+    # before/after commits and trees are resolved from the actual target checkout,
+    # never taken on trust from the caller; an accepted goal must hold a verified
+    # record or an explicit not-required decision bound to its final artifact.
+    """
+CREATE TABLE IF NOT EXISTS workflow_integrations (
+    integration_id        TEXT PRIMARY KEY,
+    run_id                TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    artifact_id           TEXT NOT NULL,
+    attempt_id            TEXT,
+    state                 TEXT NOT NULL CHECK (state IN ('verified','not-required','conflict')),
+    strategy              TEXT NOT NULL,
+    binding_sha256        TEXT NOT NULL,
+    target_kind           TEXT NOT NULL,
+    target_path           TEXT NOT NULL DEFAULT '',
+    target_ref            TEXT NOT NULL DEFAULT '',
+    target_repository_id  TEXT,
+    target_checkout_id    TEXT,
+    source_commit         TEXT,
+    source_tree           TEXT,
+    before_commit         TEXT,
+    after_commit          TEXT,
+    before_tree           TEXT,
+    after_tree            TEXT,
+    verification_json     TEXT NOT NULL,
+    reason                TEXT,
+    command_id            TEXT,
+    actor                 TEXT NOT NULL,
+    created_at            TEXT NOT NULL,
+    UNIQUE(binding_sha256)
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workflow_integrations_run_idx ON workflow_integrations(run_id, artifact_id, created_at);
+""",
+    # One cleanup plan per disposable managed checkout. The plan binds the exact
+    # path, the workspace/repository identity and the evidence that permitted it;
+    # apply rechecks all of them and deletes only that registered linked worktree.
+    """
+CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
+    plan_id          TEXT PRIMARY KEY,
+    run_id           TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    workspace_id     TEXT NOT NULL,
+    checkout_id      TEXT NOT NULL,
+    repository_id    TEXT,
+    path             TEXT NOT NULL,
+    kind             TEXT NOT NULL,
+    state            TEXT NOT NULL CHECK (state IN ('planned','applying','applied','blocked')),
+    evidence_json    TEXT NOT NULL,
+    retention_json   TEXT NOT NULL,
+    reasons_json     TEXT NOT NULL DEFAULT '[]',
+    result_json      TEXT,
+    command_id       TEXT,
+    actor            TEXT NOT NULL,
+    revision         INTEGER NOT NULL DEFAULT 1,
+    created_at       TEXT NOT NULL,
+    applied_at       TEXT,
+    expires_at       TEXT NOT NULL
+);
+""",
+    """
+CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_plans(run_id, state);
+""",
     # Attempt-scoped credentials handed to a DSH child. The token is derived from
     # the service secret and never stored; only its verifier is persisted, and the
     # service enforces the permitted operation set on every request that presents

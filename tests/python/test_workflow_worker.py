@@ -124,7 +124,22 @@ class RealWorkerTurnTests(GovernedWorkerTestCase):
             self.assertTrue(turn["sessionId"].startswith("mock-session-"))
 
             # The final acknowledgement is separate from execution and bound to the
-            # actual sealed artifact.
+            # actual sealed artifact. The Host records its explicit integration
+            # decision through the same business method the public operation uses.
+            from buddy.store import BoardStore
+
+            control = json.loads(control_path.read_text())
+            BoardStore(self.directory).workflow.integration_record({
+                "runId": run_id,
+                "commandId": "worker-integration-1",
+                "expectedRevision": delivered["revision"],
+                "artifactId": outputs[0]["artifactId"],
+                "notRequired": True,
+                "reason": "the mock turn is reviewed without a separate integration target",
+                "hostId": control["hostId"],
+                "ownerGeneration": control["ownerGeneration"],
+                "controlToken": control["controlToken"],
+            })
             code, acknowledged = self.cli(
                 "acknowledge",
                 json.dumps(

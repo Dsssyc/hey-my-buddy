@@ -87,6 +87,11 @@ class MockWorkspace:
         # file selection is covered by the real-workspace preparation tests.
         return []
 
+    def normalize_scope(self, values) -> list[str]:
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            raise BoardError("INVALID_WORKSPACE", "writeScope must be a list of nonempty relative paths")
+        return sorted({value for value in values})
+
     def inspect(self, cwd: str) -> dict:
         return {
             "kind": "existing",

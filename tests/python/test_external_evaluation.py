@@ -127,6 +127,18 @@ class ExternalEvaluationTestCase(EvaluationTestCase):
         )
         if verdict is not None and not failed:
             view = board.call("workflow_get", {"runId": run_id})
+            if verdict == "accepted":
+                # An accepted goal must hold a verified integration record or an
+                # explicit not-required decision bound to its final artifact.
+                board.store.workflow.integration_record({
+                    "runId": run_id,
+                    "commandId": f"integration-{request_id}",
+                    "expectedRevision": view["revision"],
+                    "artifactId": view["finalArtifactId"],
+                    "notRequired": True,
+                    "reason": "external maintenance fixture output has no separate repository target",
+                    **self.model_controls[run_id],
+                })
             board.call(
                 "workflow_acknowledge",
                 {
