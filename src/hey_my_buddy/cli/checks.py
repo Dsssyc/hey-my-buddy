@@ -109,11 +109,20 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     return root
 
 
+def prepare_test_home(home: Path) -> None:
+    """Initialize a private home whose Git commands never start background writers."""
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config = home / ".gitconfig"
+    # A private service may already be reading this home; initialize it only once.
+    if not config.exists():
+        config.write_text("[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n", encoding="utf-8")
+
+
 def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dict:
     """The suite's private state and a separately owned native home."""
     values = test_environment(root)
     home = home_root
-    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    prepare_test_home(home)
     values.update({
         "HOME": str(home), "USERPROFILE": str(home),
         "HOMEDRIVE": home.drive, "HOMEPATH": str(home),
