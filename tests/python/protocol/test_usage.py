@@ -1,9 +1,9 @@
-"""Native token usage, quota failures and last-assistant-message normalization.
+"""Native token usage, provider rejections and last-assistant-message normalization.
 
 The two native record fixtures are desensitized minimal copies of the real
 records this machine produces: a DSH session rollout (``assistant/message`` with
 ``data.usage`` and ``turn/end``) and the Codex App Server v2 token-usage and
-token-usage payloads. The tests pin the one rule that matters for the board: DSH
+provider-rejection payloads. The tests pin the one rule that matters for the board: DSH
 reports its input count excluding cache read/write tokens and Codex includes the
 cached input, so each is unified exactly once and a replayed record never
 accumulates twice.

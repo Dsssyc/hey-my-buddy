@@ -521,7 +521,7 @@ class BoardStore:
             "forceRequestedAt": row["force_requested_at"],
             "exitCode": recorded.get("exitCode"),
             "signal": recorded.get("signal"),
-            "error": row["error"],
+            "error": recorded.get("error"),
             "startedAt": row["started_at"],
             "finishedAt": row["finished_at"],
             "createdAt": row["created_at"],
@@ -2374,12 +2374,11 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?, error=?,"
+                "UPDATE attempts SET result_json=?,"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
                     canonical_json(payload),
-                    error_text,
                     1 if shutdown_confirmed else 0,
                     request["runtimeIdentity"],
                     "unknown" if (termination_reason == "unknown-stop"

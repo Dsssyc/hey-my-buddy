@@ -6824,7 +6824,7 @@ class WorkflowCoordinator:
                 and payload.get("shutdownConfirmed") is True)
 
     def _overloaded_model_services(self, connection, run_id):
-        """Task-local refusals since the last effective turn, newest evidence first.
+        """Task-local provider rejections since the last effective turn, newest evidence first.
 
         Consecutive pre-model rejections belong to the same routing recovery;
         keep their exclusions so two overloaded services cannot route in a loop.

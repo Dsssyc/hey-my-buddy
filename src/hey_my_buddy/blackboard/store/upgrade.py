@@ -8,93 +8,77 @@ import re
 import sqlite3
 
 from ...errors import BoardError
+from ...protocol.usage import normalize_token_usage
 from .db import SCHEMA, SCHEMA_VERSION, canonical_json
 
 UPGRADE_BASE_SCHEMA = 29
-REMOVED_ATTEMPT_COLUMNS = ("token_usage_json", "exit_code", "signal", "log_paths")
+REMOVED_ATTEMPT_COLUMNS = ("token_usage_json", "exit_code", "signal", "log_paths", "error")
 
 
 def _result(value):
     if not isinstance(value, dict) or "quotaFailure" not in value:
         return
-    rejection = value.pop("quotaFailure")
-    if isinstance(rejection, dict) and rejection.get("code") == "model-overloaded":
-        rejection["code"] = "overloaded"
-    value["providerRejection"] = rejection
+    value["providerRejection"] = value.pop("quotaFailure")
 
 
-def _routing(value):
-    """Move known overload facts; never infer a historical user preference."""
-    if not isinstance(value, dict):
-        return
-    overloads = value.pop("excludedModelServices", [])
+def _mismatch(table, row, field):
+    raise BoardError("UPGRADE_INVALID_BOARD", "A stored copy disagrees with its retained value",
+                     table=table, row=row, field=field)
+
+
+def _routing(value, decision_id):
+    """Check the base's redundant counts before removing them."""
     basis = value.get("routingBasis")
     if basis is None:
-        if not overloads:
-            return
-        basis = value["routingBasis"] = {}
-    services = {}
-    for item in overloads:
-        identity = tuple(item[key] for key in ("harness", "provider", "model"))
-        services.setdefault(identity, {key: item[key] for key in ("harness", "provider", "model", "nativeCode", "turnId")})
-    user_excluded = []
-    for item in basis.get("excludedBuddies", []):
-        if item.get("reason") == "model-overloaded":
-            identity = tuple(item[key] for key in ("harness", "provider", "model"))
-            services.setdefault(identity, {key: item[key] for key in ("harness", "provider", "model", "nativeCode", "turnId")})
-        else:
-            user_excluded.append(item)
-    basis["excludedBuddies"] = user_excluded
-    basis["overloadedModelServices"] = list(services.values())
-    basis.pop("excludedCount", None)
-    basis.pop("coolingCount", None)
-
-
-def _snapshot(value):
-    _routing(value)
-    if isinstance(value, dict) and isinstance(value.get("baseInput"), dict):
-        _snapshot(value["baseInput"])
-
-
-def _convert_json(connection, table, column, transform):
-    changed = 0
-    for rowid, raw in connection.execute(f'SELECT rowid,"{column}" FROM "{table}" WHERE "{column}" IS NOT NULL'):
-        value = json.loads(raw)
-        transform(value)
-        converted = canonical_json(value)
-        if value != json.loads(raw):
-            connection.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (converted, rowid))
-            changed += 1
-    return changed
+        return
+    for count, items in (("excludedCount", "excludedBuddies"), ("coolingCount", "coolingBuddies")):
+        if basis[count] != len(basis[items]):
+            _mismatch("decision_requests", decision_id, "routingBasis." + count)
+        del basis[count]
+    basis["overloadedModelServices"] = []
 
 
 def upgrade_schema_29_to_30(connection):
-    """Convert mutable database projections; digest-bound files are never opened."""
+    """Convert base-written projections; sealed Router snapshots stay as written."""
     changed = {}
     converted = 0
-    for rowid, raw, usage in connection.execute(
-            "SELECT rowid,result_json,token_usage_json FROM attempts WHERE result_json IS NOT NULL"):
-        value = json.loads(raw)
-        original = json.loads(raw)
+    rows = connection.execute(
+        "SELECT attempt_id,result_json,token_usage_json,exit_code,signal,log_paths,error FROM attempts").fetchall()
+    for attempt_id, raw, usage, exit_code, signal, log_paths, error in rows:
+        value = json.loads(raw) if raw is not None else {}
+        original = json.loads(raw) if raw is not None else {}
+        for field, stored, retained in (
+                ("exit_code", exit_code, value.get("exitCode")),
+                ("signal", signal, value.get("signal")),
+                ("log_paths", (json.loads(log_paths) if log_paths is not None else None) or {}, value.get("logPaths") or {}),
+                ("error", error, value.get("error"))):
+            if stored != retained:
+                _mismatch("attempts", attempt_id, field)
         result = value.get("result")
+        usage = json.loads(usage) if usage is not None else None
+        if isinstance(result, dict) and "tokenUsage" in result:
+            if normalize_token_usage(result["tokenUsage"]) != usage:
+                _mismatch("attempts", attempt_id, "token_usage_json")
+            result["tokenUsage"] = usage
+        elif usage is not None:
+            if not isinstance(result, dict):
+                _mismatch("attempts", attempt_id, "token_usage_json")
+            result["tokenUsage"] = usage
         _result(result)
-        if usage is not None or isinstance(result, dict) and "tokenUsage" in result:
-            result["tokenUsage"] = json.loads(usage) if usage is not None else None
         if value != original:
-            connection.execute("UPDATE attempts SET result_json=? WHERE rowid=?", (canonical_json(value), rowid))
+            connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", (canonical_json(value), attempt_id))
             converted += 1
     changed["attempts.result_json"] = converted
-    changed["decision_requests.requested_json"] = _convert_json(connection, "decision_requests", "requested_json", _routing)
-    changed["decision_requests.output_json"] = _convert_json(connection, "decision_requests", "output_json", _result)
-    changed["router_requests.snapshot_json"] = _convert_json(connection, "router_requests", "snapshot_json", _snapshot)
-    event_count = 0
-    for seq, raw in connection.execute("SELECT seq,payload_json FROM events WHERE kind='workflow.auto_continued'"):
+    converted = 0
+    rows = connection.execute("SELECT decision_id,requested_json FROM decision_requests").fetchall()
+    for decision_id, raw in rows:
         value = json.loads(raw)
-        if value.get("reason") == "model-overloaded":
-            value["reason"] = "overloaded"
-            connection.execute("UPDATE events SET payload_json=? WHERE seq=?", (canonical_json(value), seq))
-            event_count += 1
-    changed["events.payload_json"] = event_count
+        original = json.loads(raw)
+        _routing(value, decision_id)
+        if value != original:
+            connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (canonical_json(value), decision_id))
+            converted += 1
+    changed["decision_requests.requested_json"] = converted
     # Recreate from the current DDL so constraints and sqlite_master SQL match a
     # fresh board exactly. Incoming foreign keys keep the original table name.
     connection.execute("CREATE TEMP TABLE hmb_attempts_upgrade AS SELECT rowid AS saved_rowid,* FROM attempts")

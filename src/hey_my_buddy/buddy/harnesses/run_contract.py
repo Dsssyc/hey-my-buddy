@@ -34,6 +34,7 @@ from ...protocol.internal_models import (
     AbsolutePath,
     Count,
     ExitCode,
+    FormatVersion,
     FrozenJson,
     FrozenJsonAt,
     Hex64,
@@ -54,9 +55,8 @@ from pydantic import (
     AfterValidator, BeforeValidator, Field, field_serializer, field_validator, model_serializer, model_validator,
 )
 
-#: Newly produced run requests and results declare their form; older seals stay as written.
-FORMAT_VERSION = 2
-RunFormatVersion = Annotated[int, Field(strict=True, ge=FORMAT_VERSION, le=FORMAT_VERSION)]
+#: The only internal format version. It never changes a public board contract.
+FORMAT_VERSION = 1
 
 from ...protocol.harness_names import HARNESS_NAMES
 
@@ -220,7 +220,7 @@ class SessionRecordFailure(InternalModel):
 class RunRequest(InternalModel):
     """One harness run request: values only, no role authority of any kind."""
 
-    format_version: RunFormatVersion = FORMAT_VERSION
+    format_version: FormatVersion = FORMAT_VERSION
 
     identity: RunIdentity
     harness: HarnessName
@@ -534,7 +534,7 @@ class RunResult(InternalModel):
     a Worker success, a publishable Router answer or a Host acceptance.
     """
 
-    format_version: RunFormatVersion = FORMAT_VERSION
+    format_version: FormatVersion = FORMAT_VERSION
 
     identity: RunIdentity
     harness: HarnessName

@@ -14,6 +14,7 @@ from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade as installation
+from hey_my_buddy.protocol.usage import normalize_token_usage
 
 
 class Schema30Tests(unittest.TestCase):
@@ -28,7 +29,7 @@ class Schema30Tests(unittest.TestCase):
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
             return backup.database_snapshot(connection)
 
-    def test_fixture_converts_all_rejection_codes_and_preserves_frozen_files(self):
+    def test_fixture_converts_base_rejections_and_preserves_sealed_evidence(self):
         files = {path.relative_to(self.state): hashlib.sha256(path.read_bytes()).hexdigest()
                  for path in self.state.rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
@@ -36,15 +37,19 @@ class Schema30Tests(unittest.TestCase):
                 "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL")}
             old_usage = dict(connection.execute("SELECT attempt_id,token_usage_json FROM attempts"))
             turns = list(connection.execute("SELECT turn_id,input_json FROM workflow_turns"))
+            snapshots = list(connection.execute("SELECT * FROM router_requests ORDER BY decision_id,round"))
+            outputs = list(connection.execute("SELECT decision_id,output_json FROM decision_requests ORDER BY decision_id"))
             before = backup.database_snapshot(connection)
         codes = {(item.get("result") or {}).get("quotaFailure", {}).get("code") for item in old_results.values()}
-        self.assertTrue({"quota-exceeded", "rate-limited", "model-overloaded"} <= codes)
+        self.assertEqual(codes - {None}, {"quota-exceeded", "rate-limited"})
         result = schema_upgrade.upgrade_state(self.state)
         self.assertEqual((result["sourceSchema"], result["targetSchema"]), (29, 30))
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertEqual(list(connection.execute("SELECT turn_id,input_json FROM workflow_turns")), turns)
+            self.assertEqual(list(connection.execute("SELECT * FROM router_requests ORDER BY decision_id,round")), snapshots)
+            self.assertEqual(list(connection.execute("SELECT decision_id,output_json FROM decision_requests ORDER BY decision_id")), outputs)
             new_results = {key: json.loads(raw) for key, raw in connection.execute(
                 "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL")}
             for key, old in old_results.items():
@@ -52,10 +57,7 @@ class Schema30Tests(unittest.TestCase):
                 target = new_results[key].get("result") or {}
                 self.assertNotIn("quotaFailure", target)
                 if "quotaFailure" in source:
-                    expected = {**source["quotaFailure"]}
-                    if expected["code"] == "model-overloaded":
-                        expected["code"] = "overloaded"
-                    self.assertEqual(target["providerRejection"], expected)
+                    self.assertEqual(target["providerRejection"], source["quotaFailure"])
                 if old_usage[key] is not None:
                     self.assertEqual(target["tokenUsage"], json.loads(old_usage[key]))
                 self.assertEqual(target.get("nativeFailure"), source.get("nativeFailure"))
@@ -65,38 +67,117 @@ class Schema30Tests(unittest.TestCase):
             columns = {row[1] for row in connection.execute("PRAGMA table_info(attempts)")}
             self.assertFalse(set(schema_upgrade.REMOVED_ATTEMPT_COLUMNS) & columns)
         self.assertEqual(after["tables"], before["tables"])
-        touched = {"meta", "attempts", "events", "decision_requests", "router_requests"}
+        touched = {"meta", "attempts", "decision_requests"}
         for table, fingerprint in before["fingerprints"].items():
             if table not in touched:
                 self.assertEqual(after["fingerprints"][table], fingerprint, table)
         self.assertEqual({path.relative_to(self.state): hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in self.state.rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}, files)
 
-    def test_mixed_overload_basis_becomes_one_model_service_and_known_user_exclusions(self):
-        decision_id = self.fixture["providerRejectionStock"]["routeDecisionId"]
+    def test_mutable_routing_basis_drops_verified_counts_and_adds_empty_overload_list(self):
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
-            before = json.loads(connection.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
-                                                   (decision_id,)).fetchone()[0])
-            self.assertEqual(len(before["excludedModelServices"]), 1)
-            self.assertTrue(any(item.get("reason") == "model-overloaded" for item in before["routingBasis"]["excludedBuddies"]))
-            fingerprint = connection.execute("SELECT input_fingerprint FROM decision_requests WHERE decision_id=?", (decision_id,)).fetchone()[0]
+            before = {key: (json.loads(raw), fingerprint) for key, raw, fingerprint in connection.execute(
+                "SELECT decision_id,requested_json,input_fingerprint FROM decision_requests")}
         schema_upgrade.upgrade_state(self.state)
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
-            after = json.loads(connection.execute("SELECT requested_json FROM decision_requests WHERE decision_id=?",
-                                                  (decision_id,)).fetchone()[0])
-            self.assertEqual(connection.execute("SELECT input_fingerprint FROM decision_requests WHERE decision_id=?", (decision_id,)).fetchone()[0], fingerprint)
-            basis = after["routingBasis"]
-            self.assertNotIn("excludedModelServices", after)
-            self.assertNotIn("excludedCount", basis)
-            self.assertNotIn("coolingCount", basis)
-            self.assertEqual(basis["candidateCount"], before["routingBasis"]["candidateCount"])
-            self.assertEqual(basis["excludedBuddies"], [item for item in before["routingBasis"]["excludedBuddies"] if "reason" not in item])
-            self.assertEqual(basis["overloadedModelServices"], [{key: before["excludedModelServices"][0][key]
-                for key in ("harness", "provider", "model", "nativeCode", "turnId")}])
-            snapshot = json.loads(connection.execute("SELECT snapshot_json FROM router_requests WHERE decision_id=?", (decision_id,)).fetchone()[0])
-            self.assertEqual(snapshot["baseInput"]["routingBasis"], basis)
-            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='workflow.auto_continued' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-            self.assertEqual(event["reason"], "overloaded")
+            converted = 0
+            for decision_id, raw, fingerprint in connection.execute(
+                    "SELECT decision_id,requested_json,input_fingerprint FROM decision_requests"):
+                original, old_fingerprint = before[decision_id]
+                self.assertEqual(fingerprint, old_fingerprint)
+                basis = original.get("routingBasis")
+                if basis is not None:
+                    self.assertEqual(basis.pop("excludedCount"), len(basis["excludedBuddies"]))
+                    self.assertEqual(basis.pop("coolingCount"), len(basis["coolingBuddies"]))
+                    basis["overloadedModelServices"] = []
+                    converted += 1
+                self.assertEqual(json.loads(raw), original)
+            self.assertGreater(converted, 0)
+
+    def test_any_mismatched_attempt_copy_refuses_the_upgrade_without_changes(self):
+        corruptions = {"exit_code": 99, "signal": "SIGINT", "log_paths": '{"stderr":"unexpected"}',
+                       "error": "a different error", "token_usage_json": '{"inputTokens":999}'}
+        for field, value in corruptions.items():
+            with self.subTest(field=field), closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+                condition = "token_usage_json IS NOT NULL" if field == "token_usage_json" else "result_json IS NOT NULL"
+                attempt_id, original = connection.execute(
+                    f'SELECT attempt_id,"{field}" FROM attempts WHERE {condition} ORDER BY rowid DESC LIMIT 1').fetchone()
+                connection.execute(f'UPDATE attempts SET "{field}"=? WHERE attempt_id=?', (value, attempt_id))
+                connection.commit()
+                before = self.snapshot()
+                with self.assertRaises(BoardError) as caught:
+                    schema_upgrade.upgrade_state(self.state)
+                self.assertEqual(caught.exception.code, "UPGRADE_INVALID_BOARD")
+                self.assertEqual(caught.exception.details, {"table": "attempts", "row": attempt_id, "field": field})
+                self.assertEqual(self.snapshot(), before)
+                connection.execute(f'UPDATE attempts SET "{field}"=? WHERE attempt_id=?', (original, attempt_id))
+                connection.commit()
+
+    def test_attempt_without_a_result_cannot_lose_an_error(self):
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            attempt_id = connection.execute("SELECT attempt_id FROM attempts ORDER BY rowid DESC LIMIT 1").fetchone()[0]
+            connection.execute("UPDATE attempts SET result_json=NULL,token_usage_json=NULL,exit_code=NULL,signal=NULL,"
+                               "log_paths='{}',error='unrecorded error' WHERE attempt_id=?", (attempt_id,))
+            connection.commit()
+        before = self.snapshot()
+        with self.assertRaises(BoardError) as caught:
+            schema_upgrade.upgrade_state(self.state)
+        self.assertEqual(caught.exception.code, "UPGRADE_INVALID_BOARD")
+        self.assertEqual(caught.exception.details, {"table": "attempts", "row": attempt_id, "field": "error"})
+        self.assertEqual(self.snapshot(), before)
+
+    def test_mismatched_routing_counts_refuse_the_upgrade_without_changes(self):
+        for field in ("excludedCount", "coolingCount"):
+            with self.subTest(field=field), closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+                decision_id, raw = connection.execute(
+                    "SELECT decision_id,requested_json FROM decision_requests WHERE json_type(requested_json,'$.routingBasis')='object' LIMIT 1").fetchone()
+                value = json.loads(raw)
+                value["routingBasis"][field] += 1
+                connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (json.dumps(value), decision_id))
+                connection.commit()
+                before = self.snapshot()
+                with self.assertRaises(BoardError) as caught:
+                    schema_upgrade.upgrade_state(self.state)
+                self.assertEqual(caught.exception.code, "UPGRADE_INVALID_BOARD")
+                self.assertEqual(caught.exception.details, {"table": "decision_requests", "row": decision_id,
+                                                          "field": "routingBasis." + field})
+                self.assertEqual(self.snapshot(), before)
+                connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?", (raw, decision_id))
+                connection.commit()
+
+    def test_canonical_usage_column_is_merged_when_result_has_no_usage(self):
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            attempt_id, raw, usage = connection.execute(
+                "SELECT attempt_id,result_json,token_usage_json FROM attempts WHERE token_usage_json IS NOT NULL LIMIT 1").fetchone()
+            value = json.loads(raw)
+            del value["result"]["tokenUsage"]
+            connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", (json.dumps(value), attempt_id))
+            connection.commit()
+        schema_upgrade.upgrade_state(self.state)
+        with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+            result = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0])
+        self.assertEqual(result["result"]["tokenUsage"], json.loads(usage))
+
+    def test_native_usage_is_compared_with_the_bases_normalized_column(self):
+        samples = ({"inputTokens": 100, "outputTokens": 3},
+                   {"inputTokens": 100, "outputTokens": 3, "cacheReadTokens": 20, "cacheWriteTokens": 5,
+                    "inputBasis": "excludes-cached", "source": "dsh/native-usage"})
+        for index, usage in enumerate(samples):
+            with self.subTest(usage=usage):
+                state = load_fixture(self.root / f"native-usage-{index}")["state"]
+                with closing(sqlite3.connect(state / "board.sqlite3")) as connection:
+                    attempt_id, raw = connection.execute(
+                        "SELECT attempt_id,result_json FROM attempts WHERE token_usage_json IS NOT NULL LIMIT 1").fetchone()
+                    result = json.loads(raw)
+                    result["result"]["tokenUsage"] = usage
+                    expected = normalize_token_usage(usage)
+                    connection.execute("UPDATE attempts SET result_json=?,token_usage_json=? WHERE attempt_id=?",
+                                       (json.dumps(result), json.dumps(expected), attempt_id))
+                    connection.commit()
+                schema_upgrade.upgrade_state(state)
+                with closing(sqlite3.connect(state / "board.sqlite3")) as connection:
+                    converted = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0])
+                self.assertEqual(converted["result"]["tokenUsage"], expected)
 
     def test_upgraded_schema_exactly_matches_a_new_board(self):
         schema_upgrade.upgrade_state(self.state)
@@ -145,11 +226,10 @@ class Schema30Tests(unittest.TestCase):
         store = BoardStore(self.state)
         self.addCleanup(store.db.close)
         store.initialize()
-        for key in ("rejected-turn", "rejected-seal"):
-            run_id = self.fixture["providerRejectionStock"][key]["runId"]
-            view = store.workflow.get({"runId": run_id, "includeAudit": True})
-            self.assertNotIn("quotaFailure", view)
-            self.assertEqual(view["providerRejection"]["code"], "overloaded" if key == "rejected-seal" else "rate-limited")
+        run_id = self.fixture["edgeStock"]["rejected-turn"]["runId"]
+        view = store.workflow.get({"runId": run_id, "includeAudit": True})
+        self.assertNotIn("quotaFailure", view)
+        self.assertEqual(view["providerRejection"]["code"], "rate-limited")
 
 
 if __name__ == "__main__":

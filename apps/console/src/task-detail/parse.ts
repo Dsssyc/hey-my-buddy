@@ -236,7 +236,7 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
       const excluded = rec(item, what);
       return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
     }) : [],
-    overloadedModelServices: basis ? list(basis.overloadedModelServices ?? [], what).map(item => {
+    overloadedModelServices: basis ? list(basis.overloadedModelServices, what).map(item => {
       const service = rec(item, what);
       return { harness: str(service.harness, what), provider: str(service.provider, what), model: str(service.model, what),
         nativeCode: str(service.nativeCode, what), turnId: str(service.turnId, what) };

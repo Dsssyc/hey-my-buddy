@@ -91,7 +91,7 @@ describe("the compact collaboration record", () => {
 
   it("reads a current turn that has returned nothing yet, and the routing bounds of the current route", () => {
     const parsed = parseWorkflow(reply({ currentTurn: turn, routing: { status: "completed", decisionId: "d1", source: "single-candidate",
-      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "排除低强度" }] } } }), "m1");
+      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "排除低强度" }], overloadedModelServices: [] } } }), "m1");
     expect(parsed.currentTurn).toMatchObject({ summary: null, remaining: [] });
     expect(parsed.routing?.basis).toEqual({ constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], candidateCount: 1,
       excluded: [{ buddy: { harness: "dsh", provider: "p", model: "m", effort: "off" }, note: "排除低强度" }], overloadedModelServices: [], cooling: [], preferences: [] });
@@ -165,7 +165,7 @@ describe("the audit", () => {
 
 describe("what a decision was bound by", () => {
   const decision = { decisionId: "d1", constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"],
-    routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "提交时排除低推理强度" }],
+    routingBasis: { candidateCount: 1, excludedBuddies: [{ harness: "dsh", provider: "p", model: "m", effort: "off", note: "提交时排除低推理强度" }], overloadedModelServices: [],
       coolingBuddies: [{ harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high", coolingUntil: "2026-09-26T11:00:00Z" }] },
     output: { programSelection: { preferences: [{ buddyId: "dsh:p:m:max", mode: "pin", note: "当时固定此 buddy" }] } } };
 

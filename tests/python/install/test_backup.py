@@ -160,7 +160,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        for version in (None, True, 0, -1, "30"):
+        for version in (None, True, 0, -1, 28, 31, "30"):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")

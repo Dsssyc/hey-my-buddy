@@ -14,7 +14,8 @@ import sqlite3
 import time
 import zlib
 
-from .db import utc_now
+from .db import SCHEMA_VERSION, utc_now
+from .upgrade import UPGRADE_BASE_SCHEMA
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs, private_files
@@ -166,7 +167,7 @@ def _verify(directory: Path) -> dict:
                 'databaseSnapshot', 'runtime', 'pluginCommit', 'pluginCommitStatus', 'files'}
     if not isinstance(manifest, dict) or not required <= manifest.keys() or not isinstance(manifest['files'], dict):
         raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
-    if manifest.get('format') != 1 or type(manifest.get('schema')) is not int or manifest['schema'] <= 0:
+    if manifest.get('format') != 1 or type(manifest.get('schema')) is not int or manifest['schema'] not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:

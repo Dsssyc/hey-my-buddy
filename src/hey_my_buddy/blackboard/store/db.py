@@ -176,7 +176,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_provider      TEXT,
     model_model         TEXT,
     result_json         TEXT,
-    error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),

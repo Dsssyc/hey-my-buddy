@@ -380,7 +380,6 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["reason"], {"code": "all-candidates-cooling", "params": {"retryAt": moment(180)}})
         self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 3)
-        self.assertEqual(len(view["routingBasis"]["coolingBuddies"]), 3)
         self.assertEqual(view["routingBasis"]["coolingBuddies"][0]["coolingUntil"], moment(300))
         self.assertNotIn("quotaRetryBuddyIds", view["routingBasis"])
 

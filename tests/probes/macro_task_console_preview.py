@@ -479,7 +479,7 @@ ROUTING_A4.update(taskId=None, attemptId=None, generation=None, routerBuddyId=No
                   routerIndex=None, routerIdentities=[], routingMode=None, usage=None, budget=None,
                   source="no-candidate")
 ROUTING_A4["routingBasis"] = {
-    "candidateCount": 0, "excludedBuddies": [], "coolingBuddies": [
+    "candidateCount": 0, "excludedBuddies": [], "overloadedModelServices": [], "coolingBuddies": [
         {"buddyId": f"dsh:deepseek-official:{model}:max", "harness": "dsh",
          "provider": "deepseek-official", "model": model, "effort": "max", "note": None,
          "coolingUntil": COOLING_UNTIL}
@@ -3345,7 +3345,6 @@ def validate_fixtures() -> list[str]:
         problems.append("preview-run-b9 must preserve a rejected turn before its accepted success")
     cooled = workflow_get({"runId": "preview-run-a4"})["routing"]
     if (cooled["reason"] != reason("all-candidates-cooling", retryAt=COOLING_UNTIL)
-            or len(cooled["routingBasis"]["coolingBuddies"]) != 2
             or len(cooled["routingBasis"]["coolingBuddies"]) != 2):
         problems.append("preview-run-a4 must freeze every cooling candidate and the earliest retry")
     multi_turn = workflow_get({"runId": "preview-run-a1"})
