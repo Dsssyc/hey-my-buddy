@@ -61,8 +61,8 @@ class LeadGrantTests(WorkflowTestCase):
             helper.pop("hostId")
             with self.subTest(value=value), self.assertRaises(BoardError) as caught:
                 schemas.normalize_helpers({"helpers": [helper]}, integrator={"role": "host", "id": "fixture-host"})
-            self.assertIn("Only Host submissions", caught.exception.message)
-            self.assertIn("helpers cannot carry it", caught.exception.message)
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+            self.assertEqual(caught.exception.details["field"], "delegationAuthority")
 
     def test_grant_requires_an_enabled_available_buddy(self):
         board = self.board()

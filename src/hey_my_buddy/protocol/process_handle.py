@@ -19,7 +19,27 @@ class ProcessHandle:
     """
 
     def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict):
-        self._initialize_owned(process, own_group=own_group, log_paths=log_paths)
+        self.process = process
+        self.own_group = own_group
+        self.log_paths = log_paths
+        self.cancel_requested = False
+        self.signalled_at: float | None = None
+        self.stop_lock = threading.RLock()
+        self.stop_initiator: str | None = None
+        self.grace_deadline: float | None = None
+        self.grace_expired = False
+        self.force_stop_requested = False
+        self.wrap_up_started = False
+        self.role_run_control: dict | None = None
+        self.role_run_identity = None
+        self.role_run_active_control: dict | None = None
+        self.role_run_active_identity = None
+        self.job = vars(process).get("_buddy_job")
+        # start_new_session makes the owned child's PID its process-group ID.
+        # Keep it even if the leader exits before identity capture.
+        self.pgid: int | None = None
+        if own_group and self.job is None and os.name != "nt" and process.pid is not None:
+            self.pgid = process.pid
         try:
             # Capture this before an adapter can poll and reap a fast child.
             from .process_identity import _creation_time, record_native_process_spawn
@@ -50,30 +70,6 @@ class ProcessHandle:
                 raise failure from error
             error.owned_popen_evidence = evidence
             raise
-
-    def _initialize_owned(self, process: subprocess.Popen, *, own_group: bool,
-                          log_paths: dict) -> None:
-        self.process = process
-        self.own_group = own_group
-        self.log_paths = log_paths
-        self.cancel_requested = False
-        self.signalled_at: float | None = None
-        self.stop_lock = threading.RLock()
-        self.stop_initiator: str | None = None
-        self.grace_deadline: float | None = None
-        self.grace_expired = False
-        self.force_stop_requested = False
-        self.wrap_up_started = False
-        self.role_run_control: dict | None = None
-        self.role_run_identity = None
-        self.role_run_active_control: dict | None = None
-        self.role_run_active_identity = None
-        self.job = vars(process).get("_buddy_job")
-        # start_new_session makes the owned child's PID its process-group ID.
-        # Keep it even if the leader exits before identity capture.
-        self.pgid: int | None = None
-        if own_group and self.job is None and os.name != "nt" and process.pid is not None:
-            self.pgid = process.pid
 
     @property
     def pid(self) -> int | None:

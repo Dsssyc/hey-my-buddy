@@ -347,6 +347,8 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_missing_empty_unreadable_and_over_limit_keep_complete_read_semantics(self):
         self.assertEqual(journal.read_inquiry_journal(RUN, None)["reason"], "journal-not-written")
+        with self.assertRaises(FileNotFoundError):
+            journal.read_shared_snapshot(self.path, MAX_JOURNAL_BYTES)
         self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-not-written")
         self.path.touch()
         empty = journal.read_inquiry_journal(RUN, self.path)
@@ -421,6 +423,17 @@ class InquiryJournalProjectionTests(unittest.TestCase):
                          (answer["text"], answer["bytes"], answer["via"],
                           answer["toolCallId"], answer["at"], False))
         self.assertEqual(len(fact["records"]), 1)
+
+    def test_bridge_preserves_projected_entries_when_second_snapshot_is_missing(self):
+        queued = self.record("q-race", question="question",
+                             questionSha256=hashlib.sha256(b"question").hexdigest())
+        self.write_records([queued])
+        bridge = make_bridge(self.directory)
+        bridge.journal_path = self.path
+        with mock.patch.object(ib, "read_shared_snapshot", side_effect=FileNotFoundError):
+            bridge._load_journal()
+        self.assertEqual(bridge.entries["q-race"], queued)
+        self.assertFalse(bridge._torn_line)
 
     def test_strict_projection_failure_keeps_owner_alive_and_observation_unavailable(self):
         self.write_records([self.record("q-invalid", "answered", answer={"text": "x" * 4001})])

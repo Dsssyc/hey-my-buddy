@@ -422,6 +422,14 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         self.assertEqual(tool_evidence.judge_tool_evidence({**package, "calls": tool_evidence.write_tool_calls(package["binding"], [forged])}, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
+    def test_malformed_fact_outranks_a_forbidden_category_at_read_level(self):
+        collector = tool_evidence.ToolEventEvidence(BINDING)
+        collector.observe_incomplete("zcode", {"toolName": "Write", "phase": "start"})
+        package = collector.finish([IDENTITY], False)
+        self.assertEqual(call_rows(package)[0]["categories"], ["edit"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
     def test_a_forbidden_recorded_call_outranks_stream_incompleteness(self):
         self.assertEqual(tool_evidence.judge_tool_evidence(collect([settled_events("edit")[0]]), "read"),
                          tool_evidence.TOOLS_FORBIDDEN)

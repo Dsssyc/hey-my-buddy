@@ -102,7 +102,7 @@ class StructuredRpcFailureTests(unittest.TestCase):
         service.ping.side_effect = ContractMismatch('wrong contract', details={'expected': 'v1'})
         with self.assertRaises(transport.ServiceError) as caught:
             transport._invoke(service, endpoint, 'ping', {})
-        self.assertEqual(caught.exception.code, 'ERROR_CONTRACT_MISMATCH')
+        self.assertEqual(caught.exception.code, 'C_TWO_CONTRACT_MISMATCH')
         self.assertEqual(caught.exception.details, {'expected': 'v1'})
 
 
@@ -122,9 +122,12 @@ class PreflightFailureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             failure = OSError(errno.ENOSPC, 'disk full')
             with patch.object(transport.private_dirs, 'open_regular_fd', side_effect=failure), \
-                 self.assertRaises(OSError) as caught:
+                 self.assertRaises(transport.ServiceError) as caught:
                 transport._cold_start_preflight(Path(temporary) / 'state')
-            self.assertIs(caught.exception, failure)
+            self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
+            self.assertEqual(caught.exception.details,
+                             {'raw_os_error': errno.ENOSPC, 'io_operation': 'state_write'})
+            self.assertIs(caught.exception.__cause__, failure)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX AF_UNIX cleanup')
     def test_replaced_temp_path_does_not_redirect_socket_cleanup(self):
@@ -149,8 +152,11 @@ class PreflightFailureTests(unittest.TestCase):
             connector.connect.side_effect = replace_then_fail
             with patch.object(transport.tempfile, 'mkdtemp', return_value=str(socket_directory)), \
                  patch.object(transport.socket, 'socket', side_effect=[listener, connector]), \
-                 self.assertRaises(FileNotFoundError):
+                 self.assertRaises(transport.ServiceError) as caught:
                 transport._cold_start_preflight(root / 'state')
+            self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
+            self.assertEqual(caught.exception.details,
+                             {'raw_os_error': errno.ENOENT, 'io_operation': 'connect'})
             self.assertEqual(sentinel.read_text(encoding='utf-8'), 'keep')
             self.assertFalse((relocated / 's').exists())
             self.assertTrue(relocated.is_dir())

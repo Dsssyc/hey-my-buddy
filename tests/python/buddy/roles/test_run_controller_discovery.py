@@ -13,7 +13,7 @@ from hey_my_buddy.buddy.roles import run_controller
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.buddy.harnesses import controller
-from hey_my_buddy.protocol import process_controller
+from hey_my_buddy.protocol import process_controller, process_identity
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.test_controller import (
     NATIVE_STOPPED, NATIVE_UNKNOWN, controller_log_close_failure, partial_log_open_failure,
@@ -206,7 +206,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
     def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
         error = ValueError('fixture handle registration failed')
         with controller_log_close_failure(log=None, receipt=NATIVE_STOPPED, observation_blocked=True) as state, \
-             patch.object(process_controller, 'ProcessHandle', side_effect=error):
+             patch.object(process_identity, '_creation_time', side_effect=error):
             with self.assertRaises(RuntimeError) as caught:
                 self.discover()
             self.assertIs(caught.exception.__cause__, error)

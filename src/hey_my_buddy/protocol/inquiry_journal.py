@@ -22,7 +22,7 @@ MAX_JOURNAL_BYTES = 1024 * 1024
 INQUIRY_JOURNAL_VERSION = 1
 
 
-def read_shared_snapshot(path, max_bytes: int, *, raise_missing: bool = False) -> bytes | None:
+def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
     """One bounded, shared-locked read of the inquiry journal file.
 
     This is the reader side of the journal's cross-process barrier (POSIX flock,
@@ -30,16 +30,14 @@ def read_shared_snapshot(path, max_bytes: int, *, raise_missing: bool = False) -
     controller writer holds the exclusive side through its append/fsync/commit
     transaction, this read waits, so a reader can never observe a record that
     the writer has not fully committed — neither an in-flight append nor the
-    remains of a failed one. Returns ``None`` when the file cannot be opened
-    (or raises for a missing file when requested), and at most
-    ``max_bytes + 1`` bytes to distinguish empty from over-limit snapshots.
+    remains of a failed one. A missing file raises ``FileNotFoundError``;
+    other open failures return ``None``. Reads at most ``max_bytes + 1``
+    bytes to distinguish empty from over-limit snapshots.
     """
     try:
         fd = open_regular_fd(Path(path), os.O_RDONLY)
     except FileNotFoundError:
-        if raise_missing:
-            raise
-        return None
+        raise
     except (OSError, BoardError, ValueError):
         return None
     try:
@@ -87,7 +85,7 @@ def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path 
         return {"available": False, "reason": "journal-not-written", "entries": 0,
                 "records": [], "rejections": []}
     try:
-        raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES, raise_missing=True)
+        raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES)
     except FileNotFoundError:
         return {"available": False, "reason": "journal-not-written", "entries": 0,
                 "records": [], "rejections": []}

@@ -58,10 +58,6 @@ from pydantic import (
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
 
-#: The native-provided identifier fields, matching the tool-evidence identity set.
-NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": "turn_id",
-                  "inputId": "input_id", "callId": "call_id"}
-
 from ...protocol.harness_names import HARNESS_NAMES
 
 HarnessName = Literal[*HARNESS_NAMES]
@@ -71,10 +67,8 @@ SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
 
-#: The bounded fact-package size: it holds the old strict 512 KiB read range.
-#: The per-field and per-count bounds below (128 events, 512-char identifiers)
-#: keep a maximal legal tool-evidence package within it, so no package the old
-#: paths could carry is refused here for size alone.
+#: Bound of each JSON fact envelope. Growing tool-call rows live in a private
+#: digest-bound file; only its bounded reference travels in a tool package.
 MAX_PACKAGE_BYTES = 512 * 1024
 #: The role-assembled input text: the board's task text bound is 1 MiB and the
 #: roles add their own bounded material (hints, workspace facts, the answer

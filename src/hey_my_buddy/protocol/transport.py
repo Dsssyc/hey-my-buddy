@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
 from .. import locking, private_dirs
-import errno
 import json
 import os
 from pathlib import Path
@@ -117,9 +116,9 @@ def _local_rpc_error(error: CoreError | CCError) -> ServiceError:
     elif kind in ('not_found', 'connection_refused'):
         code = 'SERVICE_UNAVAILABLE'
     elif isinstance(error, CCError):
-        code = error.code.name
+        code = 'C_TWO_' + error.code.name.removeprefix('ERROR_')
     else:
-        code = 'C_TWO_' + str(getattr(error, 'category', 'UNKNOWN')).upper()
+        code = 'C_TWO_' + error.category.upper()
     return ServiceError(code, str(error), **details)
 
 
@@ -295,9 +294,8 @@ def _cold_start_preflight(directory: Path) -> None:
                 connector.close()
                 listener.close()
     except OSError as error:
-        if not isinstance(error, PermissionError) and error.errno not in (errno.EACCES, errno.EPERM):
-            raise
-        raise ServiceError('LAUNCH_ACCESS_DENIED', str(error),
+        code = 'LAUNCH_ACCESS_DENIED' if isinstance(error, PermissionError) else 'LAUNCH_IO_ERROR'
+        raise ServiceError(code, str(error),
                            raw_os_error=error.errno, io_operation=operation) from error
     finally:
         try:
