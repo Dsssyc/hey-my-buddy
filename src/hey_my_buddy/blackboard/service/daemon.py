@@ -219,8 +219,8 @@ class Daemon:
     def cancel_queued(self, note: str | None, *, exclude: set[str] | None = None) -> int:
         count = 0
         failed = False
-        for task in self.store.active_work()["queuedTasks"]:
-            if exclude and task["runId"] in exclude:
+        for task in self.store.autonomous_tasks():
+            if task["state"] != "queued" or (exclude and task["runId"] in exclude):
                 continue
             try:
                 self.store.task_cancel({"runId": task["runId"], **({"note": note} if note else {})},

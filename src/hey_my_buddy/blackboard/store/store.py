@@ -33,6 +33,7 @@ from .db import (
     utc_now,
 )
 from ...errors import BoardError
+from .work import autonomous_tasks
 
 #: Documented task transition table. A transition outside this map is rejected.
 TASK_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -2969,6 +2970,10 @@ class BoardStore:
             }
             for row in rows
         ]
+
+    def autonomous_tasks(self) -> list[dict[str, str]]:
+        with self.db.read() as connection:
+            return autonomous_tasks(connection)
 
     def active_work(self) -> dict:
         with self.db.read() as connection:

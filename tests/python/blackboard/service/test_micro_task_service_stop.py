@@ -1,8 +1,12 @@
 """Service shutdown fences micro-task work through the authoritative workflow path."""
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from hey_my_buddy.blackboard.service.daemon import Daemon
+from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.install import upgrade
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import request_private_service_stop
 
@@ -11,7 +15,79 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
     def stop_daemon(self, note="test stop"):
         daemon = Daemon(self.directory)
         self.addCleanup(daemon.store.db.close)
-        return daemon.on_stop({"note": note, "drainSeconds": 0})
+        with patch.object(daemon.store, "task_cancel", wraps=daemon.store.task_cancel) as cancel:
+            reply = daemon.on_stop({"note": note, "drainSeconds": 0})
+        cancel.assert_not_called()
+        self.assertEqual(daemon.store.service_issues(), [])
+        return reply
+
+    def test_host_boundary_only_stop_is_idle_and_preserves_the_board(self):
+        board = self.board()
+        for disposition in ("assistance", "attention"):
+            run = self.submit(board, request_id=disposition, cwd=str(self.workdir(disposition)))
+            claimed = self.claim(board, run_id=run["runId"])
+            self.finish_turn(board, claimed, disposition=disposition)
+            board.store.complete_execution_cleanup(claimed["claim"]["attempt"]["attemptId"])
+        with board.store.db.read() as connection:
+            before = backup.database_snapshot(connection)
+        upgrade.idle_snapshot(board.directory)
+        reply = self.stop_daemon()
+        self.assertTrue(reply["stopped"])
+        self.assertEqual((reply["cancelledQueued"], reply["cancelRequested"]), (0, 0))
+        with board.store.db.read() as connection:
+            self.assertEqual(backup.database_snapshot(connection), before)
+
+        board.store.record_service_issue("cancel-queued", BoardError("UNAUTHORIZED", "earlier stop"))
+        self.stop_daemon()
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT kind FROM events ORDER BY seq DESC LIMIT 1").fetchone()[0], "service.issue_resolved")
+            self.assertEqual([row[0] for row in connection.execute("SELECT state FROM workflow_runs")],
+                             ["awaiting-host", "awaiting-host"])
+
+    def test_pending_continuations_block_install_and_stop_through_workflow(self):
+        board = self.board()
+        runs = {}
+        for state in ("recorded", "queued", "executing", "passive"):
+            run = self.submit(board, request_id=state, cwd=str(self.workdir(state)))
+            runs[state] = run["runId"]
+            claimed = self.claim(board, run_id=run["runId"])
+            self.finish_turn(board, claimed, disposition="assistance")
+            board.store.complete_execution_cleanup(claimed["claim"]["attempt"]["attemptId"])
+            if state == "passive":
+                continue
+            view = board.call("workflow_get", {"runId": run["runId"]})
+            self.decide(board, view, view["activeRequest"]["requestId"], command_id=state)
+            if state in ("recorded", "queued"):
+                # Keep the durable continuation before its run leaves the Host boundary.
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE workflow_runs SET state='awaiting-host' WHERE run_id=?", (run["runId"],))
+                    connection.execute("UPDATE workflow_continuations SET state=? WHERE run_id=?", (state, run["runId"]))
+        ordinary = board.submit_execution(**{
+            "requestId": "ordinary", "adapter": "command", "task": "plain",
+            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"],
+        })["task"]["runId"]
+        with self.assertRaises(BoardError) as caught:
+            upgrade.idle_snapshot(board.directory)
+        self.assertEqual(caught.exception.code, "UPGRADE_NOT_IDLE")
+        self.assertEqual({task["runId"] for task in caught.exception.details["active"]},
+                         {runs["recorded"], runs["queued"], runs["executing"], ordinary})
+
+        daemon = Daemon(self.directory)
+        self.addCleanup(daemon.store.db.close)
+        with patch.object(daemon.store, "task_cancel", wraps=daemon.store.task_cancel) as cancel:
+            reply = daemon.on_stop({"note": "test stop", "drainSeconds": 0})
+        cancel.assert_called_once_with({"runId": ordinary, "note": "test stop"}, initiator="service")
+        self.assertEqual(daemon.store.service_issues(), [])
+        self.assertEqual(reply["cancelledQueued"], 4)
+        self.assertEqual(board.call("task_get", {"runId": ordinary})["task"]["state"], "cancelled")
+        for state, run_id in runs.items():
+            self.assertEqual(board.call("workflow_get", {"runId": run_id})["state"],
+                             "awaiting-host" if state == "passive" else "cancelled")
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workflow_continuations WHERE state IN ('recorded','queued')").fetchone()[0], 0)
+        upgrade.idle_snapshot(board.directory)
 
     def test_queued_micro_task_is_fenced_but_passive_host_request_is_preserved(self):
         board = self.board()

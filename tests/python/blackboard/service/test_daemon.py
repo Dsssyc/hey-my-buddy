@@ -143,21 +143,24 @@ class DaemonAdmissionTests(BoardTestCase):
         daemon = Daemon(self.directory / "state")
         self.addCleanup(daemon.store.db.close)
         daemon.store.initialize()
-        work = {"queuedTasks": [{"runId": "one"}, {"runId": "two"}],
-                "attempts": [{"taskId": "three"}, {"taskId": "four"}]}
-        for method, stage in ((daemon.cancel_queued, "cancel-queued"), (daemon.cancel_active, "cancel-active")):
-            with self.subTest(stage=stage), patch.object(daemon.store, "active_work", return_value=work), \
+        for method, stage, source, work, empty in (
+            (daemon.cancel_queued, "cancel-queued", "autonomous_tasks",
+             [{"runId": "one", "state": "queued"}, {"runId": "two", "state": "queued"}], []),
+            (daemon.cancel_active, "cancel-active", "active_work",
+             {"attempts": [{"taskId": "three"}, {"taskId": "four"}]}, {"attempts": []}),
+        ):
+            with self.subTest(stage=stage), patch.object(daemon.store, source, return_value=work), \
                  patch.object(daemon.store, "task_cancel", side_effect=[BoardError("CONFLICT", "fixture cancellation refused"), {}]) as cancel:
                 self.assertEqual(method(None), 1)
                 self.assertEqual(cancel.call_count, 2)
             issue = next(item for item in daemon.store.service_issues() if item["stage"] == stage)
             self.assertEqual(issue["code"], "CONFLICT")
-            with patch.object(daemon.store, "active_work", return_value=work), \
+            with patch.object(daemon.store, source, return_value=work), \
                  patch.object(daemon.store, "task_cancel", return_value={}):
                 self.assertEqual(method(None), 2)
             self.assertNotIn(stage, [item["stage"] for item in daemon.store.service_issues()])
             daemon.store.record_service_issue(stage, BoardError("CONFLICT", "earlier cancellation refused"))
-            with patch.object(daemon.store, "active_work", return_value={"queuedTasks": [], "attempts": []}):
+            with patch.object(daemon.store, source, return_value=empty):
                 self.assertEqual(method(None), 0)
             self.assertNotIn(stage, [item["stage"] for item in daemon.store.service_issues()])
 
