@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -57,18 +58,29 @@ class FocusedChecksTests(unittest.TestCase):
     def frontend(self):
         """Synthetic entrypoints use Python as Node, without real frontend tests."""
         console = self.root / "apps/console"
+        source = console / "src"
+        (source / "nested").mkdir(parents=True)
+        (source / "index.html").write_bytes(b"<script src='nested/main.js'></script>\n")
+        (source / "nested/main.js").write_bytes(b"console.log('source');\n")
+        (source / "nested/icon.bin").write_bytes(b"\x00\xff")
+        self.assets = self.root / "src/hey_my_buddy/console/assets"
+        shutil.copytree(source, self.assets)
         for name, relative, arguments in (
             ("frontend-typecheck", "typescript/bin/tsc", ["--noEmit"]),
             ("frontend-vitest", "vitest/vitest.mjs", ["run", "--maxWorkers=1", "--reporter=dot"]),
+            ("frontend-build", "vite/bin/vite.js", None),
         ):
             entry = console / "node_modules" / relative
             entry.parent.mkdir(parents=True, exist_ok=True)
             entry.write_text(
-                "import json, os, sys, time\nfrom pathlib import Path\n"
-                f"assert sys.argv[1:] == {arguments!r}, sys.argv\n"
+                "import json, os, shutil, sys, time\nfrom pathlib import Path\n"
                 f"assert Path.cwd() == Path({str(console)!r})\n"
                 "root = Path(os.environ['HMB_STATE_DIR']).parent\n"
-                "assert Path(os.environ['TMPDIR']) == root / 'tmp'\n"
+                + (f"assert sys.argv[1:] == {arguments!r}, sys.argv\n" if arguments is not None else
+                   "assert sys.argv[1:] == ['build', '--outDir', str(root / 'assets')], sys.argv\n"
+                   "assert not (root / 'assets').exists(), 'build must use a fresh private directory'\n"
+                   "shutil.copytree(Path.cwd() / 'src', root / 'assets')\n")
+                + "assert Path(os.environ['TMPDIR']) == root / 'tmp'\n"
                 "assert Path(os.environ['HMB_RUNTIME_ROOT']) == root / 'runtime'\n"
                 "assert Path.home().parent == root.parent\n"
                 "assert 'HMB_RUNTIME' not in os.environ\n"
@@ -163,19 +175,70 @@ class FocusedChecksTests(unittest.TestCase):
 
     def test_no_paths_runs_frontend_once_and_the_original_full_file_set(self):
         self.frontend()
+        before = {path.relative_to(self.assets): path.read_bytes()
+                  for path in self.assets.rglob("*") if path.is_file()}
         code, output, errors = self.invoke(["--jobs", "1"])
         self.assertEqual(code, 0, errors + output)
         self.assertEqual({path.name for path in self.markers.iterdir()},
-                         set(checks.python_test_modules(self.root)) | {"frontend-typecheck", "frontend-vitest"})
+                         set(checks.python_test_modules(self.root)) |
+                         {"frontend-typecheck", "frontend-vitest", "frontend-build"})
         self.assertIn("apps/console ok", output)
+        self.assertIn("Packaged console assets match the fresh build (3 files)", output)
+        self.assertEqual({path.relative_to(self.assets): path.read_bytes()
+                          for path in self.assets.rglob("*") if path.is_file()}, before)
         self.assertIn("Tests  2 passed (2)", output)
         self.assertIn("python tests run: 3 (skipped 0) in 3 of 3 files", output)
         self.assertIn("tests passed; private root removed; exit 0", output.splitlines()[-1])
         self.assertEqual(list(self.temporary.iterdir()), [])
 
+    def test_unrebuilt_source_fails_even_with_matching_asset_size_and_mtime(self):
+        console = self.frontend()
+        source = console / "src/nested/main.js"
+        original = source.stat()
+        source.write_bytes(b"console.log('change');\n")
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+        code, output, errors = self.invoke(["--jobs", "1"])
+        self.assertEqual(code, 1, errors + output)
+        self.assertIn("Files with different content:\n  nested/main.js\n", output)
+        self.assertIn("Run `npm --prefix apps/console run build`", output)
+        self.assertIn("frontend suite failed: apps/console", output.splitlines()[-1])
+        self.assertEqual((self.assets / "nested/main.js").read_bytes(), b"console.log('source');\n")
+        self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_extra_packaged_asset_fails_and_names_the_file(self):
+        self.frontend()
+        extra = self.assets / "nested/.stale.bin"
+        extra.write_bytes(b"obsolete")
+        code, output, errors = self.invoke(["--jobs", "1"])
+        self.assertEqual(code, 1, errors + output)
+        self.assertIn("Extra packaged files:\n  nested/.stale.bin\n", output)
+        self.assertEqual(extra.read_bytes(), b"obsolete")
+        self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_missing_packaged_asset_fails_and_names_the_file(self):
+        self.frontend()
+        missing = self.assets / "nested/icon.bin"
+        missing.unlink()
+        code, output, errors = self.invoke(["--jobs", "1"])
+        self.assertEqual(code, 1, errors + output)
+        self.assertIn("Missing packaged files:\n  nested/icon.bin\n", output)
+        self.assertFalse(missing.exists())
+        self.assertEqual(list(self.temporary.iterdir()), [])
+
+    def test_build_failure_keeps_its_exit_code_without_comparing_partial_output(self):
+        console = self.frontend()
+        (console / "node_modules/vite/bin/vite.js").write_text(
+            "print('fixture build failed')\nraise SystemExit(7)\n", encoding="utf-8", newline="\n")
+        code, output, errors = self.invoke(["--jobs", "1"])
+        self.assertEqual(code, 1, errors + output)
+        self.assertIn("apps/console FAILED (exit 7)", output)
+        self.assertIn("fixture build failed", output)
+        self.assertNotIn("packaged files:", output)
+        self.assertEqual(list(self.temporary.iterdir()), [])
+
     def test_missing_node_or_frontend_dependency_fails_with_install_instruction(self):
         console = self.frontend()
-        for missing in ("node", "typescript/bin/tsc", "vitest/vitest.mjs"):
+        for missing in ("node", "typescript/bin/tsc", "vitest/vitest.mjs", "vite/bin/vite.js"):
             with self.subTest(missing=missing):
                 for marker in self.markers.iterdir():
                     marker.unlink()
@@ -217,10 +280,13 @@ class FocusedChecksTests(unittest.TestCase):
                 self.assertEqual(code, 0, errors + output)
                 intervals = {path.name: json.loads(path.read_text(encoding="utf-8"))
                              for path in self.markers.iterdir()}
-                typecheck, vitest = intervals.pop("frontend-typecheck"), intervals.pop("frontend-vitest")
+                typecheck, vitest, build = (intervals.pop(f"frontend-{name}")
+                                           for name in ("typecheck", "vitest", "build"))
                 self.assertEqual(typecheck["root"], vitest["root"])
+                self.assertEqual(typecheck["root"], build["root"])
                 self.assertLess(typecheck["end"], vitest["start"])
-                frontend = {"start": typecheck["start"], "end": vitest["end"]}
+                self.assertLess(vitest["end"], build["start"])
+                frontend = {"start": typecheck["start"], "end": build["end"]}
                 active = peak = 0
                 for _, delta in sorted((interval[key], delta)
                                        for interval in [frontend, *intervals.values()]
