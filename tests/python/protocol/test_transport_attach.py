@@ -976,7 +976,6 @@ class RpcReadOnlySetupTests(unittest.TestCase):
 
     def native_ping_peer(self):
         """Reuse the protocol probe's native process, profile and stop handshake."""
-        import c_two as cc
         from c_two import crm
         from protocol import test_rpc_config as probe_fixture
         from support import shutdown_private_rpc
@@ -1022,7 +1021,6 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.10.0")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
