@@ -17,6 +17,7 @@ from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -26,8 +27,8 @@ export_sample = runpy.run_path(str(TOOL))['export_sample']
 
 
 def files(root):
-    return {str(path.relative_to(root)): path.read_bytes()
-            for path in root.rglob('*') if path.is_file()}
+    return {str(path.relative_to(native_path(root))): path.read_bytes()
+            for path in native_path(root).rglob('*') if path.is_file()}
 
 
 class ExportBoardSampleTests(WorkflowTestCase):

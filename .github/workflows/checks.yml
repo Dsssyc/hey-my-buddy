@@ -257,6 +257,27 @@ jobs:
       - name: Install console parsers for preview regressions
         run: |
           npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
+      - name: Use the default Windows long-path setting
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+          Set-ItemProperty -LiteralPath $key -Name LongPathsEnabled -Type DWord -Value 0 -ErrorAction Stop
+          $value = Get-ItemPropertyValue -LiteralPath $key -Name LongPathsEnabled -ErrorAction Stop
+          Write-Host "LongPathsEnabled (registry): $value"
+      - name: Verify long paths are disabled in a fresh Windows process
+        if: runner.os == 'Windows'
+        shell: python {0}
+        run: |
+          import ctypes
+
+          enabled = ctypes.WinDLL("ntdll").RtlAreLongPathsEnabled
+          enabled.argtypes = []
+          enabled.restype = ctypes.c_ubyte
+          value = int(enabled())
+          print(f"RtlAreLongPathsEnabled (fresh process): {value}", flush=True)
+          if value != 0:
+              raise SystemExit("Windows long paths must be disabled before running checks")
       - name: Select Python test shard
         id: shard
         # Splits by measured per-file durations (.github/check-durations.json).

@@ -14,6 +14,7 @@ from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade as installation
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.usage import normalize_token_usage
 
 
@@ -30,8 +31,8 @@ class Schema30Tests(unittest.TestCase):
             return backup.database_snapshot(connection)
 
     def test_fixture_converts_base_rejections_and_preserves_sealed_evidence(self):
-        files = {path.relative_to(self.state): hashlib.sha256(path.read_bytes()).hexdigest()
-                 for path in self.state.rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}
+        files = {path.relative_to(native_path(self.state)): hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in native_path(self.state).rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
             old_results = {key: json.loads(raw) for key, raw in connection.execute(
                 "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL")}
@@ -71,8 +72,8 @@ class Schema30Tests(unittest.TestCase):
         for table, fingerprint in before["fingerprints"].items():
             if table not in touched:
                 self.assertEqual(after["fingerprints"][table], fingerprint, table)
-        self.assertEqual({path.relative_to(self.state): hashlib.sha256(path.read_bytes()).hexdigest()
-                          for path in self.state.rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}, files)
+        self.assertEqual({path.relative_to(native_path(self.state)): hashlib.sha256(path.read_bytes()).hexdigest()
+                          for path in native_path(self.state).rglob("*") if path.is_file() and not path.name.startswith("board.sqlite3")}, files)
 
     def test_mutable_routing_basis_drops_verified_counts_and_adds_empty_overload_list(self):
         with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
