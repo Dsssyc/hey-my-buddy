@@ -12,7 +12,7 @@ const retiredLow = "dsh:deepseek-official:retired-model:low";
 
 function catalog(): Profile[] {
   const base = {
-    adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision:dsh"],
+    adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
@@ -42,6 +42,8 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
     ? [{ profileId: retiredMax, mode: "pin", reason: "以前固定" }]
     : [];
   const sampleCounts = { [flashOff]: 4, [retiredMax]: 9 };
+  // The retained page is bound to the published revision it was read at.
+  let revision = 2;
   const pages = (params: Record<string, any>): ProfilePage => {
     const includeUnavailable = params.includeUnavailable === true;
     const visible = includeUnavailable ? profiles : profiles.filter(p => p.available || p.profileId === decisionId);
@@ -56,18 +58,20 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       annotations: annotations.filter(a => ids.has(a.profileId)),
       preferences: preferences.filter(p => ids.has(p.profileId)),
       sampleCounts: Object.fromEntries(Object.entries(sampleCounts).filter(([id]) => ids.has(id))),
-      tableRevision: 2,
+      tableRevision: revision,
       nextCursor: ordered.length > slice.length ? slice[slice.length - 1].profileId : null,
     };
   };
   const live = profiles.filter(p => p.available || p.profileId === decisionId);
   let state: Snapshot = {
-    csrfToken: "csrf", tableRevision: 2,
+    csrfToken: "csrf", tableRevision: revision,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: decisionId },
     profiles: live,
-    // The snapshot carries the retained identities only as a count.
-    unavailableProfileCount: profiles.filter(p => !p.available).length,
+    // The snapshot carries the unlisted retained identities only as a count
+    // (a listed unavailable row, such as the current decision profile, is not
+    // included in it).
+    unavailableProfileCount: profiles.filter(p => !p.available && p.profileId !== decisionId).length,
     cards: cards.filter(c => live.some(p => p.profileId === c.profileId)),
     annotations: annotations.filter(a => live.some(p => p.profileId === a.profileId)),
     preferences: preferences.filter(p => live.some(p => p.profileId === p.profileId)),
@@ -94,7 +98,15 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
       published.push(params);
       state = { ...state, tableRevision: state.tableRevision + 1,
         gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null } };
+      revision = state.tableRevision;
       return { tableRevision: state.tableRevision };
+    }
+    if (operation === "model_catalog_refresh") {
+      // A completed program discovery publishes directory facts and a new
+      // revision; the bounded snapshot still omits retained identities.
+      revision += 1;
+      state = { ...state, tableRevision: revision };
+      return { tableRevision: revision };
     }
     if (operation === "evaluation_write_abort") return { aborted: true };
     throw new Error(`Unexpected command: ${operation}`);
@@ -219,6 +231,108 @@ describe("unavailable configurations", () => {
     expect(wire).not.toContain("provider");
     expect(wire).not.toContain("\"model\"");
     expect(wire).not.toContain("cards");
+  });
+
+  it("allows a reason-only edit of a retired pin while new pins stay blocked", async () => {
+    const f = fixture({ stalePin: true });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await openRetired(f, user);
+    await screen.findByText(/固定选择指向 .*需要处理，但不影响保存其他修改/);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
+    // The existing pin stays a reachable, selectable value; only its reason changes.
+    const pinOption = within(screen.getByLabelText("用户偏好")).getByRole("option", { name: "固定选择" });
+    expect(pinOption).toHaveProperty("disabled", false);
+    const reason = await screen.findByLabelText("偏好依据");
+    expect(reason).toHaveProperty("value", "以前固定");
+    await user.clear(reason);
+    await user.type(reason, "仍然适用");
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0].preferenceChanges).toEqual([
+      { profileId: retiredMax, mode: "pin", reason: "仍然适用" },
+    ]);
+    expect(f.published[0]).not.toHaveProperty("profileSettings");
+  });
+
+  it("keeps a retained disable unresolved until the fresh history is re-read", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await openRetired(f, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
+    await user.click(await screen.findByLabelText("允许后续选择使用此配置"));
+    await user.click(screen.getByRole("button", { name: "发现模型" }));
+    await screen.findByText(/目录已更新/);
+    // The retired row is absent from the bounded V3 snapshot: the edit stays
+    // unresolved instead of being dropped or rebased from the V2 cache.
+    const banner = document.querySelector(".conflict-banner")!;
+    expect(banner).toBeTruthy();
+    expect(banner.textContent).toContain("尚不能与 V3 核对");
+    expect(screen.getByLabelText("允许后续选择使用此配置")).toHaveProperty("checked", false);
+    // No save of the disable under V3 while the conflict is unresolved.
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect(f.published).toHaveLength(0);
+    expect(f.operations).not.toContain("evaluation_write_begin");
+    // The revision-bound history reload supplies the fresh V3 row; the pending
+    // rebase resolves on its own and the same edit publishes at V3.
+    await waitFor(() => expect(document.querySelector(".conflict-banner")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0]).toMatchObject({
+      expectedRevision: 3,
+      profileSettings: [{ profileId: retiredMax, enabled: false }],
+    });
+  });
+
+  it("does not resurrect a preference the user removed when a page is re-read", async () => {
+    const f = fixture({ stalePin: true });
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await openRetired(f, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "偏好与启用" }));
+    const select = screen.getByLabelText("用户偏好");
+    expect(select).toHaveProperty("value", "pin");
+    await user.selectOptions(select, "");
+    expect(select).toHaveProperty("value", "");
+    // A same-revision retained page still contains the published pin. Reading it
+    // (here a search-filter reload) must not silently re-add the removed row.
+    await user.type(screen.getByPlaceholderText("搜索模型、Harness、提供方"), "retired");
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
+      { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
+    await waitFor(() => expect(f.operations.filter(op => op === "model_profiles").length).toBeGreaterThan(1));
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    await screen.findByText("已发布新版本。正在执行的任务继续使用原配置。");
+    expect(f.published[0].preferenceChanges).toEqual([
+      { profileId: retiredMax, mode: null, reason: "" },
+    ]);
+  });
+
+  it("sends the search and harness filter to the retained-history request", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await screen.findByRole("heading", { name: "模型 1" });
+    await user.click(screen.getByLabelText("显示不可用配置"));
+    await screen.findByRole("heading", { name: "模型 2" });
+    expect(f.command).toHaveBeenCalledWith("model_profiles",
+      { includeUnavailable: true, limit: 100 }, "csrf");
+    // A search is a bounded server query, so matching rows past the 600-item
+    // display budget are reachable instead of a local-only filter.
+    await user.type(screen.getByPlaceholderText("搜索模型、Harness、提供方"), "retired");
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
+      { includeUnavailable: true, limit: 100, query: "retired" }, "csrf"));
+    await user.selectOptions(screen.getByLabelText("Harness 筛选"), "dsh");
+    await waitFor(() => expect(f.command).toHaveBeenCalledWith("model_profiles",
+      { includeUnavailable: true, limit: 100, query: "retired", adapter: "dsh" }, "csrf"));
   });
 });
 

@@ -27,7 +27,7 @@ const discovered = "dsh:deepseek-official:deepseek-v5:medium";
 type Outcome = "begin" | "renew" | "publish" | "abort";
 type Script = Partial<Record<Outcome, ("network" | "conflict" | "queued" | "active" | "drift" | "forbidden")[]>>;
 
-function fixture(script: Script = {}, options: { queuedForever?: boolean } = {}) {
+function fixture(script: Script = {}, options: { queuedForever?: boolean; discoveryAnnotation?: string } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
     csrfToken: "csrf", tableRevision: 2,
@@ -95,7 +95,13 @@ function fixture(script: Script = {}, options: { queuedForever?: boolean } = {})
     }
     if (operation === "model_catalog_refresh") {
       // The program publishes the directory itself; the page only re-reads it.
+      // A discovery can also publish another writer's human field, which must
+      // never be silently overwritten by a stale local draft.
       state = { ...state, tableRevision: state.tableRevision + 1,
+        ...(options.discoveryAnnotation ? {
+          annotations: [...state.annotations.filter(a => a.profileId !== flashOff),
+            { profileId: flashOff, text: options.discoveryAnnotation, revision: 2, updatedAt: null }],
+        } : {}),
         profiles: [...state.profiles, { profileId: discovered, label: "deepseek-v5 · medium", adapter: "dsh",
           provider: "deepseek-official", model: "deepseek-v5", effort: "medium", available: true, enabled: false,
           capabilities: [], contextWindow: null, source: "catalog:refresh", description: "" }] };
@@ -166,7 +172,7 @@ describe("edit mode and the write lease", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("false");
     expect(screen.queryByLabelText("我的意见")).toBeNull();
-    expect(screen.getByText("开启右上角“编辑模式”后可以写下或清除人工意见；自动评价始终只读。")).toBeTruthy();
+    expect(screen.getByText("开启右上角“编辑模式”后可以写下或清除人工意见；已发布的评价内容始终只读。")).toBeTruthy();
     expect(f.command).not.toHaveBeenCalled();
   });
 
@@ -365,6 +371,61 @@ describe("edit mode and the write lease", () => {
     const added = f.snapshot().profiles.find(p => p.profileId === discovered);
     expect(added).toBeTruthy();
     expect(added!.enabled).toBe(false);
+  });
+
+  it("keeps a conflicting draft at its own revision when discovery finds another value", async () => {
+    const f = fixture({}, { discoveryAnnotation: "他人发现期间发布" });
+    const user = userEvent.setup();
+    await openModels(f.api, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "，我的草稿");
+    await user.click(screen.getByRole("button", { name: "发现模型" }));
+    await screen.findByText(/目录已更新/);
+    // Field-level three-way check: C was published for the same field our draft
+    // changes, so the draft keeps B and its own expectedRevision.
+    const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
+    expect(banner).toBeTruthy();
+    expect(banner.textContent).toContain("已被其他发布修改");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见，我的草稿");
+    expect(f.published).toHaveLength(0);
+    // Saving B under V3 is refused without an explicit conflict resolution.
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect(f.published).toHaveLength(0);
+    expect(f.operations).not.toContain("evaluation_write_begin");
+    // Deliberate reload is the explicit resolution: it adopts the other value.
+    await user.click(within(banner).getByRole("button", { name: "重新加载最新版本" }));
+    await screen.findByText("已加载评价表 V3。请核对后重新保存。");
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "他人发现期间发布");
+  });
+
+  it("keeps a dirty old-version draft for CAS conflict when a poll finds a publication", async () => {
+    const f = fixture();
+    const user = userEvent.setup();
+    await openModels(f.api, user);
+    await user.click(screen.getByRole("switch", { name: "编辑模式" }));
+    await user.click(screen.getByRole("tab", { name: "评价与意见" }));
+    await user.type(await screen.findByLabelText("我的意见"), "，未保存");
+    // Another writer published V3; the 3s poll (here the refresh button) only
+    // re-reads state and must not rebase, rewrite or discard the local draft.
+    f.setSnapshot({ ...f.snapshot(), tableRevision: 3,
+      annotations: [{ profileId: flashOff, text: "他人 V3", revision: 2, updatedAt: null }] });
+    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    const banner = document.querySelector<HTMLElement>(".conflict-banner")!;
+    expect(banner).toBeTruthy();
+    expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见，未保存");
+    expect(screen.getByRole("switch", { name: "编辑模式" }).getAttribute("aria-checked")).toBe("true");
+    expect(f.published).toHaveLength(0);
+    // No save of the stale draft under V3 without an explicit resolution.
+    await user.click(screen.getByRole("button", { name: "保存更改" }));
+    expect((await screen.findAllByText(/共享评价表已发布 V3，你的草稿基于 V2/)).length).toBeGreaterThan(0);
+    expect(f.published).toHaveLength(0);
+    expect(f.operations).not.toContain("evaluation_write_begin");
+    // Discard is the deliberate resolution; nothing was published implicitly.
+    await user.click(within(banner).getByRole("button", { name: "放弃修改" }));
+    await screen.findByText("已放弃未发布的修改。");
+    expect(f.operations).not.toContain("user_policy_publish");
   });
 
   it("keeps an unsaved opinion while discovery refreshes the directory", async () => {

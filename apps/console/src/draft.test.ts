@@ -6,14 +6,18 @@ import {
   changedProfileIds,
   configurationChanged,
   draftDiffers,
+  historyView,
   makeDraft,
   preferenceChanges,
   profileSettings,
   publication,
   rebaseDraft,
+  retainedAdditions,
   setAnnotation,
   setPreference,
+  withHistory,
 } from "./draft";
+import type { HistoryEntries } from "./draft";
 import type { Profile, Snapshot, WriterGrant } from "./types";
 
 const flash = {
@@ -25,7 +29,7 @@ const flash = {
   effort: "off",
   available: true,
   enabled: true,
-  capabilities: ["execution:dsh", "decision:dsh"],
+  capabilities: ["execution:dsh", "decision"],
   contextWindow: 1000000,
   description: "",
   source: "catalog",
@@ -256,11 +260,258 @@ describe("editing a published snapshot", () => {
   });
 });
 
+describe("field-level three-way rebase", () => {
+  /** A bounded snapshot that omits every unavailable identity. */
+  const bounded = { ...snapshot, profiles: [flash] } as unknown as Snapshot;
+  const retiredEnabled = { ...retired, enabled: true } satisfies Profile;
+  const retained = (revision: number, entries: Partial<HistoryEntries> = {}): HistoryEntries => ({
+    tableRevision: revision,
+    ...entries,
+  });
+
+  it("refuses to overlay a draft onto another writer's newer value", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      annotations: [{ profileId: "flash-off", text: "A", revision: 1, updatedAt: null }],
+    };
+    const draft = setAnnotation(baseline, "flash-off", "B");
+    // Another writer published C (v2); a program discovery then published v3.
+    const discovered = {
+      ...bounded,
+      tableRevision: 3,
+      annotations: [{ profileId: "flash-off", text: "C", revision: 2, updatedAt: null }],
+    } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts).toHaveLength(1);
+    expect(adopted.conflicts[0]).toMatchObject({
+      kind: "changed",
+      field: "annotation",
+      profileId: "flash-off",
+    });
+    // The original draft and expectedRevision stay; B is never saved under v3.
+    expect(adopted.draft).toEqual(draft);
+    expect(adopted.baseline).toEqual(baseline);
+    expect(adopted.draft.tableRevision).toBe(1);
+    expect(annotationText(adopted.draft, "flash-off")).toBe("B");
+    expect(annotationText(adopted.baseline, "flash-off")).toBe("A");
+    expect(publication(adopted.baseline, adopted.draft, grant(1), "c").expectedRevision).toBe(1);
+  });
+
+  it("merges only when the refreshed value still equals the old baseline", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      annotations: [{ profileId: "flash-off", text: "A", revision: 1, updatedAt: null }],
+    };
+    const draft = setAnnotation(baseline, "flash-off", "B");
+    // The program re-published the row unchanged: A is still what the board holds.
+    const discovered = {
+      ...bounded,
+      tableRevision: 3,
+      annotations: [{ profileId: "flash-off", text: "A", revision: 2, updatedAt: null }],
+    } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts).toEqual([]);
+    expect(annotationText(adopted.draft, "flash-off")).toBe("B");
+    expect(adopted.draft.tableRevision).toBe(3);
+    expect(adopted.baseline.tableRevision).toBe(3);
+  });
+
+  it("keeps the published row when it already equals the draft intent", () => {
+    const baseline = { ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot) };
+    const draft = setAnnotation(baseline, "flash-off", "B");
+    const discovered = {
+      ...bounded,
+      tableRevision: 3,
+      annotations: [{ profileId: "flash-off", text: "B", revision: 2, updatedAt: null }],
+    } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts).toEqual([]);
+    expect(annotationText(adopted.draft, "flash-off")).toBe("B");
+    expect(adopted.draft.tableRevision).toBe(3);
+  });
+
+  it("keeps an enabled-intent edit unresolved while its profile has no fresh row", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      profiles: [flash, retiredEnabled],
+    };
+    const draft = {
+      ...baseline,
+      profiles: baseline.profiles.map((p) =>
+        p.profileId === "retired" ? { ...p, enabled: false } : p,
+      ),
+    };
+    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts).toHaveLength(1);
+    expect(adopted.conflicts[0]).toMatchObject({
+      kind: "unread",
+      field: "enabled",
+      profileId: "retired",
+    });
+    expect(adopted.draft).toEqual(draft);
+    expect(adopted.draft.tableRevision).toBe(1);
+    expect(adopted.draft.profiles.find((p) => p.profileId === "retired")!.enabled).toBe(false);
+
+    // A cached page from the old revision must not mint a baseline at the new revision.
+    const stalePage = retained(1, { profiles: [retiredEnabled] });
+    const withStale = rebaseDraft(draft, baseline, discovered, stalePage);
+    expect(withStale.conflicts[0].kind).toBe("unread");
+    expect(withStale.draft.tableRevision).toBe(1);
+    expect(withStale.baseline.tableRevision).toBe(1);
+
+    // A fresh retained page at the discovered revision resolves and applies the edit.
+    const freshPage = retained(3, { profiles: [retiredEnabled] });
+    const resolved = rebaseDraft(draft, baseline, discovered, freshPage);
+    expect(resolved.conflicts).toEqual([]);
+    expect(resolved.draft.tableRevision).toBe(3);
+    expect(resolved.baseline.tableRevision).toBe(3);
+    expect(resolved.draft.profiles.find((p) => p.profileId === "retired")!.enabled).toBe(false);
+    expect(resolved.draft.profiles.some((p) => p.profileId === "flash-off")).toBe(true);
+  });
+
+  it("flags a fresh retained row that differs from both baseline and draft", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      profiles: [flash, retiredEnabled],
+      annotations: [{ profileId: "retired", text: "A", revision: 1, updatedAt: null }],
+    };
+    const draft = setAnnotation(baseline, "retired", "B");
+    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
+    const freshPage = retained(3, {
+      profiles: [retiredEnabled],
+      annotations: [{ profileId: "retired", text: "C", revision: 2, updatedAt: null }],
+    });
+    const adopted = rebaseDraft(draft, baseline, discovered, freshPage);
+    expect(adopted.conflicts[0]).toMatchObject({
+      kind: "changed",
+      field: "annotation",
+      profileId: "retired",
+    });
+    expect(annotationText(adopted.draft, "retired")).toBe("B");
+    expect(adopted.draft.tableRevision).toBe(1);
+  });
+
+  it("merges a changed preference mode without overwriting another writer's reason", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      preferences: [{ profileId: "flash-off", mode: "prefer" as const, reason: "old" }],
+    };
+    const draft = setPreference(baseline, "flash-off", "pin", "old");
+    const discovered = {
+      ...bounded,
+      tableRevision: 3,
+      preferences: [{ profileId: "flash-off", mode: "pin" as const, reason: "他人依据" }],
+    } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts).toEqual([]);
+    expect(adopted.draft.preferences).toEqual([
+      { profileId: "flash-off", mode: "pin", reason: "他人依据" },
+    ]);
+  });
+
+  it("treats a preference another writer removed as a conflict, not a resurrection", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      preferences: [{ profileId: "flash-off", mode: "prefer" as const, reason: "old" }],
+    };
+    const draft = setPreference(baseline, "flash-off", "prefer", "mine");
+    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
+    const adopted = rebaseDraft(draft, baseline, discovered);
+    expect(adopted.conflicts[0]).toMatchObject({ kind: "changed", field: "preference" });
+    expect(adopted.draft.tableRevision).toBe(1);
+  });
+
+  it("keeps a changed decision selector when the fresh table still holds the old value", () => {
+    const baseline = {
+      ...makeDraft({ ...bounded, tableRevision: 1 } as Snapshot),
+      profiles: [flash, retiredEnabled],
+      configuration: { revision: 1, decisionProfileId: "flash-off" },
+    };
+    const draft = {
+      ...baseline,
+      configuration: { ...baseline.configuration, decisionProfileId: "retired" },
+    };
+    const discovered = { ...bounded, tableRevision: 3 } as Snapshot;
+    const clean = rebaseDraft(draft, baseline, discovered);
+    expect(clean.conflicts).toEqual([]);
+    expect(clean.draft.configuration.decisionProfileId).toBe("retired");
+    // Another writer changed the selector first: the old revision is retained.
+    const conflicted = rebaseDraft(draft, baseline, {
+      ...discovered,
+      configuration: { revision: 2, decisionProfileId: "gone:model:off" },
+    } as Snapshot);
+    expect(conflicted.conflicts[0]).toMatchObject({ kind: "changed", field: "configuration" });
+    expect(conflicted.draft.configuration.decisionProfileId).toBe("retired");
+    expect(conflicted.draft.tableRevision).toBe(1);
+  });
+
+  it("bounds retained rows to the revision they were read at", () => {
+    const current = makeDraft({ ...bounded, tableRevision: 3 } as Snapshot);
+    const entries = retained(2, {
+      profiles: [retiredEnabled],
+      annotations: [{ profileId: "retired", text: "旧意见", revision: 1, updatedAt: null }],
+    });
+    const merged = withHistory(current, entries);
+    expect(merged.profiles.map((p) => p.profileId)).toEqual(["flash-off"]);
+    expect(merged.annotations).toEqual([]);
+    const view = historyView({ ...snapshot, tableRevision: 3 } as Snapshot, entries);
+    expect(view.profiles.some((p) => p.profileId === "retired")).toBe(false);
+    const matched = withHistory(current, retained(3, { profiles: [retiredEnabled] }));
+    expect(matched.profiles.some((p) => p.profileId === "retired")).toBe(true);
+  });
+});
+
 describe("empty opinion handling", () => {
   it("reports no change when an absent opinion stays absent", () => {
     const baseline = makeDraft(snapshot);
     expect(annotationText(baseline, "flash-off")).toBe("");
     expect(annotationChanges(baseline, makeDraft(snapshot))).toEqual([]);
+  });
+});
+
+describe("retained additions never resurrect a removal", () => {
+  const revision = 3;
+  const current = makeDraft({ ...snapshot, tableRevision: revision } as Snapshot);
+  const pinned = {
+    ...current,
+    preferences: [{ profileId: "flash-off", mode: "pin" as const, reason: "旧依据" }],
+  };
+
+  it("keeps a removed preference removed when the published row comes back", () => {
+    const draft = { ...pinned, preferences: [] };
+    const page: HistoryEntries = {
+      tableRevision: revision,
+      preferences: [{ profileId: "flash-off", mode: "pin", reason: "旧依据" }],
+    };
+    // A plain merge would erase the removal, so the adoption path filters first.
+    expect(withHistory(draft, page).preferences).toHaveLength(1);
+    expect(withHistory(draft, retainedAdditions(draft, pinned, page)).preferences).toHaveLength(0);
+    // The change stays publishable as a real removal.
+    expect(preferenceChanges(pinned, withHistory(draft, retainedAdditions(draft, pinned, page)))).toEqual([
+      { profileId: "flash-off", mode: null, reason: "" },
+    ]);
+  });
+
+  it("still fills identities neither the draft nor the baseline knows", () => {
+    const draft = { ...current, preferences: [] };
+    const page: HistoryEntries = {
+      tableRevision: revision,
+      preferences: [{ profileId: "new-profile", mode: "prefer", reason: "初评" }],
+    };
+    const additions = retainedAdditions(draft, current, page)!;
+    expect(withHistory(draft, additions).preferences).toEqual([
+      { profileId: "new-profile", mode: "prefer", reason: "初评" },
+    ]);
+  });
+
+  it("ignores a page from another revision entirely", () => {
+    const draft = { ...pinned, preferences: [] };
+    const page: HistoryEntries = {
+      tableRevision: revision - 1,
+      preferences: [{ profileId: "flash-off", mode: "pin", reason: "旧依据" }],
+    };
+    expect(retainedAdditions(draft, pinned, page)).toBeNull();
   });
 });
 

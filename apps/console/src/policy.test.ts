@@ -19,7 +19,7 @@ const worker: Profile = {
   effort: "off",
   available: true,
   enabled: true,
-  capabilities: ["execution:dsh", "effort:off", "decision:dsh"],
+  capabilities: ["execution:dsh", "effort:off", "decision"],
   contextWindow: null,
   description: "",
   source: "catalog",
@@ -74,6 +74,16 @@ describe("decision capability", () => {
     expect(isDecisionCandidate({ ...worker, available: false })).toBe(false);
   });
 
+  it("accepts only the recorded `decision` token, never an invented alias", () => {
+    // Host populates the capability token exactly as `decision`.
+    expect(hasDecisionCapability({ ...worker, capabilities: ["decision:dsh"] })).toBe(false);
+    expect(hasDecisionCapability({ ...worker, capabilities: ["decision/dsh"] })).toBe(false);
+    expect(hasDecisionCapability({ ...worker, capabilities: ["DECISION"] })).toBe(true);
+    expect(hasDecisionCapability({ ...worker, capabilities: [" decision "] })).toBe(true);
+    expect(hasDecisionCapability({ ...worker, capabilities: ["decision:"] })).toBe(false);
+    expect(decisionCandidates([{ ...worker, capabilities: ["decision:dsh"] }])).toEqual([]);
+  });
+
   it("offers enabled, available, decision-capable candidates in a stable order", () => {
     expect(decisionCandidates([coder, otherHarness, disabled, worker, retired]).map(p => p.profileId))
       .toEqual([worker.profileId, otherHarness.profileId]);
@@ -125,6 +135,23 @@ describe("blocking new changes", () => {
     const stale = { ...baseline, preferences: [{ profileId: disabled.profileId, mode: "pin" as const, reason: "以前固定" }] };
     expect(blockingIssues(stale, stale)).toEqual([]);
     expect(attentionIssues(stale)[0].message).toContain("停用状态");
+  });
+
+  it("allows a reason-only edit of an existing unavailable pin", () => {
+    const baseline = makeDraft(snapshot([worker, retired], {
+      preferences: [{ profileId: retired.profileId, mode: "pin", reason: "旧依据" }],
+    }));
+    // The mode does not transition into pin, so current legality is not required.
+    const reasonOnly = setPreference(baseline, retired.profileId, "pin", "新依据");
+    expect(blockingIssues(baseline, reasonOnly)).toEqual([]);
+    const patch = publication(baseline, reasonOnly, grant(), "c");
+    expect(patch.preferenceChanges).toEqual([
+      { profileId: retired.profileId, mode: "pin", reason: "新依据" },
+    ]);
+    // The same edit from prefer into pin is a transition and stays blocked.
+    const soft = setPreference(baseline, retired.profileId, "prefer", "旧依据");
+    expect(blockingIssues(soft, setPreference(soft, retired.profileId, "pin", "旧依据"))[0].message)
+      .toContain("不能设为固定选择");
   });
 
   it("blocks a new decision selector unless it is available, enabled and decision-capable", () => {

@@ -27,7 +27,7 @@ const flashOff: Profile = {
   effort: "off",
   available: true,
   enabled: true,
-  capabilities: ["execution:dsh", "effort:off", "decision:dsh"],
+  capabilities: ["execution:dsh", "effort:off", "decision"],
   contextWindow: 1000000,
   source: "catalog:fixture",
   description: "",
@@ -38,7 +38,7 @@ const proMax: Profile = {
   label: "DeepSeek-V4-Pro · max",
   model: "deepseek-v4-pro",
   effort: "max",
-  capabilities: ["execution:dsh", "effort:max", "decision:dsh"],
+  capabilities: ["execution:dsh", "effort:max", "decision"],
 };
 
 function catalogSnapshot(): Snapshot {

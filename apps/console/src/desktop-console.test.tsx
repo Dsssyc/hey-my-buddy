@@ -41,7 +41,8 @@ function fixture(records: Task[] = []) {
   const snapshot: Snapshot = { csrfToken: "csrf", tableRevision: 2,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
     configuration: { revision: 1, decisionProfileId: profiles[0].profileId },
-    profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `原评价 ${p.model} ${p.effort}`,
+    profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, origin: "maintenance",
+      summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),
     preferences: [], annotations: [], evidence: [], decisions: [], sampleCounts: { [profiles[0].profileId]: 4 },
     tasks: { runs: records, total: records.length },
@@ -94,6 +95,7 @@ describe("desktop console", () => {
     await user.click(within(detail).getByRole("tab", { name: "评价与意见" }));
     // The automatic assessment stays read-only; only the separate opinion is editable.
     expect(within(detail).getByText("自动评价（只读）")).toBeTruthy();
+    expect(within(detail).getByText("由维护 Harness 依据证据发布")).toBeTruthy();
     expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
     expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
     await user.click(within(detail).getByRole("tab", { name: "证据" }));
@@ -142,6 +144,25 @@ describe("desktop console", () => {
     await user.click(screen.getByRole("switch", { name: "编辑模式" }));
     await user.click(await screen.findByRole("button", { name: "放弃修改" }));
     await screen.findByText("已放弃未发布的修改。");
+    expect(f.command).not.toHaveBeenCalled();
+  });
+
+  it("labels an unattributed historical card honestly instead of as an automatic assessment", async () => {
+    const f = fixture();
+    f.snapshot.cards = f.snapshot.cards.map(card => ({ ...card, origin: "unattributed" }));
+    const user = userEvent.setup();
+    window.location.hash = "#models";
+    render(<App suppliedApi={f.api} />);
+    await user.click(await screen.findByRole("button", { name: /^deepseek-flash/ }));
+    const detail = screen.getByRole("complementary", { name: "评价卡片详情" });
+    await user.click(within(detail).getByRole("tab", { name: "评价与意见" }));
+    // The card was not recorded as maintenance-published, so it is not called
+    // an automatic assessment; it stays read-only either way.
+    expect(within(detail).queryByText("自动评价（只读）")).toBeNull();
+    expect(within(detail).getAllByText(/发布者未记录/).length).toBeGreaterThan(0);
+    expect(within(detail).getAllByText("原评价 deepseek-flash off").length).toBeGreaterThan(0);
+    expect(within(detail).queryByRole("textbox", { name: "当前评价" })).toBeNull();
+    expect(screen.queryByLabelText("我的意见")).toBeNull();
     expect(f.command).not.toHaveBeenCalled();
   });
 

@@ -6,6 +6,7 @@ import {
   countsText,
   parseActivity,
   phaseLabels,
+  recordedTermination,
   terminationText,
 } from "./task-activity";
 import type { Task, TaskActivity } from "./types";
@@ -94,6 +95,26 @@ describe("bounded activity projection", () => {
       selectedAttempt: { result: { terminationReason: "deadline" } } })} />);
     expect(rendered.container.textContent).toContain("执行时限到期");
     expect(rendered.container.textContent).not.toContain("用户取消");
+  });
+
+  it("uses the receipt cause without claiming the record gave no reason", () => {
+    const rendered = render(<TaskActivityView task={task({ status: "failed",
+      selectedAttempt: { result: { terminationReason: "transport-error" } } })} />);
+    expect(rendered.container.textContent).toContain("传输故障");
+    expect(rendered.container.textContent).not.toContain("原始记录未给出原因");
+  });
+
+  it("prefers the canonical receipt cause over a task-level field", () => {
+    expect(recordedTermination(task({ terminationReason: "user-cancel",
+      selectedAttempt: { result: { terminationReason: "deadline" } } }))).toBe("deadline");
+    expect(recordedTermination(task({ terminationReason: "deadline" }))).toBe("deadline");
+    expect(recordedTermination(task({ status: "cancelled" }))).toBeNull();
+  });
+
+  it("still marks a genuinely missing cause as unknown", () => {
+    const rendered = render(<TaskActivityView task={task({ status: "cancelled" })} />);
+    expect(rendered.container.textContent).toContain("原始记录未给出原因");
+    expect(rendered.container.textContent).not.toMatch(/终止原因：用户取消/);
   });
 });
 

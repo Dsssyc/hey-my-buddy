@@ -139,17 +139,17 @@ function record(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * The durable cause is recorded on the selected attempt receipt
- * (`selectedAttempt.result.terminationReason`); a task-level field is accepted
- * too when a reader hoists it. Nothing is inferred from status alone.
+ * The durable cause is the one recorded on the selected attempt receipt
+ * (`selectedAttempt.result.terminationReason`). A task-level `terminationReason`
+ * is only an accepted hoisted copy; nothing is inferred from status alone.
  */
 export function recordedTermination(task: Task): string | null {
-  const direct =
-    typeof task.terminationReason === "string" ? task.terminationReason.trim() : "";
   const receipt = record(record(task.selectedAttempt)?.result);
   const stored =
     typeof receipt?.terminationReason === "string" ? receipt.terminationReason.trim() : "";
-  return direct || stored || null;
+  const direct =
+    typeof task.terminationReason === "string" ? task.terminationReason.trim() : "";
+  return stored || direct || null;
 }
 
 /** Recorded termination cause. A missing cause stays unknown, never "user cancel". */
@@ -173,6 +173,8 @@ export function terminationText(task: Task): string | null {
 export function TaskActivityView({ task }: { task: Task }) {
   const activity = parseActivity(task.activity);
   const termination = terminationText(task);
+  // The suffix is about the record, not about which field carried the value.
+  const causeRecorded = recordedTermination(task) !== null;
   const evidence = activity ? activityEvidence(activity) : "unknown";
   return (
     <section className="activity-view" aria-label="执行活动（只读）">
@@ -210,7 +212,7 @@ export function TaskActivityView({ task }: { task: Task }) {
       {termination && (
         <p className="small">
           终止原因：<strong>{termination}</strong>
-          {task.terminationReason ? "" : "（原始记录未给出原因）"}
+          {causeRecorded ? "" : "（原始记录未给出原因）"}
         </p>
       )}
     </section>

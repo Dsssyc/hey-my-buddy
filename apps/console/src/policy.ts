@@ -7,16 +7,15 @@ import {
 import { profileTitle } from "./profile-display";
 
 /**
- * Host populates each profile's `capabilities`. A decision configuration must
- * declare `decision`, `decision:<adapter>` or `decision/<adapter>`; coding
- * ability alone is never inferred as a decision capability.
+ * Host populates each profile's `capabilities`; the only recorded decision token
+ * is `decision`. Coding ability, adapter names and invented aliases never imply
+ * a decision capability.
  */
 export function hasDecisionCapability(profile: Profile | undefined): boolean {
   if (!profile) return false;
-  return (profile.capabilities ?? []).some((entry) => {
-    const value = entry.trim().toLowerCase();
-    return value === "decision" || value.startsWith("decision:") || value.startsWith("decision/");
-  });
+  return (profile.capabilities ?? []).some(
+    (entry) => entry.trim().toLowerCase() === "decision",
+  );
 }
 
 /** Enabled, currently available and actually able to compute a selection. */
@@ -60,12 +59,16 @@ function pinRefusal(profile: Profile | undefined): string | null {
 }
 
 /**
- * Changes that cannot be published at all. Only a *new* enable, a *new* pin or
- * a changed decision selector needs a currently legal model; every other edit
- * is independent of availability.
+ * Changes that cannot be published at all. Only a *new* enable, a mode that
+ * *transitions into* pin or a changed decision selector needs a currently legal
+ * model; changing the reason of an existing pin, a disable and every other edit
+ * stay independent of current availability.
  */
 export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   const profiles = new Map(draft.profiles.map((p) => [p.profileId, p]));
+  const baselinePreferenceModes = new Map(
+    baseline.preferences.map((p) => [p.profileId, p.mode]),
+  );
   const issues: PolicyIssue[] = [];
   for (const setting of profileSettings(baseline, draft)) {
     if (!setting.enabled) continue;
@@ -80,6 +83,9 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
   }
   for (const change of preferenceChanges(baseline, draft)) {
     if (change.mode !== "pin") continue;
+    // The board requires current legality only when the mode transitions into
+    // pin; a reason-only edit of an existing pin stays a legal patch.
+    if (baselinePreferenceModes.get(change.profileId) === "pin") continue;
     const profile = profiles.get(change.profileId);
     const refusal = pinRefusal(profile);
     if (refusal) {

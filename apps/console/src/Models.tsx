@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import { historyView } from "./draft";
@@ -22,7 +22,8 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
   const [section, setSection] = useState("overview");
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [note, setNote] = useState("");
   const [guard, setGuard] = useState("");
-  const history = useProfileHistory(api, snapshot.csrfToken);
+  const history = useProfileHistory(api, snapshot.csrfToken, snapshot.tableRevision,
+    { query, adapter: harness, enabled: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const editing = editor.editing;
@@ -32,22 +33,20 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
     && g.profiles.some(p => [p.label, p.model, p.provider, p.adapter, effortText(p.effort)].join(" ").toLowerCase().includes(query.toLowerCase())));
   const shownProfiles = data.profiles.filter(p => showUnavailable || p.available);
   const hiddenCount = data.profiles.length - shownProfiles.length;
-  // Retired identities the server still holds but this page has not loaded yet.
-  const retired = data.profiles.filter(p => !p.available).length;
-  const unlisted = Math.max(0, (snapshot.unavailableProfileCount ?? retired) - retired);
+  // `unavailableProfileCount` counts the retired identities the snapshot does
+  // not list, so only the retained rows this page has actually loaded are
+  // subtracted; a snapshot-listed unavailable row is not part of that count.
+  const listedIds = new Set(snapshot.profiles.map(p => p.profileId));
+  const loadedRetained = data.profiles.filter(p => !p.available && !listedIds.has(p.profileId)).length;
+  const unlisted = Math.max(0, (snapshot.unavailableProfileCount ?? loadedRetained) - loadedRetained);
   const profile = data.profiles.find(p => p.profileId === selected);
   const family = profile && families.find(g => g.key === familyKey(profile));
   // A refusal only stays on screen while it still describes the current state.
   const shownGuard = editing && mutationsAvailable ? "" : guard;
-  // Loaded retained rows join the local view and, while editing, the draft.
-  useEffect(() => { if (history.page) editor.adoptHistory(history.page); }, [history.page]);
-  // A publication or discovery changes what history means; re-read it once.
-  const seenRevision = useRef(snapshot.tableRevision);
-  useEffect(() => {
-    if (seenRevision.current === snapshot.tableRevision) return;
-    seenRevision.current = snapshot.tableRevision;
-    if (showUnavailable) history.reload();
-  }, [snapshot.tableRevision, showUnavailable, history.reload]);
+  // Loaded retained rows join the local view and, while editing, the draft. The
+  // revision dependency also clears a page that belonged to the previous table
+  // before it could seed a baseline, even when both renders see `null`.
+  useEffect(() => { editor.adoptHistory(history.page); }, [history.page, snapshot.tableRevision]);
   function toggleUnavailable(next: boolean) {
     setShowUnavailable(next);
     if (next) history.open();
@@ -90,11 +89,13 @@ export function Models({ snapshot, editor, api, refresh, active = true, mutation
       <p className="small muted">{visible.length} 个模型 · {shownProfiles.length} 个执行配置</p>
       {hiddenCount > 0 && <p className="small muted">已隐藏 {hiddenCount} 个不可用配置；勾选“显示不可用配置”可以查看保留的历史。</p>}
       {!showUnavailable && unlisted > 0 && <p className="small muted">目录中另有 {unlisted} 个不可用配置保留在历史记录中；勾选“显示不可用配置”可按页查看。</p>}
+      {!showUnavailable && (query || harness) && unlisted > 0 && <p className="small muted">当前搜索只在已加载的配置中匹配，没有检索服务端历史；勾选“显示不可用配置”后可按关键词在服务端查找。</p>}
+      {showUnavailable && (query || harness) && <p className="small muted">搜索与 Harness 筛选由服务端在保留历史中匹配（分页前过滤），可以命中本地显示上限之外的配置。</p>}
       {history.loading && <p className="small muted" role="status">正在读取保留的配置历史…</p>}
       {history.error && <p className="banner guard-banner" role="alert">{history.error}
         <button className="button small-button" onClick={history.reload}>重试读取</button></p>}
       {showUnavailable && history.hasMore && <button className="button small-button" disabled={history.loading} onClick={history.loadMore}>加载更多历史配置</button>}
-      {showUnavailable && history.limitReached && <p className="small muted">已读取到控制台显示上限（{MAX_HISTORY_PROFILES} 个配置）；更早的条目仍保留在服务端历史域。</p>}
+      {showUnavailable && history.limitReached && <p className="small muted">已读取到控制台显示上限（{MAX_HISTORY_PROFILES} 个配置）；请用搜索或 Harness 筛选在服务端查找更早的保留配置。</p>}
       {!profile && (shownGuard || error) && <p className="banner guard-banner" role="status">{shownGuard || error}</p>}
       {!profile && note && <p className="success-message" role="status">{note}</p>}
     </div>

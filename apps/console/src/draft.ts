@@ -10,6 +10,12 @@ import type {
 
 /** Retained identity rows the current snapshot no longer lists. */
 export type HistoryEntries = {
+  /**
+   * Table revision the rows were read at. Retained rows are only ever merged
+   * into a source at that exact revision: a cached page must not seed, or be
+   * relabelled as, a newer published table.
+   */
+  tableRevision: number;
   profiles?: Profile[];
   preferences?: Preference[];
   annotations?: Annotation[];
@@ -77,13 +83,14 @@ function addMissing<T extends { profileId: string }>(current: T[], extra: T[] | 
 
 /**
  * Adds retained history rows the snapshot no longer lists. Live snapshot rows
- * always win; history only fills identities that would otherwise be invisible.
+ * always win; history only fills identities that would otherwise be invisible,
+ * and only when the page was read at the source's own revision.
  */
-export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "annotations">>(
+export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "annotations"> & { tableRevision: number }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
-  if (!entries) return source;
+  if (!entries || entries.tableRevision !== source.tableRevision) return source;
   return {
     ...source,
     profiles: addMissing(source.profiles, entries.profiles),
@@ -94,15 +101,47 @@ export function withHistory<T extends Pick<Draft, "profiles" | "preferences" | "
 
 /** Full console view: human draft (or snapshot) plus retained history rows. */
 export function historyView<T extends Pick<Draft, "profiles" | "preferences" | "annotations">
-  & { cards: Card[]; sampleCounts?: Record<string, number> }>(
+  & { tableRevision: number; cards: Card[]; sampleCounts?: Record<string, number> }>(
   source: T,
   entries: HistoryEntries | null | undefined,
 ): T {
+  // A page from another revision is stale cache, not evidence about this table.
+  if (!entries || entries.tableRevision !== source.tableRevision) return source;
   const base = withHistory(source, entries);
-  if (!entries) return base;
   // Snapshot cards and counts are authoritative for the identities they cover.
   const counts = { ...(entries.sampleCounts ?? {}), ...(source.sampleCounts ?? {}) };
-  return { ...base, cards: addMissing(source.cards, entries.cards), sampleCounts: counts };
+  return { ...base, cards: addMissing(source.cards, entries.cards ?? []), sampleCounts: counts };
+}
+
+/**
+ * Retained rows that may still be added to an existing draft. A retained row
+ * whose identity the draft still holds adds nothing, and a row the draft no
+ * longer holds while the baseline does is a deliberate removal (for example
+ * "无额外偏好" or a cleared opinion) that retained history must never resurrect.
+ * Identities neither the draft nor the baseline ever knew are still filled in.
+ */
+export function retainedAdditions(
+  draft: Draft,
+  baseline: Draft,
+  entries: HistoryEntries | null | undefined,
+): HistoryEntries | null {
+  if (!entries || entries.tableRevision !== draft.tableRevision) return null;
+  const additions = <T extends { profileId: string }>(
+    rows: T[] | undefined,
+    current: { profileId: string }[],
+    known: { profileId: string }[],
+  ): T[] | undefined => {
+    if (!rows) return rows;
+    const inDraft = new Set(current.map((row) => row.profileId));
+    const inBaseline = new Set(known.map((row) => row.profileId));
+    return rows.filter((row) => inDraft.has(row.profileId) || !inBaseline.has(row.profileId));
+  };
+  return {
+    ...entries,
+    profiles: additions(entries.profiles, draft.profiles, baseline.profiles),
+    preferences: additions(entries.preferences, draft.preferences, baseline.preferences),
+    annotations: additions(entries.annotations, draft.annotations, baseline.annotations),
+  };
 }
 
 export function setPreference(
@@ -311,45 +350,190 @@ export function changedProfileIds(baseline: Draft, draft: Draft): string[] {
 }
 
 /**
+ * One human-owned field that could not be replayed onto a refreshed table.
+ * `changed` means another publication holds a different value; `unread` means
+ * the bounded snapshot had no row to compare against yet, so the edit stays
+ * unresolved until fresh retained-row data is read.
+ */
+export type RebaseConflictKind = "changed" | "unread";
+export type RebaseConflict = {
+  kind: RebaseConflictKind;
+  field: "enabled" | "preference" | "annotation" | "configuration";
+  profileId: string;
+  message: string;
+};
+
+export type RebaseOutcome = {
+  draft: Draft;
+  baseline: Draft;
+  conflicts: RebaseConflict[];
+};
+
+const FIELD_NAMES: Record<RebaseConflict["field"], string> = {
+  enabled: "启用状态",
+  preference: "用户偏好",
+  annotation: "人工意见",
+  configuration: "决策模型配置",
+};
+
+function conflictSubject(field: RebaseConflict["field"], profileId: string): string {
+  return field === "configuration"
+    ? `决策模型配置${profileId ? ` ${profileId}` : "（空）"}`
+    : `配置 ${profileId} 的${FIELD_NAMES[field]}`;
+}
+
+/**
  * Adopts freshly published program facts (a completed directory discovery or a
- * maintenance publication) without discarding the user's unsubmitted edits:
- * the new snapshot becomes the baseline and the dirty user patches are replayed
- * on top of it. Provider/model/effort/available/catalog facts come only from the
- * snapshot, so no local copy of them is published.
+ * maintenance publication) without discarding the user's unsubmitted edits.
+ *
+ * Every human-owned field is checked three ways against the old baseline, the
+ * draft and the refreshed table. The draft value is replayed only when the
+ * refreshed value still equals the old baseline (nobody else touched it) or
+ * already equals the draft intent. Anything else keeps the *original* draft and
+ * its `expectedRevision` and reports an actionable conflict, so a stale draft
+ * can never silently overwrite another writer's publication. A dirty field
+ * whose profile is missing from the bounded snapshot stays unresolved until a
+ * retained page read at the refreshed revision supplies the missing row; cached
+ * rows from an older revision are never used to mint a new baseline.
  */
 export function rebaseDraft(
   draft: Draft,
   baseline: Draft,
   snapshot: Snapshot,
-): { draft: Draft; baseline: Draft } {
-  const nextBaseline = makeDraft(snapshot);
-  const settings = new Map(
-    profileSettings(baseline, draft).map((entry) => [entry.profileId, entry.enabled]),
-  );
-  let next: Draft = {
-    ...nextBaseline,
-    profiles: nextBaseline.profiles.map((profile) =>
-      settings.has(profile.profileId)
-        ? { ...profile, enabled: settings.get(profile.profileId)! }
-        : profile,
-    ),
+  retained?: HistoryEntries | null,
+): RebaseOutcome {
+  const nextBaseline = withHistory(makeDraft(snapshot), retained);
+  const conflicts: RebaseConflict[] = [];
+  const fail = (
+    kind: RebaseConflictKind,
+    field: RebaseConflict["field"],
+    profileId: string,
+    detail = "",
+  ) => {
+    const subject = conflictSubject(field, profileId);
+    conflicts.push({
+      kind,
+      field,
+      profileId,
+      message: kind === "unread"
+        ? `${subject} 尚不能与 V${snapshot.tableRevision} 核对：它不在最新快照中，保留历史也尚未按 V${snapshot.tableRevision} 重新读取。你的修改和原基于版本都保留；读取“显示不可用配置”的历史后会自动核对。`
+        : `${subject} 已被其他发布修改（V${snapshot.tableRevision}）${detail}；为避免覆盖，草稿仍基于原版本，请重新加载最新版本核对后再提交。`,
+    });
   };
+  const freshProfiles = new Map(nextBaseline.profiles.map((p) => [p.profileId, p]));
+
+  // Enabled intent: only a profile that still exists in the refreshed table can
+  // be compared; a missing row is unresolved rather than silently dropped.
+  const enabledOverrides = new Map<string, boolean>();
+  const baselineEnabled = new Map(baseline.profiles.map((p) => [p.profileId, p.enabled]));
+  for (const setting of profileSettings(baseline, draft)) {
+    const fresh = freshProfiles.get(setting.profileId);
+    if (!fresh) {
+      fail("unread", "enabled", setting.profileId);
+      continue;
+    }
+    const old = baselineEnabled.get(setting.profileId);
+    if (fresh.enabled === old || fresh.enabled === setting.enabled) {
+      enabledOverrides.set(setting.profileId, setting.enabled);
+    } else {
+      fail("changed", "enabled", setting.profileId, `（现为${fresh.enabled ? "已启用" : "已停用"}）`);
+    }
+  }
+
+  // Preferences: mode and reason are separate fields. A field the human did not
+  // touch keeps the refreshed value, so another writer's reason survives a mode
+  // change of ours.
+  const preferenceMerges = new Map<string, Preference>();
+  const preferenceRemovals = new Set<string>();
+  const baselinePreferences = new Map(baseline.preferences.map((p) => [p.profileId, p]));
+  const draftPreferences = new Map(draft.preferences.map((p) => [p.profileId, p]));
   for (const change of preferenceChanges(baseline, draft)) {
-    next = change.mode
-      ? setPreference(next, change.profileId, change.mode, change.reason)
-      : { ...next, preferences: next.preferences.filter((p) => p.profileId !== change.profileId) };
+    const profileId = change.profileId;
+    if (!freshProfiles.has(profileId)) {
+      fail("unread", "preference", profileId);
+      continue;
+    }
+    const oldRow = baselinePreferences.get(profileId);
+    const draftRow = draftPreferences.get(profileId);
+    const freshRow = nextBaseline.preferences.find((p) => p.profileId === profileId);
+    const oldMode = oldRow?.mode;
+    const draftMode = draftRow?.mode;
+    const freshMode = freshRow?.mode;
+    let mode: Preference["mode"] | undefined;
+    if (oldMode === draftMode) mode = freshMode;
+    else if (freshMode === oldMode || freshMode === draftMode) mode = draftMode;
+    else {
+      fail("changed", "preference", profileId, "（模式）");
+      continue;
+    }
+    const oldReason = oldRow?.reason ?? "";
+    const draftReason = draftRow?.reason ?? "";
+    const freshReason = freshRow?.reason ?? "";
+    let reason: string;
+    if (oldReason === draftReason) reason = freshReason;
+    else if (freshReason === oldReason || freshReason === draftReason) reason = draftReason;
+    else {
+      fail("changed", "preference", profileId, "（依据）");
+      continue;
+    }
+    if (mode === undefined) preferenceRemovals.add(profileId);
+    else preferenceMerges.set(profileId, { profileId, mode, reason });
   }
+
+  // Opinions: the text is the field; an already-equal refreshed value wins.
+  const mergedAnnotations = new Map<string, string>();
+  const baselineAnnotations = new Map(baseline.annotations.map((a) => [a.profileId, a.text]));
   for (const change of annotationChanges(baseline, draft)) {
-    next = setAnnotation(next, change.profileId, change.text);
+    const profileId = change.profileId;
+    if (!freshProfiles.has(profileId)) {
+      fail("unread", "annotation", profileId);
+      continue;
+    }
+    const oldText = baselineAnnotations.get(profileId) ?? "";
+    const freshText = nextBaseline.annotations.find((a) => a.profileId === profileId)?.text ?? "";
+    if (freshText === oldText || freshText === change.text) {
+      mergedAnnotations.set(profileId, change.text);
+    } else {
+      fail("changed", "annotation", profileId);
+    }
   }
+
+  // The fixed decision configuration is a single global field.
+  let decisionProfileId = nextBaseline.configuration.decisionProfileId;
   if (configurationChanged(baseline, draft)) {
-    next = {
-      ...next,
-      configuration: {
-        ...next.configuration,
-        decisionProfileId: draft.configuration.decisionProfileId,
-      },
-    };
+    const old = baseline.configuration.decisionProfileId;
+    const wanted = draft.configuration.decisionProfileId;
+    const fresh = nextBaseline.configuration.decisionProfileId;
+    if (fresh === old || fresh === wanted) decisionProfileId = wanted;
+    else fail("changed", "configuration", wanted ?? "");
   }
-  return { draft: next, baseline: nextBaseline };
+
+  if (conflicts.length) return { draft, baseline, conflicts };
+
+  const preferences = nextBaseline.preferences.filter(
+    (p) => !preferenceMerges.has(p.profileId) && !preferenceRemovals.has(p.profileId),
+  );
+  for (const preference of preferenceMerges.values()) preferences.push(preference);
+  const annotations = nextBaseline.annotations.filter(
+    (annotation) => !mergedAnnotations.has(annotation.profileId),
+  );
+  for (const [profileId, text] of mergedAnnotations) {
+    const known = nextBaseline.annotations.find((a) => a.profileId === profileId);
+    annotations.push({ ...(known ?? emptyAnnotation(profileId)), profileId, text });
+  }
+  return {
+    baseline: nextBaseline,
+    draft: {
+      ...nextBaseline,
+      profiles: nextBaseline.profiles.map((profile) =>
+        enabledOverrides.has(profile.profileId)
+          ? { ...profile, enabled: enabledOverrides.get(profile.profileId)! }
+          : profile,
+      ),
+      preferences,
+      annotations,
+      configuration: { ...nextBaseline.configuration, decisionProfileId },
+    },
+    conflicts,
+  };
 }

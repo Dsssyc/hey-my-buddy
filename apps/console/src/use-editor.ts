@@ -16,9 +16,10 @@ import {
   makeDraft,
   publication,
   rebaseDraft,
+  retainedAdditions,
   withHistory,
 } from "./draft";
-import type { HistoryEntries } from "./draft";
+import type { HistoryEntries, RebaseConflict } from "./draft";
 import { attentionIssues, blockingIssues } from "./policy";
 import type { Draft, Snapshot, WriterGrant } from "./types";
 
@@ -79,6 +80,7 @@ export function useEditor(
   const [draft, setDraftState] = useState<Draft | null>(null);
   const [baseline, setBaseline] = useState<Draft | null>(null);
   const [historyEntries, setHistoryEntries] = useState<HistoryEntries | null>(null);
+  const [rebaseConflicts, setRebaseConflicts] = useState<RebaseConflict[]>([]);
   const [grant, setGrantState] = useState<WriterGrant | null>(null);
   const [saving, setSaving] = useState(false);
   const [auxiliaryBusy, setAuxiliaryBusy] = useState(false);
@@ -97,6 +99,8 @@ export function useEditor(
   const baselineRef = useRef<Draft | null>(null);
   /** Retained profiles loaded from `model_profiles`; merged into the local view. */
   const historyRef = useRef<HistoryEntries | null>(null);
+  /** A program publication whose merge waits for fresh retained-row data. */
+  const pendingRebase = useRef<Snapshot | null>(null);
   const draftRef = useRef<Draft | null>(null);
   /** A begin whose reply was lost; kept so a retry reuses the same request ID. */
   const pendingBegin = useRef<BeginIntent | null>(null);
@@ -242,6 +246,8 @@ export function useEditor(
     setExitPrompt(false);
     cancelRequested.current = false;
     pendingSave.current = null;
+    pendingRebase.current = null;
+    setRebaseConflicts([]);
     if (!preserveIntent) {
       pendingBegin.current = null;
       unresolvedAbort.current = null;
@@ -706,6 +712,8 @@ export function useEditor(
       pendingBegin.current = null;
       pendingSave.current = null;
       unresolvedAbort.current = null;
+      pendingRebase.current = null;
+      setRebaseConflicts([]);
       setGrant(null);
       setUncertain(false);
       setNotice(`已加载评价表 V${next.tableRevision}。请核对后重新保存。`);
@@ -726,37 +734,71 @@ export function useEditor(
    * of the local view immediately, and of the draft and its baseline when a
    * draft exists, so a disable or an opinion on a retired configuration stays a
    * normal diffed patch instead of an untracked insertion.
+   *
+   * Rows are only trusted at the revision they were read at: a page that no
+   * longer matches the published table is dropped before it can seed a view or
+   * a baseline. A deferred rebase retries here, because this is the moment the
+   * missing fresh row data actually arrives.
    */
   function adoptHistory(entries: HistoryEntries | null) {
-    historyRef.current = entries;
-    setHistoryEntries(entries);
+    const usable = entries && entries.tableRevision === snapshot.tableRevision ? entries : null;
+    historyRef.current = usable;
+    setHistoryEntries(usable);
     const current = draftRef.current;
     const base = baselineRef.current;
     if (!current || !base || saving || confirming || uncertain) return;
     if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
-    const nextDraft = withHistory(current, entries);
+    const pending = pendingRebase.current;
+    if (pending && pending.tableRevision === snapshot.tableRevision) {
+      const retried = rebaseDraft(current, base, pending, usable);
+      if (retried.conflicts.length) {
+        // A missing-row disagreement can still be resolved by fresh data; a real
+        // competing value needs the user's deliberate reload or discard.
+        pendingRebase.current = retried.conflicts.some((issue) => issue.kind === "unread")
+          ? pending
+          : null;
+        setRebaseConflicts(retried.conflicts);
+        return;
+      }
+      pendingRebase.current = null;
+      setRebaseConflicts([]);
+      draftRef.current = retried.draft;
+      setDraft(retried.draft);
+      setBaselineValue(retried.baseline);
+      return;
+    }
+    const nextDraft = withHistory(current, retainedAdditions(current, base, usable));
     draftRef.current = nextDraft;
     setDraft(nextDraft);
-    setBaselineValue(withHistory(base, entries));
+    setBaselineValue(withHistory(base, usable));
   }
 
   /**
    * Adopts a freshly published snapshot (this page's own program directory
-   * discovery, or another program publication) without discarding unsubmitted
-   * user patches. Directory facts come only from the board; the dirty human
-   * patches are replayed onto the new revision.
+   * discovery, or another program publication). Directory facts come only from
+   * the board; dirty human fields are replayed field by field. A field another
+   * writer changed, or one whose fresh row is not readable yet, keeps the
+   * original draft and its expectedRevision and is reported as a conflict.
    */
   function rebase(next: Snapshot) {
     const current = draftRef.current;
-    const base = baseline;
+    // The ref is authoritative: a retained page adopted while `discover` was
+    // awaiting the refresh must not be compared away by an older render value.
+    const base = baselineRef.current;
     if (!current || !base) return;
     if (saving || confirming || uncertain) return;
     if (grantRef.current || pendingBegin.current || unresolvedAbort.current) return;
-    const adopted = rebaseDraft(current, base, next);
-    const mergedDraft = withHistory(adopted.draft, historyRef.current);
-    draftRef.current = mergedDraft;
-    setDraft(mergedDraft);
-    setBaselineValue(withHistory(adopted.baseline, historyRef.current));
+    const adopted = rebaseDraft(current, base, next, historyRef.current);
+    if (adopted.conflicts.length) {
+      pendingRebase.current = adopted.conflicts.some((issue) => issue.kind === "unread") ? next : null;
+      setRebaseConflicts(adopted.conflicts);
+      return;
+    }
+    pendingRebase.current = null;
+    setRebaseConflicts([]);
+    draftRef.current = adopted.draft;
+    setDraft(adopted.draft);
+    setBaselineValue(adopted.baseline);
   }
 
   return {
@@ -778,6 +820,7 @@ export function useEditor(
     blocking,
     attention,
     conflict,
+    rebaseConflicts,
     error,
     notice,
     blocked,

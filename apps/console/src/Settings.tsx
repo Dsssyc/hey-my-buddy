@@ -23,8 +23,8 @@ export function Settings({
   const publishedName = publishedCurrent
     ? profileTitle(publishedCurrent)
     : publishedId || "尚未配置";
-  // Candidates must be enabled, currently available and declare a decision
-  // capability that Host reports; coding ability alone is not enough.
+  // Candidates must be enabled, currently available and declare the `decision`
+  // capability Host reports; coding ability alone is not enough.
   const candidates = decisionCandidates(data.profiles);
   const currentIsCandidate = candidates.some((p) => p.profileId === currentId);
   const attention = decisionAttention(data);

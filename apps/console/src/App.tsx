@@ -121,6 +121,9 @@ function Connected({ api, snapshot, refresh, connectionError }: {
       {connectionError && <p className="banner error-banner" role="alert">{connectionError}</p>}
       {editor.conflict && !editor.confirming && <div className="banner conflict-banner" role="alert">
         <span>共享评价表已发布 V{editor.conflict.latest}，你的草稿基于 V{editor.conflict.basedOn}。草稿仍保留：重新加载会采用最新发布版本，放弃修改会丢弃本页草稿。</span>
+        {editor.rebaseConflicts.length > 0 && <ul className="conflict-details">
+          {editor.rebaseConflicts.map(issue => <li key={`${issue.kind}:${issue.field}:${issue.profileId}`}>{issue.message}</li>)}
+        </ul>}
         <button type="button" className="button small-button" aria-disabled={editor.busy}
           onClick={() => void editor.reloadLatest()}>重新加载最新版本</button>
         <button type="button" className="button small-button danger" aria-disabled={editor.busy}

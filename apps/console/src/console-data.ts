@@ -1,4 +1,4 @@
-import type { Preference, Profile, Snapshot, Task } from "./types";
+import type { Card, Preference, Profile, Snapshot, Task } from "./types";
 import { effortText, profileName } from "./profile-display";
 
 export const familyKey = (p: Profile) => JSON.stringify([p.adapter, p.provider, p.model]);
@@ -49,4 +49,18 @@ export function recordedSampleCount(
 ): number {
   const recorded = snapshot.sampleCounts?.[profileId];
   return typeof recorded === "number" && Number.isFinite(recorded) ? recorded : 0;
+}
+
+/** True only when the card records a maintenance publication. */
+export function isMaintenanceCard(card: Pick<Card, "origin"> | undefined): boolean {
+  return !!card && (card.origin ?? "").trim().toLowerCase() === "maintenance";
+}
+
+/**
+ * Recorded card authorship. An unattributed or absent origin is unknown
+ * history, not evidence that a maintenance Harness assessed it.
+ */
+export function cardOriginText(card: Pick<Card, "origin"> | undefined): string {
+  if (isMaintenanceCard(card)) return "由维护 Harness 依据证据发布";
+  return "发布者未记录（历史卡片，不能判断为自动评价）";
 }

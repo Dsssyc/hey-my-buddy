@@ -21,6 +21,8 @@ export type Preference = {
 /**
  * Automatic, evidence-linked assessment. Published only by a maintenance
  * Harness through `assessment_publish`; the human console never writes it.
+ * `origin` is the recorded authorship: "maintenance" or "unattributed"; an
+ * absent value is unknown history and must not be presented as automatic.
  */
 export type Card = {
   profileId: string;
@@ -31,6 +33,7 @@ export type Card = {
   risks: string[];
   evidenceIds: string[];
   updatedAt: string | null;
+  origin?: string;
 };
 /** One human opinion, stored apart from the automatic card and its evidence. */
 export type Annotation = {
@@ -183,8 +186,10 @@ export type Snapshot = {
   /** Human opinions, kept apart from the automatic evidence-linked cards. */
   annotations: Annotation[];
   /**
-   * Retired configurations the snapshot does not list. The console pages them
-   * through `model_profiles`; they are never silently dropped from the count.
+   * Retired configurations the snapshot does not list (a snapshot-listed
+   * unavailable row, such as the current decision profile, is not counted).
+   * The console pages the unlisted ones through `model_profiles`; they are
+   * never silently dropped from the count.
    */
   unavailableProfileCount?: number;
   evidence: Evidence[];
