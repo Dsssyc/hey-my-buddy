@@ -2443,10 +2443,10 @@ def audit_view(entry: dict) -> dict:
 
 def message_list(params: dict, state: PreviewState | None = None) -> dict:
     """The inquiries of one run, newest first, as ``message_list`` returns them."""
-    unknown = sorted(set(params) - {"runId", "taskId", "state", "limit"})
+    unknown = sorted(set(params) - {"runId", "state", "limit"})
     if unknown:
         raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
-    run_id = params.get("runId") or params.get("taskId")
+    run_id = params.get("runId")
     limit = params.get("limit", 50)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 200:
         raise PreviewError("INVALID_ARGUMENT", "limit must be an integer from 1 to 200")

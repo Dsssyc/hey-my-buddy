@@ -1797,10 +1797,12 @@ class BoardStore:
                 task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (chosen["task_id"],)).fetchone()
                 attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
                 # Execution inputs start from mechanical facts, never the decorated read view.
+                claim_task = self._task_view(task_row, execution_spec=spec)
+                claim_task["taskId"] = claim_task.pop("runId")
                 response = {
                     "claim": {
                         "attempt": self._attempt_view(attempt_row, include_result=False),
-                        "task": {**self._task_view(task_row, execution_spec=spec), "taskId": task_row["task_id"]},
+                        "task": claim_task,
                     },
                     "reason": None,
                 }

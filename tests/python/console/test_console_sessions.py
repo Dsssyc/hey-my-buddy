@@ -265,7 +265,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 self.assertEqual(after['serviceId'], before['serviceId'])
                 code, viewed = self.cli('status', json.dumps({'runId': task['runId']}))
                 self.assertEqual(code, 0)
-                self.assertIn(viewed['status'], ('queued', 'running', 'completed'))
+                self.assertIn(viewed['state'], ('queued', 'running', 'completed'))
                 self.assertFalse(self.cli('console', '{"action":"status"}')[1]['running'])
             finally:
                 if child.poll() is None:

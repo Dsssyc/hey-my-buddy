@@ -613,6 +613,16 @@ class PreviewDeletionTest(unittest.TestCase):
             self.assertEqual({"harness": "zcode", "provider": "zai", "cleared": True,
                               "duplicate": False}, expired["result"])
 
+    def test_message_list_uses_the_current_task_selector(self) -> None:
+        with self.server() as server:
+            run_id = 'preview-run-a1'
+            status, reply = self.call(server, '/api/command', 'message_list', {'runId': run_id})
+            self.assertEqual(status, 200, reply)
+            self.assertIn('messages', reply['result'])
+            status, reply = self.call(server, '/api/command', 'message_list', {'taskId': run_id})
+            self.assertEqual(status, 400, reply)
+            self.assertEqual(reply['error']['code'], 'INVALID_ARGUMENT')
+
     def test_preview_scope_and_blocker_titles(self) -> None:
         with self.server() as server:
             for group in self.preview.FIXTURES["groups"]:

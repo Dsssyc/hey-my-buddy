@@ -329,7 +329,7 @@ class TestCrashWindows(BoardTestCase):
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "a" * 32)
         board.store.release_execution(claim["claim"]["attempt"]["attemptId"], reason="execution-process-not-created")
-        task = client.get(runId=claim["claim"]["task"]["runId"])
+        task = client.get(runId=claim["claim"]["task"]["taskId"])
         self.assertEqual(task["state"], "failed")
         self.assertEqual(task["attemptState"], "finished")
         self.assertEqual(
@@ -702,7 +702,7 @@ class TestLifecycle(BoardTestCase):
             summary = board.store.reconcile_startup()
         self.assertEqual(summary["uncertain"], 1)
         self.assertEqual(summary["retained"], 1)
-        self.assertEqual(client.get(runId=claim["claim"]["task"]["runId"])["attemptState"], "uncertain")
+        self.assertEqual(client.get(runId=claim["claim"]["task"]["taskId"])["attemptState"], "uncertain")
 
 
 class TestIdentity(BoardTestCase):

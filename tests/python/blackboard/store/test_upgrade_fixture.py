@@ -401,8 +401,41 @@ class UpgradeFixtureTests(unittest.TestCase):
                 with self.assertRaises(BoardError) as caught:
                     schema_upgrade.migrate_schema(fixture['state'])
                 self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(caught.exception.details['messageId'], message['message_id'])
                 self.assertEqual(caught.exception.details['field'], field)
                 self.assertEqual(list(connection.iterdump()), before)
+
+    def test_idle_snapshot_reports_invalid_copies_before_sqlite_fingerprints(self):
+        fixture, connection = self.restored('snapshot-invalid-copies')
+        cases = (
+            ('messages', 'message_id', 'delivery_json',
+             "json_type(delivery_json,'$.supported') IS NOT NULL", 'supported', False, 'messageId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation' AND child_task_id IS NULL", 'paths', ['changed.txt'], 'recordId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation' AND child_task_id IS NOT NULL", 'paths', ['changed.txt'], 'recordId'),
+            ('events', 'seq', 'payload_json', "kind='workflow.scope_conflict'", 'paths', ['changed.txt'], 'recordId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation'", 'conflictIds', ['missing-conflict'], 'recordId'),
+            ('events', 'seq', 'payload_json', "kind='workflow.scope_conflict'", 'conflictIds', ['missing-conflict'], 'recordId'),
+        )
+        for table, identity, column, predicate, field, value, detail in cases:
+            with self.subTest(table=table, predicate=predicate, field=field):
+                record_id, original = connection.execute(
+                    f'SELECT {identity},{column} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
+                changed = {**json.loads(original), field: value}
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?', (_json(changed), record_id))
+                connection.commit()
+                before = list(connection.iterdump())
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.idle_snapshot(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(caught.exception.details[detail], record_id)
+                self.assertEqual(caught.exception.details['field'], field)
+                self.assertTrue(caught.exception.message)
+                self.assertEqual(list(connection.iterdump()), before)
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?', (original, record_id))
+                connection.commit()
 
     def test_scope_request_proxy_and_event_path_mismatches_roll_back_the_upgrade(self):
         fixture, connection = self.restored('scope-copy-mismatch')
@@ -410,7 +443,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                 ('workflow_requests', 'reason_params_json', "reason_code='workspace-scope-violation' AND child_task_id IS NULL"),
                 ('workflow_requests', 'reason_params_json', "reason_code='workspace-scope-violation' AND child_task_id IS NOT NULL"),
                 ('events', 'payload_json', "kind='workflow.scope_conflict'")):
-            row = connection.execute(f'SELECT rowid,{column} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
+            identity = 'seq' if table == 'events' else 'request_id'
+            row = connection.execute(f'SELECT rowid,{column},{identity} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
             for change in ({'paths': ['different.txt']}, {'conflictIds': ['missing-conflict']}):
                 with self.subTest(table=table, predicate=predicate, change=change):
                     facts = {**json.loads(row[1]), **change}
@@ -420,6 +454,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                     with self.assertRaises(BoardError) as caught:
                         schema_upgrade.migrate_schema(fixture['state'])
                     self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                    self.assertEqual(caught.exception.details['recordId'], row[2])
+                    self.assertEqual(caught.exception.details['field'], next(iter(change)))
                     self.assertEqual(list(connection.iterdump()), before)
                     connection.execute(f'UPDATE {table} SET {column}=? WHERE rowid=?', (row[1], row[0]))
                     connection.commit()

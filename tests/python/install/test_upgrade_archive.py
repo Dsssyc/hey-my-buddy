@@ -144,6 +144,28 @@ class UpgradeCutoverTests(BoardTestCase):
         else:
             self.assertEqual(actual, self.before)
 
+    def test_invalid_delivery_preserves_its_cause_in_the_installation_reply(self):
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection, connection:
+            message_id, original = connection.execute(
+                "SELECT message_id,delivery_json FROM messages"
+                " WHERE json_type(delivery_json,'$.supported') IS NOT NULL LIMIT 1").fetchone()
+            delivery = {**json.loads(original), 'supported': False}
+            connection.execute('UPDATE messages SET delivery_json=? WHERE message_id=?',
+                               (json.dumps(delivery), message_id))
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            stock = list(connection.iterdump())
+        target = self.runtime_root / ('b' * 32)
+        result = self.cutover(self.previous, target)
+        self.assertFalse(result['upgraded'], result)
+        cause = result['error']['details']['reason']
+        self.assertEqual(cause['code'], 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(cause['details']['messageId'], message_id)
+        self.assertEqual(cause['details']['field'], 'supported')
+        self.assertEqual(json.loads((self.state / 'upgrade-last.json').read_text())['failure'], cause)
+        self.assertEqual(self.started_runtimes, [self.previous])
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            self.assertEqual(list(connection.iterdump()), stock)
+
     def test_schema_upgrade_and_same_schema_cutover_keep_history(self):
         first = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, first)

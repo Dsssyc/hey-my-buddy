@@ -387,7 +387,7 @@ class LeadOwnedTests(WorkflowTestCase):
         def revoke_after_validation(spec):
             result = validate(spec)
             with board.store.db.write() as db:
-                db.execute("UPDATE agent_credentials SET state='revoked' WHERE run_id=?", (claim["task"]["runId"],))
+                db.execute("UPDATE agent_credentials SET state='revoked' WHERE run_id=?", (claim["task"]["taskId"],))
             return result
         with patch.object(board.store.workflow, "_validated_buddy", side_effect=revoke_after_validation), self.assertRaises(BoardError) as caught:
             if mutation == "submit":

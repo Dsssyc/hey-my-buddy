@@ -207,7 +207,7 @@ class TestWorkflowRouting(WorkflowTestCase):
                                            "task": "ordinary", "cwd": str(self.workdir("plain"))})
         self.register(board)
         claim = self.claim(board)
-        self.assertEqual(claim["claim"]["task"]["runId"], other["task"]["runId"])
+        self.assertEqual(claim["claim"]["task"]["taskId"], other["task"]["runId"])
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["routing"]["status"], "needs-host")
         self.assertEqual(view["counts"]["turns"], 0)

@@ -29,14 +29,14 @@ class DirectAdmissionTests(BoardTestCase):
         third = self.submit(board, "third")
         one = board.store.admit_execution("n" * 32, task_id=first["runId"])["claim"]
         two = board.store.admit_execution("m" * 32, task_id=second["runId"])["claim"]
-        self.assertEqual({one["task"]["runId"], two["task"]["runId"]},
+        self.assertEqual({one["task"]["taskId"], two["task"]["taskId"]},
                          {first["runId"], second["runId"]})
         self.assertEqual(board.store.capacity_report()["totalActive"], 2)
         refused = board.store.admit_execution("o" * 32, task_id=third["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "capacity")
         board.store.release_execution(one["attempt"]["attemptId"], reason="execution-process-not-created")
-        self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["runId"],
+        self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["taskId"],
                          third["runId"])
 
     def test_exclusive_resource_prevents_overlap_with_a_free_machine_slot(self):
@@ -79,7 +79,7 @@ class ModelServiceAdmissionTests(BoardTestCase):
             "cwd": str(self.workdir("command-free")), "adapter": "command", "argv": ["/bin/true"],
         })["task"]
         claim = board.store.admit_execution("p" * 32)["claim"]
-        self.assertEqual(claim["task"]["runId"], command["runId"])
+        self.assertEqual(claim["task"]["taskId"], command["runId"])
 
     def test_uncertain_deep_model_attempt_holds_model_and_machine_capacity(self):
         board = self.board(max_concurrent=2)
