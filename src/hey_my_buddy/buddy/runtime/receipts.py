@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from ...protocol.execution import fsync_json, read_execution_receipt as read_receipt, RECEIPT
+from ...protocol.execution import fsync_json, read_execution_receipt as read_receipt, receipt_reference, RECEIPT
 
 from ...errors import BoardError
 
@@ -25,6 +25,7 @@ def write_receipt(directory: Path, receipt: dict) -> None:
 def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=lambda message: None,
                     flush_hints=None) -> bool:
     """Keep the execution alive until its result is confirmed or explicitly refused."""
+    reference = receipt_reference(directory)
     delay = 0.25
     while True:
         if flush_hints is not None:
@@ -33,7 +34,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
             flush_hints()
         try:
             client.submit_result(receipt["attemptId"], receipt["generation"],
-                                 nonce, receipt["report"])
+                                 nonce, reference)
         except BoardError as error:
             if error.code not in RETRYABLE:
                 accepted = False

@@ -1257,7 +1257,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
             commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name)
             patch_data = _diff(repository, manifest["inputCommit"], commit)
-            snapshot = {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
+            snapshot = {"version": 1, "headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
                         "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
                         "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
                         "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
@@ -1624,7 +1624,7 @@ def _reset_site(root, manifest, observation):
 
 
 def _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data):
-    return {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
+    return {"version": 1, "headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
             "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
             "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
             "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),

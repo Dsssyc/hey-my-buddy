@@ -7411,7 +7411,7 @@ class WorkflowCoordinator:
         return self._execution_adapter(attempt["adapter"]).validate_turn_provenance(turn)
 
     def _record_scope_conflicts(self, connection, run_row, turn_row, attempt, now) -> list[str]:
-        """Persist any bounded out-of-scope failure-site evidence of one stopped attempt.
+        """Persist the out-of-scope failure-site evidence of one stopped attempt.
 
         The record is the Host's handle on the preserved site: it names the exact
         observed fingerprint, blocking paths and per-path authorized/observed
@@ -7441,7 +7441,7 @@ class WorkflowCoordinator:
         except BoardError:
             return []
         recorded = []
-        for record in records[:4]:
+        for record in records:
             fingerprint = record.get("observedFingerprint")
             paths = record.get("blockingPaths")
             if not isinstance(fingerprint, str) or not isinstance(paths, list):
@@ -7467,7 +7467,7 @@ class WorkflowCoordinator:
                     turn_row["turn_id"],
                     manifest.get("manifestSha256"),
                     fingerprint,
-                    canonical_json([path for path in paths if isinstance(path, str)][:256]),
+                    canonical_json(paths),
                     canonical_json(record),
                     now,
                     now,

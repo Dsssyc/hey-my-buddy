@@ -896,7 +896,7 @@ class BoardService(_BaseResource):
         return self._guard("execution.progress", request_json, handler)
 
     def execution_result(self, request_json: str) -> str:
-        return self._guard("execution.result", request_json, self.store.execution_result)
+        return self._guard("execution.result", request_json, self.store.execution_result_reference)
 
     # -- messages -----------------------------------------------------------
     def message_get(self, request_json: str) -> str:

@@ -90,16 +90,17 @@ class ResultViewTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.store import _public_result_payload
 
         paths = ["src/" + "a" * 2990] * 3000
-        evidence = {"blockingPaths": paths, "changedPaths": paths,
+        evidence = {"blockingPaths": paths, "changedPaths": paths, "writeScope": paths,
                     "entries": [{"path": path, "changed": True} for path in paths]}
         error = {"code": "WORKSPACE_SCOPE_VIOLATION", "message": "outside scope",
                  "details": {"paths": paths, "changedPaths": paths, "evidence": evidence}}
-        payload = {"status": "failed", "result": {"workspaceSealError": error}}
+        payload = {"status": "failed", "result": {"partialSealError": error}}
         view = _public_result_payload(payload)
-        self.assertEqual(payload["result"]["workspaceSealError"]["details"]["evidence"], evidence)
-        details = view["result"]["workspaceSealError"]["details"]
+        self.assertEqual(payload["result"]["partialSealError"]["details"]["evidence"], evidence)
+        details = view["result"]["partialSealError"]["details"]
         self.assertEqual(details["pathsCount"], len(paths))
         self.assertEqual(details["evidence"]["entriesCount"], len(paths))
+        self.assertEqual(details["evidence"]["writeScopeCount"], len(paths))
         self.assertEqual(len(details["evidence"]["entries"]), 32)
         self.assertLess(len(json.dumps(view).encode()), MAX_MESSAGE_BYTES)
 

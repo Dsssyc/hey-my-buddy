@@ -100,14 +100,14 @@ class BoardClient:
             params["data"] = data
         return self.call("execution_progress", params)
 
-    def submit_result(self, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
+    def submit_result(self, attempt_id: str, generation: int, nonce: str, receipt: dict) -> dict:
         return self.call(
             "execution_result",
             {
                 "attemptId": attempt_id,
                 "generation": generation,
                 "nonce": nonce,
-                **report,
+                "receipt": receipt,
             },
         )
 

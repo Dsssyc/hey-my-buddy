@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import time
@@ -149,11 +150,30 @@ def _private_json(path: Path, maximum: int = 32768) -> dict:
     return value
 
 
-def read_execution_receipt(directory: Path, *, binding: dict | None = None) -> dict | None:
+def receipt_reference(directory: Path) -> dict:
+    """Identify the durable receipt without putting its facts in an RPC frame."""
+    path = Path(directory) / RECEIPT
+    with os.fdopen(open_regular_fd(path, os.O_RDONLY), "rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"path": str(path), "sha256": digest}
+
+
+def read_execution_receipt(directory: Path, *, binding: dict | None = None,
+                           sha256: str | None = None) -> dict | None:
     try:
-        value = _private_json(Path(directory) / RECEIPT, 1024 * 1024)
+        descriptor = open_regular_fd(Path(directory) / RECEIPT, os.O_RDONLY)
     except FileNotFoundError:
         return None
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.geteuid()):
+            raise BoardError("PRIVATE_PATH_UNSAFE", "Execution receipt is not private")
+        raw = stream.read()
+    if sha256 is not None and hashlib.sha256(raw).hexdigest() != sha256:
+        raise BoardError("RECEIPT_MISMATCH", "Execution receipt digest does not match")
+    value = decode_strict_json(raw)
+    if not isinstance(value, dict):
+        raise BoardError("INVALID_ARGUMENT", "Execution receipt must be an object")
     if set(value) != {"attemptId", "generation", "taskId", "report", "createdAt"}:
         raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid shape")
     if (not isinstance(value["taskId"], str) or not value["taskId"]

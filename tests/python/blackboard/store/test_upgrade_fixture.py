@@ -1,4 +1,4 @@
-"""The fixed installed schema-25 base converts to the current board."""
+"""The installed schema-25 base needs no conversion and retains its history."""
 from __future__ import annotations
 
 import hashlib
@@ -13,8 +13,6 @@ from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import BASE_SCHEMA_VERSION, plan_schema_25_to_26, upgrade_schema_25_to_26
-from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -26,12 +24,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state', *, current=True):
+    def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
-        if current:
-            plan = plan_schema_25_to_26(fixture['state'])
-            backup.create(fixture['state'], physical_files={path: original for path, (original, _) in plan['physical'].items()})
-            upgrade_schema_25_to_26(fixture['state'], plan=plan)
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -118,7 +112,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         self.assertEqual(fixture['sourceCommit'], '137caef7b42c26616fbaf4fcaf36c1252449bd76')
         self.assertEqual(fixture['sourceVersion'], '0.46.0')
-        self.assertEqual(fixture['schemaVersion'], BASE_SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -193,7 +187,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_converted_base_is_accepted_and_matches_fresh_structure(self):
+    def test_base_is_accepted_unchanged_and_matches_fresh_structure(self):
         fixture, connection = self.restored()
         state = fixture['state']
         stock = list(connection.iterdump())
@@ -230,9 +224,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 1)
 
-    def test_unsupported_schemas_are_refused_without_writes(self):
+    def test_every_other_schema_is_refused_without_writes(self):
         fixture, connection = self.restored()
-        for version in ('24', '0', '999', '025'):
+        for version in ('24', '26', '0', '999', '025'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
                 connection.commit()

@@ -299,6 +299,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(), "base\n")
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+
         record = resolved
         self.assertEqual(record["artifact"]["action"], "restore")
         self.assertEqual(record["changedPaths"], ["src/feature.py"])
@@ -315,6 +316,43 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(execution["inputCommit"], record["outputCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
         self.assertEqual((checkout / "src" / "feature.py").read_text(), "value = 2\n")
+
+    def test_thousand_scope_paths_are_stored_and_restored_through_the_board(self):
+        docs = self.repo / "docs"
+        docs.mkdir(exist_ok=True)
+        paths = [f"docs/outside-{number:04d}.txt" for number in range(1000)]
+        for path in paths:
+            (self.repo / path).write_text("authorized\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "large scope baseline")
+        board = self.board()
+        submitted = self.micro_task_submit(board, request_id="thousand-scope-paths", scope=("src",))
+        claimed = self.claim(board, submitted["runId"])
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        for path in paths:
+            (checkout / path).write_text("outside scope\n")
+        with self.assertRaises(BoardError):
+            workspace_module.seal(self.directory, manifest, submitted["runId"],
+                                  claimed["claim"]["attempt"]["attemptId"])
+        self.scope_failure(board, claimed)
+        view = self.view(board, submitted["runId"])
+        conflict = view["workspaceConflicts"][0]
+        self.assertEqual(conflict["blockingPathsCount"], len(paths))
+        with board.store.db.read() as connection:
+            raw = connection.execute("SELECT blocking_paths_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                                     (conflict["conflictId"],)).fetchone()[0]
+        self.assertEqual(json.loads(raw), paths)
+        restored = self.resolve(board, view, conflict, "restore")
+        self.assertTrue(restored["resolved"])
+        self.assertEqual(restored["resolvedPathsCount"], len(paths))
+        self.assertEqual(restored["resolvedPaths"], paths[:32])
+        for path in paths:
+            self.assertEqual((checkout / path).read_text(), "authorized\n")
+        with board.store.db.read() as connection:
+            raw = connection.execute("SELECT resolved_paths_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                                     (conflict["conflictId"],)).fetchone()[0]
+        self.assertEqual(json.loads(raw), paths)
 
     def test_restore_compare_and_swap_preserves_a_later_change(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()

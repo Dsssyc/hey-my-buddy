@@ -107,7 +107,7 @@ def _public_result_payload(payload: dict) -> dict:
         details = bound(error["details"], ("paths", "changedPaths", "blockingPaths", "excludedChangedPaths"))
         evidence = details.get("evidence")
         if isinstance(evidence, dict):
-            details["evidence"] = bound(evidence, ("blockingPaths", "changedPaths", "entries"))
+            details["evidence"] = bound(evidence, ("blockingPaths", "changedPaths", "entries", "writeScope"))
         projected[key] = {**error, "details": details}
 
     # A stopped partial result retains its exact input manifest in the receipt.
@@ -2054,6 +2054,39 @@ class BoardStore:
             head = self._head_of(connection)
         self._notify(head)
         return {"recorded": True, "head": head, "activity": activity_state}
+
+    def execution_result_reference(self, params: dict) -> dict:
+        """Read an authenticated attempt's fixed private receipt at the RPC boundary."""
+        from ...private_dirs import attempt_root
+        from ...protocol.execution import RECEIPT, read_execution_receipt
+
+        schemas.reject_unknown(params, {"attemptId", "generation", "nonce", "receipt"}, "execution.result")
+        reference = params.get("receipt")
+        if not isinstance(reference, dict):
+            raise BoardError("INVALID_ARGUMENT", "receipt must be a file reference")
+        schemas.reject_unknown(reference, {"path", "sha256"}, "execution.result.receipt")
+        path = schemas.required_string(reference, "path", max_length=4096)
+        digest = schemas.optional_sha256(reference, "sha256")
+        if digest is None:
+            raise BoardError("INVALID_ARGUMENT", "receipt.sha256 is required")
+        with self.db.read() as connection:
+            attempt = self._verify_attempt_actor(connection, params)
+            adapter = attempt["model_harness"] if attempt["adapter"] == "decision" else attempt["adapter"]
+            directory = attempt_root(self.directory, adapter, attempt["task_id"], attempt["attempt_id"])
+            binding = {"taskId": attempt["task_id"], "attemptId": attempt["attempt_id"],
+                       "generation": attempt["generation"]}
+        if path != str(directory / RECEIPT):
+            raise BoardError("INVALID_ARGUMENT", "Receipt path differs from the attempt's private record")
+        try:
+            receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+        except (ValueError, RecursionError) as error:
+            raise BoardError("INVALID_ARGUMENT", "Execution receipt is not valid JSON") from error
+        if receipt is None:
+            raise BoardError("RECEIPT_MISSING", "Execution receipt is missing")
+        report = receipt["report"]
+        if {"attemptId", "generation", "nonce"} & report.keys():
+            raise BoardError("INVALID_ARGUMENT", "Execution report contains attempt capability fields")
+        return self.execution_result({**report, **{key: params[key] for key in ("attemptId", "generation", "nonce")}})
 
     def execution_result(self, params: dict, *, recovered: bool = False, stop_evidence: dict | None = None) -> dict:
         """Commit result, artifacts, task/attempt state and the completion event together.

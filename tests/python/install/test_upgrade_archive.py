@@ -10,7 +10,6 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.upgrade import plan_schema_25_to_26, upgrade_schema_25_to_26
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -22,9 +21,6 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
-        plan = plan_schema_25_to_26(self.state)
-        backup.create(self.state, physical_files={path: original for path, (original, _) in plan['physical'].items()})
-        upgrade_schema_25_to_26(self.state, plan=plan)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         store = BoardStore(self.state)
         store.db.close()

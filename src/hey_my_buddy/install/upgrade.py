@@ -13,7 +13,7 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup, upgrade as schema_upgrade
+from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -61,9 +61,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+        if schema is None or schema[0] != str(SCHEMA_VERSION):
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schemas {schema_upgrade.BASE_SCHEMA_VERSION} and {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -289,7 +289,6 @@ def restore(state: Path, current: Path) -> None:
             _restore_guard(temporary, regular=True)
             _restore_guard(destination, regular=True)
             os.replace(temporary, destination)
-            backup.sync_dir(destination.parent)
         finally:
             if private_dirs.linked_component(temporary) is None:
                 temporary.unlink(missing_ok=True)
@@ -501,12 +500,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     before = idle_snapshot(state, exact=True)
                     before['runtimeSettings'] = runtime_settings
                     journal['before'] = before
-                    conversion_plan = (schema_upgrade.plan_schema_25_to_26(state)
-                                       if before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION else None)
-                    physical_files = ({path: original for path, (original, _) in conversion_plan['physical'].items()}
-                                      if conversion_plan is not None else None)
-                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version,
-                                              physical_files=physical_files)
+                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                     stored = backup.verify(Path(backed_up['path']))
                     if stored.get('databaseSnapshot') is not None:
                         before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
@@ -514,16 +508,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
                 expected = before
-                if before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
-                    # The old owner is gone and its backup is verified. A crash
-                    # from this point through preparation restores both the DB
-                    # and the physical records before any old runtime is started.
-                    journal.update(phase='converting')
-                    write_journal(marker, journal)
-                    converted = schema_upgrade.upgrade_schema_25_to_26(state, plan=conversion_plan)
-                    expected = {**idle_snapshot(state, event_head=before['eventHead'], exact=True),
-                                'runtimeSettings': before['runtimeSettings']}
-                    journal['conversion'] = converted
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)
             active = target
@@ -653,7 +637,9 @@ def recover(state: Path, root: Path) -> dict:
                 if Path(saved['path']) != current:
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
                 restore(state, current)
-        before = journal['before']
+            before = idle_snapshot(state)
+        else:
+            before = journal['before']
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before, contract_changed=contract_changed)
     write_active_runtime(state, previous, journal.get('environment'))
