@@ -31,6 +31,9 @@ export default {
   },
   tabs: { label: "Step content", overview: "Overview" },
   sessionView: {
+    turnChanges: "Changes in this turn", nativeMarker: "Marker · {{type}}",
+    routingTask: { fast: "Choose a buddy for this micro task", review: "Choose a buddy for this micro task (review mode)" },
+    routerAnswer: { buddyId: "Selected buddy", note: "Explanation", evidence: "Evidence" },
     task: "Task", answer: "Answer", fullPrompt: "Expand full text sent to buddy (role and result format included) · {{count}} characters",
     moreLines: "Show remaining {{count}} lines", collapseOutput: "Collapse output", groupSeparator: " · ", failures_one: "{{count}} failure", failures_other: "{{count}} failures",
     scrollEnd: "Scroll to latest content", scrollStart: "Scroll to start",

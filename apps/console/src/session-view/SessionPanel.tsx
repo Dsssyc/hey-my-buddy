@@ -13,12 +13,12 @@ import type { SessionClient } from "./use-session";
 import type { SessionPosition } from "./types";
 
 export type SessionPanelProps = {
-  taskText: string; checkoutRoot: string; client: SessionClient; taskId: string; attemptId: string; harness: string;
+  routingMode?: "fast" | "review" | null; taskText: string; checkoutRoot: string; client: SessionClient; taskId: string; attemptId: string; harness: string;
   active: boolean; position?: SessionPosition; onPosition: (position: SessionPosition) => void;
 };
 
 /** One read-only attempt. Navigation and persistence are owned by the enclosing shell. */
-export default function SessionPanel({ taskText, checkoutRoot, client, taskId, attemptId, harness, active, position, onPosition }: SessionPanelProps) {
+export default function SessionPanel({ routingMode, taskText, checkoutRoot, client, taskId, attemptId, harness, active, position, onPosition }: SessionPanelProps) {
   const { t } = useTranslation("taskDetail");
   const { data, error, earlierBusy, earlier, retry } = useSession(client, taskId, attemptId, active, position?.before);
   const viewport = useRef<HTMLDivElement>(null);
@@ -119,7 +119,7 @@ export default function SessionPanel({ taskText, checkoutRoot, client, taskId, a
                     void earlier();
                   }}>{t(earlierBusy ? "sessionView.loadingEarlier" : "sessionView.earlier")}</Button>
                 </div>}
-                {rows.length ? <SessionBlocks rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
+                {rows.length ? <SessionBlocks routingMode={routingMode} rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
                   setExpanded(previous => { const next = new Set(previous); if (open) next.add(key); else next.delete(key); expandedRef.current = next; return next; });
                   // The disclosure keeps the viewport where the reader is interacting.
                   atBottom.current = false;

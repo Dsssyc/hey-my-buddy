@@ -1,14 +1,31 @@
 import type { SessionBlock } from "./blocks";
-import type { ToolUpdate } from "./types";
+import type { JsonValue, ToolUpdate } from "./types";
 
 export type ToolBlock = Extract<SessionBlock, { type: "tool" }>;
-type MessageBlock = Extract<SessionBlock, { type: "message" }>;
+export type MessageBlock = Extract<SessionBlock, { type: "message" }>;
 export type ToolKind = NonNullable<ToolUpdate["kind"]>;
 export type CallGroup = { type: "calls"; key: string; items: (ToolBlock | MessageBlock)[]; counts: Partial<Record<ToolKind, number>>; failed: number };
 export type SessionRow = CallGroup | { type: "tool"; key: string; tool: ToolBlock; markers: MessageBlock[] }
   | { type: "blackboard"; key: string; action: "checkpoint" | "answer_inquiry" | "finish_turn"; tool: ToolBlock }
-  | { type: "task" | "note" | "answer" | "reasoning" | "marker"; key: string; message: MessageBlock }
+  | { type: "answer"; key: string; content: AnswerContent; copyText: string }
+  | { type: "task" | "note" | "reasoning" | "marker"; key: string; message: MessageBlock }
   | Extract<SessionBlock, { type: "plan" }>;
+
+export type AnswerContent = { format: "markdown"; text: string } | { format: "fields"; value: JsonValue };
+
+/** A reconstructed model message is the boundary for classifying JSON versus prose. */
+export function answerContent(text: string): AnswerContent {
+  try { return { format: "fields", value: JSON.parse(text) as JsonValue }; }
+  catch { return { format: "markdown", text }; }
+}
+function structuredOutcome(block: SessionBlock): JsonValue | undefined {
+  return block.type === "tool" && block.update.title === "StructuredOutput" ? toolInput(block.update).outcome as JsonValue | undefined : undefined;
+}
+export function markerBody(message: MessageBlock): string {
+  const text = message.update.content.text;
+  const prefix = `[${message.update._meta?.nativeType}]`;
+  return text.startsWith(prefix + "\n") || text.startsWith(prefix + "\r\n") ? text.slice(prefix.length).replace(/^\r?\n/, "") : text;
+}
 
 const blackboardActions = ["checkpoint", "answer_inquiry", "finish_turn"] as const;
 export function blackboardAction(title = "") {
@@ -21,7 +38,11 @@ export function typeOnlyMarker(block: MessageBlock): boolean {
 /** View-only grouping: activity markers do not interrupt adjacent calls; real prose does. */
 export function sessionRows(blocks: SessionBlock[]): SessionRow[] {
   const rows: SessionRow[] = [];
-  const lastAnswer = [...blocks].reverse().find(block => block.type === "message" && block.update.sessionUpdate === "agent_message_chunk" && !block.update._meta?.marker);
+  const reversed = [...blocks].reverse();
+  const structured = reversed.find(block => structuredOutcome(block) !== undefined);
+  const lastAction = reversed.find(block => block.type === "tool" ? !blackboardAction(block.update.title)
+    : block.type === "message" && block.update.sessionUpdate === "agent_message_chunk" && !block.update._meta?.marker);
+  const answer = structured ?? (lastAction?.type === "message" ? lastAction : undefined);
   let group: CallGroup | null = null;
   const flush = () => {
     if (!group) return;
@@ -30,6 +51,13 @@ export function sessionRows(blocks: SessionBlock[]): SessionRow[] {
     group = null;
   };
   for (const block of blocks) {
+    if (block === answer) {
+      flush();
+      const outcome = structuredOutcome(block);
+      const text = block.type === "message" ? block.update.content.text : JSON.stringify(outcome, null, 2);
+      rows.push({ type: "answer", key: block.key, content: outcome === undefined ? answerContent(text) : { format: "fields", value: outcome }, copyText: text });
+      continue;
+    }
     if ((block.type === "tool" && !blackboardAction(block.update.title)) || (block.type === "message" && typeOnlyMarker(block))) {
       group ??= { type: "calls", key: `calls:${block.key}`, items: [], counts: {}, failed: 0 };
       group.items.push(block);
@@ -44,7 +72,7 @@ export function sessionRows(blocks: SessionBlock[]): SessionRow[] {
     if (block.type === "tool") rows.push({ type: "blackboard", key: block.key, action: blackboardAction(block.update.title)!, tool: block });
     else if (block.type === "plan") rows.push(block);
     else rows.push({ type: block.update._meta?.marker ? "marker" : block.update.sessionUpdate === "user_message_chunk" ? "task"
-      : block.update.sessionUpdate === "agent_thought_chunk" ? "reasoning" : block === lastAnswer ? "answer" : "note", key: block.key, message: block });
+      : block.update.sessionUpdate === "agent_thought_chunk" ? "reasoning" : "note", key: block.key, message: block });
   }
   flush();
   return rows;

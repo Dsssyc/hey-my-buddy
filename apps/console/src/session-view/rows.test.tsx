@@ -11,7 +11,7 @@ import { MessageResponse } from "./Markdown";
 import { HighlightedCode } from "./MarkdownCode";
 import { parseSession, records } from "./types";
 import { sessionBlocks } from "./blocks";
-import { sessionRows, toolObject, displayPath, unwrappedCommand, taskExcerpt } from "./rows";
+import { sessionRows, toolObject, displayPath, unwrappedCommand, taskExcerpt, answerContent, markerBody } from "./rows";
 
 const project = "/home/worker/project";
 const tool = (id: string, kind = "read", extra = {}) => ({ sessionUpdate: "tool_call", toolCallId: id, title: id, kind, status: "completed", ...extra });
@@ -45,9 +45,56 @@ describe("session rows", () => {
     expect(result.map(row => row.type)).toEqual(["tool", "blackboard", "blackboard", "blackboard", "tool"]);
     expect(result[2]).toMatchObject({ action: "answer_inquiry", tool: { update: { rawInput: { result: 1 } } } });
   });
-  it("takes task and reasoning separately, and only the last agent message is the answer", () => {
-    expect(rows([{ ...message("Role prompt"), sessionUpdate: "user_message_chunk" }, { ...message("Thinking"), sessionUpdate: "agent_thought_chunk" }, message("First"), tool("call"), message("Last"), tool("after")]).map(row => row.type)).toEqual(["task", "reasoning", "note", "tool", "answer", "tool"]);
+  it("keeps interim messages as notes when tools follow, and lets blackboard actions follow an answer", () => {
+    expect(rows([{ ...message("Role prompt"), sessionUpdate: "user_message_chunk" }, { ...message("Thinking"), sessionUpdate: "agent_thought_chunk" }, message("First"), tool("call"), message("Last"), tool("after")]).map(row => row.type)).toEqual(["task", "reasoning", "note", "tool", "note", "tool"]);
+    expect(rows([message("Done"), tool("checkpoint", "other", { title: "mcp__hmb__hey_my_buddy_checkpoint" })]).map(row => row.type)).toEqual(["answer", "blackboard"]);
     expect(taskExcerpt("# Title\n\nFirst\nSecond\nThird")).toEqual({ title: "Title", opening: "First\nSecond" });
+  });
+  it("uses native StructuredOutput outcome as the answer instead of the interim note", () => {
+    const outcome = { summary: "Complete", remaining: [], request: null };
+    const result = rows([message("I found the source"), tool("finish", "other", { title: "StructuredOutput", rawInput: { outcome } }), { sessionUpdate: "tool_call_update", toolCallId: "finish", status: "in_progress" }, { sessionUpdate: "tool_call_update", toolCallId: "finish", status: "completed" }]);
+    expect(result.map(row => row.type)).toEqual(["note", "answer"]);
+    expect(result[1]).toMatchObject({ content: { format: "fields", value: outcome } });
+    expect(answerContent(' {"buddyId":null,"note":"No candidate","evidence":[]} ')).toMatchObject({ format: "fields", value: { buddyId: null } });
+    expect(answerContent("ordinary prose")).toEqual({ format: "markdown", text: "ordinary prose" });
+  });
+  it("keeps diff markers collapsed and renders their literal body as diff code, never Markdown", async () => {
+    const text = "[turn/diff/updated]\ndiff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n@@ -1 +1 @@\n- old\n+ **literal** <img src=x>";
+    const result = rows([message(text, { _meta: { nativeItemId: "turn", contentSegment: "turn/diff/0", marker: true, nativeType: "turn/diff/updated", replace: true } })]);
+    const expanded = new Set<string>();
+    const view = () => <TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></MessageScrollerProvider></TooltipProvider>;
+    const { container, rerender } = render(view());
+    expect(container.textContent).not.toContain("diff --git");
+    fireEvent.click(screen.getByRole("button", { name: "本回合的改动" }));
+    expect(container.textContent).toContain("**literal** <img src=x>");
+    expect(container.textContent).not.toContain("[turn/diff/updated]");
+    expect(container.querySelector("img,strong,[data-streamdown]")).toBeNull();
+    expect(result[0].type === "marker" && markerBody(result[0].message)).toBe(text.slice(text.indexOf("\n") + 1));
+    await waitFor(() => expect(container.querySelector('[style*="--shiki-light"]')).not.toBeNull());
+  });
+  it("shows command output without decomposed commandActions, cwd or other input fields", () => {
+    const result = rows([tool("run", "execute", { rawInput: { command: "echo done", cwd: project, commandActions: [{ type: "unknown", command: "echo done" }] }, content: [{ type: "content", content: { type: "text", text: "done" } }] })]);
+    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:run"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    expect(container.textContent).toContain("done");
+    expect(container.textContent).not.toContain("commandActions");
+    expect(container.textContent).not.toContain("cwd");
+    expect(container.querySelector("dl")).toBeNull();
+  });
+  it("labels a review Router task separately and lays its JSON answer out in buddy, note, evidence order", () => {
+    const prompt = "ROLE: Router buddy\nPick within the review constraints.";
+    const result = rows([{ ...message(prompt), sessionUpdate: "user_message_chunk" }, message(JSON.stringify({ evidence: ["Allowed"], note: "Fits", buddyId: "chosen", extra: { empty: [], other: {} } }))]);
+    const first = result[0];
+    if (first.type !== "task") throw Error("Expected task");
+    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="# Micro task title\nOpening" checkoutRoot={project} routingMode="review" expansion={{ expanded: new Set([first.key]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    expect(container.textContent).toContain("为这个微任务选择 buddy（审阅模式）");
+    expect(container.textContent).toContain("Micro task title");
+    for (const line of prompt.split("\n")) expect(container.textContent).toContain(line);
+    const answer = container.querySelector('[data-session-row="answer"]')!;
+    expect([...answer.querySelectorAll(":scope [data-slot=session-answer-fields] > div > dt")].slice(0, 3).map(node => node.textContent)).toEqual(["选中的 buddy", "说明", "依据"]);
+    expect(answer.textContent).toContain("chosen");
+    expect(answer.textContent).toContain("[]");
+    expect(answer.textContent).toContain("{}");
+    expect(answer.querySelector("pre")).toBeNull();
   });
   it("extracts objects by category and shortens only paths, keeping commands and URLs intact", () => {
     const objects = [

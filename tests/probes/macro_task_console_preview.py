@@ -73,6 +73,8 @@ Claude read/search session. ``preview-run-b1/att-b1-2`` is a ZCode session
 with tool inputs, and ``att-b1-1`` models an older input-free projection.
 ``preview-run-b9/att-b9-2`` is a DSH question/answer session.
 ``preview-run-a1-router/att-router-a1`` is a Router decision session.
+``preview-run-a2-router-abstention/att-router-a2-abstention`` is a review-mode
+Router abstention tied to its recorded routing span.
 Error pairs are listed in SESSION_ERRORS below.
 """
 from __future__ import annotations
@@ -236,11 +238,12 @@ STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND":
 SESSION_LONG = ("preview-run-a1", "att-a1-2")
 SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
 SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
+SESSION_ROUTER_REVIEW = ("preview-run-a2-router-abstention", "att-router-a2-abstention")
 SESSION_CLAUDE = ("preview-run-b10", "att-b10-1")
 SESSION_ZCODE = ("preview-run-b1", "att-b1-2")
 SESSION_ZCODE_OLD = ("preview-run-b1", "att-b1-1")
 SESSION_DSH = ("preview-run-b9", "att-b9-2")
-SESSION_PAIRS = (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER, SESSION_CLAUDE,
+SESSION_PAIRS = (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER, SESSION_ROUTER_REVIEW, SESSION_CLAUDE,
                  SESSION_ZCODE, SESSION_ZCODE_OLD, SESSION_DSH)
 SESSION_ERRORS = {
     ("preview-run-a2", "att-a2-1"): (501, "SESSION_NOT_INTEGRATED", "session.not-integrated",
@@ -453,6 +456,9 @@ ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed"
                      {}, attempt_id="att-router-a1", user_outcome="alternative",
                      mode="fast",
                      elapsed_ms=60000, tool_calls=0, bytes_read=0)
+ROUTING_A1.update(routerBuddyIds=["dsh:deepseek-official:deepseek-flash:max"],
+                  routerIdentities=[CFG_FLASH], routerBuddyId="dsh:deepseek-official:deepseek-flash:max",
+                  routerBuddy=CFG_FLASH)
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
                      "合成预览：候选超出路由边界，等待 Host 选择配置。", {"harness": "claude"},
                      attempt_id="att-router-a2", program_reason=reason("router-out-of-bounds", bound="constraints"))
@@ -1139,11 +1145,13 @@ def build_runs() -> dict[str, dict]:
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
-                        category="ended", buddy=CFG_CODEX, micro_task=False, routing=record,
+                        category="ended", buddy=CFG_FLASH if record is ROUTING_A1 else CFG_CODEX,
+                        micro_task=False, routing=record,
                         adapter="decision", router_budget_seconds=record["budget"]["timeoutSeconds"] + 10,
                         accepted=recorded_span["endAt"], result=True,
                         attempts=[attempt(record["attemptId"], 1, "finished", True,
-                                          recorded_span["startAt"], recorded_span["endAt"], CFG_CODEX,
+                                          recorded_span["startAt"], recorded_span["endAt"],
+                                          CFG_FLASH if record is ROUTING_A1 else CFG_CODEX,
                                           error=("router-out-of-bounds" if record["status"] == "failed" else None),
                                           result=decision_result(record), disposition=("abstention" if record["status"] == "needs-host" else record["status"]),
                                           usage=usage("synthetic-preview", 2100, 400, 200))],
@@ -1286,16 +1294,26 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
             ))
         events.append(session_event(attempt_id, "agent_message_chunk",
                                     content=session_text("已核对起始样例，继续检查失败路径。")))
-        # The opening is the last event of the earlier page. A type-only
-        # Codex subagent marker and the failed update start the latest page.
+        # The opening is the last event of the earlier page. A native Codex
+        # diff marker and the failed update start the latest page.
         events.append(session_event(attempt_id, "tool_call", toolCallId="codex-failed-command",
                                     title="synthetic-preview-missing --verify", kind="execute",
                                     status="in_progress",
                                     rawInput={"command": "bash -lc 'synthetic-preview-missing --verify'"}))
         events.extend((
-            session_event(attempt_id, "agent_message_chunk", content=session_text("[collab/agent_activity]"),
-                          _meta={"nativeItemId": "codex-agent-marker", "contentSegment": "marker",
-                                 "nativeType": "collab/agent_activity", "marker": True}),
+            session_event(attempt_id, "agent_message_chunk",
+                          content=session_text("[turn/diff/updated]\n"
+                                               "diff --git a/synthetic-preview/fixture.txt b/synthetic-preview/fixture.txt\n"
+                                               "index 1111111..2222222 100644\n"
+                                               "--- a/synthetic-preview/fixture.txt\n"
+                                               "+++ b/synthetic-preview/fixture.txt\n"
+                                               "@@ -1,3 +1,3 @@\n"
+                                               " unchanged context\n"
+                                               "-old fixture line\n"
+                                               "+new fixture line\n"
+                                               " trailing context\n"),
+                          _meta={"nativeItemId": "turn/diff/updated:att-a1-2", "contentSegment": "diff/0",
+                                 "nativeType": "turn/diff/updated", "marker": True, "replace": True}),
             session_event(attempt_id, "tool_call_update", toolCallId="codex-failed-command",
                           status="failed", rawOutput={"exitCode": 127},
                           content=[{"type": "content", "content": session_text("command not found\n")}]),
@@ -1317,7 +1335,9 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                           _meta={"nativeItemId": "reasoning-1", "contentSegment": "summary-0",
                                  "reasoning": "summary"}),
             session_event(attempt_id, "tool_call", toolCallId="tool-long", title="检查合成源码与测试",
-                          kind="execute", status="in_progress", rawInput={"command": "synthetic-preview-check"},
+                          kind="execute", status="in_progress",
+                          rawInput={"command": "pwd && synthetic-preview-check", "cwd": "/synthetic-preview/hey-my-buddy",
+                                    "commandActions": [{"command": "pwd"}, {"command": "synthetic-preview-check"}]},
                           content=[{"type": "content", "content": session_text("开始输出\n")}],
                           _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
             session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="in_progress",
@@ -1369,7 +1389,18 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                 session_event(attempt_id, "tool_call_update", toolCallId="claude-search-path",
                               status="completed", rawOutput="2 个匹配。"),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text("独立核对完成：路径示例与说明一致。"))]
+                              content=session_text("路径示例与说明一致，准备提交结构化核对结果。")),
+                session_event(attempt_id, "tool_call", toolCallId="claude-structured-output",
+                              title="StructuredOutput", kind="other", status="in_progress",
+                              rawInput={"outcome": {"disposition": "completed",
+                                                    "summary": "独立核对完成：路径示例与说明一致。",
+                                                    "artifacts": ["docs/reference/path-guide.md"],
+                                                    "decisions": ["保留相对路径示例。"],
+                                                    "remaining": [], "request": None}}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-structured-output",
+                              status="in_progress"),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-structured-output",
+                              status="completed", rawOutput={"accepted": True})]
     if pair == SESSION_ZCODE:
         return [session_event(attempt_id, "user_message_chunk",
                               content=session_text("核对合成平台路径并交回有格式的结果。")),
@@ -1406,13 +1437,25 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                               content=session_text("一致。合成样例里的路径可以正常读取。"))]
     if pair == SESSION_ROUTER:
         return [session_event(attempt_id, "user_message_chunk",
-                              content=session_text("为合成任务选择执行 buddy。")),
-                session_event(attempt_id, "agent_thought_chunk",
-                              content=session_text("比较已给出的候选约束与可用性。"),
-                              _meta={"nativeItemId": "router-reasoning", "contentSegment": "summary",
-                                     "reasoning": "summary"}),
+                              content=session_text("ROLE: Router buddy\n为合成任务选择执行 buddy。")),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text("选择 DeepSeek Flash。"))]
+                              content=session_text(json.dumps({"buddyId": "dsh:deepseek-official:deepseek-flash:max",
+                                                               "note": "合成任务由 DeepSeek Flash 执行。",
+                                                               "evidence": ["符合本次合成路由约束。"]},
+                                                              ensure_ascii=False)))]
+    if pair == SESSION_ROUTER_REVIEW:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("ROLE: Router buddy\nReview the synthetic Claude-only routing request.")),
+                session_event(attempt_id, "tool_call", toolCallId="router-review-read", title="Read",
+                              kind="read", status="in_progress",
+                              rawInput={"file_path": "docs/reference/path-guide.md"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="router-review-read",
+                              status="completed", rawOutput="Insufficient evidence for a confident selection."),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text(json.dumps({"buddyId": None,
+                                                               "note": "合成证据不足，请 Host 选择。",
+                                                               "evidence": ["候选约束仅指定 Claude。"]},
+                                                              ensure_ascii=False)))]
     return []
 
 
@@ -1469,7 +1512,7 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
         last = boundaries.index(cursor) if cursor is not None else len(events)
         first = max(0, last - limit)
     omitted = ([reason("session.codex-internal-reasoning-omitted")]
-               if pair in (SESSION_LONG, SESSION_ROUTER) else [])
+               if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW) else [])
     return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
             "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
             "hasEarlier": first > 0, "stopped": None}
@@ -2486,6 +2529,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks/{SESSION_LONG[0]}/attempts/{SESSION_LONG[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_RUNNING[0]}/attempts/{SESSION_RUNNING[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_ROUTER[0]}/attempts/{SESSION_ROUTER[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_ROUTER_REVIEW[0]}/attempts/{SESSION_ROUTER_REVIEW[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_CLAUDE[0]}/attempts/{SESSION_CLAUDE[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_ZCODE[0]}/attempts/{SESSION_ZCODE[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_ZCODE_OLD[0]}/attempts/{SESSION_ZCODE_OLD[1]}/session",
@@ -3489,7 +3533,8 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
     print("session fixtures (taskId / attemptId):")
     for label, pair in (("Codex, ended, >100 events", SESSION_LONG),
                         ("Claude Code, running, later after polls append", SESSION_RUNNING),
-                        ("Codex Router decision", SESSION_ROUTER),
+                        ("DSH Router decision", SESSION_ROUTER),
+                        ("Codex review Router abstention", SESSION_ROUTER_REVIEW),
                         ("Claude Code read and search", SESSION_CLAUDE),
                         ("ZCode with inputs", SESSION_ZCODE),
                         ("ZCode old turn without inputs", SESSION_ZCODE_OLD),

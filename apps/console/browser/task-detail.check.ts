@@ -185,7 +185,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a1/2`);
         const band = pane(page).locator("[data-slot=detail-band]");
         await expect(band).toContainText("Router");
-        await expect(band).toContainText("gpt-5-codex");
+        await expect(band).toContainText("dsh / deepseek-official / deepseek-flash / max");
         await expect(band).toContainText(mode);
         await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("deepseek-flash");
         await expectDetailWhole(page, { skipTitle: true });

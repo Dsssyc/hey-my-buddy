@@ -73,13 +73,8 @@ test.describe("session content and navigation", () => {
     await loadEarlier(page);
     expect(Math.abs((await reasoning.boundingBox())!.y - oldY)).toBeLessThan(3);
 
-    const failedGroup = row(page, "calls").filter({ hasText: "1 failure" });
-    await expect(failedGroup).toContainText(/Ran \d+ commands/);
-    await expect(failedGroup).toContainText("1 activity marker");
-    const groupTrigger = failedGroup.locator('[data-slot="trace-collapsible-trigger"]').first();
-    await expect(groupTrigger).toHaveAttribute("aria-expanded", "false");
-    await groupTrigger.click();
-    await expect(groupTrigger).toHaveAttribute("aria-expanded", "true");
+    await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
+    await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
     const failed = await expandTool(page, "codex-failed-command");
     await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
     await expect(failed).toContainText("command not found");
@@ -130,6 +125,43 @@ test.describe("session content and navigation", () => {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await output.getByRole("button", { name: "Copy full text" }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("FULL_OUTPUT_END");
+  });
+
+  test("shows the native Codex turn diff as highlighted code and keeps command inputs concise", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, long);
+    const command = await expandTool(page, "tool-long");
+    await expect(command.locator("dt")).toHaveCount(0);
+    await expect(command).not.toContainText("commandActions");
+    await expect(command).not.toContainText("/synthetic-preview/hey-my-buddy");
+    await expect(command.locator('[data-slot="session-output"]').first()).toContainText("最终完整快照");
+    await loadEarlier(page);
+
+    const marker = row(page, "marker").filter({ hasText: "Changes in this turn" });
+    await expect(marker).toHaveCount(1);
+    const trigger = marker.getByRole("button", { name: "Changes in this turn" });
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const diff = marker.locator('[data-slot="code-block"]');
+    await expect(diff).toContainText("diff --git a/synthetic-preview/fixture.txt b/synthetic-preview/fixture.txt");
+    await expect(diff).toContainText("-old fixture line");
+    await expect(diff).toContainText("+new fixture line");
+    await expect(diff).not.toContainText("[turn/diff/updated]");
+    await expect.poll(() => diff.locator("span[style*='--shiki']").count()).toBeGreaterThan(0);
+    const colors = await diff.evaluate(node => {
+      const lines = [...node.querySelectorAll('[data-slot="code-block-line"]')];
+      return ["-old fixture line", "+new fixture line"].map(text => {
+        const line = lines.find(item => item.textContent?.includes(text));
+        return line ? getComputedStyle(line.querySelector('[data-slot="code-block-line-content"] span[style]')!).color : null;
+      });
+    });
+    expect(colors[0]).not.toBeNull();
+    expect(colors[1]).not.toBeNull();
+    expect(colors[0]).not.toBe(colors[1]);
+    await marker.scrollIntoViewIfNeeded();
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-codex-diff-dark.png`, fullPage: true });
   });
 
   test("restores reading position, disclosure and focus through tabs, reload and history", async ({ page }) => {
@@ -295,7 +327,7 @@ test.describe("session content and navigation", () => {
 test.describe("four harness preview records", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
 
-  test("Claude Code groups read and search with their direct inputs", async ({ page }) => {
+  test("Claude Code keeps its interim note and presents StructuredOutput as the answer", async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
     await openSession(page, session("preview-run-b10", 2, B));
     const group = row(page, "calls");
@@ -309,8 +341,18 @@ test.describe("four harness preview records", () => {
     await expect(search).toContainText("pattern");
     await expect(search).toContainText("synthetic/path");
     await expect(search).toContainText("docs/**/*.md");
+    const note = row(page, "note");
+    await expect(note).toContainText("路径示例与说明一致，准备提交结构化核对结果。");
+    await expect(note).not.toContainText("Answer");
+    const answer = row(page, "answer");
+    await expect(answer).toHaveCount(1);
+    await expect(answer).toContainText("独立核对完成：路径示例与说明一致。");
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["disposition", "summary", "artifacts", "decisions", "remaining", "request"]);
+    await expect(answer).not.toContainText('"outcome"');
+    await expect(tool(page, "claude-structured-output")).toHaveCount(0);
+    await answer.scrollIntoViewIfNeeded();
     mkdirSync(screenshots, { recursive: true });
-    await page.screenshot({ path: `${screenshots}/session-claude-dark.png`, fullPage: true });
+    await page.screenshot({ path: `${screenshots}/session-claude-outcome-dark.png`, fullPage: true });
   });
 
   test("ZCode current input and blackboard actions remain distinct", async ({ page }) => {
@@ -339,8 +381,58 @@ test.describe("four harness preview records", () => {
   test("DSH renders a question and answer without tool rows", async ({ page }) => {
     await openSession(page, session("preview-run-b9", 5, B));
     await expect(row(page, "task")).toContainText("核对合成平台路径中的字符编码并交回结果");
+    await row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await expect(row(page, "task").locator('[data-slot="session-output"]')).toContainText("合成平台路径的编码是否一致？");
     await expect(row(page, "answer")).toContainText("合成样例里的路径可以正常读取");
     await expect(row(page, "calls")).toHaveCount(0);
     await expect(row(page, "tool")).toHaveCount(0);
+  });
+
+  test("DSH Router shows the routing task, full prompt and ordered decision fields", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, session("preview-run-a1", 2));
+    const task = row(page, "task");
+    await expect(task.locator("h3")).toHaveText("Choose a buddy for this micro task");
+    await task.getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
+    await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
+    const answer = row(page, "answer");
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(answer).toContainText("dsh:deepseek-official:deepseek-flash:max");
+    await expect(answer).toContainText("合成任务由 DeepSeek Flash 执行。");
+    await expect(answer).toContainText("符合本次合成路由约束。");
+    await expect(answer).not.toContainText('"buddyId"');
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-router-dark.png`, fullPage: true });
+  });
+
+  test("review-mode Router abstention keeps its own task heading and structured decision", async ({ page }) => {
+    await openSession(page, session("preview-run-a2", 5));
+    await expect(row(page, "task").locator("h3")).toHaveText("Choose a buddy for this micro task (review mode)");
+    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(row(page, "answer")).toContainText("null");
+    await expect(row(page, "answer")).toContainText("合成证据不足，请 Host 选择。");
+  });
+});
+
+for (const language of ["en", "zh"] as const) test.describe(`structured answers on a narrow light screen: ${language}`, () => {
+  test.use({ locale: language === "zh" ? "zh-CN" : "en-US", viewport: { width: 390, height: 844 }, reducedMotion: "reduce", colorScheme: "light" });
+  test("keeps the Claude outcome and Router fields readable", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "light"));
+    await openSession(page, session("preview-run-b10", 2, B));
+    const claude = row(page, "answer");
+    await expect(claude.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["disposition", "summary", "artifacts", "decisions", "remaining", "request"]);
+    await expectNoSidewaysScroll(page);
+    await claude.scrollIntoViewIfNeeded();
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-claude-outcome-${language}-narrow-light.png`, fullPage: true });
+
+    await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
+    await expect(panel(page)).toBeVisible();
+    const router = row(page, "answer");
+    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["选中的 buddy", "说明", "依据"] : ["Selected buddy", "Explanation", "Evidence"]);
+    await expectNoSidewaysScroll(page);
+    await router.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${screenshots}/session-router-${language}-narrow-light.png`, fullPage: true });
   });
 });

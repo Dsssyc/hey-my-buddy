@@ -43,7 +43,7 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
     return () => observer.disconnect();
   }, [title, tool.rawInput]);
   const input = toolInput(tool);
-  const fields = Object.entries(input).filter(([name]) => tool.kind !== "execute" || name !== "command");
+  const fields = tool.kind === "execute" ? [] : Object.entries(input);
   const output = [...block.segments.values()].join("");
   const status = tool.status;
   return <TraceCollapsible open={open} onOpenChange={value => expansion.toggle(key, value)} data-session-tool={key}>
@@ -62,7 +62,7 @@ export function ToolRow({ block, expansion, checkoutRoot, markers = [] }: { bloc
       {output && <Output text={output} id={`${key}:output`} expansion={expansion} language={tool.kind === "execute" ? "ansi" : "text"}/>}
       {tool.rawOutput !== undefined && <Output text={jsonText(tool.rawOutput)} id={`${key}:result`} expansion={expansion} language={typeof tool.rawOutput === "string" ? "text" : "json"}/>}
       {markers.map(marker => <p key={marker.key} className="mt-2 text-xs text-ink3">{marker.update.content.text || marker.update._meta?.nativeType}</p>)}
-      {tool.locations && <ul className="mt-2 font-mono text-ink2">{tool.locations.map((location, index) => <li key={index}>{displayPath(location.path, checkoutRoot)}</li>)}</ul>}
+      {tool.kind !== "execute" && tool.locations && <ul className="mt-2 font-mono text-ink2">{tool.locations.map((location, index) => <li key={index}>{displayPath(location.path, checkoutRoot)}</li>)}</ul>}
     </TraceCollapsibleContent>
   </TraceCollapsible>;
 }

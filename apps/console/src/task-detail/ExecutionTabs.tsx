@@ -10,8 +10,8 @@ import type { DetailTab } from "./location";
 const SessionPanel = lazy(() => import("../session-view/SessionPanel"));
 
 /** Retain both reading surfaces while only the visible session owns reads. */
-export function ExecutionTabs({ taskText, checkoutRoot, children, client, taskId, attemptId, harness, active, tab, onTab }: {
-  taskText: string; checkoutRoot: string; children: ReactNode; client: SessionClient; taskId: string; attemptId: string; harness: string;
+export function ExecutionTabs({ routingMode, taskText, checkoutRoot, children, client, taskId, attemptId, harness, active, tab, onTab }: {
+  routingMode?: "fast" | "review" | null; taskText: string; checkoutRoot: string; children: ReactNode; client: SessionClient; taskId: string; attemptId: string; harness: string;
   active: boolean; tab: DetailTab; onTab: (tab: DetailTab) => void;
 }) {
   const { t } = useTranslation("taskDetail");
@@ -27,7 +27,7 @@ export function ExecutionTabs({ taskText, checkoutRoot, children, client, taskId
     <TabsPrimitive.Content value="overview" forceMount className="flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">{children}</TabsPrimitive.Content>
     <TabsPrimitive.Content value="session" forceMount className="flex min-h-0 min-w-0 flex-1 flex-col outline-none data-[state=inactive]:hidden">
       {(visited || tab === "session") && <Suspense fallback={<p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>}><SessionPanel
-        taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active && tab === "session"} position={position}
+        routingMode={routingMode} taskText={taskText} checkoutRoot={checkoutRoot} client={client} taskId={taskId} attemptId={attemptId} harness={harness} active={active && tab === "session"} position={position}
         onPosition={next => window.history.replaceState({ ...window.history.state, sessionPositions: { ...window.history.state?.sessionPositions, [key]: next } }, "")}/></Suspense>}
     </TabsPrimitive.Content>
   </Tabs>;

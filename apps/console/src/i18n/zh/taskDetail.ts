@@ -30,6 +30,9 @@ export default {
   },
   tabs: { label: "步骤内容", overview: "概述" },
   sessionView: {
+    turnChanges: "本回合的改动", nativeMarker: "标记 · {{type}}",
+    routingTask: { fast: "为这个微任务选择 buddy", review: "为这个微任务选择 buddy（审阅模式）" },
+    routerAnswer: { buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
     task: "任务", answer: "回答", fullPrompt: "展开发给 buddy 的全文（含角色说明与交回格式）· {{count}} 字",
     moreLines: "展开其余 {{count}} 行", collapseOutput: "收起输出", groupSeparator: " · ", failures_one: "{{count}} 次失败", failures_other: "{{count}} 次失败",
     scrollEnd: "滚动到最新内容", scrollStart: "滚动到开头",
