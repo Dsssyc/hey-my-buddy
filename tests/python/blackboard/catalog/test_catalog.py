@@ -145,7 +145,7 @@ class CatalogTests(unittest.TestCase):
                                             if cap.startswith("permission:")} for profile in profiles}
         self.assertEqual(permissions, {
             "claude": {"permission:read", "permission:write"},
-            "codex": {"permission:read", "permission:write"},
+            "codex": {"permission:read", "permission:write", "permission:full"},
             "dsh": {"permission:read", "permission:write"},
             "zcode": {"permission:read", "permission:write"},
         })
@@ -157,9 +157,10 @@ class CatalogTests(unittest.TestCase):
         require_permission({"adapter": "dsh"}, "read")
         require_permission({"adapter": "zcode"}, "read")
         require_permission({"adapter": "codex"}, "write")
+        require_permission({"adapter": "codex"}, "full")
         require_permission({"adapter": "external"}, "read")
         require_permission({"adapter": "command"}, "write")
-        for adapter, access in (("codex", "full"), ("claude", "full"), ("external", "full")):
+        for adapter, access in (("claude", "full"), ("external", "full")):
             with self.subTest(adapter=adapter, access=access), self.assertRaises(BoardError) as caught:
                 require_permission({"adapter": adapter}, access)
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")

@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from blackboard.evaluation.test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from hey_my_buddy.errors import BoardError
@@ -34,7 +35,7 @@ PROFILE = {
     "effort": "off",
     "available": True,
     "enabled": True,
-    "capabilities": ["execution:dsh", "effort:off", "context:large"],
+    "capabilities": ["execution:dsh", "effort:off", "context:large", *permission_capabilities("dsh")],
     "contextWindow": 1000000,
     "description": "fixture decision model",
     "source": "manual",
@@ -46,7 +47,7 @@ SECOND_PROFILE = {
     "label": "DeepSeek-V4-Pro · high",
     "model": "deepseek-v4-pro",
     "effort": "high",
-    "capabilities": ["execution:dsh", "effort:high"],
+    "capabilities": ["execution:dsh", "effort:high", *permission_capabilities("dsh")],
 }
 #: A second effort-high profile, so a test can pin or constrain to `effort:
 #: high` and still leave two legal candidates for the Router path.

@@ -33,7 +33,7 @@ from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
-from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.harnesses.registry import worker_permission, worker_format
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.buddy.runtime import windows_process
 from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -121,7 +121,7 @@ class SeamCase(unittest.TestCase):
     def request(self, *, tool_scope: str, output_schema: dict, prompt: str,
                 timeout: int = 8, continuation=None, capture_evidence=False,
                 input_sha256: str | None = None, turn_id: str | None = None,
-                native: str | None = None) -> RunRequest:
+                native: str | None = None, permission=None) -> RunRequest:
         marker = uuid.uuid4().hex[:8]
         return RunRequest(
             identity=RunIdentity(task_id="goal-1", attempt_id=f"attempt-{marker}",
@@ -134,6 +134,7 @@ class SeamCase(unittest.TestCase):
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / (native or f"native-{marker}"))),
             input_text=prompt, tool_scope=tool_scope, output_schema=output_schema,
+            worker_permission=permission or (worker_permission("codex", "write") if tool_scope == "write" else None),
             budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
             capture_evidence=capture_evidence)
 
@@ -511,11 +512,12 @@ class CodexSeamCase(SeamCase):
         os.environ["BUDDY_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
-                   observer=None, input_text: str = "fixture governed task", live=None):
+                   observer=None, input_text: str = "fixture governed task", live=None, level="write"):
+        permission = worker_permission("codex", level)
         self.set_case(case)
         turn_input = {"taskId": "goal-1", "attemptId": "attempt-check", "generation": 7,
                       "turnId": "turn-check"}
-        return run(self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        return run(self.request(tool_scope=permission.tool_scope, permission=permission, output_schema=OUTCOME_SCHEMA,
                                 prompt=input_text, timeout=timeout, continuation=continuation,
                                 input_sha256=input_hash(turn_input), turn_id="turn-check",
                                 native="worker-native"),
@@ -745,6 +747,88 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def expected_worker_policy(self, level):
+        sandbox, policy = {
+            "read": ("read-only", {"type": "readOnly", "networkAccess": True}),
+            "write": ("workspace-write", {"type": "workspaceWrite", "writableRoots": [str(self.cwd)],
+                                           "networkAccess": True}),
+            "full": ("danger-full-access", {"type": "dangerFullAccess"}),
+        }[level]
+        return sandbox, {"sandboxPolicy": policy, "approvalPolicy": "never"}
+
+    def test_each_worker_level_reaches_native_start_and_controller_evidence(self):
+        import threading
+        from hey_my_buddy.buddy.harnesses.run_contract import decode_run_result
+        from hey_my_buddy.buddy.roles import run_controller, run_execution
+        from hey_my_buddy.private_dirs import ensure_private_dir
+
+        self.set_case("ok")
+        for level in ("read", "write", "full"):
+            with self.subTest(level=level):
+                permission = worker_permission("codex", level)
+                request = self.request(tool_scope=permission.tool_scope, permission=permission,
+                                       output_schema=OUTCOME_SCHEMA, prompt="Work",
+                                       turn_id="turn-check", input_sha256="a" * 64)
+                root = ensure_private_dir(Path(request.private_state.invocation_root))
+                control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
+                           "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json")}
+                with mock.patch.object(run_execution, "worker_request", return_value=(
+                        request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
+                    frame, code = run_controller.execute(control, threading.Event(),
+                                                         Path(os.environ["BUDDY_STATE_DIR"]))
+                result = decode_run_result(frame)
+                self.assertEqual(code, 0, result.end.message)
+                sandbox, policy = self.expected_worker_policy(level)
+                self.assertEqual(result.effective_policy.tools.requested.value, policy)
+                facts = run_execution._worker_facts(result)
+                self.assertEqual(native_run.native_evidence(result)["nativePolicy"], policy)
+                self.assertEqual(facts["nativeEvidence"]["workerPermission"]["permission"],
+                                 permission.to_payload())
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                thread = trace["threads"][result.native_identity.session_id]
+                self.assertEqual(thread["start"]["sandbox"], sandbox)
+                self.assertEqual(thread["start"]["approvalPolicy"], "never")
+                self.assertEqual(thread["turnRequests"], [{"cwd": str(self.cwd), **policy}])
+                self.assertNotIn("permissions", thread["start"])
+
+    def test_resume_uses_each_rounds_level_including_level_changes(self):
+        for before, after in (("read", "read"), ("write", "write"), ("full", "full"),
+                              ("read", "write"), ("write", "full")):
+            with self.subTest(before=before, after=after):
+                first = self.worker_run("ok", level=before)
+                self.assertEqual(first.end.status, "ok", first.end.message)
+                previous = first.native_identity.session_id
+                second = self.worker_run("ok", level=after, continuation=RunContinuation(
+                    mode="native-session", previous_session_id=previous))
+                self.assertEqual(second.end.status, "ok", second.end.message)
+                self.assertEqual(second.native_identity.session_id, previous)
+                sandbox, policy = self.expected_worker_policy(after)
+                self.assertEqual(second.effective_policy.tools.requested.value, policy)
+                self.assertEqual(native_run.native_evidence(second)["nativePolicy"], policy)
+                trace = json.loads(Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"]).read_text())
+                thread = trace["threads"][previous]
+                self.assertEqual(thread["resumeRequests"][-1]["sandbox"], sandbox)
+                self.assertEqual(thread["resumeRequests"][-1]["approvalPolicy"], "never")
+                self.assertEqual(thread["turnRequests"][-2:], [
+                    {"cwd": str(self.cwd), **self.expected_worker_policy(before)[1]},
+                    {"cwd": str(self.cwd), **policy}])
+
+    def test_rejected_turn_keeps_the_policy_sent_to_native(self):
+        for level in ("read", "write", "full"):
+            with self.subTest(level=level):
+                permission = worker_permission("codex", level)
+                request = self.request(tool_scope=permission.tool_scope, permission=permission,
+                                       output_schema=OUTCOME_SCHEMA, prompt="Work")
+                connection = mock.Mock()
+                connection.call.side_effect = CodexProtocolError("native-rpc-error", "turn rejected")
+                state = native_run._RunState()
+                with self.assertRaises(CodexProtocolError):
+                    native_run._admit_turn(connection, request, "thread", "Work", "worker", state)
+                policy = self.expected_worker_policy(level)[1]
+                self.assertEqual(state.worker_policy, policy)
+                sent = connection.call.call_args.args[1]
+                self.assertEqual({key: sent[key] for key in policy}, policy)
+
     def test_default_and_configured_provider_reach_worker_thread_start(self):
         self.assert_discovered_provider_runs('write', OUTCOME_SCHEMA)
 
@@ -1599,6 +1683,7 @@ class CatalogTrustTests(CodexSeamCase):
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / "worker-native")),
             input_text="fixture governed task", tool_scope="write", output_schema=OUTCOME_SCHEMA,
+            worker_permission=worker_permission("codex", "write"),
             budget=RunBudget(timeout_seconds=12)),
             observer=lambda _facts: FEEDBACK_CONTINUE,
             services=self.worker_services(), cancelled=lambda: False)

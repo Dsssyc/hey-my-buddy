@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_history
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -38,9 +39,9 @@ class CurrentRouterTestCase(BoardTestCase):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO evaluation_profiles(profile_id,label,adapter,provider,model,effort,"
                        "available,enabled,capabilities_json,created_revision,updated_revision)"
-                       " VALUES(?,?,?,?,?,?,?,?,'[]',0,0)",
+                       " VALUES(?,?,?,?,?,?,?,?,?,0,0)",
                        (profile_id, profile_id, adapter, provider, model or profile_id, "max",
-                        available, enabled))
+                        available, enabled, canonical_json(permission_capabilities(adapter))))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""

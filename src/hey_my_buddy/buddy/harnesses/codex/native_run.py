@@ -132,7 +132,23 @@ _UNLISTED_UNKNOWN_TYPES = "(unlisted-native-events)"
 
 
 def _mode(request: RunRequest) -> str:
-    return {"none": "fast", "read": "review", "write": "worker"}[request.tool_scope]
+    if request.worker_permission is not None:
+        return "worker"
+    if request.tool_scope not in ("none", "read"):
+        raise BoardError("INVALID_ARGUMENT", "Codex Worker runs require a permission level",
+                         toolScope=request.tool_scope)
+    return {"none": "fast", "read": "review"}[request.tool_scope]
+
+
+def _worker_sandbox(request: RunRequest) -> tuple[str, dict]:
+    """One turn's native thread mode and explicit file/network policy."""
+    level = request.worker_permission.level
+    if level == "read":
+        return "read-only", {"type": "readOnly", "networkAccess": True}
+    if level == "write":
+        return "workspace-write", {"type": "workspaceWrite", "writableRoots": [request.cwd],
+                                   "networkAccess": True}
+    return "danger-full-access", {"type": "dangerFullAccess"}
 
 
 # -- the cumulative facts the role observer sees ---------------------------------
@@ -630,6 +646,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     """Worker configuration: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
     requested = configuration_spec(request)
+    sandbox, _policy = _worker_sandbox(request)
     state.requested = requested
     if mode == "native-session":
         binding = _read_binding(prep.native_root, previous)
@@ -656,7 +673,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
                                          "the Codex thread has changed since its bound completed turn")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
-                                                         "approvalPolicy": "never", "sandbox": "workspace-write"})
+                                                         "approvalPolicy": "never", "sandbox": sandbox})
         except CodexProtocolError as error:
             if error.code != "native-rpc-error":
                 raise
@@ -664,7 +681,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     elif mode == "initial" and previous is None or mode == "reconstructed-new-session":
         response = connection.call("thread/start", {"cwd": request.cwd, "model": requested["model"],
                                                     "modelProvider": requested["provider"], "approvalPolicy": "never",
-                                                    "sandbox": "workspace-write", "serviceName": "hey-my-buddy"})
+                                                    "sandbox": sandbox, "serviceName": "hey-my-buddy"})
     else:
         raise CodexProtocolError("invalid-resume-mode",
                                  "Codex requires an explicit initial, native or reconstructed turn")
@@ -943,15 +960,13 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
                     "input": [{"type": "text", "text": input_text}],
                     "outputSchema": request.output_schema.value}
     if mode == "worker":
-        params["sandboxPolicy"] = {"type": "workspaceWrite", "writableRoots": [request.cwd],
-                                   "networkAccess": True}
+        _sandbox, params["sandboxPolicy"] = _worker_sandbox(request)
     elif mode == "review":
         params["permissions"] = "buddy-router"
-    response = connection.call("turn/start", params)
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
-    return response
+    return connection.call("turn/start", params)
 
 
 def _observe_quota(connection: Connection, evidence: TurnEvidence) -> dict | None:
@@ -999,9 +1014,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
     """Run one native Codex execution: the single native path of this harness."""
     if request.harness != "codex":
         raise BoardError("INVALID_ARGUMENT", "this run module drives codex", harness=request.harness)
-    if request.tool_scope == "full" or (request.worker_permission is not None
-                                        and request.worker_permission.level == "full"):
-        raise BoardError("INVALID_ARGUMENT", "codex full access is not implemented", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, RunServices):
         raise BoardError("INVALID_ARGUMENT", "codex accepts its own narrow run service binding")
     binding = services if services is not None else RunServices()

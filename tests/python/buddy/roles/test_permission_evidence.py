@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
+from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
@@ -24,14 +25,13 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = ensure_private_dir(Path(temporary.name) / "inv")
 
-    def request(self, *, permission=True):
+    def request(self, *, permission=True, level="read"):
         fields = full_request(self.root.parent).to_payload()
-        fields.update(harness="codex", toolScope="write" if permission else "none", sessionServices=[],
+        fields.update(harness="codex", toolScope=level if permission else "none", sessionServices=[],
                       captureEvidence=False)
         fields["privateState"]["invocationRoot"] = str(self.root)
         if permission:
-            fields["workerPermission"] = {"level": "read", "toolScope": "write",
-                                          "enforcement": "convention"}
+            fields["workerPermission"] = worker_permission("codex", level).to_payload()
         return rc.decode_run_request(fields)
 
     def execute(self, request, *, status="ok", operation="worker"):
