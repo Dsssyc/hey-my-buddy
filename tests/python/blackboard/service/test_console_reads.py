@@ -76,28 +76,41 @@ class BoundaryTests(BoardTestCase):
             with self.subTest(timestamp=malformed), self.assertRaises(ValueError):
                 parse_boundary(malformed)
 
-    def test_collect_deadline_takes_earliest_future_boundary(self):
+    def test_collect_deadline_uses_only_known_service_producers(self):
         after = parse_boundary("2026-10-07T12:00:00.000Z")
         projection = {
-            "buddies": [
-                {"providerCooling": {"provider": "openai", "coolingUntil": "2026-10-07T12:30:00.000Z", "consecutiveRejections": 2}},
-            ],
-            "harnesses": [{"providers": [{"provider": "openai", "coolingUntil": "2026-10-07T12:30:00.000Z", "consecutiveRejections": 2}],
+            "buddies": [{"providerCooling": {"coolingUntil": "2026-10-07T12:30:00.000Z"}}],
+            "harnesses": [{"providers": [{"coolingUntil": "2026-10-07T12:20:00.000Z"}],
+                           "expiresAt": "2026-10-07T12:10:00.000Z",
                            "scanAfter": "2026-10-07T12:02:00.000Z"}],
-            "routingHealth": {"routers": [{"skipUntil": "2026-10-07T12:05:00.000Z"}]},
-            "past": {"expiresAt": "2026-10-07T11:00:00.000Z"},
+            "routingHealth": {"routers": [{"skipUntil": "2026-10-07T12:05:00.000Z",
+                                          "retryAt": "2026-10-07T12:05:00.000Z"}]},
         }
-        deadline = collect_deadline(projection, after=after)
-        # The borrowed harness scan is due first: once scanAfter passes, the
-        # next periodic read must re-enter the projection and kick the scan.
-        self.assertEqual(deadline, parse_boundary("2026-10-07T12:02:00.000Z"))
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:02:00.000Z"))
         del projection["harnesses"][0]["scanAfter"]
-        without_scan = collect_deadline(projection, after=after)
-        self.assertEqual(without_scan, parse_boundary("2026-10-07T12:05:00.000Z"))
-        cooling_only = collect_deadline({"providers": [{"coolingUntil": "2026-10-07T12:30:00.000Z"}]}, after=after)
-        self.assertEqual(cooling_only, parse_boundary("2026-10-07T12:30:00.000Z"))
-        self.assertEqual(collect_deadline({"quotaFailure": {"resetsAt": "2026-10-07T12:01:00.000Z"}}, after=after), float("inf"))
-        self.assertEqual(collect_deadline({"x": 1}, after=after), float("inf"))
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:05:00.000Z"))
+        projection["routingHealth"]["routers"] = []
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:10:00.000Z"))
+        del projection["harnesses"][0]["expiresAt"]
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:20:00.000Z"))
+        projection["harnesses"][0]["providers"] = []
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:30:00.000Z"))
+        projection["buddies"][0]["providerCooling"] = None
+        self.assertEqual(collect_deadline(projection, after=after), float("inf"))
+
+    def test_collect_deadline_ignores_foreign_nested_fields(self):
+        projection = {
+            "buddies": [{"providerCooling": None, "description": {"retryAt": False}}],
+            "harnesses": [{"providers": [], "expiresAt": None, "scanAfter": None,
+                           "discovery": {"expiresAt": "tomorrow", "coolingUntil": 123,
+                                         "skipUntil": {}, "retryAt": [], "scanAfter": "2026-10-07T12:00:01Z"}}],
+            "routingHealth": {"routers": [], "reason": {"params": {"retryAt": "foreign"}}},
+            "arbitrary": {"expiresAt": "2026-10-07T12:00:01.000Z"},
+        }
+        after = parse_boundary("2026-10-07T12:00:00.000Z")
+        self.assertEqual(collect_deadline(projection, after=after), float("inf"))
+        projection["harnesses"][0]["scanAfter"] = "2026-10-07T12:02:00.000Z"
+        self.assertEqual(collect_deadline(projection, after=after), parse_boundary("2026-10-07T12:02:00.000Z"))
 
 
 class MarkerTests(BoardTestCase):

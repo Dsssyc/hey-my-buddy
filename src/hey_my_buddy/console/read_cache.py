@@ -45,16 +45,9 @@ import threading
 import time
 from collections import OrderedDict
 from datetime import datetime
-from typing import Any, Callable
+from typing import Callable
 
-#: Keys whose absolute value is a semantic boundary: when the clock passes it,
-#: some now-derived field of the projection may flip on its own. ``scanAfter``
-#: additionally borrows the harness scan: once it passes, the next periodic read
-#: regenerates and kicks the rate-limited scan again instead of letting an idle
-#: console starve the 180-second cadence.
-BOUNDARY_KEYS = frozenset({"expiresAt", "coolingUntil", "skipUntil", "retryAt", "scanAfter"})
-
-#: Safety net for any now-derived field the boundary walk fails to enumerate.
+#: Maximum lifetime for time-derived fields without an explicit deadline.
 #: An idle board recomputes each cached read at most once per hour.
 MAX_ENTRY_SECONDS = 3600.0
 
@@ -70,32 +63,33 @@ def parse_boundary(value: str | None) -> float | None:
     return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
 
 
-def collect_deadline(projection: Any, *, after: float) -> float:
-    """The earliest future boundary inside a projection, as epoch seconds.
+def collect_deadline(projection: dict, *, after: float) -> float:
+    """The earliest future boundary from the snapshot's known service producers.
 
-    Walks every dict and list looking for the boundary keys above, comparing
-    against ``after`` (the generation clock). A key that only feeds display
-    still counts: over-reporting costs one recomputation, while a missed flip
-    would freeze state that must expire.
+    Discovery records may embed arbitrary timestamps. Only provider cooldowns,
+    Router skip windows and the service's own health expiry/scan fields determine
+    when this projection changes; nested discovery content is never traversed.
     """
     earliest = float("inf")
 
-    def visit(node: Any) -> None:
+    def include(value: str | None) -> None:
         nonlocal earliest
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in BOUNDARY_KEYS:
-                    moment = parse_boundary(value)
-                    if moment is not None:
-                        if moment > after:
-                            earliest = min(earliest, moment)
-                else:
-                    visit(value)
-        elif isinstance(node, list):
-            for item in node:
-                visit(item)
+        moment = parse_boundary(value)
+        if moment is not None and moment > after:
+            earliest = min(earliest, moment)
 
-    visit(projection)
+    for buddy in projection["buddies"]:
+        cooling = buddy["providerCooling"]
+        if cooling is not None:
+            include(cooling["coolingUntil"])
+    for harness in projection["harnesses"]:
+        include(harness.get("expiresAt"))
+        include(harness.get("scanAfter"))
+        for provider in harness["providers"]:
+            include(provider["coolingUntil"])
+    for router in projection["routingHealth"]["routers"]:
+        include(router["skipUntil"])
+        include(router["retryAt"])
     return earliest
 
 

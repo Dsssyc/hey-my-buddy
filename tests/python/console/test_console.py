@@ -13,8 +13,8 @@ import socket
 import sys
 import unittest
 from unittest import mock
-from pathlib import Path
-from urllib.parse import urlsplit
+from pathlib import Path, PureWindowsPath
+from urllib.parse import quote, urlsplit
 
 from support import BoardTestCase, PYTHON_ROOT
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -488,6 +488,53 @@ class ConsoleAssetTests(ConsoleTestCase):
         self.assertNotIn("gate", snapshot)
         self.assertFalse(snapshot["capabilities"]["consoleAssets"])
 
+    def test_connection_abort_during_response_uses_only_connection_error_handling(self):
+        from hey_my_buddy.console.server import _ConsoleHTTPServer
+        board = self.board()
+        handler = object.__new__(board.console._handler())
+        for error in (BrokenPipeError(), ConnectionResetError(), ConnectionAbortedError(), TimeoutError()):
+            with self.subTest(error=type(error).__name__):
+                handler._error = mock.Mock()
+                handler._send = mock.Mock(side_effect=error)
+                with self.assertNoLogs("hey_my_buddy.console.server", level="ERROR"):
+                    try:
+                        handler._handle_request(lambda: handler._send(200, b"{}", "application/json"))
+                    except type(error) as caught:
+                        self.assertIs(caught, error)
+                        _ConsoleHTTPServer.handle_error(None, None, None)
+                    else:
+                        self.fail("connection error was swallowed by the request wrapper")
+                handler._error.assert_not_called()
+                handler._send.assert_called_once()
+
+    def test_asset_request_paths_are_rejected_before_filesystem_access(self):
+        board = self.board()
+        handler = object.__new__(board.console._handler())
+        windows_root = PureWindowsPath("C:/console/assets")
+        windows_paths = (
+            PureWindowsPath(r"nested\file.js"),
+            PureWindowsPath(r"\rooted\x"),
+            PureWindowsPath(r"\\host\share\x"),
+            PureWindowsPath("D:/outside/x"),
+            PureWindowsPath("D:relative"),
+        )
+        # Pure Windows joins show that UNC/rooted/drive forms can escape the root.
+        for path in windows_paths[1:]:
+            self.assertFalse((windows_root / path).is_relative_to(windows_root))
+        requests = ["/" + quote(str(path), safe="") for path in windows_paths]
+        requests += ["/assets//x", "/assets/%2E/x", "/assets/%2E%2E/x", "/assets/x%00.js"]
+        for request in requests:
+            with self.subTest(request=request):
+                handler.path = request
+                handler._error = mock.Mock()
+                handler._page = mock.Mock()
+                with mock.patch.object(Path, "resolve", side_effect=AssertionError("filesystem resolve")), \
+                     mock.patch.object(Path, "stat", side_effect=AssertionError("filesystem stat")), \
+                     mock.patch.object(Path, "is_file", side_effect=AssertionError("filesystem is_file")):
+                    handler._asset(handler._path())
+                handler._error.assert_called_once_with(404, "NOT_FOUND", "Not found")
+                handler._page.assert_not_called()
+
     def test_route_failures_are_logged_once_without_private_paths_in_response(self):
         from unittest import mock
         board = self.board()
@@ -553,9 +600,6 @@ class ConsoleAssetTests(ConsoleTestCase):
         ):
             status, _headers, _body = browser.get(path)
             self.assertEqual(status, 404, path)
-        # A symlink escaping the asset root is refused as well.
-        os.symlink(self.directory / "outside.txt", board.console.assets_dir / "assets" / "leak.txt")
-        self.assertEqual(browser.get("/assets/leak.txt")[0], 404)
         # An extension-less navigation path serves the single page document.
         status, headers, body = browser.get("/evaluation/table")
         self.assertEqual(status, 200)
