@@ -84,7 +84,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
         fields = full_request(Path("/private/tmp")).to_payload()
         fields.update(harness="codex", toolScope="none", sessionServices=[], captureEvidence=False)
         request = decode_run_request(fields)
-        policy = {"configuration": "private-no-tool", "tools": []}
+        policy = {"sandbox": "read-only", "approvalPolicy": "never"}
         module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
         with mock.patch.dict(RUN_SEAMS, {"codex": module}):
             for status in ("ok", "error"):

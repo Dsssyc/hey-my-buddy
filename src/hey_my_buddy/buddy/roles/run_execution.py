@@ -109,6 +109,8 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
             payload["nativeIdentity"] = result.native_identity.to_payload()
         payload["nativeEventCount"] = result.native_event_count
         payload["zeroToolVerified"] = calls == 0
+    if result.usage is not None:
+        payload["tokenUsage"] = usage.normalize_token_usage(result.usage.value)
     top_level = fast_evidence_is_top_level(result.harness)
     if top_level or request.capture_evidence and payload["status"] == "ok":
         module = run_seam(result.harness)
@@ -610,16 +612,6 @@ class WorkerRunExecutor:
             payload.pop("nativeCheckpoint", None)
             if result is not None and any(ref.kind == "native-checkpoint" for ref in result.evidence_refs):
                 payload["lastAssistantMessage"] = None
-        cleanup = getattr(self.module, "cleanup_after_run", None)
-        if shutdown and result is not None and callable(cleanup):
-            try:
-                cleanup_facts = cleanup(Path(handle.role_run_control["nativeRoot"]), result)
-                for key in ("codingHomePrepared", "credentialCleanup"):
-                    if key in cleanup_facts:
-                        payload[key] = cleanup_facts[key]
-            except (BoardError, OSError) as error:
-                payload["credentialCleanup"] = {"complete": False,
-                    "error": error.code if isinstance(error, BoardError) else "filesystem-error"}
         from ..harnesses.registry import worker_format
         format = worker_format(self.name)
         for key, normalizer in (("tokenUsage", usage.normalize_token_usage), ("quota", usage.normalize_quota)):

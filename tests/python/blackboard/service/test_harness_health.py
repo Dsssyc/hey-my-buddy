@@ -685,7 +685,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
                 self.assertEqual(result['status'], 'ready')
                 self.assertNotIn('reasonCode', result)
                 self.assertEqual(result['accountReadFailure']['reasonCode'], reason)
-                self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
+                self.assertEqual(result['billingByProvider']['unknown']['kind'], 'unknown')
                 self.assertEqual(result['accountReadFailure']['errorType'], type(error).__name__)
                 self.assertEqual(result['accountReadFailure']['message'], str(error))
                 self.assertEqual(self.events('harness.account_read_failed')[-1]['reasonCode'], reason)
@@ -722,6 +722,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
              patch.object(account_probe, 'Connection') as connection:
             handle.return_value.shutdown_confirmed.return_value = True
             connection.return_value.call.side_effect = [{}, {'account': {'type': 'chatgpt', 'planType': 'pro'}},
+                                                       {'config': {'model_provider': 'openai'}},
                                                        CodexProtocolError('native-rpc-error', 'quota RPC denied')]
             result = self.health.refresh('codex', force=True)
             handle.return_value.terminate.assert_called_once()
@@ -751,7 +752,26 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertTrue(result['available'])
         self.assertNotIn('reasonCode', result)
         self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
-        self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
+        self.assertEqual(result['billingByProvider']['unknown']['kind'], 'unknown')
+
+    def test_non_openai_native_provider_keeps_unknown_billing_without_rejecting_login(self):
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
+             patch.object(account_probe, 'Connection') as connection:
+            handle.return_value.shutdown_confirmed.return_value = True
+            connection.return_value.call.side_effect = [
+                {}, {'account': {'type': 'apiKey'}},
+                {'config': {'model_provider': 'configured-provider'}}, {},
+            ]
+            result = self.health.refresh('codex', force=True)
+            self.assertEqual([call.args[0] for call in connection.return_value.call.call_args_list],
+                             ['initialize', 'account/read', 'config/read', 'account/rateLimits/read'])
+        self.assertTrue(result['available'])
+        self.assertNotIn('accountReadFailure', result)
+        self.assertEqual(set(result['billingByProvider']), {'configured-provider'})
+        self.assertEqual(result['billingByProvider']['configured-provider']['kind'], 'unknown')
+        self.assertNotIn('provider', result['billingByProvider']['configured-provider'])
+        self.assertEqual(self.events('harness.account_observed')[0]['billing'], result['billingByProvider'])
 
     def test_unexpected_account_reader_exception_is_not_silently_recorded(self):
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=TypeError('fixture programming error')):

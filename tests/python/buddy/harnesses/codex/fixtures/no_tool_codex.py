@@ -23,6 +23,20 @@ def main():
         return
     case = os.environ.get("BUDDY_CODEX_FIXTURE_CASE", "ok")
     turns = 0
+    native_config = {"model_provider": "openai", "mcp_servers": {"user-tool": {}},
+                     "web_search": "enabled", "approval_policy": "on-request"}
+    user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
+    if user_config.is_file():
+        native_config.update(tomllib.loads(user_config.read_text()))
+    def merge(target, update):
+        for key, value in update.items():
+            if isinstance(value, dict):
+                merge(target.setdefault(key, {}), value)
+            else:
+                target[key] = value
+    for index, argument in enumerate(sys.argv[:-1]):
+        if argument == "-c":
+            merge(native_config, tomllib.loads(sys.argv[index + 1]))
     for raw in sys.stdin:
         request = json.loads(raw)
         if "id" not in request:
@@ -40,15 +54,15 @@ def main():
                          "supportedReasoningEfforts": [{"reasoningEffort": "low"}]}
             send({"id": ident, "result": {"data": [entry], "nextCursor": None}})
         elif method == "config/read":
-            config = tomllib.loads((Path(os.environ["CODEX_HOME"]) / "config.toml").read_text())
+            config = dict(native_config)
             if case == "config-mismatch":
-                config["features"]["sleep_tool"] = True
-            send({"id": ident, "result": {"config": {"web_search": "disabled", "approval_policy": "never"},
-                 "layers": [{"name": {"type": "user", "file": str(Path(os.environ["CODEX_HOME"]) / "config.toml")},
-                             "config": config, "version": "1"}]}})
+                config["web_search"] = "enabled"
+            send({"id": ident, "result": {"config": config,
+                 "layers": [{"name": {"type": "user", "file": "<native-user-config>"},
+                             "config": {"mcp_servers": {"user-tool": {}}, "features": {"apps": True}}, "version": "1"}]}})
         elif method == "thread/start":
             trace = Path(os.environ["BUDDY_CODEX_FIXTURE_STATE"])
-            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"]}))
+            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
             send({"id": ident, "result": {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                 "model": "other" if case == "wrong-model" else params["model"],
                 "modelProvider": "openai", "approvalPolicy": "never"}})
@@ -65,6 +79,8 @@ def main():
                 send({"id": ident, "error": {"code": -32000, "message": "model not found"}})
                 continue
             if case == 'native-metadata':
+                send({'method': 'thread/started', 'params': {'thread': {
+                    'id': 'thread-1', 'environments': [{'id': 'user-native-environment'}]}}})
                 send({'method':'thread/settings/updated','params':{'threadId':'thread-1','threadSettings':{}}})
                 send({'method':'thread/status/changed','params':{'threadId':'thread-1','status':{'type':'active'}}})
                 send({'method':'account/rateLimits/updated','params':{'rateLimits':{}}})
@@ -91,7 +107,13 @@ def main():
                 event("rawResponseItem/completed", turn_id, item=item)
             if case == "unknown":
                 event("item/completed", turn_id, item={"type": "futureThing"})
-            answer = "not-json" if case == "format" and turns == 1 else json.dumps({"profileId": "foreign" if case == "outside" else "legal"})
+            if case in ("usage", "usage-format", "usage-then-missing"):
+                if case != "usage-then-missing" or turns == 1:
+                    usage = {"inputTokens": 17, "cachedInputTokens": 3, "outputTokens": 5,
+                             "reasoningOutputTokens": 1, "totalTokens": 22}
+                    event("thread/tokenUsage/updated", turn_id, tokenUsage={
+                        "last": usage, "total": {key: value * turns for key, value in usage.items()}})
+            answer = "not-json" if case in ("format", "usage-format", "usage-then-missing") and turns == 1 else json.dumps({"profileId": "foreign" if case == "outside" else "legal"})
             final = {"type": "agentMessage", "id": f"final-{turns}", "phase": "final_answer", "text": answer}
             event("item/completed", turn_id, item=final)
             items = [final]

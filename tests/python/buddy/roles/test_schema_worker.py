@@ -119,10 +119,10 @@ class SchemaWorkerTests(NativeRunCase):
                 self.assertIs(payload["processState"]["shutdownConfirmed"], stopped is True)
 
     def test_native_schemas_stay_fixed_and_full_prompt_hashes_include_the_worker_role(self):
-        # Schemas retain their description/optional-field differences; ADR-030
+        # Codex includes the shared optional profile suggestion; ADR-030
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
-            "codex": ("71b8134b2e41ebe2045afa8f3808f0f04b3cee52e0d979918ba4381c150dedec",
+            "codex": ("b3a067e92b0d2ad488b0d9cafe60faac0aba4b6da22c5eab820863db80272d34",
                       "ea7db0557cc9718b5f5b8ecb2b89b8b82c05535c5dda1fe3c0dce6137ffdbc7f"),
             "claude": ("cd91d26ede0d45b6bed2b7747520a1358ab334874c26f9d19bd2f348ae5e15a3",
                        "99f649f8eae95e65bbf7d902bc84efb594024b9ad779e44d1930e2e5a16819a4"),
