@@ -222,18 +222,18 @@ def submission_references(connection, manifest: dict, request_id: str, directory
     """Prove the new logical allocation is unregistered, including retained uses.
 
     Existing workspaces borrow their checkout, so its other readers do not own
-    this request's records or refs. Both kinds use the same private directory,
-    workspace/input identities and request identity for this proof.
+    this request's records or refs. A worktree's checkout identity belongs to
+    its allocation and protects references independently of path spelling.
     """
     return _allocation_reference_sets(_workspace_reference_rows(connection), [(manifest, request_id)],
-                                      directories=[str(directory)], include_checkout_ids=False)[0]
+                                      directories=[str(directory)])[0]
 
 
 def _allocation_reference_reasons(rows, manifest, request_id):
     return _allocation_reference_sets(rows, [(manifest, request_id)])[0]
 
 
-def _allocation_reference_sets(rows, allocations, *, directories=None, include_checkout_ids=True):
+def _allocation_reference_sets(rows, allocations, *, directories=None):
     """One streaming pass, one parse per structured field, bounded by a row.
 
     Exact tokens and normalized ancestor paths match every candidate together.
@@ -246,7 +246,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, include_c
     tokens, paths = {}, {}
     for index, (manifest, request_id) in enumerate(allocations):
         identities = [manifest['workspaceId'], request_id, manifest.get('manifestSha256')]
-        if include_checkout_ids:
+        if manifest['kind'] == 'worktree':
             identities.append(manifest['checkoutId'])
         for token in identities:
             if isinstance(token, str):

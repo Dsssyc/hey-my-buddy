@@ -898,8 +898,10 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                            _preparation=None):
     """Hold the original allocation lock through preparation and admission.
 
-    The new-allocation fact is local to this invocation; replaying a prepared
-    input never grants permission to remove the earlier allocation.
+    Both kinds are new allocations when no manifest existed before this
+    preparation. An earlier input record or checkout does not decide that fact;
+    the revocation plan must prove every record, reference and physical target.
+    Replaying an existing manifest never grants permission to revoke it.
     """
     with _errors():
         intent = _intent(intent)
@@ -927,10 +929,7 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                 fresh = _borrowed_submission_allocation(state_dir, intent)
                 if fresh != borrowed:
                     raise BoardError("WORKSPACE_CHANGED", "The borrowed allocation changed while its lock was acquired")
-            target = directory / "checkout"
-            new = (_record(directory / "manifest.json") is None
-                   and ((intent["kind"] == "worktree" and not _path_present(target))
-                        or (intent["kind"] == "existing" and _record(directory / "input.json") is None)))
+            new = _record(directory / "manifest.json") is None
             if _preparation is None:
                 manifest = _prepare_locked(directory, workspace_id, request_id, intent)
             else:
@@ -997,19 +996,25 @@ def submission_revoke_plan(state_dir, manifest):
 
 
 def revoke_submission(plan):
-    """Apply a proven, unregistered allocation's removal in reverse creation order.
+    """Remove a proven, unregistered allocation, preserving sweep evidence on failure.
 
     The original preparation lock and the coordinator's writer fence are held.
+    The worktree goes before its manifest so failed Git removal retains the
+    record the orphan sweep needs. All remaining removals follow creation in
+    reverse order.
     The lock file and directory are removed after release by that context's
-    callback; a same-request retry may enter this accepted narrow window.
+    callback. With three callers for one requestId, a second caller can lock the
+    unlinked old inode while a third creates and locks a new file, breaking
+    mutual exclusion. This window remains accepted; deleting the lock file
+    while holding it requires separate Windows verification.
     """
     with _errors():
         manifest, directory = plan["manifest"], plan["directory"]
         repository = Path(manifest["snapshot"]["repositoryPath"])
-        (directory / "manifest.json").unlink()
         if manifest["kind"] == "worktree":
             _remove_worktree(repository, Path(manifest["checkoutRoot"]), plan["allocation"], manifest,
                              {"removed": True, "alreadyRemoved": True})
+        (directory / "manifest.json").unlink()
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         for suffix, commit in (("staged", manifest["snapshot"]["stagedCommit"]), ("input", manifest["inputCommit"])):
             _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)

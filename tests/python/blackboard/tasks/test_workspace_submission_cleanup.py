@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from blackboard.tasks import test_workflow as workflow_tests
 from blackboard.tasks import test_workflow_preparation as preparation_tests
-from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.tasks import storage, workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
 
 
@@ -184,6 +184,38 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertTrue((self.allocation() / 'checkout').is_dir())
         self.assert_no_registration(board)
 
+    def test_alias_state_directory_retains_public_integration_target(self):
+        canonical = self.directory.resolve()
+        if not str(canonical).startswith(('/private/tmp/', '/private/var/')):
+            self.skipTest('requires a macOS private-directory alias')
+        self.directory = Path(str(canonical)[len('/private'):])
+        self.assertEqual(self.directory.resolve(), canonical)
+        with patch.object(storage, 'submission_references', wraps=storage.submission_references) as references, \
+                patch.object(workspace, '_write_once', wraps=workspace._write_once) as write:
+            self.test_public_integration_during_failed_admission_retains_new_target()
+        self.assertEqual(references.call_args.args[3], self.allocation().resolve())
+        receipts = [call.args[0] for call in write.call_args_list if call.args[0].name.startswith('submission-cleanup-')]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0].parent, self.allocation().resolve())
+        self.assertTrue((self.allocation() / 'manifest.json').exists())
+        self.assertEqual(len(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation().name).splitlines()), 4)
+
+    def test_submission_proof_uses_checkout_identity_only_for_worktrees(self):
+        board = self.board()
+        for kind in ('existing', 'worktree'):
+            with self.subTest(kind=kind):
+                request = 'identity-proof-' + kind
+                manifest = workspace.prepare(self.directory, request, {
+                    'kind': kind, 'cwd': str(self.repo), 'access': 'write', 'base': {'kind': 'working-tree'},
+                    'writeScope': ['.'], 'integrator': {'role': 'host', 'id': 'host-1'}})
+                plan = workspace.submission_revoke_plan(self.directory, manifest)
+                with board.store.db.write() as connection:
+                    connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json) VALUES(?,?,?,?)',
+                                       ('retained-' + kind, 'fixture', 'fixture', json.dumps({'checkoutId': manifest['checkoutId']})))
+                with board.store.db.read() as connection:
+                    reasons = storage.submission_references(connection, manifest, request, plan['directory'])
+                self.assertEqual(reasons, ['commands-reference'] if kind == 'worktree' else [])
+
     def test_admission_rejection_preserves_everything_when_additional_evidence_exists(self):
         board = self.board()
         foreign = self.submit(board, request_id='foreign', cwd=str(self.repository('foreign')),
@@ -310,6 +342,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                              'executionWorkspace': {'kind': 'existing', 'access': 'write'}},
                         ])
                 self.assertEqual(caught.exception.code, 'SHUTDOWN_UNCONFIRMED')
+                self.assertNotIn('submissionCleanup', caught.exception.details)
                 self.assertEqual(len(caught.exception.details['helperPreparationCleanup']), 2)
                 self.assertTrue(all(item['removed'] for item in caught.exception.details['helperPreparationCleanup']))
                 self.assertEqual(sorted((self.directory / 'workspaces').iterdir()), before_allocations)
@@ -455,7 +488,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         directory = self.allocation()
         manifest = captured['manifest']
         self.assertTrue((directory / 'checkout').exists())
-        self.assertFalse((directory / 'manifest.json').exists())
+        self.assertTrue((directory / 'manifest.json').exists())
         self.assertTrue((directory / 'input.json').exists())
         self.assertTrue((directory / 'request.json').exists())
         self.assertEqual(error.details['submissionCleanup']['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
@@ -463,6 +496,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(record['locked'], 'hey-my-buddy:' + manifest['workspaceId'])
         self.assertEqual(record['HEAD'], manifest['inputCommit'])
         self.assertEqual(workspace.inspect(str(directory / 'checkout'))['checkoutId'], manifest['checkoutId'])
+        self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
+        orphan = storage._orphan_workspace(board, directory)
+        self.assertEqual(orphan['reasons'], [])
         self.assert_no_registration(board)
 
     def test_changed_new_checkout_is_retained_after_admission_rejection(self):

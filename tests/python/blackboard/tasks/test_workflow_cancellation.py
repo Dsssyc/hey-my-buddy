@@ -49,6 +49,25 @@ class WorkflowCancellationTests(WorkflowTestCase):
         self.assertEqual([row[0] for row in held], [grandchild])
         self.assertEqual(transferred, "transferred")
 
+    def test_proxy_rejects_a_stale_prechecked_requesting_run(self):
+        board, _root, parent, child = self.parent_and_child()
+        self.finish_turn(board, self.claim(board, run_id=child), disposition="attention")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        with board.store.db.write() as connection:
+            workflow = board.store.workflow
+            run = workflow._run_row(connection, parent["runId"])
+            request = workflow._request_row(connection, parent["runId"], view["activeRequest"]["requestId"])
+            with self.assertRaises(BoardError) as caught:
+                workflow._resolve_helper_attention(
+                    connection, run, request, [], decision="approve", note=None,
+                    actor={"role": "host", "id": "host-1"}, command_id="stale-requesting-run",
+                    now=board.store.now(), source_run_id=parent["runId"])
+            self.assertEqual(caught.exception.code, "CONFLICT")
+            self.assertIn("requesting run changed", caught.exception.message)
+            self.assertEqual(connection.execute("SELECT state FROM workflow_requests WHERE request_id=?", (request["request_id"],)).fetchone()[0], "open")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_children WHERE parent_run_id=?", (child,)).fetchone()[0], 0)
+        self.assertIn((child, "held"), self.reservations(board))
+
     def reservations(self, board):
         with board.store.db.read() as connection:
             return {(row["holder_task_id"], row["state"]) for row in connection.execute("SELECT * FROM workspace_reservations")}

@@ -1082,7 +1082,7 @@ class WorkflowCoordinator:
         try:
             workspace_module().verify(manifest, require_unchanged=True)
         except BoardError as error:
-            if error.code in ("WORKSPACE_CHANGED", "SNAPSHOT_CHANGED"):
+            if error.code == "WORKSPACE_CHANGED":
                 raise BoardError(
                     "SNAPSHOT_CHANGED", "The checkout no longer matches a reader's frozen input",
                     checkoutId=checkout_id, holderTaskId=holder_task_id,
@@ -1730,7 +1730,8 @@ class WorkflowCoordinator:
 
         self._require_permission(schemas.buddy_constraints(spec) or None, normalized["executionWorkspace"]["access"])
         buddy = self._validated_buddy(spec)
-        self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
+        if normalized["executionWorkspace"]["kind"] == "worktree":
+            self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
         with self._submission_preparation(request_id, normalized["executionWorkspace"]) as prepared:
             manifest = prepared["manifest"]
             store_params = {
@@ -1759,9 +1760,9 @@ class WorkflowCoordinator:
                 )
             except BoardError as error:
                 if error.code == "CONFLICT":
-                    # A concurrent identical submit won the race. Its pinned snapshot is
-                    # authoritative; ours stays on disk as a recoverable artifact keyed by
-                    # the request id and is reported in the event stream.
+                    # Same-request callers share one allocation directory and lock.
+                    # Recover the committed admission only when its specification
+                    # and pinned request match this caller's input.
                     with self.db.write() as connection:
                         task = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
                         run_row = self._run_optional(connection, task["task_id"]) if task is not None else None
@@ -1824,24 +1825,24 @@ class WorkflowCoordinator:
                 yield prepared
             except Exception as error:
                 if prepared["newAllocation"]:
-                    facts = self._revoke_submission_allocation(request_id, prepared, error)
-                    if shared_locks is not None and isinstance(error, BoardError):
-                        error.details.setdefault("helperPreparationCleanup", []).append(facts)
+                    self._revoke_submission_allocation(request_id, prepared, error, batch=shared_locks is not None)
                 raise
 
-    def _revoke_submission_allocation(self, request_id, prepared, original_error):
+    def _revoke_submission_allocation(self, request_id, prepared, original_error, *, batch):
         """Revoke this invocation's new allocation without replacing admission errors.
 
         The original preparation lock stays held through physical inspection,
         the database writer fence, and removal of the checkout, refs and records.
-        Lock-file and directory removal follows lock release; a same-request
-        retry can enter that narrow window, which is accepted and reported if it
-        prevents final removal.
+        Lock-file and directory removal follows lock release. With three callers
+        for the same requestId, a second can lock the unlinked old inode while a
+        third recreates and locks a new file, breaking mutual exclusion. This
+        window remains accepted; holding the lock through deletion needs separate
+        Windows verification.
         """
         from . import storage
         module = workspace_module()
         manifest = prepared["manifest"]
-        directory = Path(self.board.directory) / "workspaces" / manifest["workspaceId"]
+        directory = None
         facts = {"requestId": request_id, "workspaceId": manifest["workspaceId"],
                  "path": manifest["checkoutRoot"], "manifestSha256": manifest["manifestSha256"],
                  "removed": False}
@@ -1853,10 +1854,13 @@ class WorkflowCoordinator:
 
         def record():
             if isinstance(original_error, BoardError):
-                original_error.details["submissionCleanup"] = facts
+                if batch:
+                    original_error.details.setdefault("helperPreparationCleanup", []).append(facts)
+                else:
+                    original_error.details["submissionCleanup"] = facts
             else:
                 original_error.add_note("Submission cleanup: " + json.dumps(facts, sort_keys=True))
-            if not facts["removed"]:
+            if not facts["removed"] and directory is not None:
                 try:
                     module._write_once(directory / ("submission-cleanup-" + uuid.uuid4().hex + ".json"), module._json(facts))
                 except Exception as error:
@@ -1864,6 +1868,7 @@ class WorkflowCoordinator:
 
         try:
             plan = module.submission_revoke_plan(self.board.directory, manifest)
+            directory = plan["directory"]
             with self.db.write() as connection:
                 reasons = storage.submission_references(connection, manifest, request_id, directory)
                 if reasons or plan["reasons"]:
@@ -2242,7 +2247,7 @@ class WorkflowCoordinator:
                     )
                 elif decision == "approve":
                     children = self._create_helpers(connection, run_row, task, request_row, prepared, command_id, now,
-                                                    source_host_id=run_row["host_id"], actor=actor, source_run_id=source_run_id)
+                                                    source_host_id=run_row["host_id"], actor=actor)
                     connection.execute(
                         "UPDATE workflow_requests SET state='approved', decision_json=?, decision_command_id=?,"
                         " decided_at=?, updated_at=? WHERE request_id=?",
@@ -2379,7 +2384,8 @@ class WorkflowCoordinator:
             for helper in helpers:
                 self._require_permission(schemas.buddy_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
                 buddy = self._validated_buddy(helper["spec"])
-                self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
+                if helper["executionWorkspace"]["kind"] == "worktree":
+                    self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                 allocation = preparations.enter_context(self._submission_preparation(
                     helper["requestId"], helper["executionWorkspace"], shared_locks=shared_locks,
                     transfer_from=transfer_from))
@@ -2573,8 +2579,7 @@ class WorkflowCoordinator:
              input_text, note or None, now),
         )
         extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now,
-                                     source_host_id=parent_run["host_id"], actor=actor,
-                                     source_run_id=source_run_id) if decision == "approve" and prepared else []
+                                     source_host_id=parent_run["host_id"], actor=actor) if decision == "approve" and prepared else []
         pending = self._open_boundary(connection, child_run)
         if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
             self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
@@ -2600,7 +2605,7 @@ class WorkflowCoordinator:
 
     def _create_helpers(
         self, connection, run_row, parent_task, request_row, prepared: list[dict], command_id: str, now: str,
-        *, source_host_id: str | None, actor: dict, source_run_id: str,
+        *, source_host_id: str | None, actor: dict,
     ) -> list[dict]:
         task_spec = json.loads(parent_task["spec_json"])
         children: list[dict] = []
@@ -2613,14 +2618,14 @@ class WorkflowCoordinator:
                     run_row["workspace_manifest_json"] or "{}").get("checkoutId"):
                 # Sequential reuse of the parent's checkout requires stopped-parent proof
                 # and an explicit Host transfer.
-                if not self._stopped_parent(connection, source_run_id):
+                if not self._stopped_parent(connection, run_row["run_id"]):
                     raise BoardError(
                         "SHUTDOWN_UNCONFIRMED",
                         "A helper cannot take over the parent's checkout while the parent execution may still run; "
                         "the Host must transfer it only after stopped-parent evidence exists",
                         parentRunId=run_row["run_id"],
                     )
-                transfer_from = source_run_id
+                transfer_from = run_row["run_id"]
             self._admit_helper_task(
                 connection,
                 helper_task_id=helper_task_id,
