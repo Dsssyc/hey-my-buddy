@@ -1294,30 +1294,128 @@ def integration_verify(artifact: dict, *, path: str, ref: str, strategy: str, be
 
 
 # -- cleanup of one registered disposable checkout ----------------------------
-def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None) -> dict:
-    """Eligibility facts for removing exactly one registered Buddy worktree.
+def _workspace_identifier(value):
+    return (isinstance(value, str) and value.startswith("ws-") and len(value) == 35
+            and all(character in "0123456789abcdef" for character in value[3:]))
 
-    Only a linked worktree created under this state directory's ``workspaces``
-    area is ever a cleanup target. The source checkout, a sibling directory, an
-    unknown path and a worktree without this preparation's lock are all reported
-    as retention reasons instead of being deleted.
+
+def _inside(path, root):
+    """True when an absolute path stays inside one known checkout root."""
+    if not isinstance(path, str) or not path or "\0" in path:
+        return False
+    try:
+        return Path(path).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def _allocation_candidates(manifest, retained):
+    """The current turn/input manifest plus the authoritative retained material."""
+    values = [manifest]
+    for candidate in retained or ():
+        if isinstance(candidate, dict) and candidate not in values:
+            values.append(candidate)
+    return values
+
+
+def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
+    """Resolve the physical managed-worktree allocation that owns one manifest's checkout.
+
+    The current manifest may be a later turn/input snapshot of an earlier
+    allocation: a continuation reuses the same physical checkout under a new
+    logical workspace id, and a borrowed existing workspace never owns anything.
+    Provenance therefore comes only from material the board already retained
+    (``retained``: pinned input artifacts, canonical turn inputs and prepared
+    continuation manifests), never from a cwd that merely sits under
+    ``state/workspaces``. A candidate proves the allocation only when all of these
+    hold together: the same repositoryId/checkoutId, the allocation's own
+    immutable manifest record under its own workspace directory, the exact
+    ``<state>/workspaces/<allocationId>/checkout`` path and a checkout inside that
+    path. The caller rechecks the Git ``buddy:<allocationId>`` lock against the
+    returned identity before any deletion.
     """
     with _errors():
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
-        workspace_id = manifest["workspaceId"]
-        checkout_root = Path(manifest["checkoutRoot"])
-        expected = state_dir / "workspaces" / workspace_id / "checkout"
-        result = {"eligible": False, "reasons": [], "workspaceId": workspace_id, "kind": manifest["kind"],
-                  "checkoutId": manifest["checkoutId"], "repositoryId": manifest["repositoryId"],
-                  "path": str(checkout_root), "cwd": manifest["path"], "worktree": False, "locked": None,
-                  "unsealedPaths": [], "refs": [], "sealedObservation": None}
-        if manifest["kind"] != "worktree":
+        checkout_root = manifest["checkoutRoot"]
+        for candidate in _allocation_candidates(manifest, retained):
+            if candidate.get("kind") != "worktree":
+                continue
+            workspace_id = candidate.get("workspaceId")
+            if not _workspace_identifier(workspace_id):
+                continue
+            if (candidate.get("checkoutId") != manifest["checkoutId"]
+                    or candidate.get("repositoryId") != manifest["repositoryId"]
+                    or candidate.get("checkoutRoot") != checkout_root
+                    or not _inside(candidate.get("path"), checkout_root)):
+                continue
+            directory = state_dir / "workspaces" / workspace_id
+            if directory.is_symlink() or not directory.is_dir():
+                continue
+            if _record(directory / "manifest.json") != candidate:
+                continue
+            if str(directory / "checkout") != checkout_root:
+                continue
+            return {"workspaceId": workspace_id, "path": checkout_root, "kind": "worktree",
+                    "checkoutId": candidate["checkoutId"], "repositoryId": candidate["repositoryId"],
+                    "manifestSha256": candidate.get("manifestSha256"),
+                    "manifestWorkspaceId": manifest["workspaceId"]}
+        return None
+
+
+def _allocation_refs(repository, allocation_id, manifest, retained):
+    """Bounded retention view of every fixed ref that belongs to this checkout."""
+    identifiers = [allocation_id, manifest["workspaceId"]]
+    for candidate in _allocation_candidates(manifest, retained):
+        value = candidate.get("workspaceId")
+        if (candidate.get("checkoutId") == manifest["checkoutId"] and _workspace_identifier(value)
+                and value not in identifiers):
+            identifiers.append(value)
+    refs = []
+    for identifier in identifiers:
+        refs.extend(os.fsdecode(line) for line in _git(
+            repository, "for-each-ref", "--format=%(refname)", f"refs/buddy/workspaces/{identifier}/").splitlines())
+        if len(refs) >= 64:
+            break
+    return sorted(set(refs))[:64]
+
+
+def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None) -> dict:
+    """Eligibility facts for removing exactly one registered Buddy worktree.
+
+    The deletion target is the *physical allocation* resolved from authoritative
+    retained manifests, not the current turn/input snapshot: a continuation
+    reuses the same checkout under a new logical workspace id, so the original
+    worktree manifest, the exact allocation path and the original
+    ``buddy:<allocationId>`` Git lock are what authorize a removal. An arbitrary
+    existing cwd under ``state/workspaces`` proves nothing by itself: the source
+    checkout, a borrowed directory, a sibling worktree and an unknown path are all
+    reported as retention reasons instead of being deleted.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        state_dir = Path(state_dir).resolve()
+        allocation = resolve_allocation(state_dir, manifest, retained)
+        result = {
+            "eligible": False, "reasons": [],
+            "workspaceId": (allocation or manifest)["workspaceId"],
+            "manifestWorkspaceId": manifest["workspaceId"],
+            "kind": (allocation or manifest)["kind"],
+            "checkoutId": manifest["checkoutId"], "repositoryId": manifest["repositoryId"],
+            "path": allocation["path"] if allocation else manifest["checkoutRoot"], "cwd": manifest["path"],
+            "allocation": allocation, "worktree": False, "locked": None,
+            "unsealedPaths": [], "refs": [], "sealedObservation": None,
+        }
+        if allocation is None:
             result["reasons"].append("not-a-managed-worktree")
-        if checkout_root != expected:
-            result["reasons"].append("unsafe-path")
-        if result["reasons"]:
+            if manifest["kind"] == "worktree":
+                # A worktree manifest that no longer names its own allocation is unsafe.
+                if Path(manifest["checkoutRoot"]) != state_dir / "workspaces" / manifest["workspaceId"] / "checkout":
+                    result["reasons"].append("unsafe-path")
             return result
+        checkout_root = Path(allocation["path"])
+        if not _inside(manifest["path"], checkout_root):
+            result["reasons"].append("unsafe-path")
         try:
             actual = inspect(str(checkout_root))
         except BoardError:
@@ -1326,25 +1424,31 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None) -> di
         for field in ("checkoutRoot", "checkoutId", "repositoryId"):
             if actual[field] != manifest[field]:
                 result["reasons"].append("identity-changed")
-        repository = Path(manifest["snapshot"]["repositoryPath"])
+        repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
-        if not record or record.get("locked") != "buddy:" + workspace_id or "detached" not in record:
+        if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
             result["reasons"].append("unregistered-checkout")
         else:
             result["worktree"] = True
             result["locked"] = record.get("locked")
-        result["refs"] = [os.fsdecode(line) for line in
-                          _git(repository, "for-each-ref", "--format=%(refname)",
-                               f"refs/buddy/workspaces/{workspace_id}/").splitlines()][:64]
+        result["refs"] = _allocation_refs(repository, allocation["workspaceId"], manifest, retained)
         if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
             result["reasons"].append("no-sealed-output")
             return result
         snapshot = sealed["snapshot"]
         result["sealedObservation"] = snapshot.get("observationSha256")
-        observation = _stable_observation(Path(manifest["checkoutRoot"]), manifest["snapshot"]["executionSelectors"])
+        # The dirty check is against the latest sealed handoff *of the current input
+        # snapshot*. A later stage's changedEntries are a delta from the latest
+        # prepared input, never the original-to-final difference, so a handoff that
+        # belongs to another input must block instead of being compared loosely.
+        if (sealed.get("manifestSha256") != manifest["manifestSha256"]
+                or snapshot.get("inputCommit") != manifest["inputCommit"]):
+            result["reasons"].append("unsealed-handoff")
+            return result
+        observation = _stable_observation(checkout_root, manifest["snapshot"]["executionSelectors"])
         unsealed = []
         try:
-            entries_now, changed, excluded_changes, _adopted = _output_entries(Path(manifest["checkoutRoot"]), manifest, observation)
+            entries_now, changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation)
             # Compare the actual per-path output bindings: a modified file that was
             # already part of the sealed change set is still a new unsealed change.
             changed_entries, truncated = _changed_entries(entries_now, changed)
@@ -1369,37 +1473,38 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None) -> di
         return result
 
 
-def cleanup_remove(state_dir, manifest: dict) -> dict:
-    """Delete exactly the registered linked worktree of one cleanup plan.
+def cleanup_remove(state_dir, manifest: dict, *, retained=None) -> dict:
+    """Delete exactly the registered worktree of one manifest's physical allocation.
 
     The caller has rechecked acceptance, integration, shutdown and dependency
-    evidence. This function only proves the exact path still is this
-    preparation's own locked worktree and then removes that one path; no parent
+    evidence. This function only proves that the exact path still is that
+    allocation's own locked worktree and then removes that one path; no parent
     directory, source checkout, outputs directory or Git reference is touched.
-    No repository-wide ``worktree prune`` runs here: a missing or foreign worktree
-    registry entry that belongs to someone else is never this cleanup's business.
+    A borrowed existing checkout, a sibling worktree and a registry entry that
+    belongs to someone else are never this cleanup's business. No repository-wide
+    ``worktree prune`` runs here.
     """
     with _errors():
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
-        workspace_id = manifest["workspaceId"]
-        checkout_root = Path(manifest["checkoutRoot"])
-        expected = state_dir / "workspaces" / workspace_id / "checkout"
-        if manifest["kind"] != "worktree" or checkout_root != expected:
+        allocation = resolve_allocation(state_dir, manifest, retained)
+        if allocation is None or not _inside(manifest["path"], allocation["path"]):
             raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable Buddy checkout",
-                             path=str(checkout_root))
-        repository = Path(manifest["snapshot"]["repositoryPath"])
+                             path=manifest["checkoutRoot"])
+        checkout_root = Path(allocation["path"])
         actual = inspect(str(checkout_root))
         for field in ("checkoutRoot", "checkoutId", "repositoryId"):
             if actual[field] != manifest[field]:
                 raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
+        repository = Path(actual["repositoryPath"])
         record = _worktree_record(repository, checkout_root)
-        if not record or record.get("locked") != "buddy:" + workspace_id:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this preparation's registered worktree",
+        if not record or record.get("locked") != "buddy:" + allocation["workspaceId"] or "detached" not in record:
+            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is not this allocation's registered worktree",
                              path=str(checkout_root))
         _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
         _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
         if checkout_root.exists():
             raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
         return {"removed": True, "path": str(checkout_root), "repositoryPath": str(repository),
-                "workspaceId": workspace_id, "checkoutId": manifest["checkoutId"]}
+                "workspaceId": allocation["workspaceId"], "manifestWorkspaceId": manifest["workspaceId"],
+                "checkoutId": manifest["checkoutId"]}

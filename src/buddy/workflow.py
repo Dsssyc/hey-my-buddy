@@ -2277,11 +2277,26 @@ class WorkflowCoordinator:
         )
 
     # -- continue ------------------------------------------------------------
-    def _continuation_target(self, connection, owner, target_id: str):
+    def _target_run(self, connection, owner, target_id: str):
+        """Resolve the run one Host control command acts on.
+
+        ``runId`` always names the controlling root: only its control capability
+        authenticates the caller and only its ``expectedRevision`` fences the
+        command. ``targetRunId`` may name that same run or an owned descendant
+        (a helper). The descent is re-walked on every call, so a sibling, a
+        foreign run, or a target that has since been detached from this Goal is
+        refused instead of acted on. Ownership is the ``workflow_children`` link,
+        not the helper's admission-time host label: a root takeover fences the old
+        capability while the current owner can still act on the same helper. No
+        helper control token is ever needed or exposed.
+        """
         if target_id != owner["run_id"] and target_id not in {
                 child["child_task_id"] for child in self._owned_children(connection, owner["run_id"])}:
             raise BoardError("UNAUTHORIZED", "targetRunId must be an authorized descendant of this owning Goal")
         return self._run_row(connection, target_id)
+
+    def _continuation_target(self, connection, owner, target_id: str):
+        return self._target_run(connection, owner, target_id)
 
     @staticmethod
     def _configuration_matches_goal(run, configuration: dict | None) -> None:
@@ -3038,12 +3053,35 @@ class WorkflowCoordinator:
         )
 
     # -- acknowledge ---------------------------------------------------------
+    def _recorded_acceptance_integration(self, connection, run_id: str) -> str | None:
+        """The integration record the recorded acceptance was bound to, if any.
+
+        The acceptance event is append-only and carries the exact integration id
+        that was current when the verdict was recorded, so a later command can
+        never relabel an accepted outcome with a different claimed integration.
+        """
+        row = connection.execute(
+            "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.acknowledged'"
+            " ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError):
+            return None
+        value = payload.get("integrationId") if isinstance(payload, dict) else None
+        return value if isinstance(value, str) and value else None
+
     def acknowledge(self, params: dict, *, console_authority: dict | None = None) -> dict:
         schemas.reject_unknown(
             params,
             {
                 "runId",
+                "targetRunId",
                 "commandId",
+                "expectedRevision",
                 "artifactId",
                 "integrationId",
                 "note",
@@ -3056,7 +3094,8 @@ class WorkflowCoordinator:
             "workflow.acknowledge",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.optional_string(params, "commandId", max_length=128)
         artifact_id = schemas.optional_string(params, "artifactId", max_length=128)
         integration_id = schemas.optional_string(params, "integrationId", max_length=128)
@@ -3065,18 +3104,25 @@ class WorkflowCoordinator:
         if verdict not in ("accepted", "rejected"):
             raise BoardError("INVALID_ARGUMENT", "verdict must be 'accepted' or 'rejected'")
         evidence = schemas.string_list(params, "evidence", limit=32)
-        request_key = {"runId": run_id, "artifactId": artifact_id, "note": note, "verdict": verdict}
+        # A retry with the same commandId but a different claimed integration or
+        # evidence is a different command, never a silent replay of the old claim.
+        request_key = {"runId": run_id, "targetRunId": target_id, "artifactId": artifact_id, "note": note,
+                       "verdict": verdict, "integrationId": integration_id, "evidence": evidence}
         now = self.now()
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+            owner = self._run_row(connection, owner_run_id)
             actor = self._authorize(
-                connection, run_row, params, console_authority=console_authority, action="Acknowledgement"
+                connection, owner, params, console_authority=console_authority, action="Acknowledgement"
             )
             if command_id:
                 receipt = self.board._receipt(connection, command_id, "workflow.acknowledge", request_key)
                 if receipt is not None:
                     return {**receipt, "duplicate": True}
+            if params.get("expectedRevision") is not None:
+                self._expect_revision(owner, schemas.require_expected_revision(params))
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = target_id
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             # Acceptance is bound to the current delivered goal, never to a Host
             # decision boundary, an active helper, or an older attempt's output.
             if run_row["state"] not in ("delivered", "accepted"):
@@ -3189,7 +3235,19 @@ class WorkflowCoordinator:
                         acceptedAt=task["accepted_at"],
                         verdict=task["acceptance_verdict"],
                     )
-                response = {**self.compact(connection, run_row, task), "duplicate": True}
+                expected_integration = self._recorded_acceptance_integration(connection, run_id)
+                if (integration_id is not None and expected_integration is not None
+                        and integration_id != expected_integration):
+                    raise BoardError(
+                        "CONFLICT",
+                        "This goal was already acknowledged with a different integration record; "
+                        "the recorded verdict is not relabelled by a changed claim",
+                        acceptedAt=task["accepted_at"],
+                        integrationId=integration_id,
+                        recordedIntegrationId=expected_integration,
+                    )
+                response = {**self.compact(connection, run_row, task), "duplicate": True,
+                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
                 if resolution is not None:
                     response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
                 return response
@@ -3242,7 +3300,8 @@ class WorkflowCoordinator:
             # An accepted attempt counts as one reviewed sample, exactly like the
             # infrastructure acknowledgement path; the verdict is never inherited implicitly.
             self.board.evaluation.refresh_task_evidence(connection, task, now)
-            response = {**view, "verdict": verdict, "duplicate": False}
+            response = {**view, "verdict": verdict, "duplicate": False,
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
             if integration is not None:
                 response["integration"] = self._integration_view(integration)
             if resolution is not None:
@@ -3347,13 +3406,14 @@ class WorkflowCoordinator:
         schemas.reject_unknown(
             params,
             {
-                "runId", "commandId", "expectedRevision", "writeScope", "expectedScopeVersion", "reason",
-                *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
+                "runId", "targetRunId", "commandId", "expectedRevision", "writeScope", "expectedScopeVersion",
+                "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.scope_amend",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
         raw_scope = schemas.string_list(params, "writeScope", limit=256)
@@ -3364,24 +3424,28 @@ class WorkflowCoordinator:
         if isinstance(expected_scope, bool) or not isinstance(expected_scope, int) or expected_scope < 1:
             raise BoardError("INVALID_ARGUMENT", "expectedScopeVersion must be a positive integer")
         reason, _size = schemas.bounded_text(params, "reason", max_bytes=schemas.MAX_WORKFLOW_REASON_BYTES)
-        request_key = {"runId": run_id, "expectedScopeVersion": expected_scope, "writeScope": write_scope,
-                       "reason": reason, "expectedRevision": expected}
+        request_key = {"runId": run_id, "targetRunId": target_id, "expectedScopeVersion": expected_scope,
+                       "writeScope": write_scope, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
-            run_row = self._run_row(connection, run_id)
-            self._authorize(connection, run_row, params, console_authority=console_authority, action="A scope amendment")
+            owner = self._run_row(connection, run_id)
+            self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
-            self._scope_precheck(connection, run_row, expected_scope, "A scope amendment")
+            self._expect_revision(owner, expected)
+            target_snapshot = self._target_run(connection, owner, target_id)
+            self._scope_precheck(connection, target_snapshot, expected_scope, "A scope amendment")
         now = self.now()
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A scope amendment")
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            self._expect_revision(run_row, target_snapshot["revision"])
             evidence = self._scope_precheck(connection, run_row, expected_scope, "A scope amendment")
             scope = self._current_scope(connection, run_row)
             version = scope["scopeVersion"] + 1
@@ -3407,6 +3471,8 @@ class WorkflowCoordinator:
                 "scopeVersion": version,
                 "writeScope": write_scope,
                 "inputManifestSha256": scope["inputManifestSha256"],
+                "targetRunId": run_id,
+                "targetRevision": run_row["revision"],
             }
             self.board._store_receipt(connection, command_id, "workflow.scope_amend", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
@@ -3556,13 +3622,14 @@ class WorkflowCoordinator:
         schemas.reject_unknown(
             params,
             {
-                "runId", "commandId", "expectedRevision", "conflictId", "action", "paths", "observedFingerprint",
-                "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
+                "runId", "targetRunId", "commandId", "expectedRevision", "conflictId", "action", "paths",
+                "observedFingerprint", "reason", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.workspace_resolve",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
         conflict_id = schemas.required_string(params, "conflictId", max_length=128)
@@ -3579,26 +3646,27 @@ class WorkflowCoordinator:
                 raise BoardError("INVALID_ARGUMENT", f"{action} binds the whole recorded site and takes no path selection")
             if not reason:
                 raise BoardError("INVALID_ARGUMENT", f"{action} requires an explicit reason")
-        request_key = {"runId": run_id, "conflictId": conflict_id, "action": action, "paths": paths,
-                       "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
+        request_key = {"runId": run_id, "targetRunId": target_id, "conflictId": conflict_id, "action": action,
+                       "paths": paths, "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A workspace resolution")
+            owner = self._run_row(connection, run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
-            conflict = self._conflict_row(connection, run_id, conflict_id)
+            self._expect_revision(owner, expected)
+            target_snapshot = self._target_run(connection, owner, target_id)
+            conflict = self._conflict_row(connection, target_id, conflict_id)
             if conflict["state"] != "open":
                 if conflict["action"] == action:
-                    return self._resolved_duplicate(connection, run_row, conflict)
+                    return self._resolved_duplicate(connection, target_snapshot, conflict)
                 raise BoardError("CONFLICT", "This conflict already has a different recorded resolution",
                                  conflictId=conflict_id, state=conflict["state"], action=conflict["action"])
-            self._lineage_stop_evidence(connection, run_row, "A workspace resolution")
-            manifest = self._conflict_manifest(connection, run_row, conflict)
+            self._lineage_stop_evidence(connection, target_snapshot, "A workspace resolution")
+            manifest = self._conflict_manifest(connection, target_snapshot, conflict)
         try:
             result = workspace_module().resolve(
-                self.board.directory, manifest, task_id=run_id, attempt_id=conflict["attempt_id"], action=action,
+                self.board.directory, manifest, task_id=target_id, attempt_id=conflict["attempt_id"], action=action,
                 paths=paths, observed_fingerprint=observed, reason=reason, actor=actor,
             )
         except BoardError as error:
@@ -3614,12 +3682,15 @@ class WorkflowCoordinator:
             raise
         now = self.now()
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A workspace resolution")
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            self._expect_revision(run_row, target_snapshot["revision"])
             current = self._conflict_row(connection, run_id, conflict_id)
             if current["state"] != "open":
                 raise BoardError("REVISION_CONFLICT", "The conflict changed while the resolution ran; re-read it and retry",
@@ -3738,6 +3809,8 @@ class WorkflowCoordinator:
                 "delivered": delivery is not None,
                 "delivery": delivery,
                 "nextBoundaryRequestId": boundary_request_id,
+                "targetRunId": run_id,
+                "targetRevision": run_row["revision"],
             }
             self.board._store_receipt(connection, command_id, "workflow.workspace_resolve", request_key, response,
                                       task_id=run_id, attempt_id=current["attempt_id"])
@@ -3781,6 +3854,8 @@ class WorkflowCoordinator:
             "delivered": delivery is not None,
             "delivery": delivery,
             "nextBoundaryRequestId": None,
+            "targetRunId": run_row["run_id"],
+            "targetRevision": run_row["revision"],
         }
 
     def integration_record(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -3794,14 +3869,15 @@ class WorkflowCoordinator:
         schemas.reject_unknown(
             params,
             {
-                "runId", "commandId", "expectedRevision", "artifactId", "target", "strategy", "notRequired",
-                "reason", "verification", "adjustedPaths", "beforeCommit", *schemas.CONTROL_FIELDS,
+                "runId", "targetRunId", "commandId", "expectedRevision", "artifactId", "target", "strategy",
+                "notRequired", "reason", "verification", "adjustedPaths", "beforeCommit", *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
             "workflow.integration_record",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
         artifact_id = schemas.required_string(params, "artifactId", max_length=128)
@@ -3834,18 +3910,21 @@ class WorkflowCoordinator:
                 raise BoardError("INVALID_ARGUMENT", "target.path must be an absolute checkout path")
             schemas.required_string(target, "ref", max_length=512)
         before_commit = schemas.optional_string(params, "beforeCommit", max_length=128)
-        request_key = {"runId": run_id, "artifactId": artifact_id, "strategy": strategy, "notRequired": not_required,
+        request_key = {"runId": run_id, "targetRunId": target_id, "artifactId": artifact_id, "strategy": strategy,
+                       "notRequired": not_required,
                        "reason": reason, "verification": verification_text, "adjustedPaths": adjusted,
                        "expectedRevision": expected, "beforeCommit": before_commit,
                        "target": ({key: target.get(key) for key in ("path", "ref", "repositoryId", "checkoutId")}
                                   if target is not None else None)}
         with self.db.read() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="An integration record")
+            owner = self._run_row(connection, run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An integration record")
             receipt = self.board._receipt(connection, command_id, "workflow.integration_record", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            target_snapshot = self._target_run(connection, owner, target_id)
+            run_id = target_id
             artifact = connection.execute(
                 "SELECT * FROM workflow_artifacts WHERE artifact_id=? AND run_id=? AND kind IN ('output','resolved-output')",
                 (artifact_id, run_id),
@@ -3878,12 +3957,15 @@ class WorkflowCoordinator:
         binding_sha = sha256_text(canonical_json(binding))
         now = self.now()
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="An integration record")
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="An integration record")
             receipt = self.board._receipt(connection, command_id, "workflow.integration_record", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            self._expect_revision(run_row, target_snapshot["revision"])
             existing = connection.execute(
                 "SELECT * FROM workflow_integrations WHERE binding_sha256=?", (binding_sha,)
             ).fetchone()
@@ -3927,6 +4009,8 @@ class WorkflowCoordinator:
                     "integrationId": integration_id,
                     "integration": self._integration_view(connection.execute(
                         "SELECT * FROM workflow_integrations WHERE integration_id=?", (integration_id,)).fetchone()),
+                    "targetRunId": run_id,
+                    "targetRevision": run_row["revision"],
                 }
             else:
                 if existing["run_id"] != run_id or existing["artifact_id"] != artifact_id:
@@ -3937,6 +4021,8 @@ class WorkflowCoordinator:
                     "duplicate": True,
                     "integrationId": existing["integration_id"],
                     "integration": self._integration_view(existing),
+                    "targetRunId": run_id,
+                    "targetRevision": run_row["revision"],
                 }
             self.board._store_receipt(connection, command_id, "workflow.integration_record", request_key, response,
                                       task_id=run_id, attempt_id=artifact["attempt_id"])
@@ -3944,7 +4030,47 @@ class WorkflowCoordinator:
         self.board._notify(head)
         return response
 
-    def _cleanup_reasons(self, connection, run_row, task, manifest: dict) -> tuple[list[str], dict, dict]:
+    @staticmethod
+    def _allocation_provenance(connection, run_row) -> list[dict]:
+        """Authoritative retained manifests that can prove one run's physical allocation.
+
+        Only material the board already pinned for this run is used: pinned input
+        artifacts, the canonical input of every turn and every prepared
+        continuation manifest. A bare cwd that happens to sit under
+        ``state/workspaces`` is never provenance, and a helper run that merely
+        borrowed its parent's checkout has no worktree manifest of its own.
+        """
+        manifests: list[dict] = []
+        seen: set[str] = set()
+        for query in (
+            "SELECT manifest_json AS body FROM workflow_artifacts WHERE run_id=? ORDER BY rowid LIMIT 128",
+            "SELECT input_json AS body FROM workflow_turns WHERE run_id=? ORDER BY turn_index LIMIT 128",
+            "SELECT workspace_manifest_json AS body FROM workflow_continuations WHERE run_id=? ORDER BY rowid LIMIT 128",
+        ):
+            for row in connection.execute(query, (run_row["run_id"],)).fetchall():
+                body = row["body"]
+                if not body:
+                    continue
+                try:
+                    document = json.loads(body)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(document, dict):
+                    continue
+                candidate = document.get("executionWorkspace")
+                if not isinstance(candidate, dict):
+                    candidate = document if "workspaceId" in document and "snapshot" in document else None
+                if not isinstance(candidate, dict):
+                    continue
+                identity = str(candidate.get("manifestSha256") or candidate.get("workspaceId") or "")
+                if identity and identity in seen:
+                    continue
+                seen.add(identity)
+                manifests.append(candidate)
+        return manifests
+
+    def _cleanup_reasons(self, connection, run_row, task, manifest: dict, *,
+                         allocation: dict | None = None) -> tuple[list[str], dict, dict]:
         """Everything that must hold before one disposable checkout may be removed."""
         reasons = []
         if run_row["state"] != "accepted" or not task["accepted_at"] or task["acceptance_verdict"] != "accepted":
@@ -3992,7 +4118,11 @@ class WorkflowCoordinator:
                               if final_artifact is not None else None),
         }
         retention = {
-            "workspaceDirectory": str(self.board.directory / "workspaces" / (manifest.get("workspaceId") or "")),
+            # The physical allocation owns the disposable worktree; the logical
+            # directory of the current turn/input snapshot is retained alongside it.
+            "workspaceDirectory": str(self.board.directory / "workspaces"
+                                      / ((allocation or {}).get("workspaceId") or manifest.get("workspaceId") or "")),
+            "logicalWorkspaceDirectory": str(self.board.directory / "workspaces" / (manifest.get("workspaceId") or "")),
             "fixedRefs": [],
             "outputPatches": [],
             "artifactIds": [],
@@ -4022,39 +4152,49 @@ class WorkflowCoordinator:
         """
         schemas.reject_unknown(
             params,
-            {"runId", "commandId", "expectedRevision", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
+            {"runId", "targetRunId", "commandId", "expectedRevision", *schemas.CONTROL_FIELDS,
+             schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cleanup_plan",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
-        request_key = {"runId": run_id, "expectedRevision": expected}
+        request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
         with self.db.read() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A cleanup plan")
+            owner = self._run_row(connection, run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = target_id
+            target_snapshot = run_row
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
             if not manifest:
                 raise BoardError("NOT_READY", "This run has no prepared workspace to clean up", runId=run_id)
+            retained = self._allocation_provenance(connection, run_row)
             existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND workspace_id=? ORDER BY rowid DESC LIMIT 1",
-                (run_id, manifest.get("workspaceId")),
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=? ORDER BY rowid DESC LIMIT 1",
+                (run_id, manifest.get("checkoutId")),
             ).fetchone()
             if existing is not None and existing["state"] in ("planned", "applying", "applied"):
                 # An applied plan is its own result; a live planned or resuming plan
                 # is still the one authorization for this exact path. An expired plan
                 # authorizes nothing and is replaced by a fresh one.
                 if existing["state"] != "planned" or existing["expires_at"] >= self.now():
-                    return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing)}
+                    return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
+                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
             sealed = self._latest_handoff(connection, run_row, manifest)
         module = workspace_module()
-        inspection = module.cleanup_inspect(self.board.directory, manifest, sealed=sealed)
+        inspection = module.cleanup_inspect(self.board.directory, manifest, sealed=sealed, retained=retained)
+        if inspection["allocation"] is not None:
+            retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
+                                                  / inspection["allocation"]["workspaceId"])
         reasons = sorted(set(reasons) | set(inspection["reasons"]))
         if inspection["refs"]:
             retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
@@ -4062,30 +4202,35 @@ class WorkflowCoordinator:
         retention["cwd"] = inspection["cwd"]
         evidence = {**evidence, "workspace": {key: inspection[key] for key in
                                               ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
-                                               "locked", "unsealedPaths", "sealedObservation")}}
+                                               "locked", "unsealedPaths", "sealedObservation", "workspaceId",
+                                               "manifestWorkspaceId", "allocation")}}
         now = self.now()
         plan_id = f"cln-{uuid.uuid4()}"
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A cleanup plan")
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            self._expect_revision(run_row, target_snapshot["revision"])
             existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND workspace_id=?"
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=?"
                 " AND state IN ('planned','applying','applied') ORDER BY rowid DESC LIMIT 1",
-                (run_id, manifest.get("workspaceId")),
+                (run_id, manifest.get("checkoutId")),
             ).fetchone()
             if existing is not None and (existing["state"] != "planned" or existing["expires_at"] >= now):
-                return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing)}
+                return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
             connection.execute(
                 "INSERT INTO workspace_cleanup_plans(plan_id, run_id, workspace_id, checkout_id, repository_id, path,"
                 " kind, state, evidence_json, retention_json, reasons_json, command_id, actor, revision, created_at,"
                 " expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
-                (plan_id, run_id, manifest.get("workspaceId"), manifest.get("checkoutId"), manifest.get("repositoryId"),
-                 inspection["path"], manifest.get("kind"),
+                (plan_id, run_id, inspection["workspaceId"], inspection["checkoutId"], inspection["repositoryId"],
+                 inspection["path"], inspection["kind"],
                  "blocked" if reasons else "planned", canonical_json(evidence), canonical_json(retention),
                  canonical_json(reasons), command_id, actor, now, expires_at),
             )
@@ -4098,7 +4243,8 @@ class WorkflowCoordinator:
             )
             plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
             run_row = self._bump_run(connection, run_row, now)
-            response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan)}
+            response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan),
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self.board._store_receipt(connection, command_id, "workflow.cleanup_plan", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -4119,24 +4265,29 @@ class WorkflowCoordinator:
         """
         schemas.reject_unknown(
             params,
-            {"runId", "planId", "commandId", "expectedRevision", "confirmPath", *schemas.CONTROL_FIELDS,
+            {"runId", "targetRunId", "planId", "commandId", "expectedRevision", "confirmPath", *schemas.CONTROL_FIELDS,
              schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cleanup_apply",
         )
         schemas.reject_untrusted_override(params)
-        run_id = schemas.required_string(params, "runId", max_length=128)
+        owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
+        target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         plan_id = schemas.required_string(params, "planId", max_length=128)
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
         confirm_path = schemas.required_string(params, "confirmPath", max_length=4096)
-        request_key = {"runId": run_id, "planId": plan_id, "confirmPath": confirm_path, "expectedRevision": expected}
+        request_key = {"runId": run_id, "targetRunId": target_id, "planId": plan_id, "confirmPath": confirm_path,
+                       "expectedRevision": expected}
         with self.db.read() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A cleanup apply")
+            owner = self._run_row(connection, run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = target_id
+            target_snapshot = run_row
             plan = connection.execute(
                 "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
             ).fetchone()
@@ -4148,26 +4299,32 @@ class WorkflowCoordinator:
             self._cleanup_apply_precheck(connection, run_row, plan)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
+            retained = self._allocation_provenance(connection, run_row)
             sealed = self._latest_handoff(connection, run_row, manifest)
         path = Path(plan["path"])
         inspection = None
         if path.exists():
-            inspection = workspace_module().cleanup_inspect(self.board.directory, manifest, sealed=sealed)
+            inspection = workspace_module().cleanup_inspect(self.board.directory, manifest, sealed=sealed,
+                                                           retained=retained)
             if inspection["reasons"]:
                 raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=inspection["reasons"])
         now = self.now()
         with self.db.write() as connection:
-            run_row = self._run_row(connection, run_id)
-            actor = self._authorize(connection, run_row, params, console_authority=console_authority, action="A cleanup apply")
+            owner = self._run_row(connection, owner_run_id)
+            actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
-            self._expect_revision(run_row, expected)
+            self._expect_revision(owner, expected)
+            run_row = self._target_run(connection, owner, target_id)
+            run_id = run_row["run_id"]
+            self._expect_revision(run_row, target_snapshot["revision"])
             plan = connection.execute(
                 "SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?", (plan_id, run_id)
             ).fetchone()
             if plan["state"] == "applied":
-                return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan)}
+                return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(plan),
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self._cleanup_apply_precheck(connection, run_row, plan)
             connection.execute(
                 "UPDATE workspace_cleanup_plans SET state='applying', command_id=?, revision=revision+1 WHERE plan_id=?"
@@ -4178,7 +4335,7 @@ class WorkflowCoordinator:
         self.board._notify(head)
         removed = None
         if path.exists():
-            removed = workspace_module().cleanup_remove(self.board.directory, manifest)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained)
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(
@@ -4206,7 +4363,8 @@ class WorkflowCoordinator:
             plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
             run_row = self._run_row(connection, run_id)
             response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan),
-                        "removed": True, "retention": result["retention"]}
+                        "removed": True, "retention": result["retention"],
+                        "targetRunId": run_id, "targetRevision": run_row["revision"]}
             self.board._store_receipt(connection, command_id, "workflow.cleanup_apply", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
         self.board._notify(head)
@@ -4222,12 +4380,18 @@ class WorkflowCoordinator:
                              planId=plan["plan_id"], expiresAt=plan["expires_at"])
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_row["run_id"],)).fetchone()
         manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
-        if (plan["workspace_id"] != manifest.get("workspaceId") or plan["checkout_id"] != manifest.get("checkoutId")
-                or plan["repository_id"] != manifest.get("repositoryId")):
+        # The plan is bound to the physical allocation, not to whatever logical
+        # turn/input snapshot currently runs on it; both must still agree here.
+        retained = self._allocation_provenance(connection, run_row)
+        allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
+        if (allocation is None or plan["workspace_id"] != allocation["workspaceId"]
+                or plan["checkout_id"] != allocation["checkoutId"]
+                or plan["repository_id"] != allocation["repositoryId"]
+                or plan["path"] != allocation["path"]):
             raise BoardError("CONFLICT", "The cleanup plan no longer matches the run's workspace allocation",
                              planId=plan["plan_id"])
         resume = plan["state"] == "applying"
-        reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest)
+        reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest, allocation=allocation)
         if reasons:
             raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons)
         return resume

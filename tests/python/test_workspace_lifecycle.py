@@ -289,6 +289,48 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, manifest, checkout, artifact, self.view(board, submitted["runId"])
 
+    # -- continuation cleanup -------------------------------------------------
+    def two_turn_worktree(self, *, request_id="continuation-cleanup"):
+        """One managed worktree whose second stage is prepared from the first seal.
+
+        The continuation reuses the same physical checkout under a new logical
+        workspace id, so the current run manifest is no longer the worktree
+        manifest that created the allocation.
+        """
+        board = self.board()
+        self.register(board)
+        submitted, first_claim, first_manifest, checkout, first_seal, yielded, first_artifact = self.run_worktree(
+            board, request_id=request_id, output="first turn output\n", disposition="assistance"
+        )
+        run_id = submitted["runId"]
+        self.assertEqual(yielded["state"], "awaiting-host")
+        continued = board.call("workflow_continue", {
+            "runId": run_id, "commandId": f"{request_id}-continue", "expectedRevision": yielded["revision"],
+            "input": "finish the goal", **self.control(yielded),
+        })
+        self.assertEqual(continued["state"], "executing")
+        second = self.claim(board, run_id, request_id=f"{request_id}-claim-2", nonce="q" * 16)
+        self.assertIsNotNone(second["claim"], second)
+        second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertEqual(second_manifest["kind"], "existing")
+        self.assertNotEqual(second_manifest["workspaceId"], first_manifest["workspaceId"])
+        for field in ("checkoutRoot", "checkoutId", "repositoryId", "path"):
+            self.assertEqual(second_manifest[field], first_manifest[field])
+        # A new-file second stage keeps the sealed patch applicable to a fresh target.
+        (checkout / "second.txt").write_text("second turn output\n")
+        second_seal = workspace_module.seal(self.directory, second_manifest, run_id,
+                                            second["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, second, second_seal, nonce="q" * 16)
+        delivered = self.view(board, run_id)
+        self.assertEqual(delivered["state"], "delivered")
+        final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
+        target = self.target_with_artifact(final)
+        self.integrate(board, delivered, final, target=target, command_id=f"{request_id}-integration",
+                       reason="verified the sealed second stage")
+        accepted = self.acknowledge(board, delivered, final)
+        self.assertEqual(accepted["state"], "accepted")
+        return board, submitted, first_manifest, second_manifest, final, self.view(board, run_id)
+
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted["runId"]
@@ -427,7 +469,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         claims: list = []
         real_remove = workspace_module.cleanup_remove
 
-        def racing_remove(state_dir, target_manifest):
+        def racing_remove(state_dir, target_manifest, **kwargs):
             # Exactly the documented window: the plan is committed as ``applying`` and
             # inspected, but the directory has not been removed yet. A concurrent new
             # existing-workspace writer first meets the early capture fence...
@@ -447,7 +489,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                     claims.append(error)
                 else:  # pragma: no cover - the reservation fence must refuse this claim
                     claims.append(None)
-            return real_remove(state_dir, target_manifest)
+            return real_remove(state_dir, target_manifest, **kwargs)
 
         with mock.patch.object(workspace_module, "cleanup_remove", racing_remove):
             applied = self.apply(board, planned, plan)
@@ -466,6 +508,498 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 (manifest["checkoutId"],),
             ).fetchone()[0]
         self.assertEqual(held, 0)
+
+    # -- physical allocation ownership across turns --------------------------
+    def test_continuation_cleanup_removes_the_original_physical_allocation(self):
+        board, submitted, first, second, final, view = self.two_turn_worktree()
+        checkout = Path(first["checkoutRoot"])
+        run_id = submitted["runId"]
+        planned = self.plan(board, view)
+        plan = planned["plan"]
+        self.assertEqual(plan["state"], "planned", plan["reasons"])
+        self.assertTrue(plan["eligible"])
+        # The plan names the physical allocation that created the worktree, not the
+        # later turn's logical workspace id on the same checkout.
+        self.assertEqual(plan["workspaceId"], first["workspaceId"])
+        self.assertNotEqual(plan["workspaceId"], second["workspaceId"])
+        self.assertEqual(plan["kind"], "worktree")
+        self.assertEqual(plan["path"], first["checkoutRoot"])
+        self.assertEqual(plan["checkoutId"], first["checkoutId"])
+        self.assertEqual(plan["evidence"]["workspace"]["manifestWorkspaceId"], second["workspaceId"])
+        self.assertTrue(plan["retention"]["artifactIds"])
+        self.assertTrue(any("outputs" in ref for ref in plan["retention"]["fixedRefs"]))
+        applied = self.apply(board, planned, plan)
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["plan"]["state"], "applied")
+        self.assertFalse(checkout.exists())
+        # Only the checkout is removed: both turns' manifests, patches and refs stay.
+        self.assertTrue((Path(self.directory) / "workspaces" / first["workspaceId"] / "manifest.json").exists())
+        self.assertTrue((Path(self.directory) / "workspaces" / second["workspaceId"] / "manifest.json").exists())
+        self.assertTrue(Path(final["diffPath"]).exists())
+        refs = git(self.repo, "for-each-ref", "--format=%(refname)")
+        self.assertIn(f"refs/buddy/workspaces/{first['workspaceId']}/", refs)
+        self.assertIn(f"refs/buddy/workspaces/{second['workspaceId']}/", refs)
+        # The applied plan stays the one authorization; repeating it is a replay.
+        repeat_view = self.view(board, run_id)
+        self.assertEqual(repeat_view["cleanup"]["state"], "applied")
+        repeat = self.apply(board, repeat_view, plan, command_id="clean-continuation-apply-2")
+        self.assertTrue(repeat["duplicate"])
+        self.assertEqual(repeat["plan"]["planId"], plan["planId"])
+
+    def test_continuation_cleanup_blocks_a_change_after_the_latest_seal(self):
+        board, submitted, first, second, final, view = self.two_turn_worktree(request_id="continuation-dirty")
+        checkout = Path(second["checkoutRoot"])
+        (checkout / "tracked.txt").write_text("edited after the second seal\n")
+        planned = self.plan(board, view)
+        self.assertEqual(planned["plan"]["state"], "blocked")
+        self.assertIn("unsealed-changes", planned["plan"]["reasons"])
+        # The delta is against the latest prepared input: the second stage's own
+        # file is sealed, only the later edit is named.
+        self.assertEqual(planned["plan"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
+        with self.assertRaises(BoardError) as raised:
+            self.apply(board, planned, planned["plan"], command_id="clean-continuation-dirty-apply")
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        self.assertTrue(checkout.exists())
+        # Returning the site to the latest sealed state makes it eligible again.
+        (checkout / "tracked.txt").write_text("first turn output\n")
+        recovered = self.plan(board, planned, command_id="clean-continuation-recovered")
+        self.assertEqual(recovered["plan"]["state"], "planned", recovered["plan"]["reasons"])
+
+    def test_a_borrowed_run_never_authorizes_its_own_cleanup(self):
+        board, submitted, first, second, final, view = self.two_turn_worktree(request_id="borrow-owner")
+        checkout = Path(first["checkoutRoot"])
+        self.register(board, worker_id="w-borrow")
+        borrowed = board.call("workflow_submit", {
+            **CONFIGURATION, "requestId": "borrowed-run", "hostId": "host-1", "task": "borrowed checkout task",
+            "cwd": str(checkout), "submissionToken": "b" * 32,
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+        })
+        self.controls[borrowed["runId"]] = borrowed["control"]
+        with board.store.db.read() as connection:
+            borrowed_manifest = json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (borrowed["runId"],)
+            ).fetchone()[0])
+        # The borrow is the same physical checkout under another logical workspace id.
+        self.assertEqual(borrowed_manifest["kind"], "existing")
+        self.assertEqual(borrowed_manifest["checkoutId"], first["checkoutId"])
+        self.assertNotEqual(borrowed_manifest["workspaceId"], first["workspaceId"])
+        # A live holder keeps the allocation owner from removing the checkout.
+        owner_view = self.view(board, submitted["runId"])
+        blocked = self.plan(board, owner_view, command_id="clean-owner-blocked")
+        self.assertEqual(blocked["plan"]["state"], "blocked")
+        self.assertIn("workspace-dependency", blocked["plan"]["reasons"])
+        # The borrowed run has no worktree manifest of its own: it can never delete it.
+        borrowed_view = self.view(board, borrowed["runId"])
+        planned = self.plan(board, borrowed_view, command_id="clean-borrower")
+        self.assertEqual(planned["plan"]["state"], "blocked")
+        self.assertIn("not-a-managed-worktree", planned["plan"]["reasons"])
+        with self.assertRaises(BoardError) as raised:
+            self.apply(board, planned, planned["plan"], command_id="clean-borrower-apply")
+        self.assertEqual(raised.exception.code, "NOT_READY")
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.cleanup_remove(self.directory, borrowed_manifest)
+        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
+        self.assertTrue(checkout.exists())
+        # Once the borrower stops holding the checkout, the owner may clean it.
+        board.call("workflow_cancel", {
+            "runId": borrowed["runId"], "commandId": "borrowed-cancel",
+            **self.control(self.view(board, borrowed["runId"])),
+        })
+        released = self.plan(board, self.view(board, submitted["runId"]), command_id="clean-owner-released")
+        self.assertEqual(released["plan"]["state"], "planned", released["plan"]["reasons"])
+        applied = self.apply(board, released, released["plan"], command_id="clean-owner-released-apply")
+        self.assertTrue(applied["removed"])
+        self.assertFalse(checkout.exists())
+
+    def test_a_helper_that_only_borrowed_the_worktree_cannot_clean_it(self):
+        board = self.board()
+        self.register(board)
+        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
+            board, request_id="helper-owner", disposition="assistance"
+        )
+        run_id = submitted["runId"]
+        decided = board.call("workflow_decide", {
+            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"], "commandId": "helper-approval",
+            "expectedRevision": yielded["revision"], "decision": "approve",
+            "helpers": [{**CONFIGURATION, "requestId": "borrow-helper", "task": "helper on the parent checkout",
+                         "cwd": str(checkout),
+                         "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]}}],
+            **self.control(yielded),
+        })
+        self.assertEqual(decided["decision"], "approve")
+        helper_id = decided["children"][0]["taskId"]
+        with board.store.db.read() as connection:
+            helper_manifest = json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
+            ).fetchone()[0])
+        self.assertEqual(helper_manifest["kind"], "existing")
+        self.assertEqual(helper_manifest["checkoutId"], manifest["checkoutId"])
+        self.assertNotEqual(helper_manifest["workspaceId"], manifest["workspaceId"])
+        # A helper run that only borrowed the parent's worktree has no allocation
+        # provenance of its own, even though its cwd is under state/workspaces.
+        helper_view = self.view(board, helper_id)
+        planned = board.store.workflow.cleanup_plan({
+            "runId": helper_id, "commandId": "clean-helper", "expectedRevision": helper_view["revision"],
+        }, console_authority={"sessionId": "console-test"})
+        self.assertEqual(planned["plan"]["state"], "blocked")
+        self.assertIn("not-a-managed-worktree", planned["plan"]["reasons"])
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.cleanup_remove(self.directory, helper_manifest)
+        self.assertEqual(raised.exception.code, "WORKSPACE_UNSAFE")
+        # The owner's own allocation cannot be removed while the helper holds it.
+        owner_view = self.view(board, run_id)
+        blocked = self.plan(board, owner_view, command_id="clean-helper-owner")
+        self.assertEqual(blocked["plan"]["state"], "blocked")
+        self.assertIn("workspace-dependency", blocked["plan"]["reasons"])
+        self.assertTrue(checkout.exists())
+
+    # -- Host control over an independently allocated helper ------------------
+    def root_with_helper_worktree(self, *, request_id="helper-target"):
+        """A root worktree run plus a helper that owns a separate isolated worktree.
+
+        Only the root control capability is kept, exactly like the real Host: the
+        helper's own control verifier is never issued to any caller.
+        """
+        board = self.board()
+        self.register(board)
+        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
+            board, request_id=request_id, output="root output\n", disposition="assistance"
+        )
+        run_id = submitted["runId"]
+        decided = board.call("workflow_decide", {
+            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
+            "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
+            "helpers": [{**CONFIGURATION, "requestId": f"{request_id}-helper",
+                         "task": "helper owns its own worktree", "cwd": str(self.repo),
+                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}}],
+            **self.control(yielded),
+        })
+        self.assertEqual(decided["decision"], "approve")
+        helper_id = decided["children"][0]["taskId"]
+        with board.store.db.read() as connection:
+            helper_manifest = json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
+            ).fetchone()["workspace_manifest_json"])
+        self.assertEqual(helper_manifest["kind"], "worktree")
+        self.assertNotEqual(helper_manifest["checkoutId"], manifest["checkoutId"])
+        helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="h" * 16)
+        self.assertIsNotNone(helper_claim["claim"], helper_claim)
+        helper_turn_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_checkout = Path(helper_turn_manifest["path"])
+        (helper_checkout / "helper.txt").write_text("helper output\n")
+        helper_seal = workspace_module.seal(self.directory, helper_turn_manifest, helper_id,
+                                            helper_claim["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, helper_claim, helper_seal, nonce="h" * 16)
+        helper_view = self.view(board, helper_id)
+        self.assertEqual(helper_view["state"], "delivered")
+        helper_artifact = next(row for row in helper_view["artifacts"] if row["kind"] == "output")
+        return {
+            "board": board, "runId": run_id, "rootView": self.view(board, run_id), "manifest": manifest,
+            "checkout": checkout, "helperId": helper_id, "helperView": helper_view,
+            "helperManifest": helper_manifest, "helperCheckout": helper_checkout, "artifact": helper_artifact,
+        }
+
+    def test_root_control_targets_an_independently_allocated_helper(self):
+        flow = self.root_with_helper_worktree()
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view, artifact = flow["rootView"], flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        recorded = board.store.workflow.integration_record({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-integration",
+            "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
+            "strategy": "patch", "beforeCommit": target["before"],
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "reason": "verified the helper worktree output", **self.control(root_view),
+        })
+        self.assertEqual(recorded["targetRunId"], helper_id)
+        self.assertEqual(recorded["integration"]["state"], "verified")
+        self.assertGreater(recorded["targetRevision"], flow["helperView"]["revision"])
+        with board.store.db.read() as connection:
+            integration_run = connection.execute(
+                "SELECT run_id FROM workflow_integrations WHERE integration_id=?",
+                (recorded["integrationId"],),
+            ).fetchone()["run_id"]
+        self.assertEqual(integration_run, helper_id)
+        # A sibling or foreign target is never reachable through the root capability.
+        with self.assertRaises(BoardError) as raised:
+            board.store.workflow.integration_record({
+                "runId": run_id, "targetRunId": "run-not-owned", "commandId": "helper-integration-sibling",
+                "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
+                "notRequired": True, "reason": "wrong target", **self.control(root_view),
+            })
+        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
+        accepted = board.call("workflow_acknowledge", {
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "commandId": "helper-ack", "expectedRevision": root_view["revision"],
+            "note": "reviewed the helper output", "verdict": "accepted", **self.control(root_view),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["targetRunId"], helper_id)
+        self.assertGreater(accepted["targetRevision"], recorded["targetRevision"])
+        self.assertEqual(self.view(board, helper_id)["state"], "accepted")
+        planned = board.store.workflow.cleanup_plan({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-clean-plan",
+            "expectedRevision": root_view["revision"], **self.control(root_view),
+        })
+        plan = planned["plan"]
+        self.assertEqual(plan["state"], "planned", plan["reasons"])
+        self.assertEqual(plan["workspaceId"], flow["helperManifest"]["workspaceId"])
+        self.assertEqual(plan["path"], flow["helperManifest"]["checkoutRoot"])
+        self.assertEqual(planned["targetRunId"], helper_id)
+        applied = board.store.workflow.cleanup_apply({
+            "runId": run_id, "targetRunId": helper_id, "planId": plan["planId"], "commandId": "helper-clean-apply",
+            "expectedRevision": root_view["revision"], "confirmPath": plan["path"], **self.control(root_view),
+        })
+        self.assertTrue(applied["removed"])
+        self.assertEqual(applied["targetRunId"], helper_id)
+        self.assertFalse(flow["helperCheckout"].exists())
+        # The root's own worktree is not the helper target and stays in place.
+        self.assertTrue(flow["checkout"].exists())
+
+    def test_an_accepted_helper_allocation_cleans_after_the_parent_is_accepted(self):
+        flow = self.root_with_helper_worktree(request_id="helper-after-parent")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view, artifact = flow["rootView"], flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        board.store.workflow.integration_record({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-before-parent-int",
+            "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
+            "strategy": "patch", "beforeCommit": target["before"],
+            "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "reason": "helper output verified", **self.control(root_view),
+        })
+        accepted = board.call("workflow_acknowledge", {
+            "runId": run_id, "targetRunId": helper_id, "artifactId": artifact["artifactId"],
+            "commandId": "helper-before-parent-ack", "note": "helper reviewed", "verdict": "accepted",
+            **self.control(root_view),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        # Deliver and accept the parent without cleaning the helper first. The
+        # approval's auto continuation already requeued the parent for its next turn.
+        root_view = self.view(board, run_id)
+        self.assertNotEqual(root_view["state"], "accepted")
+        parent_claim = self.claim(board, run_id, request_id="parent-claim-2", nonce="p" * 16)
+        self.assertIsNotNone(parent_claim["claim"], parent_claim)
+        parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        (Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n")
+        parent_seal = workspace_module.seal(self.directory, parent_manifest, run_id,
+                                            parent_claim["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, parent_claim, parent_seal, nonce="p" * 16)
+        root_view = self.view(board, run_id)
+        self.assertEqual(root_view["state"], "delivered")
+        parent_artifact = next(row for row in root_view["artifacts"] if row["kind"] == "output")
+        parent_target = self.target_with_artifact(parent_artifact, name="parent-target")
+        board.store.workflow.integration_record({
+            "runId": run_id, "commandId": "parent-int", "expectedRevision": root_view["revision"],
+            "artifactId": parent_artifact["artifactId"], "strategy": "patch", "beforeCommit": parent_target["before"],
+            "target": {"path": str(parent_target["path"]), "ref": "HEAD"}, "reason": "parent output verified",
+            **self.control(root_view),
+        })
+        root_view = self.view(board, run_id)
+        parent_accepted = board.call("workflow_acknowledge", {
+            "runId": run_id, "artifactId": parent_artifact["artifactId"], "commandId": "parent-ack",
+            "note": "parent reviewed", "verdict": "accepted", **self.control(root_view),
+        })
+        self.assertEqual(parent_accepted["state"], "accepted")
+        # The accepted helper allocation is still owned and still removable.
+        root_view = self.view(board, run_id)
+        planned = board.store.workflow.cleanup_plan({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-after-parent-clean",
+            "expectedRevision": root_view["revision"], **self.control(root_view),
+        })
+        self.assertEqual(planned["plan"]["state"], "planned", planned["plan"]["reasons"])
+        applied = board.store.workflow.cleanup_apply({
+            "runId": run_id, "targetRunId": helper_id, "planId": planned["plan"]["planId"],
+            "commandId": "helper-after-parent-apply", "expectedRevision": root_view["revision"],
+            "confirmPath": planned["plan"]["path"], **self.control(root_view),
+        })
+        self.assertTrue(applied["removed"])
+        self.assertFalse(flow["helperCheckout"].exists())
+        self.assertTrue(flow["checkout"].exists())
+
+    def test_root_takeover_fences_a_stale_helper_target_command(self):
+        flow = self.root_with_helper_worktree(request_id="helper-takeover")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view, artifact = flow["rootView"], flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        taken = board.call("workflow_takeover", {
+            "runId": run_id, "commandId": "helper-takeover", "expectedOwnerGeneration": root_view["ownerGeneration"],
+            "newHostId": "host-2", **self.control(root_view),
+        })
+        self.assertEqual(taken["ownerGeneration"], root_view["ownerGeneration"] + 1)
+        params = {
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-stale-integration",
+            "expectedRevision": taken["revision"], "artifactId": artifact["artifactId"], "strategy": "patch",
+            "beforeCommit": target["before"], "target": {"path": str(target["path"]), "ref": "HEAD"},
+            "reason": "a stale owner must be fenced",
+        }
+        with self.assertRaises(BoardError) as raised:
+            board.store.workflow.integration_record({**params, **self.control(root_view)})
+        self.assertEqual(raised.exception.code, "STALE_GENERATION")
+        recorded = board.store.workflow.integration_record({**params, **dict(taken["control"])})
+        self.assertEqual(recorded["targetRunId"], helper_id)
+        self.assertEqual(recorded["integration"]["state"], "verified")
+
+    def test_a_target_detached_during_git_work_is_refused(self):
+        flow = self.root_with_helper_worktree(request_id="helper-detach")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view, artifact = flow["rootView"], flow["artifact"]
+        target = self.target_with_artifact(artifact)
+        real_verify = workspace_module.integration_verify
+
+        def detaching_verify(*args, **kwargs):
+            verification = real_verify(*args, **kwargs)
+            # Simulate the ownership link disappearing while the target checkout was
+            # being verified, after the read-phase target snapshot.
+            with board.store.db.write() as connection:
+                connection.execute("DELETE FROM workflow_children WHERE child_task_id=?", (helper_id,))
+            return verification
+
+        with mock.patch.object(workspace_module, "integration_verify", detaching_verify):
+            with self.assertRaises(BoardError) as raised:
+                board.store.workflow.integration_record({
+                    "runId": run_id, "targetRunId": helper_id, "commandId": "helper-detach-integration",
+                    "expectedRevision": root_view["revision"], "artifactId": artifact["artifactId"],
+                    "strategy": "patch", "beforeCommit": target["before"],
+                    "target": {"path": str(target["path"]), "ref": "HEAD"},
+                    "reason": "detached mid-flight", **self.control(root_view),
+                })
+        self.assertEqual(raised.exception.code, "UNAUTHORIZED")
+        with board.store.db.read() as connection:
+            recorded = connection.execute(
+                "SELECT COUNT(*) FROM workflow_integrations WHERE run_id=?", (helper_id,)).fetchone()[0]
+            parent = connection.execute(
+                "SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (helper_id,)).fetchone()
+        self.assertEqual(recorded, 0)
+        self.assertIsNone(parent)
+        self.assertTrue(flow["helperCheckout"].exists())
+
+    def test_acknowledge_command_id_binds_the_claimed_integration(self):
+        board = self.board()
+        self.register(board)
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
+            board, request_id="ack-key")
+        first = self.integrate(board, view, artifact, not_required=True, reason="first claim",
+                               command_id="ack-int-1")
+        second = self.integrate(board, first, artifact, not_required=True, reason="second claim",
+                                command_id="ack-int-2")
+        accepted = board.call("workflow_acknowledge", {
+            "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
+            "integrationId": first["integration"]["integrationId"], "note": "reviewed the first claim",
+            "verdict": "accepted", **self.control(second),
+        })
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["integration"]["integrationId"], first["integration"]["integrationId"])
+        replay = board.call("workflow_acknowledge", {
+            "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
+            "integrationId": first["integration"]["integrationId"], "note": "reviewed the first claim",
+            "verdict": "accepted", **self.control(second),
+        })
+        self.assertTrue(replay["duplicate"])
+        # The same commandId with a changed claimed integration is a different
+        # command and conflicts instead of replaying the stored verdict.
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_acknowledge", {
+                "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-once",
+                "integrationId": second["integration"]["integrationId"], "note": "reviewed the first claim",
+                "verdict": "accepted", **self.control(second),
+            })
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        self.assertEqual(raised.exception.details["commandId"], "ack-once")
+        # A different commandId that tries to relabel an accepted outcome with
+        # another integration record conflicts against the recorded verdict.
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_acknowledge", {
+                "runId": submitted["runId"], "artifactId": artifact["artifactId"], "commandId": "ack-relabel",
+                "integrationId": second["integration"]["integrationId"], "note": "reviewed the first claim",
+                "verdict": "accepted", **self.control(second),
+            })
+        self.assertEqual(raised.exception.code, "CONFLICT")
+        self.assertEqual(raised.exception.details["recordedIntegrationId"],
+                         first["integration"]["integrationId"])
+
+    def test_root_control_amends_a_helper_scope(self):
+        flow = self.root_with_helper_worktree(request_id="helper-amend")
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view = flow["rootView"]
+        amended = board.store.workflow.scope_amend({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-amend",
+            "expectedRevision": root_view["revision"], "expectedScopeVersion": 1,
+            "writeScope": ["docs", "."], "reason": "the helper may touch docs next", **self.control(root_view),
+        })
+        self.assertEqual(amended["scopeVersion"], 2)
+        self.assertEqual(amended["targetRunId"], helper_id)
+        with board.store.db.read() as connection:
+            stored = connection.execute(
+                "SELECT write_scope_json FROM workflow_scope_versions WHERE run_id=? AND scope_version=2",
+                (helper_id,),
+            ).fetchone()
+        self.assertEqual(json.loads(stored["write_scope_json"]), [".", "docs"])
+
+    def test_root_control_resolves_a_helper_scope_conflict(self):
+        flow = self.helper_scope_failure()
+        board, run_id, helper_id = flow["board"], flow["runId"], flow["helperId"]
+        root_view = self.view(board, run_id)
+        resolved = board.store.workflow.workspace_resolve({
+            "runId": run_id, "targetRunId": helper_id, "commandId": "helper-resolve",
+            "expectedRevision": root_view["revision"], "conflictId": flow["conflict"]["conflictId"],
+            "action": "restore", "paths": ["tracked.txt"],
+            "observedFingerprint": flow["conflict"]["observedFingerprint"],
+            "reason": "restore the helper site to its authorized input", **self.control(root_view),
+        })
+        self.assertEqual(resolved["targetRunId"], helper_id)
+        self.assertEqual(resolved["resolutionState"], "restored")
+        self.assertIn("tracked.txt", resolved["resolvedPaths"])
+        self.assertEqual((flow["helperCheckout"] / "tracked.txt").read_text(), "base\n")
+        self.assertEqual((flow["helperCheckout"] / "src" / "feature.py").read_text(), "value = 2\n")
+        with board.store.db.read() as connection:
+            conflict_run = connection.execute(
+                "SELECT run_id FROM workflow_workspace_conflicts WHERE conflict_id=?",
+                (flow["conflict"]["conflictId"],),
+            ).fetchone()["run_id"]
+        self.assertEqual(conflict_run, helper_id)
+
+    def helper_scope_failure(self, *, request_id="helper-scope"):
+        """A root run plus a helper whose own worktree seal fails outside its scope."""
+        board = self.board()
+        self.register(board)
+        submitted, first_claim, manifest, checkout, seal, yielded, artifact = self.run_worktree(
+            board, request_id=request_id, output="root output\n", disposition="assistance"
+        )
+        run_id = submitted["runId"]
+        decided = board.call("workflow_decide", {
+            "runId": run_id, "requestId": yielded["activeRequest"]["requestId"],
+            "commandId": f"{request_id}-decide", "expectedRevision": yielded["revision"], "decision": "approve",
+            "helpers": [{**CONFIGURATION, "requestId": f"{request_id}-helper", "task": "scoped helper",
+                         "cwd": str(self.repo),
+                         "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["src"]}}],
+            **self.control(yielded),
+        })
+        helper_id = decided["children"][0]["taskId"]
+        helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="s" * 16)
+        self.assertIsNotNone(helper_claim["claim"], helper_claim)
+        helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_checkout = Path(helper_manifest["path"])
+        (helper_checkout / "src" / "feature.py").write_text("value = 2\n")
+        (helper_checkout / "tracked.txt").write_text("outside the helper scope\n")
+        with self.assertRaises(BoardError) as raised:
+            workspace_module.seal(self.directory, helper_manifest, helper_id,
+                                  helper_claim["claim"]["attempt"]["attemptId"])
+        self.assertEqual(raised.exception.code, "WORKSPACE_SCOPE_VIOLATION")
+        attempt = helper_claim["claim"]["attempt"]
+        seal_error = "WORKSPACE_SCOPE_VIOLATION: managed changes outside the declared write scope"
+        board.call("worker_result", {
+            "workerId": self.worker, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": "s" * 16, "status": "failed",
+            "result": {"status": "failed", "workspaceSealError": seal_error, "turnResultPath": "/tmp/turn-result.json"},
+            "shutdownConfirmed": True, "exitCode": 1, "error": seal_error,
+        })
+        helper_view = self.view(board, helper_id)
+        self.assertEqual(helper_view["state"], "awaiting-host")
+        conflict = helper_view["workspaceConflicts"][0]
+        self.assertEqual(conflict["state"], "open")
+        return {"board": board, "runId": run_id, "helperId": helper_id, "helperManifest": helper_manifest,
+                "helperCheckout": helper_checkout, "conflict": conflict}
 
     def test_cleanup_plan_expires_and_a_new_plan_is_required(self):
         clock = FakeClock()
