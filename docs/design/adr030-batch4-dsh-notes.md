@@ -119,11 +119,11 @@ for inject_unknown in (False, True):
 
 ### 共用出口
 
-新增的 `_native_evidence_facts(state)` 把 `dsh-native-facts` 已经记下的形状事实投影成 `RunResult.native_evidence`：`initialize`、`agentInfo`、`configOptions`、`modelReadback`、`effortReadback` 五个固定阶段标签各按 `_note_native_shape` 的计数进入 `unknown_events.countsByType`，其和进入 `unknown_events.total`；`toolScope` 为 unknown 时取共享名 `tool-scope`，模型或强度的回读没有识别时取共享名 `configuration-readback`。类型名只有这五个有界标签，短名字只有这两个共享名；DSH 没有 `model-catalog` 与 `thread-receipt` 的对应情形，所以两者没有使用，也没有自造名字。事实来源只有 `state.native_facts`，投影不读引用以外的原生正文；`dsh-native-facts.json` 证据文件与它的 `EvidenceRef` 照旧写，没有增删引用。
+新增的 `_native_evidence_facts(state)` 把 `dsh-native-facts` 已经记下的形状事实投影成 `RunResult.native_evidence`：`initialize`、`agentInfo`、`configOptions`、`modelReadback`、`effortReadback` 五个固定阶段标签各按 `_note_native_shape` 的计数进入 `unknown_events.countsByType`，其和进入 `unknown_events.total`；`toolScope` 为 unknown 时取共享名 `tool-scope`。模型与推理强度的回读有没有被证实只看结果里已核对的配置（为空就是没有证实），它不进 `unconfirmed`；两个回读没读懂的形状仍按上面的计数留在 `unknown_events`。类型名只有这五个有界标签，短名字只有 `tool-scope` 一个；DSH 没有 `model-catalog`、`configuration-readback`（它是 Codex 那件事的名字）与 `thread-receipt` 的对应情形，都没有使用，也没有自造名字。事实来源只有 `state.native_facts`，投影不读引用以外的原生正文；`dsh-native-facts.json` 证据文件与它的 `EvidenceRef` 照旧写，没有增删引用。
 
 运行模块自己的 `native_evidence(result)` 投影保持 `eventCount`、`disabledRows`、`streamEof` 三个 harness 特有键：它本来就没有与共用两项重复的键，所以这一处没有可删的内容，既有断言 `test_native_run.RoleSeamFunctionTests.test_native_evidence_projects_the_launch_scope_and_stream_end` 与 `test_no_tool_dsh.test_capture_reports_the_launch_scope_as_native_evidence` 原样保留。流内未知种类计数（`_RunFacts.unknown_counts`）继续只走观察器事实，本轮没有为它们建第二份投影，因为共用出口的事实来源是任务指定的 `dsh-native-facts`；`test_an_unknown_event_is_retained_and_continues_to_a_result` 的断言因此未动。
 
-测试：`test_refusal_facts.test_unread_shapes_reach_the_shared_outlet_as_unknown_events`、`test_unconfirmed_readback_and_tool_scope_reach_the_shared_outlet`，以及 `test_the_three_role_results_carry_the_shared_native_facts`（同一份真实运行结果经 `run_execution` 的快速、审阅与 Worker 三个投影，三处 `nativeEvidence.unknownEvents` 一致）。
+测试：`test_refusal_facts.test_unread_shapes_reach_the_shared_outlet_as_unknown_events`、`test_unread_configuration_readback_stays_an_unknown_event`、`test_unconfirmed_tool_scope_reaches_the_shared_outlet`，以及 `test_the_three_role_results_carry_the_shared_native_facts`（同一份真实运行结果经 `run_execution` 的快速、审阅与 Worker 三个投影，三处 `nativeEvidence.unknownEvents` 一致）。
 
 ### 结束原因缺失
 
@@ -143,6 +143,6 @@ for inject_unknown in (False, True):
 
 ### 已执行与留给 Host 的验证
 
-每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器；与检查运行器一样给每个测试进程一个私有的临时 `BUDDY_STATE_DIR`（否则读该变量的 8 条 C-Two 测试在收集时就报 `KeyError`），其余任务列出的继承环境变量已清除，没有读或写日常看板、用户配置与凭据。通过的 9 个文件共 203 条：`test_native_run` 61、`acp.test_acp_connection` 39、`test_refusal_facts` 26、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6；`git diff --check` 通过。
+每个文件单独一个进程，源码来自本检出，依赖用任务给的只读解释器；与检查运行器一样给每个测试进程一个私有的临时 `BUDDY_STATE_DIR`（否则读该变量的 8 条 C-Two 测试在收集时就报 `KeyError`），其余任务列出的继承环境变量已清除，没有读或写日常看板、用户配置与凭据。通过的 9 个文件共 204 条：`test_native_run` 61、`acp.test_acp_connection` 39、`test_refusal_facts` 27、`test_session_records` 18、`test_native_resume` 15、`acp.test_acp_launch` 15、`acp.test_acp_session` 12、`test_dsh_tool_evidence` 11、`test_dsh_session_storage` 6；`git diff --check` 通过。Host 打回 1 之后重跑了这 9 个文件与两个留给 Host 的文件，结果与打回前相同（`unconfirmed` 的收窄只改 `test_refusal_facts` 的一条断言并把它拆成两条，其余文件未受影响）。
 
 留给 Host 的两个文件在本环境不过，且在本检出的基线上失败数与失败点相同（都停在受管角色控制器子进程里的 ACP initialize：`native-disconnected`、原生退出码 3，与这次改动无关）：`buddy.harnesses.dsh.test_no_tool_dsh`（6 条，5 条不过）与 `buddy.harnesses.dsh.test_dsh_role_wiring`（12 条，9 条不过，只有 3 条 `DescriptionSeamTests` 通过）。Host 需要在自己的环境里补跑这两个文件，它们覆盖受管 Worker、受管发现路由与注册快速 seam。完整检查、真实 DSH 读取与回合、故障注入与安装仍由 Host 做；本节没有跑 `apps/console`，也没有启动任何服务与 Worker。

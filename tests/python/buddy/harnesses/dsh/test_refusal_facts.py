@@ -277,16 +277,24 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(evidence.unknown_events.total, 2)
         self.assertEqual(evidence.unconfirmed, ())
 
-    def test_unconfirmed_readback_and_tool_scope_reach_the_shared_outlet(self):
+    def test_unread_configuration_readback_stays_an_unknown_event(self):
         self.echoes["model"] = {"configOptions": []}
+        result = self.run_final()
+        self.assert_continued(result)
+        evidence = result.native_evidence
+        self.assertEqual(evidence.unknown_events.counts_by_type, (("modelReadback", 1),))
+        self.assertIsNone(result.configuration.checked.model,
+                          "the unread readback confirms nothing")
+        self.assertEqual(evidence.unconfirmed, (),
+                         "a readback that confirmed nothing is not an unconfirmed request fact")
+
+    def test_unconfirmed_tool_scope_reaches_the_shared_outlet(self):
         with mock.patch.object(native_run, "NONE_SCOPE_DISABLED_ROWS", ()):
             result = self.run_final()
         self.assert_continued(result)
         evidence = result.native_evidence
-        self.assertEqual(evidence.unknown_events.counts_by_type, (("modelReadback", 1),))
-        self.assertEqual(evidence.unconfirmed,
-                         (native_run.UNCONFIRMED_TOOL_SCOPE,
-                          native_run.UNCONFIRMED_CONFIGURATION_READBACK))
+        self.assertIsNone(evidence.unknown_events)
+        self.assertEqual(evidence.unconfirmed, (native_run.UNCONFIRMED_TOOL_SCOPE,))
         # The unknown-event kind names and the unconfirmed names stay the bounded
         # vocabulary: no payload, path or credential travels in either.
         rendered = json.dumps(evidence.to_payload())

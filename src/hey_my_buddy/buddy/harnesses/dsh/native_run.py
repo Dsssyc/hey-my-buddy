@@ -157,11 +157,11 @@ UNREAD_STOP_REASON = "native-stop-reason-unread"
 #: never a native payload, path or credential.
 UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
                       "modelReadback", "effortReadback")
-#: The shared unconfirmed names this run can produce: the tool rows the scope
-#: declares but the launch patch cannot confirm, and a configuration readback
-#: that never confirmed the requested selection.
+#: The one shared unconfirmed name this run can produce: the tool rows the
+#: scope declares but the launch patch cannot confirm. Whether the model and
+#: effort readback confirmed the selection is read from the result's own
+#: checked configuration, never from a second unconfirmed name.
 UNCONFIRMED_TOOL_SCOPE = "tool-scope"
-UNCONFIRMED_CONFIGURATION_READBACK = "configuration-readback"
 #: The discovery read that could not recognize the session's configuration
 #: options: the catalog stays unknown with this reason instead of a complete
 #: empty reading.
@@ -1517,10 +1517,9 @@ def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
     """This run's unread shapes and requested things left unconfirmed.
 
     Only the run's own recorded facts are projected: every unrecognized shape
-    fact of :func:`_note_native_shape` becomes a bounded kind count, a tool
-    scope the launch patch could not confirm becomes ``tool-scope``, and a
-    model/effort readback that never confirmed the requested selection becomes
-    ``configuration-readback``. A run with neither fact carries no outlet.
+    fact of :func:`_note_native_shape` — the readbacks included — becomes a
+    bounded kind count, and a tool scope the launch patch could not confirm
+    becomes ``tool-scope``. A run with neither fact carries no outlet.
     """
     counts = {}
     for kind in UNREAD_SHAPE_KINDS:
@@ -1531,8 +1530,6 @@ def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
     scope = state.native_facts.get("toolScope")
     if isinstance(scope, dict) and scope.get("status") == "unknown":
         unconfirmed.append(UNCONFIRMED_TOOL_SCOPE)
-    if any(kind in counts for kind in ("modelReadback", "effortReadback")):
-        unconfirmed.append(UNCONFIRMED_CONFIGURATION_READBACK)
     if not counts and not unconfirmed:
         return None
     return NativeEvidence(
