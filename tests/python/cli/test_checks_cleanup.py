@@ -443,6 +443,18 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
 
+    def test_process_becoming_zombie_after_snapshot_explains_missing_lsof_result(self):
+        root = Path('/private/checks-fixture')
+        target = process(456, cwd=str(root))
+        target.status.side_effect = [observation.psutil.STATUS_RUNNING, observation.psutil.STATUS_ZOMBIE]
+        with processes(target), native_references('', returncode=1) as native:
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, set())
+        self.assertIsNone(error)
+        self.assertTrue(available)
+        command = native.call_args.args[0]
+        self.assertEqual(command[command.index('-p') + 1], '456')
+
     def test_other_lsof_failures_remain_unknown_even_when_a_process_ends(self):
         for returncode, stderr in ((2, ''), (0, 'denied'), (1, 'denied')):
             with self.subTest(returncode=returncode, stderr=stderr):

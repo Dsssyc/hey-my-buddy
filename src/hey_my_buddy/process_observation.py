@@ -121,7 +121,7 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
         if native_pids is None or process.pid not in paths or process.pid in native_pids:
             continue
         try:
-            if process.is_running():
+            if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
                 problems.append('lsof has no result for a live snapshot process')
             else:
                 paths.pop(process.pid)
