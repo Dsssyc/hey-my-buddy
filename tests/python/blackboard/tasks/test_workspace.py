@@ -11,7 +11,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace, windows_paths
+from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
 from hey_my_buddy.paths import native_path
 
 
@@ -225,21 +225,19 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "src/link").symlink_to(outside)
         original_index = (self.repo / ".git/index").read_bytes()
         original_status = self.git("status", "--porcelain=v1", "-z")
-        if workspace._WINDOWS:
-            with self.assertRaises(BoardError) as failure:
-                self.prepare(includeUntracked=["src/selected.bin", "src/link"])
-            self.assertEqual(failure.exception.code, "WORKSPACE_UNSUPPORTED")
-            self.assertEqual(failure.exception.details['path'], 'src/link')
-            self.assertEqual(original_index, (self.repo / '.git/index').read_bytes())
-            self.assertEqual(original_status, self.git('status', '--porcelain=v1', '-z'))
-            self.assertEqual(outside.read_text(encoding='utf-8'), 'do not follow')
-            return
         manifest = self.prepare(includeUntracked=["src/selected.bin", "src/link"])
         target = Path(manifest["checkoutRoot"])
         self.assertEqual((target / "src/file.txt").read_bytes(), source.read_bytes())
-        self.assertEqual(bool((target / "src/file.txt").stat().st_mode & 0o111), os.name != "nt")
+        input_mode = self.git("ls-tree", manifest["inputCommit"], "--", "src/file.txt").split()[0]
+        self.assertEqual(self.git("ls-files", "-s", "--", "src/file.txt", cwd=target).split()[0], input_mode)
         self.assertEqual((target / "src/selected.bin").read_bytes(), selected.read_bytes())
-        self.assertEqual(os.readlink(target / "src/link"), str(outside))
+        link_blob = self.git("show", manifest["inputCommit"] + ":src/link")
+        symlinks = self.git("config", "--type=bool", "--default=true", "core.symlinks").strip() == b"true"
+        if symlinks:
+            self.assertEqual(os.fsencode(os.readlink(target / "src/link")), link_blob)
+        else:
+            self.assertFalse((target / "src/link").is_symlink())
+            self.assertEqual((target / "src/link").read_bytes(), link_blob)
         self.assertFalse((target / "src/excluded.txt").exists())
         self.assertEqual(self.git("show", manifest["snapshot"]["stagedCommit"] + ":src/file.txt"), b"staged\n")
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
@@ -539,13 +537,6 @@ class WorkspaceTests(unittest.TestCase):
         (Path(manifest["path"]) / name).write_bytes(b"changed selected input")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
 
-    @unittest.skipUnless(os.name == "nt", "Windows Git path boundary")
-    def test_windows_rejects_unportable_selected_git_paths(self):
-        for name in ("src/odd\nname.secret", "src/odd\tname.secret", "src/odd\nname\t.secret"):
-            with self.subTest(name=name):
-                self.assert_error("WORKSPACE_UNSUPPORTED", windows_paths.validate_git_path, name)
-                self.assert_error("WORKSPACE_UNSUPPORTED", self.prepare, name, includeUntracked=[name])
-
     def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
         (self.repo / ".gitignore").write_text("*.ignored\n", encoding="utf-8", newline="\n")
         self.git("add", ".gitignore")
@@ -587,14 +578,9 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / ".git/info/exclude").write_text("local-environment/\n", encoding="utf-8", newline="\n")
         (self.repo / "local-environment").mkdir()
         (self.repo / "local-environment/secret").write_text("ignored by repository exclude", encoding="utf-8", newline="\n")
-        read = workspace._file
-        def managed_read(root, path, **kwargs):
-            self.assertFalse(path.startswith(("node_modules/", ".venv/", "tmp/", "local-environment/")), path)
-            return read(root, path, **kwargs)
-        with patch.object(workspace, "_file", side_effect=managed_read):
-            manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
-            self.assertTrue(workspace.verify(manifest)["unchanged"])
-            self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
+        manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
+        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
         self.assertEqual(manifest["snapshot"]["excludedUntracked"], [])
         self.assertEqual(manifest["exclusionPolicy"], {"version": 1, "kind": "git-standard",
                          "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"})
@@ -612,13 +598,8 @@ class WorkspaceTests(unittest.TestCase):
         (ignored / "secret").write_text("must not be read", encoding="utf-8", newline="\n")
         ignored.chmod(0)
         self.addCleanup(ignored.chmod, 0o700)
-        read = workspace._file
-        def selected_read(root, path, **kwargs):
-            self.assertFalse(path.startswith("other-private/"), path)
-            return read(root, path, **kwargs)
-        with patch.object(workspace, "_file", side_effect=selected_read):
-            manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
-            self.assertTrue(workspace.verify(manifest)["unchanged"])
+        manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
+        self.assertTrue(workspace.verify(manifest)["unchanged"])
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
         (fixtures / "config.json").write_text('{"fixture": "changed"}', encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)

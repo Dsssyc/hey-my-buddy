@@ -242,9 +242,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
           date +%s > "$RUNNER_TEMP/logs/started-at.txt"
-      - name: Disable Git line-ending conversion
-        # Run before checkout so the working tree is byte-identical on every system.
-        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

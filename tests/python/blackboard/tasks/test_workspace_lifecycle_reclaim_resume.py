@@ -155,8 +155,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             board.store.workflow._cleanup_fence(str(checkout))
         self.assertEqual(fenced.exception.code, "PREPARATION_CONFLICT")
         self.assertEqual(fenced.exception.details["planId"], before["plan_id"])
-        self.assertEqual((checkout / "tracked.txt").read_bytes(), b"sealed output\n")
-        retained[Path("tracked.txt")] = b"sealed output\n"
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "sealed output\n")
+        retained[Path("tracked.txt")] = (checkout / "tracked.txt").read_bytes()
         self.assertEqual({path.relative_to(checkout): path.read_bytes()
                           for path in checkout.rglob("*") if path.is_file()}, retained)
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
@@ -177,7 +177,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
                                            paths=["new/payload.bin"], restored=(".git", "tracked.txt"))
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
-        self.assertEqual((checkout / "tracked.txt").read_bytes(), b"sealed output\n")
+        self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "sealed output\n")
         self.assertEqual(workspace_module.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
         git(self.repo, "worktree", "prune", "--expire", "now")
         self.assertIsNotNone(workspace_module._worktree_record(self.repo, checkout))

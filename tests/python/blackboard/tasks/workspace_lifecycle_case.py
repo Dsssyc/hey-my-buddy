@@ -397,7 +397,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         second_manifest = second['claim']['turn']['input']['executionWorkspace']
         successful_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, second_id))
-        (successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
+        native_path(successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
         (checkout / 'tracked.txt').write_text('completed after retry\n', encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id, second_id)
         self.finish_turn(board, second, second_seal, nonce='q' * 16)

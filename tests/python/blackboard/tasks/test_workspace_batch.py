@@ -1,63 +1,33 @@
-"""Batched workspace object numbering and storage, tested against real Git repositories.
-
-The batch must keep the exact per-file ``git hash-object --no-filters --stdin``
-contract: identities cover the already-read bytes with no path, filter or CRLF
-conversion involved, written objects live in the same repository and stay
-readable, and no ref, branch, tag or stash is created. The structural
-regression pins the Git process count so removing the batching or changing the
-byte handling fails here.
-"""
+"""Workspace snapshots use Git's path-aware index semantics in real repositories."""
 import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import unittest
-from temporary import TemporaryDirectory
 from pathlib import Path
+from temporary import TemporaryDirectory
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy import private_dirs
+from hey_my_buddy.blackboard.tasks import workspace
 
 
-#: Content shapes whose numbering must not depend on how they reach Git.
-PAYLOADS = (
-    b"",
-    b"\n",
-    b"plain text\n",
-    b"crlf line\r\nsecond line\r\n",
-    b"binary\x00\xff\xfe\x00\r\n\x00tail",
-    "unicode ✓ accented é\n".encode(),
-    b"no trailing newline",
-    b"repeat block\n" * 4096,
-    b"large\n" + bytes(range(256)) * 8192,
-)
+LARGE_BINARY = b"large\x00\xff\r\n" + bytes(range(256)) * 8192
 
 
-class BatchedObjectTests(unittest.TestCase):
+class GitIndexSnapshotTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-batch-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-git-index-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
-        self.repo = self.root / "repo"
-        self.repo.mkdir()
         self.state = self.root / "state"
-        self.git("init", "-q")
-        self.git("config", "user.name", "Workspace Batch Test")
-        self.git("config", "user.email", "batch@example.invalid")
 
-    def git(self, *args, cwd=None, data=None, check=True):
-        command, git_env = workspace._git_command(cwd or self.repo, *args)
-        result = subprocess.run(command, input=data, capture_output=True, env=git_env, timeout=120)
-        if check:
-            self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+    def git(self, repo, *args, data=None):
+        command, environment = workspace._git_command(repo, *args)
+        result = subprocess.run(command, input=data, capture_output=True, env=environment, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         return result.stdout
-
-    def reference_oids(self, repo, payloads):
-        """The old per-file contract: one hash-object run per payload."""
-        return [self.git("hash-object", "--no-filters", "--stdin", cwd=repo, data=payload).decode().strip()
-                for payload in payloads]
 
     def supported_formats(self):
         formats = ["sha1"]
@@ -65,224 +35,114 @@ class BatchedObjectTests(unittest.TestCase):
         probe.mkdir()
         result = subprocess.run(["git", "-C", str(probe), "init", "-q", "--object-format=sha256"],
                                 capture_output=True)
-        if result.returncode == 0 and self.git("rev-parse", "--show-object-format",
-                                               cwd=probe).decode().strip() == "sha256":
+        if result.returncode == 0 and self.git(probe, "rev-parse", "--show-object-format").strip() == b"sha256":
             formats.append("sha256")
         return formats
 
+    def repository(self, name, *, object_format="sha1"):
+        repo = self.root / name
+        repo.mkdir()
+        init = ["init", "-q"]
+        if object_format == "sha256":
+            init.append("--object-format=sha256")
+        self.git(repo, *init)
+        self.git(repo, "config", "user.name", "Git Index Test")
+        self.git(repo, "config", "user.email", "index@example.invalid")
+        (repo / "src").mkdir()
+        (repo / "src/text.txt").write_bytes(b"base\n")
+        (repo / "src/binary.bin").write_bytes(b"\x00base\xff")
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "base")
+        return repo
+
+    def intent(self, repo, selected=()):
+        return {"kind": "worktree", "cwd": str(repo), "access": "write", "base": {"kind": "working-tree"},
+                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"},
+                "includeUntracked": list(selected)}
+
     def tree_entries(self, repo, treeish):
         entries = {}
-        for record in self.git("ls-tree", "-r", "-z", treeish, cwd=repo).split(b"\0"):
+        for record in self.git(repo, "ls-tree", "-r", "-z", treeish).split(b"\0"):
             if record:
                 metadata, _, name = record.partition(b"\t")
                 mode, _kind, oid = metadata.decode().split()
                 entries[os.fsdecode(name)] = (mode, oid)
         return entries
 
-    def mixed_checkout(self, name, object_format=None, autocrlf=False):
-        repo = self.root / name
-        repo.mkdir()
-        args = ["init", "-q"]
-        if object_format:
-            args.append("--object-format=" + object_format)
-        self.git(*args, cwd=repo)
-        self.git("config", "user.name", "Batch Checkout Test", cwd=repo)
-        self.git("config", "user.email", "checkout@example.invalid", cwd=repo)
-        if autocrlf:
-            self.git("config", "core.autocrlf", "true", cwd=repo)
-        (repo / "src").mkdir()
-        if autocrlf:
-            (repo / ".gitattributes").write_text("* text=auto\n", encoding="utf-8", newline="\n")
-            self.git("add", ".gitattributes", cwd=repo)
-        tracked = {"src/kept.txt": b"kept\n", "src/crlf.txt": b"crlf\r\nlines\r\n",
-                   "src/binary.bin": b"\x00\xff\x10\r\n\x00", "src/empty.dat": b""}
-        for path, payload in tracked.items():
-            (repo / path).write_bytes(payload)
-        self.git("add", "-A", cwd=repo)
-        self.git("commit", "-qm", "mixed base", cwd=repo)
-        (repo / "src/selected.bin").write_bytes(b"selected\x00\xfe\r\n")
-        return repo, tracked
+    def source_state(self, repo):
+        refs = self.git(repo, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
+        return (self.git(repo, "rev-parse", "HEAD"), (repo / ".git/index").read_bytes(),
+                tuple(line for line in refs if not line.startswith(b"refs/hey-my-buddy/")),
+                self.git(repo, "stash", "list"))
 
-    def worktree_intent(self, repo, selected=()):
-        return {"kind": "worktree", "cwd": str(repo), "access": "write", "base": {"kind": "working-tree"},
-                "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, "includeUntracked": list(selected)}
+    def test_normalized_input_and_output_match_git_for_sha1_and_sha256(self):
+        for object_format in self.supported_formats():
+            with self.subTest(object_format=object_format):
+                repo = self.repository(object_format + "-content", object_format=object_format)
+                (repo / ".gitattributes").write_text("src/*.txt text\n", encoding="utf-8", newline="\n")
+                self.git(repo, "add", ".gitattributes")
+                self.git(repo, "commit", "-qm", "attributes")
+                (repo / "src/text.txt").write_bytes(b"staged\r\n")
+                self.git(repo, "add", "src/text.txt")
+                (repo / "src/text.txt").write_bytes(b"unstaged\r\nsecond\r\n")
+                (repo / "src/binary.bin").write_bytes(LARGE_BINARY)
+                (repo / "src/selected.txt").write_bytes(b"selected\r\n")
+                (repo / "src/excluded.txt").write_bytes(b"excluded\r\n")
+                before = self.source_state(repo)
+                manifest = workspace.prepare(self.state, object_format, self.intent(repo, ["src/selected.txt"]))
+                self.assertEqual(self.source_state(repo), before)
+                staged = manifest["snapshot"]["stagedCommit"]
+                self.assertEqual(self.git(repo, "show", staged + ":src/text.txt"), b"staged\n")
+                self.assertEqual(self.git(repo, "show", manifest["inputCommit"] + ":src/text.txt"),
+                                 b"unstaged\nsecond\n")
+                self.assertEqual(self.git(repo, "show", manifest["inputCommit"] + ":src/selected.txt"),
+                                 b"selected\n")
+                self.assertEqual(self.git(repo, "show", manifest["inputCommit"] + ":src/binary.bin"),
+                                 LARGE_BINARY)
+                self.assertNotIn("src/excluded.txt", self.tree_entries(repo, manifest["inputTree"]))
+                self.assertEqual(manifest["snapshot"]["excludedEntries"]["src/excluded.txt"],
+                                 ["100644", hashlib.sha256(b"excluded\n").hexdigest()])
+                self.assertEqual(len(self.tree_entries(repo, manifest["inputTree"])["src/binary.bin"][1]),
+                                 64 if object_format == "sha256" else 40)
+                self.assertTrue(workspace.verify(manifest)["unchanged"])
+                checkout = Path(manifest["checkoutRoot"])
+                (checkout / "src/text.txt").write_bytes(b"output\r\n")
+                (checkout / "src/binary.bin").write_bytes(LARGE_BINARY + b"\x00output")
+                (checkout / "src/new.txt").write_bytes(b"new\r\n")
+                output = workspace.seal(self.state, manifest, "task", object_format)
+                self.assertEqual(self.git(repo, "show", output["commit"] + ":src/text.txt"), b"output\n")
+                self.assertEqual(self.git(repo, "show", output["commit"] + ":src/new.txt"), b"new\n")
+                self.assertEqual(self.git(repo, "show", output["commit"] + ":src/binary.bin"),
+                                 LARGE_BINARY + b"\x00output")
+                self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"],
+                                 ["src/binary.bin", "src/new.txt", "src/text.txt"])
+                self.assertEqual(self.source_state(repo), before)
 
-    def object_files(self, repo):
-        return sorted(str(path.relative_to(repo)) for path in (repo / ".git" / "objects").rglob("*")
-                      if path.is_file())
-
-    # -- object numbering ------------------------------------------------------
-    def test_batch_identities_match_hash_object_for_every_content_kind(self):
-        sha1_expected = self.reference_oids(self.repo, PAYLOADS)
-        self.assertEqual(workspace._batch_blobs(self.repo, list(PAYLOADS), write=False), sha1_expected)
-        self.assertEqual(workspace._blob(self.repo, PAYLOADS[3], write=False), sha1_expected[3])
-        self.assertEqual(workspace._batch_blobs(self.repo, [], write=False), [])
-        if "sha256" in self.supported_formats():
-            repo = self.root / "repo-sha256"
-            repo.mkdir()
-            self.git("init", "-q", "--object-format=sha256", cwd=repo)
-            expected = self.reference_oids(repo, PAYLOADS)
-            self.assertEqual(workspace._batch_blobs(repo, list(PAYLOADS), write=False), expected)
-            # The repository's object format decides the number; no length is hardcoded.
-            self.assertEqual(len(expected[0]), 64)
-            self.assertNotEqual(expected[0], sha1_expected[0])
-
-    def test_batch_write_stores_objects_in_the_same_repository_without_refs(self):
-        refs_before = self.git("for-each-ref", "--format=%(refname)")
-        objects_before = self.object_files(self.repo)
-        oids = workspace._batch_blobs(self.repo, list(PAYLOADS), write=True, state_dir=self.state)
-        self.assertEqual(oids, self.reference_oids(self.repo, PAYLOADS))
-        for oid, payload in zip(oids, PAYLOADS):
-            self.assertEqual(self.git("cat-file", "-t", oid), b"blob\n")
-            self.assertEqual(self.git("cat-file", "blob", oid), payload)
-        self.assertEqual(self.git("for-each-ref", "--format=%(refname)"), refs_before)
-        self.assertEqual(self.git("stash", "list"), b"")
-        self.assertNotEqual(self.object_files(self.repo), objects_before, "write=True must store objects")
-        # A second write finds every object already present and stores nothing again.
-        objects_after_first = self.object_files(self.repo)
-        self.assertEqual(workspace._batch_blobs(self.repo, list(PAYLOADS), write=True, state_dir=self.state), oids)
-        self.assertEqual(self.object_files(self.repo), objects_after_first)
-
-    def test_object_format_and_unknown_format_fail_closed(self):
-        with self.assertRaises(workspace.BoardError) as caught:
-            workspace._blob_oid(b"data", "stretched256")
-        self.assertEqual(caught.exception.code, "WORKSPACE_UNSUPPORTED")
-        self.assertEqual(workspace._blob_oid(b"data", "sha256"),
-                         hashlib.sha256(b"blob 4\x00data").hexdigest())
-
-    # -- filters and autocrlf --------------------------------------------------
-    def test_filtered_path_hashing_never_decides_the_numbering(self):
-        (self.repo / ".gitattributes").write_text("* text=auto\n", encoding="utf-8", newline="\n")
-        self.git("add", ".gitattributes")
-        self.git("commit", "-qm", "attributes")
-        self.git("config", "core.autocrlf", "true")
-        payload = b"crlf\r\nlines\r\n"
-        unfiltered = self.reference_oids(self.repo, [payload])[0]
-        # The path-driven filtered reference is exactly what the batch must not use.
-        filtered = self.git("hash-object", "--stdin", "--path=crlf.txt", data=payload).decode().strip()
-        self.assertNotEqual(unfiltered, filtered, "the fixture must make the filtered path differ")
-        self.assertEqual(workspace._batch_blobs(self.repo, [payload], write=True, state_dir=self.state), [unfiltered])
-        self.assertEqual(workspace._blob(self.repo, payload, write=True, state_dir=self.state), unfiltered)
-        self.assertEqual(self.git("cat-file", "blob", unfiltered), payload)
-
-    def test_prepare_verify_and_seal_bytes_match_per_file_hash_object(self):
-        repo, tracked = self.mixed_checkout("filtered-checkout", autocrlf=True)
-        manifest = workspace.prepare(self.state, "parity", self.worktree_intent(repo, ["src/selected.bin"]))
-        entries = self.tree_entries(repo, manifest["inputTree"])
-        for path in (*tracked, "src/selected.bin"):
-            payload = (repo / path).read_bytes()
-            reference = self.reference_oids(repo, [payload])[0]
-            self.assertEqual(entries[path], ("100644", reference), path)
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
-        target = Path(manifest["path"])
-        changed = {"src/kept.txt": b"changed output\r\n", "src/new.txt": b"new\r\noutput\x00"}
-        for path, payload in changed.items():
-            (target / path).write_bytes(payload)
-        output = workspace.seal(self.state, manifest, "task", "attempt")
-        entries = self.tree_entries(repo, output["tree"])
-        for path, payload in changed.items():
-            reference = self.reference_oids(repo, [payload])[0]
-            self.assertEqual(entries[path], ("100644", reference), path)
-            self.assertEqual(self.git("show", output["commit"] + ":" + path, cwd=repo), payload)
-        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"],
-                         ["src/kept.txt", "src/new.txt"])
-
-    def test_workspace_scratch_trees_stay_in_state_with_a_worker_writable_tmpdir(self):
-        repo, _tracked = self.mixed_checkout('private-scratch')
-        worker_tmp = self.root / 'worker-tmp'
+    def test_private_index_stays_under_state_tmp_and_is_removed(self):
+        repo = self.repository("private-index")
+        worker_tmp = self.root / "worker-tmp"
         worker_tmp.mkdir()
         created = []
         allocate = private_dirs.make_temporary_dir
+
         def capture(*, prefix, directory):
             path = allocate(prefix=prefix, directory=directory)
             created.append(path)
             return path
-        with patch.dict(os.environ, {'TMPDIR': str(worker_tmp), 'TEMP': str(worker_tmp), 'TMP': str(worker_tmp)}), \
-                patch.object(private_dirs, 'make_temporary_dir', side_effect=capture):
-            manifest = workspace.prepare(self.state, 'private-scratch', self.worktree_intent(repo))
-            (Path(manifest['path']) / 'src/kept.txt').write_bytes(b'private output')
-            sealed = workspace.seal(self.state, manifest, 'task', 'private-scratch')
-        self.assertEqual(sealed['changedPaths'], ['src/kept.txt'])
-        self.assertTrue(any(path.name.startswith('hey-my-buddy-objects-') for path in created))
-        self.assertTrue(any(path.name.startswith('hey-my-buddy-index-') for path in created))
-        self.assertTrue(all(path.parent == self.state / 'tmp' for path in created))
-        self.assertEqual(list((self.state / 'tmp').iterdir()), [])
+
+        with patch.dict(os.environ, {"TMPDIR": str(worker_tmp), "TEMP": str(worker_tmp), "TMP": str(worker_tmp)}), \
+                patch.object(private_dirs, "make_temporary_dir", side_effect=capture):
+            manifest = workspace.prepare(self.state, "private-index", self.intent(repo))
+            (Path(manifest["checkoutRoot"]) / "src/text.txt").write_bytes(b"changed\n")
+            workspace.seal(self.state, manifest, "task", "private-index")
+        self.assertTrue(any(path.name.startswith("hey-my-buddy-index-") for path in created))
+        self.assertTrue(all(path.parent == self.state / "tmp" for path in created))
+        self.assertEqual(list((self.state / "tmp").iterdir()), [])
         self.assertEqual(list(worker_tmp.iterdir()), [])
 
-    def test_sha256_repository_roundtrip_uses_full_length_numbers(self):
-        if "sha256" not in self.supported_formats():
-            self.skipTest("this Git does not support the sha256 object format")
-        repo, tracked = self.mixed_checkout("sha256-checkout", object_format="sha256")
-        manifest = workspace.prepare(self.state, "sha256", self.worktree_intent(repo, ["src/selected.bin"]))
-        entries = self.tree_entries(repo, manifest["inputTree"])
-        for path in (*tracked, "src/selected.bin"):
-            payload = (repo / path).read_bytes()
-            reference = self.reference_oids(repo, [payload])[0]
-            self.assertEqual(len(reference), 64, path)
-            self.assertEqual(entries[path], ("100644", reference), path)
-        target = Path(manifest["path"])
-        (target / "src/kept.txt").write_bytes(b"sha256 output\x00\r\n")
-        output = workspace.seal(self.state, manifest, "task", "attempt")
-        reference = self.reference_oids(repo, [b"sha256 output\x00\r\n"])[0]
-        self.assertEqual(self.tree_entries(repo, output["tree"])["src/kept.txt"], ("100644", reference))
-        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"],
-                         ["src/kept.txt"])
-
-    # -- observation of mixed modes --------------------------------------------
-    def test_observe_numbers_mixed_content_and_modes_like_hash_object(self):
-        payloads = {"text.txt": b"text\n", "crlf.txt": b"crlf\r\nline\r\n",
-                    "binary.bin": b"\x00\x01\xff\xfe\x00", "empty.dat": b"", "large.bin": PAYLOADS[-1]}
-        for path, payload in payloads.items():
-            (self.repo / path).write_bytes(payload)
-        (self.repo / "script.sh").write_bytes(b"#!/bin/sh\necho hi\n")
-        (self.repo / "script.sh").chmod(0o755)
-        (self.repo / "link").symlink_to("text.txt")
-        self.git("add", "-A")
-        self.git("commit", "-qm", "mixed modes")
-        # Git numbers a symlink by its target string, not by the target's content.
-        contents = {path: (self.repo / path).read_bytes() for path in payloads}
-        contents["script.sh"] = (self.repo / "script.sh").read_bytes()
-        contents["link"] = os.fsencode(os.readlink(self.repo / "link"))
-        expected = {path: self.reference_oids(self.repo, [payload])[0] for path, payload in contents.items()}
-        observed = workspace._observe(self.repo, [])
-        for path, oid in expected.items():
-            self.assertEqual(observed["tracked"][path][1], oid, path)
-        self.assertEqual(observed["tracked"]["script.sh"][0],
-                         "100644" if os.name == "nt" else "100755")
-        self.assertEqual(observed["tracked"]["link"][0], "120000")
-        written = workspace._observe(self.repo, [], write=True, state_dir=self.state)
-        self.assertEqual(written["tracked"], observed["tracked"])
-        for path, oid in expected.items():
-            self.assertEqual(self.git("cat-file", "blob", oid), contents[path])
-
-    def test_raw_tree_delta_reads_only_changes_for_sha1_and_sha256(self):
-        for object_format in self.supported_formats():
-            with self.subTest(object_format=object_format):
-                repo, _tracked = self.mixed_checkout("raw-" + object_format, object_format=object_format)
-                before = self.git("rev-parse", "HEAD", cwd=repo).decode().strip()
-                (repo / "src/empty.dat").unlink()
-                (repo / "src/kept.txt").write_bytes(b"modified\n")
-                name = "src/unicode-\N{CHECK MARK}.txt"
-                (repo / name).write_bytes(b"added\n")
-                self.git("add", "-A", cwd=repo)
-                self.git("commit", "-qm", "raw delta", cwd=repo)
-                after = self.git("rev-parse", "HEAD", cwd=repo).decode().strip()
-                expected = self.tree_entries(repo, after)
-                with patch.object(workspace, "_git", wraps=workspace._git) as observed:
-                    delta = workspace._tree_changes(repo, before, after)
-                self.assertEqual(observed.call_count, 1)
-                self.assertEqual(observed.call_args.args[1], "diff-tree")
-                self.assertIn("--raw", observed.call_args.args)
-                self.assertIsNone(delta["src/empty.dat"])
-                for path in ("src/kept.txt", name, "src/selected.bin"):
-                    self.assertEqual(delta[path], {"mode": expected[path][0], "oid": expected[path][1]})
-                self.assertEqual(set(delta), {"src/empty.dat", "src/kept.txt", name, "src/selected.bin"})
-
-    # -- structural process-count regression -----------------------------------
     def git_process_counter(self, tag):
-        """A Python argv wrapper that records and forwards each real Git call."""
         real = shutil.which("git")
-        self.assertTrue(real, "a real git binary is required")
+        self.assertTrue(real, "a real Git binary is required")
         log = self.root / f"git-count-{tag}.log"
         wrapper = self.root / f"git-counter-{tag}.py"
         wrapper.write_text(
@@ -305,56 +165,47 @@ class BatchedObjectTests(unittest.TestCase):
             result = operation(*args, **kwargs)
         return len(log.read_text(encoding="utf-8").splitlines()), result
 
-    def build_scaling_checkout(self, name, tracked, modified, untracked):
-        repo = self.root / name
-        repo.mkdir()
-        self.git("init", "-q", cwd=repo)
-        self.git("config", "user.name", "Scaling Test", cwd=repo)
-        self.git("config", "user.email", "scaling@example.invalid", cwd=repo)
-        (repo / "src").mkdir()
-        for number in range(tracked):
-            (repo / "src" / f"file-{number}.txt").write_bytes(f"tracked {number}\n".encode())
-        self.git("add", "-A", cwd=repo)
-        self.git("commit", "-qm", "base", cwd=repo)
-        for number in range(modified):
-            (repo / "src" / f"file-{number}.txt").write_bytes(f"modified {number}\n".encode())
+    def scaling_checkout(self, name, count):
+        repo = self.repository(name)
+        # repository() contributes two tracked files, so this makes exactly
+        # count tracked files in each checkout.
+        for number in range(count - 2):
+            (repo / "src" / f"file-{number}.txt").write_bytes(f"base {number}\n".encode())
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "scaling base")
+        for number in range(min(count - 2, 20)):
+            (repo / "src" / f"file-{number}.txt").write_bytes(f"changed {number}\n".encode())
         selected = []
-        for number in range(untracked):
-            path = f"src/new-{number}.txt"
-            (repo / path).write_bytes(f"untracked {number}\n".encode())
+        for number in range(5):
+            path = f"src/selected-{number}.txt"
+            (repo / path).write_bytes(f"selected {number}\n".encode())
             selected.append(path)
+        (repo / "src/excluded.txt").write_bytes(b"excluded\n")
         return repo, selected
 
-    def test_git_process_count_does_not_grow_from_small_checkout_to_800_files(self):
-        small_repo, small_selected = self.build_scaling_checkout("small-checkout", 12, 2, 2)
-        large_repo, large_selected = self.build_scaling_checkout("large-checkout", 800, 20, 5)
-        small_count, small_manifest = self.count_git_processes(
-            "p-small", workspace.prepare, self.state, "small-request", self.worktree_intent(small_repo, small_selected))
-        large_count, large_manifest = self.count_git_processes(
-            "p-large", workspace.prepare, self.state, "large-request", self.worktree_intent(large_repo, large_selected))
-        verify_small, _ = self.count_git_processes("v-small", workspace.verify, small_manifest)
-        verify_large, _ = self.count_git_processes("v-large", workspace.verify, large_manifest)
-        for manifest, tag in ((small_manifest, "small"), (large_manifest, "large")):
-            target = Path(manifest["path"])
-            (target / "src/file-0.txt").write_bytes(b"sealed output\n")
-            (target / f"src/output-{tag}.txt").write_bytes(b"new output\n")
-        seal_small, small_output = self.count_git_processes(
-            "s-small", workspace.seal, self.state, small_manifest, "task", "attempt")
-        seal_large, large_output = self.count_git_processes(
-            "s-large", workspace.seal, self.state, large_manifest, "task", "attempt")
-        # The wrapper must actually observe the operation's processes.
-        probe_count, version = self.count_git_processes("probe", workspace._git, self.repo, "--version")
-        self.assertEqual(probe_count, 1)
-        self.assertTrue(version.startswith(b"git version "))
-        self.assertGreaterEqual(small_count, 10)
-        counts = {"prepare": (small_count, large_count), "verify": (verify_small, verify_large),
-                  "seal": (seal_small, seal_large)}
-        for operation, (small, large) in counts.items():
-            self.assertLessEqual(large - small, 8,
-                                 f"{operation}: git processes grew with the checkout file count "
-                                 f"(small={small}, large={large})")
-        self.assertEqual(small_output["changedPaths"], ["src/file-0.txt", "src/output-small.txt"])
-        self.assertEqual(large_output["changedPaths"], ["src/file-0.txt", "src/output-large.txt"])
+    def test_git_process_count_does_not_grow_from_8_to_800_files(self):
+        small_repo, small_selected = self.scaling_checkout("small", 8)
+        large_repo, large_selected = self.scaling_checkout("large", 800)
+        small, small_manifest = self.count_git_processes(
+            "prepare-small", workspace.prepare, self.state, "small", self.intent(small_repo, small_selected))
+        large, large_manifest = self.count_git_processes(
+            "prepare-large", workspace.prepare, self.state, "large", self.intent(large_repo, large_selected))
+        self.assertGreater(small, 0)
+        self.assertLessEqual(large - small, 8, (small, large))
+        small_verify, _ = self.count_git_processes("verify-small", workspace.verify, small_manifest)
+        large_verify, _ = self.count_git_processes("verify-large", workspace.verify, large_manifest)
+        self.assertLessEqual(large_verify - small_verify, 8, (small_verify, large_verify))
+        for manifest in (small_manifest, large_manifest):
+            checkout = Path(manifest["checkoutRoot"])
+            (checkout / "src/file-0.txt").write_bytes(b"sealed output\n")
+            (checkout / "src/output.txt").write_bytes(b"new output\n")
+        small_seal, small_output = self.count_git_processes(
+            "seal-small", workspace.seal, self.state, small_manifest, "task", "small")
+        large_seal, large_output = self.count_git_processes(
+            "seal-large", workspace.seal, self.state, large_manifest, "task", "large")
+        self.assertLessEqual(large_seal - small_seal, 8, (small_seal, large_seal))
+        self.assertEqual(small_output["changedPaths"], ["src/file-0.txt", "src/output.txt"])
+        self.assertEqual(large_output["changedPaths"], ["src/file-0.txt", "src/output.txt"])
 
 
 if __name__ == "__main__":

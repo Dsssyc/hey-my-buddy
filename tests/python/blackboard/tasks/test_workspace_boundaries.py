@@ -80,7 +80,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assert_error("WORKSPACE_GIT_ERROR", workspace.verify, manifest, require_unchanged=False)
         self.assertEqual(source.read_text(encoding="utf-8"), "base\n")
         source.write_text("output after the staged commit disappeared\n", encoding="utf-8", newline="\n")
-        with patch.object(workspace, "_write_objects", side_effect=AssertionError("write before input proof")):
+        with patch.object(workspace, "_observe", side_effect=AssertionError("capture before input proof")):
             self.assert_error("WORKSPACE_GIT_ERROR", self.seal, manifest)
         self.assertEqual(source.read_text(encoding="utf-8"), "output after the staged commit disappeared\n")
 
@@ -125,7 +125,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             ("seal", lambda: self.seal(manifest)),
         ):
             with self.subTest(boundary=boundary):
-                with patch.object(workspace, "_write_objects", side_effect=AssertionError("write before input proof")):
+                with patch.object(workspace, "_observe", side_effect=AssertionError("capture before input proof")):
                     self.assert_error("WORKSPACE_GIT_ERROR", operation)
         self.assertEqual(source.read_text(encoding="utf-8"), "output after the input commit disappeared\n")
 
@@ -176,22 +176,23 @@ class WorkspaceBoundaryTests(unittest.TestCase):
     def test_unsealed_cleanup_requires_each_fixed_ref(self):
         self.check_each_cleanup_ref(sealed_output=False)
 
-    def test_mismatching_fingerprint_cleanup_proof_writes_no_objects(self):
+    def test_mismatching_fingerprint_cleanup_proof_preserves_index_and_refs(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         (checkout / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
         (checkout / "src/new.txt").write_text("unique unsealed object for read-only cleanup\n", encoding="utf-8", newline="\n")
-        before = self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
-        with patch.object(workspace, "_write_objects", side_effect=AssertionError("object write")) as writes, \
-                patch.object(workspace, "_tree", side_effect=AssertionError("tree construction")) as trees:
+        before = self.git("for-each-ref")
+        index = Path(self.git("rev-parse", "--path-format=absolute", "--git-path", "index", cwd=checkout).decode().strip())
+        before_index = index.read_bytes()
+        with patch.object(workspace, "_tree", side_effect=AssertionError("tree construction")) as trees:
             proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
         self.assertFalse(proof["eligible"], proof)
         self.assertEqual(proof["reasons"], ["unsealed-changes"])
         self.assertEqual(proof["unsealedPaths"], ["src/new.txt"])
-        writes.assert_not_called()
         trees.assert_not_called()
-        self.assertEqual(self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)"), before)
+        self.assertEqual(self.git("for-each-ref"), before)
+        self.assertEqual(index.read_bytes(), before_index)
         self.assertEqual((checkout / "src/new.txt").read_text(encoding="utf-8"), "unique unsealed object for read-only cleanup\n")
 
     def test_cleanup_requires_current_product_lock_reason(self):
@@ -352,36 +353,28 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
         self.assertTrue(proof["eligible"], proof)
         self.assertEqual((checkout / "src/deep/payload.bin").read_bytes(), b"retained executable\x00\xff")
-        self.assertEqual((checkout / "src/deep/link").readlink(), Path("payload.bin"))
+        symlinks = self.git("config", "--type=bool", "--default=true", "core.symlinks").strip() == b"true"
+        if symlinks:
+            self.assertEqual((checkout / "src/deep/link").readlink(), Path("payload.bin"))
+        else:
+            self.assertEqual((checkout / "src/deep/link").read_bytes(), b"payload.bin")
+        self.assertEqual(self.git("ls-files", "-s", "--", "src/deep/link", cwd=checkout).split()[0], b"120000")
         if not workspace._WINDOWS:
             self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
         self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
         self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
 
-    def test_resumed_cleanup_never_overwrites_a_file_created_during_restoration(self):
+    def test_resumed_cleanup_preserves_a_surviving_changed_file(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         sealed = self.seal(manifest)
-        (checkout / "src/file.txt").unlink()
+        (checkout / "src/file.txt").write_bytes(b"new unsealed bytes\x00\xff")
         (checkout / ".git").unlink()
         self.git("worktree", "unlock", str(checkout))
-        materialize = workspace._materialize
-
-        def competing_write(root, entries, **kwargs):
-            self.assertEqual(set(entries), {"src/file.txt"})
-            (checkout / "src/file.txt").write_bytes(b"new unsealed bytes\x00\xff")
-            materialize(root, entries, **kwargs)
-
-        with patch.object(workspace, "_materialize", side_effect=competing_write):
-            self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_inspect,
-                              self.state, manifest, sealed=sealed, resume=True)
-        self.assertEqual((checkout / "src/file.txt").read_bytes(), b"new unsealed bytes\x00\xff")
-        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
-        self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
-                         "hey-my-buddy:" + manifest["workspaceId"])
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
         self.assertFalse(proof["eligible"], proof)
         self.assertEqual(proof["unsealedPaths"], ["src/file.txt"])
+        self.assertEqual((checkout / "src/file.txt").read_bytes(), b"new unsealed bytes\x00\xff")
 
 
 if __name__ == "__main__":

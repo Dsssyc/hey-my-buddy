@@ -18,6 +18,7 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 
@@ -136,7 +137,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
         self.assertFalse(native.exists())
-        self.assertEqual([Path(ref).read_text(encoding="utf-8") for ref in refs], ['failure evidence'] * 2)
+        self.assertEqual([native_path(Path(ref)).read_text(encoding="utf-8") for ref in refs], ['failure evidence'] * 2)
         root = failed_root.parent.parent
         with board.store.db.write() as connection:
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
@@ -335,19 +336,17 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertFalse(checkout.exists())
         self.assertFalse(native.exists())
 
-    def test_matching_seal_fingerprint_needs_no_git_object_writes_for_cleanup_proof(self):
+    def test_matching_seal_fingerprint_needs_no_tree_construction_for_cleanup_proof(self):
         board = self.board()
         self.register(board)
         _submitted, _claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
             board, request_id="cleanup-matching-fingerprint"
         )
         self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
-        with mock.patch.object(workspace_module, "_write_objects", side_effect=AssertionError("object write")) as write, \
-                mock.patch.object(workspace_module, "_tree", side_effect=AssertionError("tree construction")) as tree:
+        with mock.patch.object(workspace_module, "_tree", side_effect=AssertionError("tree construction")) as tree:
             proof = workspace_module.cleanup_inspect(self.directory, manifest, sealed=seal, retained=[manifest])
         self.assertTrue(proof["eligible"], proof)
         self.assertEqual(proof["reasons"], [])
-        write.assert_not_called()
         tree.assert_not_called()
         self.assertTrue(checkout.exists())
 

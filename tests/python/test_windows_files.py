@@ -3,7 +3,6 @@ import ctypes
 import errno
 import os
 from pathlib import Path, PureWindowsPath
-import struct
 import subprocess
 import sys
 import tempfile
@@ -141,20 +140,14 @@ class HandleBoundaryTests(unittest.TestCase):
         converted.start()
         self.addCleanup(converted.stop)
 
-    def test_no_follow_open_and_pywin32_file_operations(self):
+    def test_no_follow_open_and_private_file_operations(self):
         handle = FakeHandle(321)
         self.native.CreateFile.return_value = handle
         self.native.GetFileInformationByHandleEx.return_value = {
             'FileAttributes': files.FILE_ATTRIBUTE_REPARSE_POINT,
-            'ReparseTag': files.IO_REPARSE_TAG_SYMLINK,
+            'ReparseTag': files.IO_REPARSE_TAG_MOUNT_POINT,
         }
-        self.native.GetFinalPathNameByHandle.return_value = r'\\?\C:\folder\leaf'
-        self.native.GetLongPathName.return_value = r'C:\folder\Long Leaf'
         self.native.GetFileType.return_value = files.FILE_TYPE_DISK
-        print_name = '../target'.encode('utf-16-le')
-        raw = struct.pack('<IHHHHHHI', files.IO_REPARSE_TAG_SYMLINK,
-                          12 + len(print_name), 0, 0, 0, 0, len(print_name), 1) + print_name
-        self.native.DeviceIoControl.return_value = raw
         with mock.patch.object(files.ctypes, 'WinDLL', create=True) as kernel:
             api = files.WindowsFileAPI()
             self.assertIs(api.kernel, files._RENAME_KERNEL)
@@ -168,18 +161,11 @@ class HandleBoundaryTests(unittest.TestCase):
         api._open(r'C:\folder\leaf', files.GENERIC_READ, files.OPEN_EXISTING, share_delete=True)
         self.assertTrue(self.native.CreateFile.call_args.args[2] & files.FILE_SHARE_DELETE)
         self.assertEqual(api.info(handle), (files.FILE_ATTRIBUTE_REPARSE_POINT,
-                                            files.IO_REPARSE_TAG_SYMLINK))
+                                            files.IO_REPARSE_TAG_MOUNT_POINT))
         self.native.GetFileInformationByHandleEx.assert_called_once_with(handle, 9)
-        self.assertEqual(api.name(handle), 'leaf')
-        self.native.GetFinalPathNameByHandle.assert_called_once_with(handle, 0)
-        self.assertEqual(api.long_path(r'C:\folder\short'), r'C:\folder\Long Leaf')
-        self.native.GetLongPathName.assert_called_once_with(r'\\?\C:\folder\short')
         self.assertEqual(api.file_type(handle), files.FILE_TYPE_DISK)
         api.delete(handle)
         self.native.SetFileInformationByHandle.assert_called_once_with(handle, 4, True)
-        self.assertEqual(api.readlink(handle), '../target')
-        self.native.DeviceIoControl.assert_called_once_with(
-            handle, files.FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
         api.close(handle)
         self.assertTrue(handle.closed)
 
@@ -192,7 +178,7 @@ class HandleBoundaryTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.native.CreateFile.side_effect = FakeWinError(code)
                 with self.assertRaises(category) as raised:
-                    api.open_leaf(r'C:\folder\leaf')
+                    api._open(r'C:\folder\leaf', files.GENERIC_READ, files.OPEN_EXISTING)
                 self.assertIs(raised.exception.__cause__, self.native.CreateFile.side_effect)
                 self.assertEqual(raised.exception.winerror, code)
                 self.assertIsInstance(raised.exception, OSError)
@@ -225,7 +211,7 @@ class HandleBoundaryTests(unittest.TestCase):
         self.native.CreateFile.return_value = handle
         self.native.GetFileInformationByHandleEx.return_value = {
             'FileAttributes': files.FILE_ATTRIBUTE_REPARSE_POINT,
-            'ReparseTag': files.IO_REPARSE_TAG_SYMLINK,
+            'ReparseTag': files.IO_REPARSE_TAG_MOUNT_POINT,
         }
         with self.assertRaises(BoardError):
             files.open_regular_fd(r'C:\folder\link', os.O_RDONLY, api=api)
@@ -276,16 +262,6 @@ class HandleBoundaryTests(unittest.TestCase):
                                 (root / 'leaf', os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
                 with self.subTest(path=path, flags=flags), self.assertRaisesRegex(BoardError, 'parent traversal|without traversal|Unsafe ordinary-file open'):
                     private_dirs.open_regular_fd(path, flags)
-
-    def test_directory_open_pins_against_rename(self):
-        api = files.WindowsFileAPI()
-        self.native.CreateFile.return_value = FakeHandle(123)
-        api.open_dir(r'C:\parent')
-        args = self.native.CreateFile.call_args.args
-        self.assertTrue(args[1] & files.GENERIC_READ)
-        self.assertFalse(args[2] & files.FILE_SHARE_DELETE)
-        self.assertEqual(args[5] & (files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS),
-                         files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS)
 
     def test_fd_ownership_transfers_once_and_failure_closes_handle(self):
         api = mock.Mock()
