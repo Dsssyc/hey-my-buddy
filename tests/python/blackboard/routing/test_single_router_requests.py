@@ -201,7 +201,7 @@ class SingleRouterRequestTests(BoardTestCase):
             resolution = router.current_router(connection)
             self.assertEqual(resolution.inspections[0]["cause"], cause)
             connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
-            with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
+            with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"status": "missing", "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-harness-unavailable")
             self.assertEqual(facts, {"cause": {"code": "harness.not-found", "params": {"operation": "probe"}}})

@@ -119,7 +119,7 @@ describe("the step strip along the top of a micro task's detail", () => {
   it("selects a settled acceptance on its settling mark, reachable by mouse and alone", async () => {
     const settled = timeline();
     settled.events.push(event(4, "integrate", at("11:03")), event(5, "accept", at("11:05")));
-    settled.rows = [row({ state: "accepted", acceptedAt: at("11:05"), acceptanceVerdict: "accepted" })];
+    settled.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
     open({ timeline: settled, origin: "settle:m1" });
     await ready();
     expect(pane().textContent).toContain("已验收");

@@ -386,8 +386,7 @@ function harnessRow(value: unknown): HarnessHealth | null {
   if (!row || typeof row !== "object" || Array.isArray(row)) return null;
   if (typeof row.harness !== "string" || !row.harness.trim()) return null;
   if (!["unknown", "ready", "missing", "login-required", "unhealthy"].includes(row.status)) return null;
-  if ((row.status === "ready") !== row.available) return null;
-  if (typeof row.available !== "boolean" || !Number.isInteger(row.revision) || row.revision < 0) return null;
+  if (!Number.isInteger(row.revision) || row.revision < 0) return null;
   if (!(row.manualPath === null || row.manualPath === undefined || typeof row.manualPath === "string")) return null;
   for (const key of ["executable", "version", "source", "checkedAt", "expiresAt"] as const) {
     if (row[key] != null && typeof row[key] !== "string") return null;

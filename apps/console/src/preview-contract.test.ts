@@ -185,7 +185,6 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
           executionStatus: conclusion.executionStatus,
           statusLabel: t(`acceptance.status.${conclusion.executionStatus}` as "acceptance.status.failed", { defaultValue: conclusion.executionStatus }),
           failed: conclusion.executionStatus === "failed", cancelled: conclusion.executionStatus === "cancelled",
-          evidence: conclusion.evidence,
         },
         turns: workflow.turns.map(turn => ({
           turnIndex: turn.turnIndex,
@@ -294,9 +293,8 @@ describe("synthetic preview fixtures through the real console parsers", () => {
 
     // Host conclusion, partial output, cumulative patch and Host paths.
     const concluded = workflows.find(workflow => workflow.facts.hostConclusion !== null)!;
-    const conclusion = concluded.facts.hostConclusion as { executionStatus?: string; statusLabel: string; evidence: string[] };
+    const conclusion = concluded.facts.hostConclusion as { executionStatus?: string; statusLabel: string };
     expect(["失败", "已取消"]).toContain(conclusion.statusLabel);
-    expect(conclusion.evidence.length).toBeGreaterThan(0);
 
     const artifacts = workflows.flatMap(workflow => (workflow.facts.artifacts as {
       state: { partial: boolean; verified: boolean; final: boolean }; cumulativePatch: { complete: boolean } | null;

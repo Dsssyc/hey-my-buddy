@@ -23,7 +23,7 @@ describe("the harness wire contract", () => {
     expect(snapshotHarnesses({ harnesses: [{ ...row, candidates: [{ reason: "not found" }] }] } as unknown as Snapshot)).toEqual([]);
   });
   const codexRow: HarnessHealth = {
-    harness: "codex", status: "ready", available: true, revision: 4, manualPath: null,
+    harness: "codex", status: "ready", revision: 4, manualPath: null,
     command: ["/opt/bin/codex"], executable: "/opt/bin/codex", version: "0.157.0", source: "PATH",
     candidates: [], checkedAt: CHECKED_AT,
   };
@@ -101,7 +101,7 @@ describe("the harness wire contract", () => {
   });
 
   it("drops a row whose state this console does not know instead of presenting it", () => {
-    expect(snapshotHarnesses({ harnesses: [{ ...codexRow, status: "paused", available: false }] } as unknown as Snapshot)).toEqual([]);
+    expect(snapshotHarnesses({ harnesses: [{ ...codexRow, status: "paused" }] } as unknown as Snapshot)).toEqual([]);
   });
 });
 

@@ -106,7 +106,7 @@ export default {
       MACRO_TASK_STORAGE_IN_USE: "存储内容仍被其他微任务持有，请先了结这些依赖。",
       MACRO_TASK_HARNESS_UNAVAILABLE: "保存会话的 harness 不可用，恢复后才能删除。",
       NOT_FOUND: "找不到这个宏任务。请重新读取列表。",
-      MACRO_TASK_DELETED: "宏任务已进入删除流程，请重新读取以确认结果。",
+      MACRO_TASK_DELETING: "宏任务已进入删除流程，请重新读取以确认结果。",
       other: "删除请求未完成（{{code}}）。请重新读取后重试。",
     },
   },

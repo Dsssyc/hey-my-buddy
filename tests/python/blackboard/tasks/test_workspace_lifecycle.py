@@ -413,8 +413,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(set(json.loads(stored)),
                          {"matchingPaths", "differingPaths", "missingPaths", "hostPaths", "note"})
         self.assertEqual(json.loads(stored)["matchingPaths"], expected)
-        self.assertTrue(verification["verified"])
-        self.assertEqual(verification["summary"], "")
+        self.assertNotIn("verified", verification)
+        self.assertNotIn("summary", verification)
         self.assertTrue(checkout.exists())
         for number in range(file_count):
             (checkout / name("new", number)).write_text("unsealed\n")
@@ -530,8 +530,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                target={"path": blank, "before": before}, adjusted=True,
                                reason="the whole-micro-task change is already the Host's own edit")
         self.assertEqual(adjusted["state"], "accepted")
-        self.assertEqual(adjusted["integration"]["verification"]["adjustments"], ["tracked.txt"])
-        self.assertEqual(adjusted["integration"]["verification"]["unrecordedPaths"], [])
+        self.assertEqual(adjusted["integration"]["verification"]["differingPaths"][0]["path"], "tracked.txt")
+        self.assertNotIn("adjustments", adjusted["integration"]["verification"])
+        self.assertNotIn("unrecordedPaths", adjusted["integration"]["verification"])
 
     def test_deletion_and_mode_change_are_bound_to_final_tree(self):
         (self.repo / "mode.txt").write_text("executable content\n")
@@ -1968,7 +1969,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                         (submitted["runId"],)).fetchall()
         self.assertEqual(json.loads(after["result_json"]), {"alreadyRemoved": False})
         self.assertNotIn("commandReceipts", json.loads(after["retention_json"]))
-        self.assertTrue(recovered["retention"]["commandReceipts"])
+        self.assertNotIn("commandReceipts", recovered["retention"])
         for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
             self.assertEqual(after[column], before[column], column)
         self.assertEqual(after["revision"], before["revision"] + 1)
@@ -2454,7 +2455,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             **self.control(accepted),
         })
         self.assertTrue(removed["removed"])
-        self.assertEqual(removed["plan"]["result"]["path"], original["checkoutRoot"])
+        self.assertEqual(removed["plan"]["path"], original["checkoutRoot"])
+        self.assertEqual(set(removed["plan"]["result"]), {"alreadyRemoved"})
         self.assertFalse(checkout.exists())
         self.assertTrue(Path(target["path"]).exists())
         target_view = board.call("task_get", {"runId": target_run["runId"]})["task"]

@@ -133,7 +133,7 @@ describe("the Router list", () => {
 
   it("keeps a large decision history out of the roles page", async () => {
     const decision = (id: string) => ({
-      decisionId: id, kind: "select" as const, status: "completed", task: "不应出现在Buddy 页的长任务说明。".repeat(200),
+      decisionId: id, status: "completed", task: "不应出现在Buddy 页的长任务说明。".repeat(200),
       buddyId: MEDIUM_ID, selectedBuddy: null, reason: "", evidence: [],
       createdAt: "2026-09-24T08:00:00Z", runId: id, decisionModel: null, requested: {}, input: {}, inputSha256: id, output: {},
     });

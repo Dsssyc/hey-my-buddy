@@ -218,7 +218,8 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(conclusions, "the preview must record a failed or cancelled Host conclusion")
         for _path, conclusion in conclusions:
             self.assertIn(conclusion["statusLabel"], {"失败", "已取消"})
-            self.assertTrue(conclusion["evidence"])
+            self.assertNotIn("evidence", conclusion)
+            self.assertNotIn("integrationId", conclusion)
         # A quota failure keeps its real failure label and its partial output: the
         # conclusion records the outcome and never turns the micro task into a success.
         failed_path, failed_conclusion = next(
@@ -228,7 +229,7 @@ class PreviewFixtureTest(unittest.TestCase):
         fixture = json.loads((fixtures / failed_path).read_text(encoding="utf-8"))
         self.assertEqual("failed", fixture["task"]["status"])
         self.assertEqual("failed", fixture["state"])
-        self.assertNotEqual("accepted", fixture["task"].get("acceptanceVerdict"))
+        self.assertIsNone(fixture["task"]["acceptedAt"])
         self.assertTrue(any(item["kind"] == "partial-output" and item.get("partial") is True
                             and item.get("verified") is False and item.get("final") is False
                             for item in fixture["artifacts"]),
@@ -684,17 +685,11 @@ class PreviewDeletionTest(unittest.TestCase):
                 for operation in ("workflow_get", "message_list"):
                     self.assertEqual(404, self.call(server, "/api/command", operation, {"runId": run_id})[0])
             self.assertEqual(404, self.call(server, f"/api/macro-tasks/{quote(target, safe='')}/timeline")[0])
-            status, response = self.call(server, "/api/command", "macro_task_deletion_preview", {"macroTaskId": target})
-            self.assertEqual(200, status)
-            preview = response["result"]
-            self.assertEqual(2, preview["microTaskCount"])
-            self.assertEqual("deleted", preview["deletionState"])
-            self.assertEqual(0, preview["blockerTotal"])
-            self.assertEqual(0, preview["unconcludedFailureCount"])
-            self.assertEqual({"artifacts": {"count": None, "bytes": None}, "sessions": {"count": None, "bytes": None},
-                              "checkouts": None, "gitRefs": None}, preview["scope"])
-            _, repeated = self.call(server, "/api/command", "macro_task_delete", confirmed)
-            self.assertEqual({**receipt, "duplicate": True}, repeated["result"])
+            for operation, params in (("macro_task_deletion_preview", {"macroTaskId": target}),
+                                      ("macro_task_delete", confirmed)):
+                status, response = self.call(server, "/api/command", operation, params)
+                self.assertEqual(404, status, response)
+                self.assertEqual("NOT_FOUND", response["error"]["code"])
             self.assertEqual(after, self.call(server, "/api/macro-tasks")[1])
             self.assertEqual(before, self.call(untouched, "/api/macro-tasks")[1])
 

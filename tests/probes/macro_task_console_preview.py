@@ -177,8 +177,8 @@ QUOTA_ERROR = "synthetic preview: harness quota exhausted before completion"
 #: The ADR-018 Host conclusion: the Host's own recorded target outcome of a
 #: failed or cancelled micro task, never a worker success claim. ``buddyLocked``
 #: is separate: a Host submission may be re-chosen, a user-locked one may not.
-HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", "reason", "evidence",
-                        "artifactId", "integrationId", "actor", "createdAt", "ownerGeneration",
+HOST_CONCLUSION_KEYS = {"conclusionId", "attemptId", "executionStatus", "note", "reason",
+                        "artifactId", "actor", "createdAt", "ownerGeneration",
                         "runRevision"}
 TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source", "scope"}
 
@@ -365,13 +365,12 @@ def patch_for(run_id: str, output_commit: str, paths: list[str]) -> dict:
 
 
 def host_conclusion(conclusion_id: str, *, attempt_id: str | None, execution_status: str, note: str,
-                    evidence: list[str], artifact_id: str | None, integration_id: str | None,
+                    artifact_id: str | None,
                     actor: dict[str, str], created_at: str, owner_generation: int = 1,
                     run_revision: int = 3) -> dict:
     """An ADR-018 Host conclusion: the recorded target outcome of a failed micro task."""
     return {"conclusionId": conclusion_id, "attemptId": attempt_id, "executionStatus": execution_status,
-            "note": note, "reason": None, "evidence": list(evidence), "artifactId": artifact_id,
-            "integrationId": integration_id, "actor": actor, "createdAt": created_at,
+            "note": note, "reason": None, "artifactId": artifact_id, "actor": actor, "createdAt": created_at,
             "ownerGeneration": owner_generation, "runRevision": run_revision}
 
 
@@ -513,7 +512,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         updated: str, state: str, status: str, category: str, buddy: dict | None,
         hosts: tuple[str | None, str | None] = (HOST_A, HOST_A), parent: str | None = None,
         group: str | None = None, lead_owner: tuple[str, str] | None = None,
-        accepted: str | None = None, verdict: str | None = None, result: bool = False,
+        accepted: str | None = None, result: bool = False,
         result_summary: str | None = None, artifacts: list[dict] | None = None,
         integrations: list[dict] | None = None, routing: dict | None = None,
         active_request: dict | None = None, spans: list[dict] | None = None,
@@ -531,7 +530,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         "state": state, "status": status, "category": category, "buddy": buddy,
         "sourceHostId": hosts[0], "currentHostId": hosts[1], "acceptedAt": accepted,
         "leadOwner": lead_owner,
-        "acceptanceVerdict": verdict, "resultAvailable": result, "resultSummary": result_summary,
+        "resultAvailable": result, "resultSummary": result_summary,
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed,
@@ -595,10 +594,8 @@ def integration(integration_id: str, artifact_id: str, attempt_id: str, host: st
             "sourceCommit": digest("source")[:40], "sourceTree": digest("source-tree")[:40],
             "beforeCommit": digest("before")[:40], "afterCommit": digest("after")[:40],
             "beforeTree": digest("before-tree")[:40], "afterTree": digest("after-tree")[:40],
-            "verification": {"verified": True, "notRequired": False,
-                             "summary": "synthetic preview verification: fixture-only, no real repository",
-                             "hostPaths": list(host_paths or [])},
-            "notRequired": False, "note": "synthetic preview integration record", "actor": host_actor(host),
+            "verification": {"matchingPaths": [], "differingPaths": [], "missingPaths": [],
+                             "hostPaths": list(host_paths or [])}, "note": "synthetic preview integration record", "actor": host_actor(host),
             "createdAt": None}
 
 
@@ -608,7 +605,7 @@ def message(message_id: str, attempt_id: str | None, question: str, *, author: s
             answered: str | None = None) -> dict:
     """One inquiry as ``message_list`` returns it; ``taskId`` is set when the run is assembled."""
     return {"messageId": message_id, "taskId": None, "attemptId": attempt_id, "inquiryId": message_id,
-            "direction": "question", "author": author, "recipient": "worker", "correlationId": None,
+            "direction": "question", "author": author, "recipient": "worker",
             "question": question, "questionBytes": len(question.encode()),
             "questionSha256": digest(f"question-{message_id}"), "state": state, "reason": reason, "note": note,
             "delivery": {"deliveredAt": delivered} if delivered else None,
@@ -635,7 +632,7 @@ def build_runs() -> dict[str, dict]:
             title_source="title",
             task_text="设计并实现工作目标时间轴的只读预览夹具，核对列表、时间轴与详情在长标题下的截断。",
             created=instant(6, 0), updated=instant(7, 5), state="accepted", status="completed",
-            category="ended", buddy=CFG_CODEX, accepted=instant(7, 5), verdict="accepted",
+            category="ended", buddy=CFG_CODEX, accepted=instant(7, 5),
             result=True, result_summary="合成预览：工作目标时间轴夹具的第一轮交付摘要",
             spans=[
                 span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "admitted",
@@ -893,8 +890,7 @@ def build_runs() -> dict[str, dict]:
             conclusion=host_conclusion("preview-conclusion-b1-h1", attempt_id="att-b1h-1",
                                        execution_status="cancelled",
                                        note="synthetic preview cancellation: Host cancelled the helper",
-                                       evidence=["att-b1h-1", "art-b1h-partial"],
-                                       artifact_id="art-b1h-partial", integration_id=None,
+                                       artifact_id="art-b1h-partial",
                                        actor=host_actor(HOST_B), created_at=instant(3, 25), run_revision=3),
             markers=[marker(instant(3, 10), "dispatch", actor=host_actor(HOST_B)),
                      marker(instant(3, 24, 30), "cancel", actor=host_actor(HOST_B), stopInitiator="host", note="Host 接手剩余工作"),
@@ -927,8 +923,7 @@ def build_runs() -> dict[str, dict]:
                                                            ["harnesses/dsh/plugins/quota.js"]))],
             conclusion=host_conclusion("preview-conclusion-b2", attempt_id="att-b2-1",
                                        execution_status="failed", note=QUOTA_ERROR,
-                                       evidence=["art-b2-partial", QUOTA_ERROR],
-                                       artifact_id="art-b2-partial", integration_id=None,
+                                       artifact_id="art-b2-partial",
                                        actor={"role": "lead", "id": "preview-run-b1"},
                                        created_at=instant(6, 26), run_revision=3)),
         # The assistance request wakes the Lead after its first waiting return.
@@ -1006,7 +1001,7 @@ def build_runs() -> dict[str, dict]:
             lead_owner=("preview-run-b3", "turn-att-b3-1"), title="核对路径样例编码", title_source="title",
             task_text="核对合成平台路径中的字符编码并交回结果。",
             created=instant(7, 14), updated=instant(7, 18), state="accepted", status="completed",
-            category="ended", buddy=CFG_FLASH, result=True, accepted=instant(7, 18), verdict="accepted",
+            category="ended", buddy=CFG_FLASH, result=True, accepted=instant(7, 18),
             routing=ROUTING_B9,
             spans=[span("execution:att-b9-1", "execution", instant(7, 15), instant(7, 15, 10), "finished",
                         attempt_id="att-b9-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
@@ -1029,7 +1024,7 @@ def build_runs() -> dict[str, dict]:
         run("preview-run-b10", project="beta", group=MACRO_B, hosts=(HOST_B, HOST_B),
             title="独立核对路径文档", title_source="title", task_text="独立核对合成路径文档中的示例。",
             created=instant(7, 15), updated=instant(7, 18), state="accepted", status="completed",
-            category="ended", buddy=CFG_CLAUDE, result=True, accepted=instant(7, 18), verdict="accepted",
+            category="ended", buddy=CFG_CLAUDE, result=True, accepted=instant(7, 18),
             spans=[span("execution:att-b10-1", "execution", instant(7, 16), instant(7, 18), "finished",
                         attempt_id="att-b10-1", buddy=CFG_CLAUDE, confirmed=True, generation=1, turn_index=1)],
             attempts=[attempt("att-b10-1", 1, "finished", True, instant(7, 16), instant(7, 18), CFG_CLAUDE,
@@ -1074,7 +1069,7 @@ def build_runs() -> dict[str, dict]:
             title="修复标题回退在 CRLF 输入下的显示", title_source="task",
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
             created=instant(5, 0), updated=instant(5, 35), state="accepted", status="completed",
-            category="ended", buddy=CFG_FLASH, accepted=instant(5, 35), verdict="accepted",
+            category="ended", buddy=CFG_FLASH, accepted=instant(5, 35),
             result=True, result_summary="修复标题回退在 CRLF 输入下的显示",
             spans=[
                 span("queue:att-c1-1", "queue", instant(5, 0), instant(5, 4), "admitted",
@@ -1095,7 +1090,7 @@ def build_runs() -> dict[str, dict]:
         run("preview-run-c1-h1", project="beta", group=None, parent=STANDALONE, hosts=(HOST_B, HOST_B),
             title=None, title_source="none", task_text="   ",
             created=instant(5, 6), updated=instant(5, 25), state="delivered", status="completed",
-            category="review", buddy=CFG_GLM, verdict="rejected", result=True,
+            category="review", buddy=CFG_GLM, result=True,
             result_summary="合成预览：交付被记录为验收问题。",
             spans=[
                 span("queue:att-c1h-1", "queue", instant(5, 6), instant(5, 8), "admitted",
@@ -1116,7 +1111,7 @@ def build_runs() -> dict[str, dict]:
             task_text="只核对虚构的删除范围，不接触任何真实文件或会话。",
             created=instant(1, 0), updated=instant(1, 20), state="accepted", status="completed",
             category="ended", buddy=CFG_CODEX, delegation_authority=True,
-            accepted=instant(1, 20), verdict="accepted", result=True,
+            accepted=instant(1, 20), result=True,
             spans=[span("execution:att-d1-1", "execution", instant(1, 2), instant(1, 10), "finished",
                         attempt_id="att-d1-1", buddy=CFG_CODEX, confirmed=True, generation=1, turn_index=1)],
             attempts=[attempt("att-d1-1", 1, "finished", True, instant(1, 2), instant(1, 10), CFG_CODEX,
@@ -1581,13 +1576,7 @@ def deletion_scope(group: str) -> dict:
 
 
 def deletion_preview(group: str, state: PreviewState | None = None) -> dict:
-    if state is not None and group in state.deleted:
-        return {"macroTaskId": group, "microTaskCount": state.deleted[group]["microTaskCount"],
-                "unconcludedFailureCount": 0, "blockerTotal": 0, "blockers": [],
-                "backupRetention": "until-backup-rotation", "deletionState": "deleted",
-                "scope": {"artifacts": {"count": None, "bytes": None},
-                          "sessions": {"count": None, "bytes": None}, "checkouts": None, "gitRefs": None}}
-    if group not in FIXTURES["groups"]:
+    if group not in FIXTURES["groups"] or state is not None and group in state.deleted:
         raise PreviewError("NOT_FOUND", "Unknown macroTaskId")
     members = set(FIXTURES["groups"][group])
     entries = [entry for entry in FIXTURES["runs"].values()
@@ -1630,8 +1619,6 @@ def deletion_preview(group: str, state: PreviewState | None = None) -> dict:
 def delete_macro_task(params: dict, state: PreviewState) -> dict:
     """The command route holds the instance lock across its mutation and reply."""
     group, count = params["macroTaskId"], params["microTaskCount"]
-    if group in state.deleted:
-        return {**state.deleted[group], "duplicate": True}
     preview = deletion_preview(group, state)
     if count != preview["microTaskCount"]:
         raise PreviewError("REVISION_CONFLICT", "The micro task count changed", microTaskCount=preview["microTaskCount"])
@@ -1717,7 +1704,7 @@ def task_view(entry: dict) -> dict:
         "selectedAttemptId": selected["attemptId"] if selected else None,
         "activeAttemptId": (selected["attemptId"] if selected and selected["state"] == "executing" else None),
         "createdAt": entry["createdAt"], "updatedAt": entry["updatedAt"], "acceptedAt": entry["acceptedAt"],
-        "acceptanceNote": None, "acceptanceVerdict": entry["acceptanceVerdict"],
+        "acceptanceNote": None,
         "resultAvailable": receipt is not None, "shutdownConfirmed": entry["shutdownConfirmed"],
         "cancellation": entry["cancellation"],
         "stopInitiator": selected["stopInitiator"] if selected else None,
@@ -1820,7 +1807,7 @@ def workflow_view(entry: dict) -> dict:
     """The micro task view consumed by ``TaskDetails``/``WorkflowPanel``."""
     turns = turn_views(entry)
     children = [{"taskId": child["runId"], "role": "helper", "state": CHILD_STATE[child["state"]],
-                 "integrator": False, "autoContinue": True, "requestId": child["requestId"]}
+                 "integrator": False, "requestId": child["requestId"]}
                 for child in FIXTURES["runs"].values()
                 if child["kind"] in ("micro-task", "helper") and child["parentRunId"] == entry["runId"]]
     routing = ({key: entry["routing"][key] for key in
@@ -1910,7 +1897,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "kind": entry["kind"],
         "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
                           if buddy else None),
-        "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
+        "acceptedAt": entry["acceptedAt"],
         "reviewRejectedAt": None, "reviewRejectionNote": None,
     }
     if entry["runId"] in PREVIEW_FIXES:
@@ -1939,7 +1926,7 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
             counts["awaitingHost"] += 1
         # 0.15.1 Host correction: accepted counts accepted ROOTS only; helpers
         # count through their root's acceptance, and the denominator is roots.
-        if entry["parentRunId"] is None and entry["acceptanceVerdict"] == "accepted":
+        if entry["parentRunId"] is None and entry["acceptedAt"] is not None:
             counts["accepted"] += 1
         if entry["parentRunId"] is None and (entry["state"] == "failed" or
                                               (entry["hostConclusion"] or {}).get("executionStatus") == "failed"):
@@ -2208,7 +2195,7 @@ def harness_account(harness: str, status: str, *, account_type: str | None = Non
 def harness_rows(state: PreviewState | None = None) -> list[dict]:
     """Four synthetic harnesses with active, expired, and cleared provider rows."""
     rows = [
-        {"harness": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
+        {"harness": "dsh", "status": "ready", "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
          "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
@@ -2220,19 +2207,19 @@ def harness_rows(state: PreviewState | None = None) -> list[dict]:
                         "consecutiveRejections": 2},
                        {"provider": "deepseek-partner", "coolingUntil": None,
                         "consecutiveRejections": 1}]},
-        {"harness": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+        {"harness": "zcode", "status": "ready", "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
          "account": harness_account("zcode", "ready"),
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
          "providers": [{"provider": "zai", "coolingUntil": "2020-01-01T00:00:00.000Z",
                         "consecutiveRejections": 1}]},
-        {"harness": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+        {"harness": "codex", "status": "ready", "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
          "account": harness_account("codex", "ready", account_type="chatgpt"),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'permissions': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "providers": []},
-        {"harness": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
+        {"harness": "claude", "status": "login-required", "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
          "account": harness_account("claude", "logged-out", reason=reason("account.login-required")),
          "source": "synthetic-preview", "checkedAt": instant(9, 55),
@@ -2326,7 +2313,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
 def decision_view(router: dict) -> dict:
     """One compact decision record from this exact internal router row."""
     routing = router["routing"]
-    return {"decisionId": router["decisionId"], "requestId": router["requestId"], "kind": "select",
+    return {"decisionId": router["decisionId"], "requestId": router["requestId"],
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
             "decisionModel": {"requested": ROUTER_BUDDY, "resolved": None, "observed": None},
@@ -2348,7 +2335,7 @@ def selection_get(params: dict, state: PreviewState | None = None) -> dict:
     if not isinstance(decision_id, str) or not decision_id:
         raise PreviewError("INVALID_ARGUMENT", "decisionId is required")
     if decision_id == ROUTING_A4["decisionId"]:
-        return {"decision": {**ROUTING_A4, "kind": "select", "runId": "preview-run-a4", "task": None,
+        return {"decision": {**ROUTING_A4, "runId": "preview-run-a4", "task": None,
                              "routerCalled": False, "output": None, "input": None,
                              "createdAt": instant(9, 43), "updatedAt": instant(9, 44)}}
     router = next((item for item in FIXTURES["runs"].values()
@@ -2837,7 +2824,7 @@ REQUIRED_KEYS = {
     "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership", "delegationAuthority",
                     "title", "titleSource", "taskSummary", "summary",
                     "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
-                    "buddy", "acceptedAt", "acceptanceVerdict", "reviewRejectedAt", "reviewRejectionNote"},
+                    "buddy", "acceptedAt", "reviewRejectedAt", "reviewRejectionNote"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "decision", "verdict", "state", "strategy", "note", "actor", "attemptId",
                       "requestId", "artifactId"},
     "MacroTaskTimeline": {"macroTask", "observedAt", "cursor", "rows", "spans", "events", "totals",
@@ -3082,7 +3069,7 @@ def validate_fixtures() -> list[str]:
         problems.append("root outcome counts must be present on every summary")
     accepted_a = sum(1 for run_id in FIXTURES["groups"][MACRO_A]
                      if FIXTURES["runs"][run_id]["parentRunId"] is None
-                     and FIXTURES["runs"][run_id]["acceptanceVerdict"] == "accepted")
+                     and FIXTURES["runs"][run_id]["acceptedAt"] is not None)
     for item in page["macroTasks"]:
         if item["counts"]["accepted"] > item["counts"]["roots"]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
@@ -3205,10 +3192,6 @@ def validate_fixtures() -> list[str]:
                 problems.append(f"{entry['runId']}: hostConclusion keys drifted")
             elif conclusion["executionStatus"] not in ("failed", "cancelled"):
                 problems.append(f"{entry['runId']}: hostConclusion must record a failed/cancelled outcome")
-            elif not isinstance(conclusion["evidence"], list) or not 1 <= len(conclusion["evidence"]) <= 8 \
-                    or not all(isinstance(item, str) and 0 < len(item) <= 200
-                               for item in conclusion["evidence"]):
-                problems.append(f"{entry['runId']}: hostConclusion.evidence must be a bounded short-string list")
             elif type(conclusion["ownerGeneration"]) is not int or type(conclusion["runRevision"]) is not int:
                 problems.append(f"{entry['runId']}: hostConclusion must carry ownerGeneration and runRevision")
         turns = view["turns"]
@@ -3299,8 +3282,6 @@ def validate_fixtures() -> list[str]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")
         harnesses = []
     for row in harnesses:
-        if (row.get("available") is True) != (row.get("status") == "ready"):
-            problems.append(f"harness {row.get('harness')}: available must mirror status")
         if row.get("manualPath", "absent") is not None:
             problems.append(f"harness {row.get('harness')}: manualPath must be null")
         if type(row.get("revision")) is not int or row["revision"] < 0:

@@ -447,7 +447,7 @@ class Execution:
                 if control.cancel_view is not None or self.stop_requested():
                     return cancelled(control.cancel_view)
                 history.append({'retry': retry, 'harness': record})
-                if record is None or not record.get('available'):
+                if record is None or record['status'] != 'ready':
                     if not retry:
                         continue
                     if review:

@@ -19,7 +19,7 @@ const sonnet = { harness: "claude", provider: "anthropic", model: "claude-sonnet
 const mediumId = "claude:anthropic:claude-sonnet-5:medium";
 
 export function harness(entry: Partial<HarnessHealth> & Pick<HarnessHealth, "harness" | "status">): HarnessHealth {
-  return { available: entry.status === "ready", revision: 1, manualPath: null, ...entry };
+  return { revision: 1, manualPath: null, ...entry };
 }
 
 /** One harness that is found, one missing, one needing a login and one that does not pass. */
@@ -84,7 +84,7 @@ export function fixture(options: FixtureOptions = {}) {
   /** One cheap check: a selected harness becomes found with a fresh reading. */
   function checked(harness?: string): HarnessHealth[] {
     return state.harnesses.map(row => harness === undefined || row.harness === harness
-      ? { ...row, status: "ready" as const, available: true, revision: row.revision + 1,
+      ? { ...row, status: "ready" as const, revision: row.revision + 1,
           executable: `/opt/bin/${row.harness}`, version: "9.9.9", source: "PATH",
           manualPath: null, reason: null, candidates: [],
           checkedAt: new Date().toISOString() }
@@ -109,10 +109,10 @@ export function fixture(options: FixtureOptions = {}) {
       }
       const path = params.path as string | null;
       state = { ...state, harnesses: state.harnesses.map(row => row.harness !== harness ? row : path
-        ? { ...row, revision: row.revision + 1, status: "ready" as const, available: true, manualPath: path,
+        ? { ...row, revision: row.revision + 1, status: "ready" as const, manualPath: path,
             executable: path, version: "1.0.0", source: "手动路径", reason: null,
             candidates: [], checkedAt: new Date().toISOString() }
-        : { ...row, revision: row.revision + 1, status: "missing" as const, available: false, manualPath: null,
+        : { ...row, revision: row.revision + 1, status: "missing" as const, manualPath: null,
             executable: undefined, version: undefined, source: undefined, reason: { code: "harness.not-found", params: { operation: "probe" } },
             candidates: [],
             checkedAt: new Date().toISOString() }) };

@@ -124,7 +124,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             if row is None:
                 raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
             buddies[buddy_id] = dict(row)
-            buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['available']
+            buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['status'] == 'ready'
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
             raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')

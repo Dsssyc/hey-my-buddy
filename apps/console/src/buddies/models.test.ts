@@ -43,9 +43,9 @@ function snapshot(list: Buddy[] = buddies()): Snapshot {
 }
 
 const harnesses: HarnessHealth[] = [
-  { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null },
-  { harness: "codex", status: "ready", available: true, revision: 1, manualPath: null },
-  { harness: "claude", status: "login-required", available: false, revision: 1, manualPath: null },
+  { harness: "dsh", status: "ready", revision: 1, manualPath: null },
+  { harness: "codex", status: "ready", revision: 1, manualPath: null },
+  { harness: "claude", status: "login-required", revision: 1, manualPath: null },
 ];
 
 function blocks(options: { recorded?: Snapshot; data?: ConsoleView; folded?: Record<string, boolean>; fresh?: string[]; health?: HarnessHealth[] } = {}) {
@@ -106,7 +106,7 @@ describe("the table's blocks", () => {
   it("falls back to plain unavailability for a harness without a health record, and keeps an unknown state as recorded", () => {
     const without = blocks({ health: [] }).find(block => block.harness === "claude")!;
     expect(without.state).toBe("unavailable");
-    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], available: false, revision: 1, manualPath: null }] })
+    const future = blocks({ health: [{ harness: "claude", status: "quarantined" as HarnessHealth["status"], revision: 1, manualPath: null }] })
       .find(block => block.harness === "claude")!;
     expect(future.state).toBe("quarantined");
     expect(harnessStateText("quarantined", t)).toBe("quarantined");

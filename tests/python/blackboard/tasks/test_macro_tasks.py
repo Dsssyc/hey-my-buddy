@@ -123,8 +123,9 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
                 self.submit(board, request_id=f"blocked-{len(presentation)}-{next(iter(presentation))}",
                             **presentation)
-            self.assertEqual(caught.exception.code, "MACRO_TASK_DELETED")
-            self.assertEqual(caught.exception.details["state"], "deleting")
+            self.assertEqual(caught.exception.code, "MACRO_TASK_DELETING")
+            self.assertNotIn("state", caught.exception.details)
+            self.assertNotIn("deletedAt", caught.exception.details)
             self.assertEqual(caught.exception.details["macroTaskId"], identifier)
         with self.assertRaises(BoardError) as continued:
             board.call("workflow_continue", {
@@ -151,7 +152,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             )
         with self.assertRaises(BoardError) as caught:
             self.submit(board, macroTask={"title":"recovering group"})
-        self.assertEqual(caught.exception.code,"MACRO_TASK_DELETED")
+        self.assertEqual(caught.exception.code,"MACRO_TASK_DELETING")
 
     def test_group_and_title_replay_are_separate_from_execution(self):
         board = self.board()

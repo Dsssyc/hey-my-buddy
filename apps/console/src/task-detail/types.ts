@@ -78,7 +78,6 @@ export type Integration = {
   target: { path: string | null; ref: string | null } | null;
   beforeCommit: string | null;
   afterCommit: string | null;
-  verificationSummary: string | null;
   hostPaths: string[];
   note: string | null;
   actor: Actor | null;
@@ -90,9 +89,7 @@ export type HostConclusion = {
   executionStatus: string;
   note: string | null;
   reason: Reason | null;
-  evidence: string[];
   artifactId: string | null;
-  integrationId: string | null;
   attemptId: string | null;
   actor: Actor;
   createdAt: string;

@@ -94,7 +94,6 @@ export type TimelineRow = {
   delegationAuthority: boolean;
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
-  acceptanceVerdict: string | null;
   reviewRejectedAt: string | null;
   reviewRejectionNote: string | null;
 };

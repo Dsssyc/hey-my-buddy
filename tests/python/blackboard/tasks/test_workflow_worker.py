@@ -224,7 +224,8 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertEqual(code, 0, acknowledged)
             self.assertEqual(acknowledged["state"], "accepted")
             self.assertEqual(acknowledged["view"], "receipt")
-            self.assertEqual(acknowledged["acceptanceVerdict"], "accepted")
+            self.assertIsNotNone(acknowledged["acceptedAt"])
+            self.assertNotIn("acceptanceVerdict", acknowledged)
 
     def test_cli_fails_closed_for_an_agent_scoped_caller(self):
         with self.daemon(env=self.env()):

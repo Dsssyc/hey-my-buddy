@@ -52,6 +52,11 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
         await api.command("macro_task_deletion_preview", { macroTaskId }, snapshot.csrfToken));
     } catch (error) {
       if (!mounted.current || ticket !== reading.current) return;
+      if (error instanceof ApiError && error.code === "NOT_FOUND") {
+        completed.current = true;
+        current.current.onDeleted(macroTaskId, 0);
+        return;
+      }
       loseAuthority(error);
       setState({ phase: "preview-failed", preview: null, errorCode: error instanceof ApiError ? error.code : "NETWORK", result: null });
       return;
@@ -83,12 +88,12 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
     } catch (error) {
       if (!mounted.current) return;
       loseAuthority(error);
-      const unresolved = state.phase === "unknown" || state.phase === "incomplete";
-      if (unresolved && error instanceof ApiError && error.code === "NOT_FOUND") {
+      if (error instanceof ApiError && error.code === "NOT_FOUND") {
         completed.current = true;
         current.current.onDeleted(macroTaskId, 0);
         return;
       }
+      const unresolved = state.phase === "unknown" || state.phase === "incomplete";
       setState({ ...state, phase: uncertainResponse(error) ? "unknown" : unresolved ? state.phase : "failed",
         errorCode: error instanceof ApiError ? error.code : "NETWORK" });
       return;

@@ -11,7 +11,7 @@ class WorkflowValidationTests(WorkflowTestCase):
     def service(self, board):
         service = BoardService(board.store, live_registry=board.live_registry, token='host', control={}, on_stop=lambda _: {},
                                on_restart=lambda _: {}, automatic_discovery=True)
-        service.harnesses.get = Mock(return_value={'available': False})
+        service.harnesses.get = Mock(return_value={'status': 'unknown'})
         service.harnesses.refresh = Mock()
         service.harnesses.kick = Mock()
         self.addCleanup(service.harnesses.close)

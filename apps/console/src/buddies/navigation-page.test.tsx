@@ -58,18 +58,18 @@ function buddies(): Buddy[] {
 /** Codex lacks local review eligibility; DSH carries a provider cooldown. */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null,
       executable: "/usr/local/bin/claude", version: "2.0.1", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [] },
-    { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "codex", status: "ready", revision: 2, manualPath: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       permissions: { write: "enforced" } },
-    { harness: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
+    { harness: "dsh", status: "ready", revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
       providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-    { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
       reason: { code: "harness.not-found", params: { operation: "probe" } },
       checkedAt: CHECKED_AT, candidates: [] },
   ];

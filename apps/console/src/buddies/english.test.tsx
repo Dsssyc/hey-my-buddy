@@ -45,17 +45,17 @@ const account = (harness: string) => ({
   harness, status: "ready", accountType: null, checkedAt: AT,
 });
 const harnesses = [
-  { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "dsh", status: "ready", revision: 1, manualPath: null, executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH", checkedAt: AT, candidates: [],
     account: account("dsh"), billingByProvider: { "deepseek-official": { kind: "metered", source: "native", observedAt: AT } },
     providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
-  { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
+  { harness: "codex", status: "ready", revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
     permissions: { write: "enforced" },
     providers: [{ provider: "openai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 2 }] },
-  { harness: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
+  { harness: "claude", status: "login-required", revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reason: { code: "harness.login-required", params: { operation: "probe" } },
     candidates: [{ path: "/home/user/bin/claude", source: "manual", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } }] },
-  { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null, checkedAt: AT,
+  { harness: "zcode", status: "missing", revision: 1, manualPath: null, checkedAt: AT,
     reason: { code: "harness.not-found", params: { operation: "probe" } },
     candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } }] },
 ] as unknown as HarnessHealth[];

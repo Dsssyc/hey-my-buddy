@@ -260,13 +260,18 @@ describe("macro task deletion confirmation", () => {
     await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
   });
 
-  it("shows NOT_FOUND on the first deletion attempt as an error", async () => {
+  it("treats NOT_FOUND on the first deletion attempt as completed", async () => {
     const f = dialogHarness();
     await screen.findByRole("button", { name: "删除" });
     f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     await confirm();
-    await screen.findByRole("alert");
-    expect(f.onDeleted).not.toHaveBeenCalled();
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+  });
+
+  it("treats NOT_FOUND while reading the deletion preview as completed", async () => {
+    const command = vi.fn().mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
+    const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
   });
 
   it("ignores a preview completing after its confirmation has been cancelled", async () => {

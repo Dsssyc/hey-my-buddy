@@ -140,7 +140,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assert_code("CONFLICT", self.request, board, task="a different task")
         queued = self.decision(board, first["decisionId"])
         self.assertEqual(queued["status"], "queued")
-        self.assertEqual(queued["kind"], "select")
+        self.assertNotIn("kind", queued)
         self.assertEqual(queued["requestId"], "pick-1")
         self.assertEqual(queued["requested"]["task"], "fix the failing parser test")
         self.assertEqual([p["buddyId"] for p in queued["input"]["buddies"]],
@@ -807,6 +807,7 @@ class DecisionFailureTests(DecisionTestCase):
         revisions = board.call("console_snapshot", {})["decisions"]
         replay = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
         self.assertTrue(first["committed"])
+        self.assertNotIn("kind", first["decision"])
         # The identical result is replayed idempotently: no second execution, no new
         # publication, and the decision history is byte-identical.
         self.assertTrue(replay.get("replayed") or replay.get("duplicate"), replay.get("duplicate"))
@@ -864,7 +865,6 @@ class DecisionSurfaceTests(DecisionTestCase):
             {
                 "decisionId",
                 "requestId",
-                "kind",
                 "status",
                 "task",
                 "runId",
@@ -951,7 +951,8 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
         snapshot = board.call("console_snapshot", {})
-        self.assertEqual([item["kind"] for item in snapshot["decisions"]], ["select"])
+        self.assertEqual([item["decisionId"] for item in snapshot["decisions"]], [decision["decisionId"]])
+        self.assertNotIn("kind", snapshot["decisions"][0])
         self.assertEqual(self.readonly_start.call_count, 1)
 
 

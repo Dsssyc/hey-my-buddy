@@ -22,8 +22,8 @@ function attention(options: { routers?: string[]; mode?: "fast" | "review"; heal
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
   const buddies = [buddy(reviewer, ["execution:claude", "routing:fast", "decision"]), buddy(worker, ["execution:codex"])];
   const harnesses = [
-    { harness: "claude", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
-    { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
+    { harness: "claude", status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
+    { harness: "dsh", status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
       providers: [{ provider: "deepseek-official", coolingUntil: "2099-01-01T00:00:00Z", consecutiveRejections: 1 }] },
   ];
   const snapshot = { configuration, routingHealth: options.health, harnesses } as unknown as Snapshot;

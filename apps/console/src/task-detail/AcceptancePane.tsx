@@ -55,7 +55,6 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
           ] : []),
           [t("acceptance.recordedBy"), <span key="by">{integration.actor ? actorText(integration.actor) : unrecorded} · <Moment at={integration.createdAt} /></span>],
         ]} />
-        {integration.verificationSummary && <Fold text={integration.verificationSummary} className="text-ink2" />}
         {integration.hostPaths.length > 0 && <div>
           <p className="mb-1.5 text-xs text-ink3">{t("acceptance.hostPaths", { n: integration.hostPaths.length })}</p>
           <Lines items={integration.hostPaths} className="font-mono text-xs" />
@@ -76,13 +75,8 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
           [t("acceptance.version"), conclusion.runRevision === null ? unrecorded : `V${conclusion.runRevision}`],
           ...(conclusion.attemptId ? [[t("acceptance.attempt"), conclusion.attemptId, true] as [string, string, boolean]] : []),
           ...(conclusion.artifactId ? [[t("acceptance.artifactRef"), conclusion.artifactId, true] as [string, string, boolean]] : []),
-          ...(conclusion.integrationId ? [[t("acceptance.integrationRef"), conclusion.integrationId, true] as [string, string, boolean]] : []),
         ]} />
         <Fold text={conclusion.reason ? reasonText(conclusion.reason) : conclusion.note ?? unrecorded} />
-        {conclusion.evidence.length > 0 && <div>
-          <p className="mb-1.5 text-xs text-ink3">{t("acceptance.evidence")}</p>
-          <Lines items={conclusion.evidence} className="font-mono text-xs" />
-        </div>}
       </div>
     </Section>}
     {(unconfirmed || ending?.cause) && <Section name={t("acceptance.exception")}>

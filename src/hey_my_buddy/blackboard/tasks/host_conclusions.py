@@ -18,6 +18,6 @@ def view(row):
     return {"conclusionId": row["conclusion_id"], "attemptId": row["attempt_id"],
             "executionStatus": row["execution_status"], "note": row["note"],
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
-            "evidence": [], "artifactId": row["artifact_id"],
-            "integrationId": None, "actor": {"role": row["actor_role"], "id": row["actor_id"]}, "createdAt": row["created_at"],
+            "artifactId": row["artifact_id"],
+            "actor": {"role": row["actor_role"], "id": row["actor_id"]}, "createdAt": row["created_at"],
             "ownerGeneration": row["owner_generation"], "runRevision": row["run_revision"]}

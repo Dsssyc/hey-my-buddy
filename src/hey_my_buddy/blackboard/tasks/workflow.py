@@ -457,7 +457,6 @@ class WorkflowCoordinator:
             "role": row["role"],
             "state": row["state"],
             "integrator": bool(row["integrator"]),
-            "autoContinue": False,
             "requestId": row["request_id"],
             "workspaceManifestSha256": (json.loads(row["workspace_manifest_json"]).get("manifestSha256")
                                         if row["workspace_manifest_json"] else None),
@@ -593,9 +592,7 @@ class WorkflowCoordinator:
     def _conflict_view(self, connection, row) -> dict:
         entries = []
         evidence = json.loads(row["evidence_json"])
-        for entry in (evidence.get("entries") if isinstance(evidence, dict) else []) or []:
-            if not isinstance(entry, dict):
-                continue
+        for entry in evidence["entries"]:
             entries.append({"path": entry.get("path"), "authorized": entry.get("authorized"),
                             "authorizedIndex": entry.get("authorizedIndex"), "observed": entry.get("observed"),
                             "observedIndex": entry.get("observedIndex"), "changed": entry.get("changed"),
@@ -641,16 +638,6 @@ class WorkflowCoordinator:
         if not not_required:
             target = {"kind": "checkout", "path": row["target_path"], "ref": row["target_ref"],
                       "repositoryId": row["target_repository_id"], "checkoutId": row["target_checkout_id"]}
-            verification.update(
-                verified=True, strategy=row["strategy"], target=target,
-                sourceCommit=row["source_commit"], sourceTree=row["source_tree"],
-                beforeCommit=row["before_commit"], beforeTree=row["before_tree"],
-                afterCommit=row["after_commit"], afterTree=row["after_tree"],
-                artifactAncestor=row["strategy"] == "merge",
-                adjustments=sorted({item["path"] for item in verification["differingPaths"]}
-                                   | set(verification["missingPaths"])),
-                unrecordedPaths=[], summary="",
-            )
         return {
             "integrationId": row["integration_id"],
             "runId": row["run_id"],
@@ -666,7 +653,6 @@ class WorkflowCoordinator:
             "beforeTree": row["before_tree"],
             "afterTree": row["after_tree"],
             "verification": WorkflowCoordinator._bounded_path_fields(verification, INTEGRATION_PATH_FIELDS),
-            "notRequired": not_required,
             "note": row["note"],
             "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None,
             "createdAt": row["created_at"],
@@ -681,9 +667,7 @@ class WorkflowCoordinator:
             evidence["workspace"] = WorkflowCoordinator._bounded_path_fields(
                 evidence["workspace"], ("unsealedPaths",))
         retention = json.loads(row["retention_json"])
-        result = ({"removed": True, "path": row["path"], "alreadyRemoved": json.loads(row["result_json"])["alreadyRemoved"],
-                   "repositoryId": row["repository_id"], "checkoutId": row["checkout_id"],
-                   "retention": {**retention, "commandReceipts": True}}
+        result = ({"alreadyRemoved": json.loads(row["result_json"])["alreadyRemoved"]}
                   if row["result_json"] else None)
         return {
             "planId": row["plan_id"],
@@ -697,7 +681,7 @@ class WorkflowCoordinator:
             "eligible": row["state"] == "planned",
             "reasons": json.loads(row["reasons_json"]),
             "evidence": evidence,
-            "retention": {**retention, "commandReceipts": True},
+            "retention": retention,
             "result": result,
             "revision": row["revision"],
             "createdAt": row["created_at"],
@@ -904,7 +888,6 @@ class WorkflowCoordinator:
             "stopInitiator": decorated["stopInitiator"],
             "graceDeadline": decorated["graceDeadline"],
             "acceptedAt": decorated["acceptedAt"],
-            "acceptanceVerdict": decorated["acceptanceVerdict"],
             "acceptanceNote": decorated["acceptanceNote"],
             "reviewRejectedAt": decorated["reviewRejectedAt"],
             "reviewRejectionNote": decorated["reviewRejectionNote"],
@@ -2161,7 +2144,6 @@ class WorkflowCoordinator:
             "ownerGeneration": run_row["owner_generation"],
             "microTaskFingerprint": micro_task_fingerprint,
             "microTask": micro_task,
-            "spec": _original_spec(connection, run_row["run_id"]),
         }
 
     # -- decide --------------------------------------------------------------
@@ -4820,7 +4802,7 @@ class WorkflowCoordinator:
         if plan["state"] == "applied":
             result = (plan.get("result") or {})
             return {"removed": True, "alreadyRemoved": bool(result.get("alreadyRemoved")),
-                    "path": plan["path"], "planId": plan["planId"], "retention": result["retention"]}
+                    "path": plan["path"], "planId": plan["planId"], "retention": plan["retention"]}
         if plan["state"] not in ("planned", "applying"):
             # An applying plan is not re-admitted here: cleanup_apply resumes it.
             blocked = {"removed": False, "reasons": plan.get("reasons") or ["blocked"], "planId": plan["planId"],
@@ -5042,10 +5024,7 @@ class WorkflowCoordinator:
         if not conflict["delivery_json"]:
             return None
         facts = json.loads(conflict["delivery_json"])
-        return {"state": "delivered", "kind": "host-resolution", "action": conflict["action"],
-                "artifactId": conflict["artifact_id"], "attemptId": conflict["attempt_id"],
-                "turnId": conflict["turn_id"], "turnOutcome": "completed",
-                "resolvedFingerprint": facts["resolvedFingerprint"],
+        return {"resolvedFingerprint": facts["resolvedFingerprint"],
                 "commandId": conflict["command_id"], "deliveredAt": facts["deliveredAt"]}
 
     @staticmethod
@@ -5053,14 +5032,14 @@ class WorkflowCoordinator:
         delivery = resolution["delivery"]
         return {
             "conflictId": resolution["conflict"]["conflict_id"],
-            "state": delivery.get("state"),
-            "kind": delivery.get("kind"),
-            "action": delivery.get("action"),
-            "artifactId": delivery.get("artifactId"),
-            "attemptId": delivery.get("attemptId"),
-            "turnId": delivery.get("turnId"),
-            "turnOutcome": delivery.get("turnOutcome"),
-            "deliveredAt": delivery.get("deliveredAt"),
+            "state": "delivered",
+            "kind": "host-resolution",
+            "action": resolution["conflict"]["action"],
+            "artifactId": resolution["conflict"]["artifact_id"],
+            "attemptId": resolution["conflict"]["attempt_id"],
+            "turnId": resolution["conflict"]["turn_id"],
+            "turnOutcome": "completed",
+            "deliveredAt": delivery["deliveredAt"],
         }
 
     def _resolution_native_completion(self, connection, run_row, conflict):
@@ -7883,16 +7862,6 @@ class WorkflowCoordinator:
 
 
 # -- module helpers ----------------------------------------------------------
-def _original_spec(connection, run_id: str) -> dict | None:
-    row = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-    if row is None:
-        return None
-    try:
-        return json.loads(row["spec_json"])
-    except ValueError:  # pragma: no cover - a stored spec is always canonical JSON
-        return None
-
-
 def _bounded_input(params: dict) -> str:
     value = params.get("input")
     if isinstance(value, str):

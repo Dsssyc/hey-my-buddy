@@ -285,7 +285,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(view['manifestSha256'], row['manifest_sha256'])
             self.assertEqual(view['blockingPaths'], json.loads(row['blocking_paths_json']))
             self.assertEqual((view['outputCommit'], view['outputTree']), (row['output_commit'], row['output_tree']))
-            self.assertEqual(view['delivery'], json.loads(row['delivery_json']) if row['delivery_json'] else None)
+            self.assertEqual(view['delivery'],
+                             {key: value for key, value in json.loads(row['delivery_json']).items()
+                              if key in {'resolvedFingerprint', 'commandId', 'deliveredAt'}} if row['delivery_json'] else None)
             if current['delivery_json']:
                 self.assertEqual(set(json.loads(current['delivery_json'])), {'resolvedFingerprint', 'deliveredAt'})
         for row in old['workflow_integrations']:
@@ -294,8 +296,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             view = coordinator._integration_view(connection, current)
             self.assertEqual(current['binding_sha256'], row['binding_sha256'])
             self.assertEqual(view['verification'], WorkflowCoordinator._bounded_path_fields(
-                json.loads(row['verification_json']),
-                ('matchingPaths', 'differingPaths', 'missingPaths', 'adjustments', 'hostPaths', 'unrecordedPaths')))
+                {key: value for key, value in json.loads(row['verification_json']).items()
+                 if key in {'matchingPaths', 'differingPaths', 'missingPaths', 'hostPaths', 'note'}},
+                ('matchingPaths', 'differingPaths', 'missingPaths', 'hostPaths')))
             self.assertEqual((view['attemptId'], view['state']), (row['attempt_id'], row['state']))
             self.assertFalse({'verified', 'strategy', 'target', 'sourceCommit', 'sourceTree', 'beforeCommit',
                               'afterCommit', 'beforeTree', 'afterTree', 'artifactAncestor', 'adjustments',
@@ -305,8 +308,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                                          (row['plan_id'],)).fetchone()
             view = WorkflowCoordinator._plan_view(current)
             self.assertEqual(current['evidence_json'], row['evidence_json'])
-            self.assertEqual(view['retention'], json.loads(row['retention_json']))
-            self.assertEqual(view['result'], json.loads(row['result_json']) if row['result_json'] else None)
+            self.assertEqual(view['retention'], {key: value for key, value in json.loads(row['retention_json']).items()
+                                                  if key != 'commandReceipts'})
+            self.assertEqual(view['result'], {'alreadyRemoved': json.loads(row['result_json'])['alreadyRemoved']}
+                             if row['result_json'] else None)
             self.assertNotIn('commandReceipts', json.loads(current['retention_json']))
             if current['result_json']:
                 self.assertEqual(set(json.loads(current['result_json'])), {'alreadyRemoved'})
@@ -316,7 +321,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         from hey_my_buddy.blackboard.routing.router_history import _fact_entries
 
         fixture, connection = self.restored(convert=False)
-        health = {name: read_health(connection, name) for name in HARNESSES}
+        health = {name: {key: value for key, value in read_health(connection, name).items()
+                         if key != 'available'} for name in HARNESSES}
         records = {row['harness']: json.loads(row['record_json'])
                    for row in connection.execute('SELECT * FROM harness_health')}
         outcomes = [dict(row) for row in connection.execute('SELECT * FROM router_outcomes')]
@@ -346,7 +352,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.commit()
         before = read_health(connection, 'codex')
         self.assertEqual(before['status'], 'unhealthy')
-        self.assertFalse(before['available'])
+        before.pop('available')
+        self.assertEqual(before['status'], 'unhealthy')
         schema_upgrade.upgrade(fixture['state'])
         self.assertEqual(read_health(connection, 'codex'), before)
 

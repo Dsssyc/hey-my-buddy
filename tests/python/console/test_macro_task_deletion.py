@@ -225,7 +225,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         for code, status in (('MACRO_TASK_NOT_SETTLED', 409), ('MACRO_TASK_STORAGE_IN_USE', 409),
                              ('MACRO_TASK_HARNESS_UNAVAILABLE', 409), ('MACRO_TASK_BUSY', 409),
                              ('STORAGE_BUSY', 409), ('TASK_DELETING', 409),
-                             ('MACRO_TASK_DELETED', 410), ('REVISION_CONFLICT', 409), ('NOT_FOUND', 404)):
+                             ('MACRO_TASK_DELETING', 409), ('REVISION_CONFLICT', 409), ('NOT_FOUND', 404)):
             for operation, seam, params in ((PREVIEW, 'preview', {'macroTaskId': 'macro-fixture'}),
                     (DELETE, 'delete', {'macroTaskId': 'macro-fixture', 'microTaskCount': 0, 'confirm': True})):
                 with self.subTest(code=code, operation=operation), patch.object(
