@@ -2,6 +2,7 @@ import type { Reason } from "./reason";
 import type { Actor } from "./types";
 import type { RoutingMode } from "./types";
 
+export type MacroTaskSort = "activity-desc" | "activity-asc" | "created-desc" | "created-asc";
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
 type MacroTaskCategory = "host" | "active" | "review" | "ended";
@@ -41,7 +42,7 @@ export type MacroTaskSummary = {
 };
 export type MacroTaskQuery = {
   limit?: number; before?: string; projectId?: string; hostId?: string;
-  query?: string; filter?: MacroTaskFilter;
+  query?: string; filter?: MacroTaskFilter; sort?: MacroTaskSort;
 };
 export type MacroTaskPage = {
   macroTasks: MacroTaskSummary[];
@@ -102,7 +103,7 @@ export type TimelineSpan = {
   startAt: string | null; endAt: string | null;
   /**
    * queue: queued (open) or admitted; execution/routing: the attempt's execution state
-   * (starting, executing, finalizing, uncertain, finished); host: the request state
+   * (starting, executing, finalizing, uncertain, finished, or rejected before the model started); host: the request state
    * (open, approved, declined, superseded, cancelled).
    */
   state: string;

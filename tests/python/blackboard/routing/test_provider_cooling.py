@@ -173,6 +173,15 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.assertNotIn("quotaFailure", final)
         self.assertEqual(final["counts"]["turns"], 2)
         self.assertEqual([t["state"] for t in final["audit"]["turns"]], ["rejected", "returned"])
+        timeline = self.board_.call("macro_task_timeline", {"macroTaskId": f"run:{run['runId']}"})
+        execution_spans = [span for span in timeline["spans"] if span["kind"] == "execution"]
+        self.assertEqual(len(execution_spans), 2)
+        by_attempt = {span["attemptId"]: span for span in execution_spans}
+        first_span = by_attempt[first["claim"]["attempt"]["attemptId"]]
+        second_span = by_attempt[second["claim"]["attempt"]["attemptId"]]
+        self.assertEqual((first_span["state"], second_span["state"]), ("rejected", "finished"))
+        self.assertTrue(all(span["shutdownConfirmed"] and span["endAt"] for span in execution_spans))
+        self.assertEqual((first_span["resultStatus"], second_span["resultStatus"]), ("failed", "ok"))
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM agent_credentials WHERE state='active'").fetchone()[0], 0)
 

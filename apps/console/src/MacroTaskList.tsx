@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { MacroTaskFilter, MacroTaskSummary } from "./macro-task-types";
+import type { MacroTaskFilter, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 import { Hint } from "./components/hint";
 import { StateMark } from "./components/ui/state-mark";
 import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
@@ -17,6 +17,7 @@ import { useTextClipped } from "./components/use-text-clipped";
 export type MacroTaskListProps = {
   rows: MacroTaskSummary[]; totals: Record<MacroTaskFilter, number>;
   loading: boolean; error: string; nextCursor: string | null; reorder: { count: number | null } | null;
+  sort: MacroTaskSort; onSortChange: (sort: MacroTaskSort) => void;
   filter: MacroTaskFilter; query: string; selected: string | null; active?: boolean; visible?: boolean;
   listNavigation?: ReactNode; onCollapse: () => void;
   onFilterChange: (filter: MacroTaskFilter) => void; onQueryChange: (query: string) => void;
@@ -80,6 +81,16 @@ export function MacroTaskList(props: MacroTaskListProps) {
       <div className="flex min-h-7 items-center gap-2">{props.listNavigation}
         {props.reorder && <Hint text={t("update")}><button type="button" data-slot="macro-update" className="inline-flex size-7 items-center justify-center" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><StateMark kind="live"/></button></Hint>}
         <span className="ml-auto"><ListFold label={t("collapse")} onClick={props.onCollapse}/></span>
+      </div>
+      <div data-slot="macro-sort" className="mt-2.5 flex h-8 items-center divide-x border border-input text-xs">
+        <select aria-label={t("sort.by")} className="h-full min-w-0 flex-1 bg-card px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          value={props.sort.split("-")[0]} onChange={event => props.onSortChange(`${event.target.value}-${props.sort.split("-")[1]}` as MacroTaskSort)}>
+          <option value="activity">{t("sort.activity")}</option><option value="created">{t("sort.created")}</option>
+        </select>
+        <select aria-label={t("sort.direction")} className="h-full bg-card px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          value={props.sort.split("-")[1]} onChange={event => props.onSortChange(`${props.sort.split("-")[0]}-${event.target.value}` as MacroTaskSort)}>
+          <option value="desc">{t("sort.desc")}</option><option value="asc">{t("sort.asc")}</option>
+        </select>
       </div>
       {!(empty && props.totals.all === 0 && !props.query && props.filter === "all") && <>
         <Input data-slot="macro-search" className="mt-2.5 h-8 text-sm" aria-label={t("search")} placeholder={t("search")} value={props.query} maxLength={200} onChange={e => props.onQueryChange(e.target.value)}/>

@@ -5032,13 +5032,10 @@ class WorkflowCoordinator:
         delivery = resolution["delivery"]
         return {
             "conflictId": resolution["conflict"]["conflict_id"],
-            "state": "delivered",
-            "kind": "host-resolution",
             "action": resolution["conflict"]["action"],
             "artifactId": resolution["conflict"]["artifact_id"],
             "attemptId": resolution["conflict"]["attempt_id"],
             "turnId": resolution["conflict"]["turn_id"],
-            "turnOutcome": "completed",
             "deliveredAt": delivery["deliveredAt"],
         }
 

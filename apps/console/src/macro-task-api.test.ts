@@ -38,12 +38,12 @@ describe("work macro task reads", () => {
     const api = createApi("/private/", fetcher);
     const controller = new AbortController();
     await expect(api.macroTasks({ limit: 50, before: "keyset+cursor/==", projectId: "repository:a", hostId: "Host B",
-      query: "时间轴", filter: "review" }, controller.signal)).resolves.toEqual(page);
+      query: "时间轴", filter: "review", sort: "created-asc" }, controller.signal)).resolves.toEqual(page);
     const [location, init] = fetcher.mock.calls[0];
     const url = new URL(String(location), "http://localhost");
     expect(url.pathname).toBe("/private/api/macro-tasks");
     expect(Object.fromEntries(url.searchParams)).toEqual({ limit: "50", before: "keyset+cursor/==",
-      projectId: "repository:a", hostId: "Host B", query: "时间轴", filter: "review" });
+      projectId: "repository:a", hostId: "Host B", query: "时间轴", filter: "review", sort: "created-asc" });
     expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", signal: controller.signal });
     expect(init?.method || "GET").toBe("GET");
     expect(init?.body).toBeUndefined();

@@ -457,6 +457,50 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.list_(board)
         self.assertEqual(self.list_(board)['macroTasks'][0]['macroTaskId'], first['macroTaskId'])
 
+    def test_list_sort_orders_and_paginates_by_activity_or_creation(self):
+        board, first, _second, loose = self.grouped_board()
+        other = self.submit(board, request_id='another-loose', kind='worktree')
+        macro_id = first['macroTaskId']
+        loose_id, other_id = f"run:{loose['runId']}", f"run:{other['runId']}"
+        with board.store.db.write() as db:
+            db.execute("UPDATE macro_tasks SET created_at=?,activity_seq=? WHERE macro_task_id=?",
+                       ('2026-01-02T00:00:00Z', 30, macro_id))
+            db.execute("UPDATE workflow_runs SET created_at=?,activity_seq=? WHERE run_id=?",
+                       ('2026-01-01T00:00:00Z', 10, loose['runId']))
+            db.execute("UPDATE workflow_runs SET created_at=?,activity_seq=? WHERE run_id=?",
+                       ('2026-01-01T00:00:00Z', 20, other['runId']))
+
+        tied = sorted([loose_id, other_id])
+        expected = {
+            'activity-desc': [macro_id, other_id, loose_id],
+            'activity-asc': [loose_id, other_id, macro_id],
+            'created-desc': [macro_id, *reversed(tied)],
+            'created-asc': [*tied, macro_id],
+        }
+        self.assertEqual([row['macroTaskId'] for row in self.list_(board)['macroTasks']],
+                         expected['activity-desc'])
+        for sort, order in expected.items():
+            with self.subTest(sort=sort):
+                full = self.list_(board, sort=sort)
+                self.assertEqual([row['macroTaskId'] for row in full['macroTasks']], order)
+                seen, before = [], None
+                for _ in order:
+                    page = self.list_(board, sort=sort, limit=1, **({'before': before} if before else {}))
+                    self.assertEqual(len(page['macroTasks']), 1)
+                    seen.extend(row['macroTaskId'] for row in page['macroTasks'])
+                    before = page['nextCursor']
+                self.assertEqual(seen, order)
+                self.assertIsNone(before)
+
+        first_page = self.list_(board, sort='created-asc', limit=1)
+        with self.assertRaises(BoardError) as error:
+            self.list_(board, sort='created-desc', limit=1, before=first_page['nextCursor'])
+        self.assertEqual((error.exception.code, error.exception.details.get('field')),
+                         ('INVALID_ARGUMENT', 'before'))
+        for sort in ('created', 'activity', 'updated-desc', 'created-oldest', ''):
+            with self.subTest(invalid_sort=sort), self.assertRaises(BoardError):
+                self.list_(board, sort=sort)
+
     def test_failed_count_keeps_host_concluded_failures_and_excludes_cancelled_roots(self):
         board, first, second, loose = self.grouped_board()
         group_id = first['macroTaskId']

@@ -487,7 +487,7 @@ describe("a turn", () => {
   it("shows a pre-model quota rejection on its own turn, then the new route without making the successful task failed", async () => {
     const first = timeline();
     first.spans = first.spans.filter(item => ["r1", "e1"].includes(item.spanId));
-    Object.assign(first.spans.find(item => item.spanId === "e1")!, { endAt: at("10:03"), resultStatus: "failed", error: "quota exceeded" });
+    Object.assign(first.spans.find(item => item.spanId === "e1")!, { state: "rejected", endAt: at("10:03"), resultStatus: "failed", error: "quota exceeded" });
     first.spans.push(span("r2", "routing", at("10:04"), at("10:05"), { attemptId: "att-r2", decisionId: "decision-2",
       routing: { routingMode: "fast", selectedBuddy: OPUS, reason: null, note: null } }),
     span("e2", "execution", at("10:06"), at("10:30"), { turnIndex: 2, attemptId: "att-2", turnId: "turn-2", buddy: OPUS, shutdownConfirmed: true, resultStatus: "ok" }));

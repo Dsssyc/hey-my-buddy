@@ -4,14 +4,17 @@ import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
 import { waitForRead } from "./global-refresh";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
-import type { MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
+import type { MacroTaskFilter, MacroTaskPage, MacroTaskQuery, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
 
 type PageState = { rows: MacroTaskSummary[]; totals: Record<MacroTaskFilter, number>; nextCursor: string | null };
 const emptyTotals = (): PageState["totals"] => ({ all: 0, active: 0, host: 0, review: 0 });
 
-/** Sort exactly like the service's default order: activity sequence, then identifier descending. */
-function byActivity(left: MacroTaskSummary, right: MacroTaskSummary): number {
-  return right.lastActivitySeq - left.lastActivitySeq || right.macroTaskId.localeCompare(left.macroTaskId);
+/** The service order, also used when polling merges fresh summaries into loaded pages. */
+function compareRows(left: MacroTaskSummary, right: MacroTaskSummary, sort: MacroTaskSort): number {
+  const difference = sort.startsWith("activity-") ? left.lastActivitySeq - right.lastActivitySeq
+    : (left.createdAt ?? "") < (right.createdAt ?? "") ? -1 : (left.createdAt ?? "") > (right.createdAt ?? "") ? 1 : 0;
+  const order = difference || (left.macroTaskId < right.macroTaskId ? -1 : left.macroTaskId > right.macroTaskId ? 1 : 0);
+  return sort.endsWith("asc") ? order : -order;
 }
 
 /**
@@ -64,6 +67,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         ...(mode === "more" ? { before: current.current.cursor! } : {}),
       }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
+      const byOrder = (left: MacroTaskSummary, right: MacroTaskSummary) => compareRows(left, right, current.current.query.sort ?? "activity-desc");
       const checked = api.readVerifiedAt?.(next) ?? null;
       setVerifiedAtMs(previous => mode === "first" || mode === "poll" && next.nextCursor === null
         ? checked : previous === null || checked === null ? null : Math.min(previous, checked));
@@ -81,7 +85,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         if (!previous.rows.length) {
           pendingNew.current.clear();
           setLatest(fresh);
-          setPage({ rows: [...next.macroTasks].sort(byActivity), totals: next.totals, nextCursor: next.nextCursor });
+          setPage({ rows: [...next.macroTasks].sort(byOrder), totals: next.totals, nextCursor: next.nextCursor });
           return;
         }
         const known = new Set(previous.rows.map(row => row.macroTaskId));
@@ -95,8 +99,8 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         const returned = new Set(next.macroTasks.map(row => row.macroTaskId));
         const droppedAmbiguous = complete ? [] : previous.rows.filter(row => {
           if (returned.has(row.macroTaskId)) return false;
-          const floor = next.macroTasks.length ? next.macroTasks[next.macroTasks.length - 1]!.lastActivitySeq : -Infinity;
-          return row.lastActivitySeq >= floor;
+          const last = next.macroTasks.at(-1);
+          return last === undefined || byOrder(row, last) <= 0;
         });
         // Completeness proves membership, not permission to reorder. Preserve
         // the surviving committed order; newcomers wait behind the notice.
@@ -106,7 +110,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         const merged = [...retained, ...next.macroTasks.filter(row => !known.has(row.macroTaskId))];
         if (complete) pendingNew.current.clear();
         for (const row of next.macroTasks) if (!known.has(row.macroTaskId)) pendingNew.current.set(row.macroTaskId, row);
-        const sorted = [...merged].sort(byActivity);
+        const sorted = [...merged].sort(byOrder);
         const orderChanged = hasNew || sorted.some((row, index) => merged[index]!.macroTaskId !== row.macroTaskId);
         const changedCount = merged.filter(row => {
           const committed = previous.rows.find(candidate => candidate.macroTaskId === row.macroTaskId);
@@ -123,7 +127,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
         const rows = mode === "more"
           ? [...pageRef.current.rows.map(row => fresh.get(row.macroTaskId) ?? row),
             ...next.macroTasks.filter(row => !known.has(row.macroTaskId)).map(row => fresh.get(row.macroTaskId) ?? row)]
-          : [...next.macroTasks].sort(byActivity);
+          : [...next.macroTasks].sort(byOrder);
         setPage({ rows, totals: next.totals, nextCursor: next.nextCursor });
         if (mode === "first") { pendingNew.current.clear(); needsFirst.current = false; }
         setLatest(mode === "first" ? new Map(next.macroTasks.map(row => [row.macroTaskId, row])) : fresh);
@@ -152,7 +156,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
       const known = new Set(previous.rows.map(row => row.macroTaskId));
       const merged = previous.rows.map(row => latestRef.current.get(row.macroTaskId) ?? row);
       for (const [id, summary] of pendingNew.current) if (!known.has(id)) merged.push(summary);
-      return { rows: merged.sort(byActivity), totals: previous.totals, nextCursor: null };
+      return { rows: merged.sort((left, right) => compareRows(left, right, current.current.query.sort ?? "activity-desc")), totals: previous.totals, nextCursor: null };
     });
     setReorder(null);
     void fetchPage("first");

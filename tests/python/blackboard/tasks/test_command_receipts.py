@@ -224,6 +224,9 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         self.assertEqual(first["state"], "accepted")
         self.assertEqual(first["resolutionDelivery"]["conflictId"], conflict["conflictId"])
         self.assertEqual(first["resolutionDelivery"]["artifactId"], resolved["artifactId"])
+        self.assertEqual(set(first["resolutionDelivery"]), {
+            "conflictId", "action", "artifactId", "attemptId", "turnId", "deliveredAt",
+        })
         stored, rebuilt, _current = replay(board, "workflow.accept", first)
         self.assertEqual(stored["resolutionConflictId"], conflict["conflictId"])
         self.assertEqual(rebuilt["resolutionDelivery"], first["resolutionDelivery"])

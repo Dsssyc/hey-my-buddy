@@ -93,6 +93,7 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
   // The timeline item the open detail came from; it names the step the detail opens on.
   const [origin, setOrigin] = useState<string | null>(null);
   function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
+    next = { ...next, sort: next.sort ?? location.sort };
     const hash = tasksHash(next);
     const state = window.history.state;
     if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, state, "", hash);
@@ -131,6 +132,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const { t } = useTranslation(["tasks", "shell", "macroHeader", "taskDetail"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState("");
+  const sort = location.sort ?? "activity-desc";
   const selected = location.macroTaskId;
   const [showNarrowList, setShowNarrowList] = useState(!selected);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -155,7 +157,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     changed(); media.addEventListener("change", changed);
     return () => media.removeEventListener("change", changed);
   }, []);
-  const list = useMacroTaskList(api, { query, filter }, active);
+  const list = useMacroTaskList(api, { query, filter, sort }, active);
   const rows = list.rows.filter(row => !deletedIds.has(row.macroTaskId));
   const totals = { ...list.totals };
   for (const row of list.rows) if (deletedIds.has(row.macroTaskId)) {
@@ -236,8 +238,9 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }
   const listPane = <MacroTaskList
     rows={rows} totals={totals} loading={list.loading} error={list.error}
-    nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} selected={selected}
+    nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} sort={sort} selected={selected}
     active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} listNavigation={listNavigation()} onCollapse={onCollapseList}
+    onSortChange={sort => go({ ...location, sort }, "push", origin)}
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}
     onMore={list.more} onApplyReorder={list.applyReorder} />;
 

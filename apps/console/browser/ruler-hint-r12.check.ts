@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const hint = "滚轮缩放 · Shift+滚轮平移 · 双击适应宽度 · 键盘 + − 0";
+const hint = "滚轮缩放 · Shift+滚轮平移 · 适应宽度：双击 · 键盘 + − 0";
 const captures = fileURLToPath(new URL("../../../tmp/readability-r12", import.meta.url));
 async function box(node: Locator) { return (await node.boundingBox())!; }
 

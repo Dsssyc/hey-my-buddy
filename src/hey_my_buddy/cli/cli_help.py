@@ -64,7 +64,7 @@ SUMMARIES: dict[str, str] = {
     "workspace-resolve": "Settle one recorded out-of-scope failure site by restore, adopt or abandon.",
     "await": "Wait for one existing run without starting, resuming, retrying or cancelling work.",
     "suggest": "Record one bounded suggestion on the caller's own run.",
-    "macro-task-list": "Bounded summaries of macro tasks and standalone micro tasks by latest activity.",
+    "macro-task-list": "Bounded summaries of macro tasks and standalone micro tasks, sorted by activity or creation.",
     "macro-task-timeline": "One work macro task's bounded timeline with spans and Host markers.",
     "execution-cancel": "Cancel one ordinary execution: queued work now, durable intent for an active attempt.",
     "execution-retry": "Requeue an eligible failed, cancelled or reconciliation-needed task as a new generation.",

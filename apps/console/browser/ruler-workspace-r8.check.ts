@@ -33,12 +33,13 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     const axis = page.locator('[data-slot=timeline-axis]');
     await moveTo(page, axis, .4);
     await expect(zoomRuler).toHaveCSS("background-color", ground);
-    await expect(page.getByRole("tooltip")).toHaveText("滚轮缩放 · Shift+滚轮平移 · 双击适应宽度 · 键盘 + − 0");
+    await expect(page.getByRole("tooltip")).toHaveText("滚轮缩放 · Shift+滚轮平移 · 适应宽度：双击 · 键盘 + − 0");
     await page.mouse.wheel(0, -350);
     await expect.poll(() => ppm(page)).toBeGreaterThan(initial);
     const zoomed = await ppm(page);
     const fit = page.locator('[data-slot=zoom-fit]');
     await expect(fit).toBeVisible();
+    await expect(fit).toHaveAccessibleName("适应宽度");
     const frame = (await view.boundingBox())!, fitBox = (await fit.boundingBox())!;
     expect(fitBox.x + fitBox.width).toBeLessThanOrEqual(frame.x + frame.width);
     expect(fitBox.x).toBeGreaterThan(frame.x + frame.width - 50);

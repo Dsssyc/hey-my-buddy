@@ -76,16 +76,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
   const decisionIds = useMemo(() => (recordedTimeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [recordedTimeline, runId]);
   const read = useTaskDetail(client, runId, active, decisionIds);
   const { view, workflow } = read;
-  // Execution shutdown and workflow rejection are distinct facts. The macro
-  // timeline records the finished process; this detail also reads its turn.
-  const timeline = useMemo(() => {
-    if (!recordedTimeline || !workflow) return recordedTimeline;
-    const rejected = new Set([...workflow.turns, ...(read.audit?.turns ?? [])]
-      .filter(turn => turn.state === "rejected").map(turn => turn.attemptId));
-    return { ...recordedTimeline, spans: recordedTimeline.spans.map(span =>
-      span.runId === runId && span.kind === "execution" && span.attemptId != null && rejected.has(span.attemptId)
-        ? { ...span, state: "rejected" } : span) };
-  }, [recordedTimeline, workflow, read.audit, runId]);
+  const timeline = recordedTimeline;
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
   const steps: Steps | null = useMemo(() => {
     if (view === null) return null;

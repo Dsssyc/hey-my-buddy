@@ -266,6 +266,9 @@ class PreviewFixtureTest(unittest.TestCase):
                 self.assertTrue({"decision", "verdict", "state", "strategy", "note"} <= event.keys())
         self.assertEqual("failed", rows["preview-run-b2"]["state"])
         self.assertEqual("preview-run-b1", rows["preview-run-b2"]["rootLeadRunId"])
+        rejected = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-b9-1")
+        self.assertEqual("rejected", rejected["state"])
+        self.assertEqual("failed", rejected["resultStatus"])
         lead, waiting, active = [json.loads((fixtures / f"normal/workflow-{run_id}.json").read_text(encoding="utf-8"))
                                  for run_id in ("preview-run-b3", "preview-run-b4", "preview-run-b5")]
         self.assertEqual("waiting-owned", rows[lead["runId"]]["state"])
@@ -570,6 +573,28 @@ class PreviewDeletionTest(unittest.TestCase):
             return response.status, json.loads(response.read())
         finally:
             connection.close()
+
+    def test_macro_task_list_sort_matches_requested_order(self) -> None:
+        preview = self.preview
+        expected = {
+            "activity-desc": [preview.MACRO_B, preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_C],
+            "activity-asc": [preview.MACRO_C, preview.STANDALONE_GROUP, preview.MACRO_A, preview.MACRO_B],
+            "created-desc": [preview.MACRO_A, preview.STANDALONE_GROUP, preview.MACRO_B, preview.MACRO_C],
+            "created-asc": [preview.MACRO_C, preview.MACRO_B, preview.STANDALONE_GROUP, preview.MACRO_A],
+        }
+        with self.server() as server:
+            status, default = self.call(server, "/api/macro-tasks")
+            self.assertEqual(200, status)
+            self.assertEqual(expected["activity-desc"], [row["macroTaskId"] for row in default["macroTasks"]])
+            for sort, order in expected.items():
+                with self.subTest(sort=sort):
+                    status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
+                    self.assertEqual(200, status)
+                    self.assertEqual(order, [row["macroTaskId"] for row in result["macroTasks"]])
+                    self.assertEqual(default["totals"], result["totals"])
+            for sort in ("random", "", "created-desc&sort=activity-asc"):
+                status, result = self.call(server, f"/api/macro-tasks?sort={sort}")
+                self.assertEqual((400, "INVALID_ARGUMENT"), (status, result["error"]["code"]))
 
     def test_provider_clear_replies_are_flat_and_idempotent(self) -> None:
         with self.server() as server:

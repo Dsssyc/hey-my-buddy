@@ -58,6 +58,7 @@ class LeadOwnedTests(WorkflowTestCase):
         return board.call("workflow_get", {"runId": child["runId"]}), claim["claim"]
 
     def test_standalone_lead_and_owned_execution_share_one_console_and_record_group(self):
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks
         from hey_my_buddy.blackboard.tasks.session_content import identity
         from hey_my_buddy.private_dirs import session_record_path
 
@@ -73,6 +74,11 @@ class LeadOwnedTests(WorkflowTestCase):
                              str(session_record_path(board.directory, group, attempt_id)))
         groups = board.call('macro_task_list', {})['macroTasks']
         self.assertEqual([row['macroTaskId'] for row in groups], [group])
+        with board.store.db.read() as db:
+            members = db.execute(f'SELECT task_id,group_id FROM ({macro_tasks.MEMBERS_SQL})').fetchall()
+        self.assertEqual({row['task_id']: row['group_id'] for row in members},
+                         {lead['runId']: group, owned['runId']: group})
+        self.assertEqual(macro_task_deletion.preview(board.store, group)['microTaskCount'], 2)
         rows = board.call('macro_task_timeline', {'macroTaskId': group})['rows']
         self.assertEqual({row['runId'] for row in rows}, {lead['runId'], owned['runId']})
         self.assertFalse(session_record_path(board.directory, 'run:' + owned['runId'], 'unused').parent.exists())
