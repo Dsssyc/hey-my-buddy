@@ -10,19 +10,19 @@ describe("a visible session's read lifetime", () => {
   it("reads the latest page first and drains every full after page without waiting another interval", async () => {
     vi.useFakeTimers();
     const failure = { code: "session-record-write-failed", params: { category: "write", message: "disk full" } };
-    const session = vi.fn().mockResolvedValueOnce(page(10, 100)).mockResolvedValueOnce(page(110, 100)).mockResolvedValueOnce({ ...page(210, 1), state: "ended", stopped: failure });
+    const session = vi.fn().mockResolvedValueOnce(page(10, 256)).mockResolvedValueOnce({ ...page(266, 1), state: "ended", stopped: failure });
     const client = { session };
     const { result, unmount } = renderHook(() => useSession(client, "task", "attempt", true));
     await flush();
-    expect(session.mock.calls[0][2]).toEqual({ limit: 100 });
-    expect(result.current.data?.events).toHaveLength(100);
+    expect(session.mock.calls[0][2]).toEqual({ limit: 256 });
+    expect(result.current.data?.events).toHaveLength(256);
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(session.mock.calls.map(call => call[2])).toEqual([{ limit: 100 }, { after: 110, limit: 100 }, { after: 210, limit: 100 }]);
-    expect(result.current.data?.events).toHaveLength(201);
+    expect(session.mock.calls.map(call => call[2])).toEqual([{ limit: 256 }, { after: 266, limit: 256 }]);
+    expect(result.current.data?.events).toHaveLength(257);
     expect(result.current.data?.stopped).toEqual(failure);
     unmount();
     await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
-    expect(session).toHaveBeenCalledTimes(3);
+    expect(session).toHaveBeenCalledTimes(2);
   });
 
   it("aborts hidden and switched attempts, and never applies a late reply to the next visible panel", async () => {

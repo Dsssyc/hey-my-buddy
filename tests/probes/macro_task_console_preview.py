@@ -67,7 +67,10 @@ The asset directory is Host-supplied; the repository's current bundle lives at
 Session view fixtures (GET /api/tasks/<taskId>/attempts/<attemptId>/session):
 ``preview-run-a1/att-a1-2`` is a paginated Codex session; its failed command
 starts on the earlier page and finishes on the latest page. The long command
-keeps 2,400 output lines and ``FULL_OUTPUT_END``. ``preview-run-a3/att-a3-1``
+keeps 2,400 output lines and ``FULL_OUTPUT_END``.
+``preview-run-a1-h1/att-h1-2`` is a multi-page session of over three thousand
+records, for scrolling from the latest page back to the beginning.
+``preview-run-a3/att-a3-1``
 is a running Claude Code session; ``preview-run-b10/att-b10-1`` is an ended
 Claude read/search session. ``preview-run-b1/att-b1-2`` is a ZCode session
 with tool inputs, and ``att-b1-1`` models an older input-free projection.
@@ -236,6 +239,7 @@ STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND":
                   "SESSION_DELETED": 410, "SESSION_INVALID_RECORD": 422, "SESSION_UNREADABLE": 500}
 
 SESSION_LONG = ("preview-run-a1", "att-a1-2")
+SESSION_VERY_LONG = ("preview-run-a1-h1", "att-h1-2")
 SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
 SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
 SESSION_ROUTER_REVIEW = ("preview-run-a2-router-abstention", "att-router-a2-abstention")
@@ -243,8 +247,8 @@ SESSION_CLAUDE = ("preview-run-b10", "att-b10-1")
 SESSION_ZCODE = ("preview-run-b1", "att-b1-2")
 SESSION_ZCODE_OLD = ("preview-run-b1", "att-b1-1")
 SESSION_DSH = ("preview-run-b9", "att-b9-2")
-SESSION_PAIRS = (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER, SESSION_ROUTER_REVIEW, SESSION_CLAUDE,
-                 SESSION_ZCODE, SESSION_ZCODE_OLD, SESSION_DSH)
+SESSION_PAIRS = (SESSION_LONG, SESSION_VERY_LONG, SESSION_RUNNING, SESSION_ROUTER, SESSION_ROUTER_REVIEW,
+                 SESSION_CLAUDE, SESSION_ZCODE, SESSION_ZCODE_OLD, SESSION_DSH)
 SESSION_ERRORS = {
     ("preview-run-a2", "att-a2-1"): (501, "SESSION_NOT_INTEGRATED", "session.not-integrated",
                                        "Session projection is not integrated for this harness"),
@@ -1380,6 +1384,27 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
             session_event(attempt_id, "agent_message_chunk",
                           content=session_text("最终答复：合成预览会话已结束。")),
         ))
+        return events
+    if pair == SESSION_VERY_LONG:
+        # A session of many pages: reading 256 at a time takes more than ten
+        # loads to reach the opening below.
+        events = [session_event(attempt_id, "user_message_chunk",
+                                content=session_text("长会话合成夹具：从最新处一直向前滚动，应能读到这条开头。"))]
+        for index in range(1500):
+            call_id = f"long-read-{index:04d}"
+            events.extend((
+                session_event(attempt_id, "tool_call", toolCallId=call_id, title="Read", kind="read",
+                              status="in_progress",
+                              rawInput={"file_path": f"synthetic/long/part-{index:04d}.txt"}),
+                session_event(attempt_id, "tool_call_update", toolCallId=call_id,
+                              status="completed", rawOutput={"lines": 1},
+                              content=[{"type": "content", "content": session_text(f"part-{index:04d}: 一行。\n")}]),
+            ))
+            if index % 10 == 9:
+                events.append(session_event(attempt_id, "agent_message_chunk",
+                                            content=session_text(f"长会话第 {index + 1} 次读取完成，继续向前核对。")))
+        events.append(session_event(attempt_id, "agent_message_chunk",
+                                    content=session_text("长会话结束：已核对到最新一条。")))
         return events
     if pair == SESSION_RUNNING:
         return [session_event(attempt_id, "user_message_chunk", content=session_text("运行中的合成回合。")),

@@ -43,7 +43,7 @@ export default {
     counts: { read_one: "读取 {{count}} 个文件", read_other: "读取 {{count}} 个文件", edit_one: "修改 {{count}} 个文件", edit_other: "修改 {{count}} 个文件", delete_one: "删除 {{count}} 个文件", delete_other: "删除 {{count}} 个文件", move_one: "移动 {{count}} 个文件", move_other: "移动 {{count}} 个文件", search_one: "搜索 {{count}} 次", search_other: "搜索 {{count}} 次", execute_one: "执行 {{count}} 条命令", execute_other: "执行 {{count}} 条命令", fetch_one: "获取 {{count}} 次", fetch_other: "获取 {{count}} 次", think_one: "推理 {{count}} 次", think_other: "推理 {{count}} 次", switch_mode_one: "切换模式 {{count}} 次", switch_mode_other: "切换模式 {{count}} 次", other_one: "调用 {{count}} 次", other_other: "调用 {{count}} 次" },
     highlightFailed: "代码高亮加载失败",
     title: "会话", content: "会话内容", loading: "正在读取会话…",
-    earlier: "加载更早内容", loadingEarlier: "正在读取更早内容…", empty: "此执行尚无会话内容", newContent: "有新内容",
+    loadingEarlier: "正在读取更早内容…", empty: "此执行尚无会话内容", newContent: "有新内容",
     omitted: "不提供：{{content}}", separator: "；", reasoning: "推理", plan: "计划",
     copy: "复制全文", copied: "已复制", copyFailed: "复制失败", recordingStopped: "会话记录已停止：{{reason}}",
     state: { running: "运行中", ended: "已结束" },

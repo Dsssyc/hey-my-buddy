@@ -8,6 +8,7 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 const step = (run: string, number: number, macro = A) => `#tasks/${macro}/${run}/${number}`;
 const session = (run: string, number: number, macro = A) => `${step(run, number, macro)}?tab=session`;
 const long = session("preview-run-a1", 7);
+const deep = session("preview-run-a1-h1", 3);
 const correctionShots = fileURLToPath(new URL("../../../tmp", import.meta.url));
 type Language = "en" | "zh";
 
@@ -15,6 +16,7 @@ const panel = (page: Page) => page.locator('[data-slot="session-view"]');
 const viewport = (page: Page) => panel(page).locator('[data-slot="message-scroller-viewport"]');
 const row = (page: Page, type: string) => panel(page).locator(`[data-session-row="${type}"]`);
 const tool = (page: Page, id: string) => panel(page).locator(`[data-session-tool="tool:${id}"]`);
+const notes = (page: Page) => panel(page).locator('[data-session-row="note"]');
 const tabs = (page: Page) => page.locator('[data-slot="detail-tabs"]');
 const overviewTab = (page: Page, language: Language = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "概述" : "Overview" });
 const sessionTab = (page: Page, language: Language = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "会话" : "Session" });
@@ -23,11 +25,14 @@ async function openSession(page: Page, hash: string) {
   await open(page, hash);
   await expect(panel(page)).toBeVisible();
 }
-async function loadEarlier(page: Page, language: Language = "en") {
+/** Scrolls to the top, which is what makes the panel read the next earlier page. */
+async function reachTop(page: Page) {
   await viewport(page).evaluate(node => { node.scrollTop = 0; });
-  await panel(page).getByRole("button", { name: language === "zh" ? "加载更早内容" : "Load earlier content", exact: true }).click();
-  await expect(panel(page).getByRole("button", { name: language === "zh" ? "加载更早内容" : "Load earlier content", exact: true })).toHaveCount(0);
-  await expect(row(page, "task")).toBeAttached();
+}
+/** Waits until the reading of earlier content has finished applying. */
+async function readOneEarlierPage(page: Page, before: number) {
+  await reachTop(page);
+  await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(before);
 }
 async function expandTool(page: Page, id: string) {
   const call = tool(page, id);
@@ -64,16 +69,10 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
 test.describe("session content and navigation", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
 
-  test("loads a cross-page call, summarizes failures, and reveals individual details", async ({ page }) => {
+  test("summarizes a turn's calls and failures, and reveals individual details", async ({ page }) => {
     await openSession(page, long);
-    await expect(tool(page, "codex-failed-command")).toHaveCount(0);
     const longCall = await expandTool(page, "tool-long");
     await longCall.getByRole("button", { name: /^Show remaining \d+ lines$/ }).click();
-    await viewport(page).evaluate(node => { node.scrollTop = 0; });
-    const reasoning = row(page, "reasoning");
-    const oldY = (await reasoning.boundingBox())!.y;
-    await loadEarlier(page);
-    expect(Math.abs((await reasoning.boundingBox())!.y - oldY)).toBeLessThan(3);
 
     await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
     await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
@@ -95,7 +94,6 @@ test.describe("session content and navigation", () => {
 
   test("shows one output for duplicate Codex results and only non-null fields without a body", async ({ page }) => {
     await openSession(page, long);
-    await loadEarlier(page);
     const completed = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-setup-00"]') });
     await expect(completed.locator('[data-slot="session-call-status"]')).toHaveAttribute("data-status", "completed");
     await completed.locator('[data-slot="trace-collapsible-trigger"]').first().click();
@@ -127,11 +125,21 @@ test.describe("session content and navigation", () => {
   });
 
   test("clamps a short page to the available scroll end when earlier content arrives", async ({ page }) => {
+    const message = (text: string) => ({ sessionId: "att-a1-2", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+    await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
+      const params = new URL(route.request().url()).searchParams;
+      const opening = params.get("before") === null && params.get("after") === null;
+      const earlier = params.get("before") !== null;
+      // A session short enough to fit the viewport: the sentinel stays in view, so
+      // the earlier page arrives without any scrolling. Later polls add nothing.
+      const events = opening ? [message("短会话最新一条。"), message("短会话倒数第二条。")]
+        : earlier ? [message("更早第三条。"), message("更早第二条。"), message("更早第一条。")] : [];
+      await route.fulfill({ json: { state: "ended", stopped: null, omitted: [], before: opening ? 60 : 0, after: opening ? 62 : 60, hasEarlier: opening, events } });
+    });
     await openSession(page, long);
-    await loadEarlier(page);
+    await expect(panel(page).getByText("更早第一条。")).toBeAttached();
     const { top, end } = await viewport(page).evaluate(node => ({ top: node.scrollTop, end: node.scrollHeight - node.clientHeight }));
     expect(top).toBeCloseTo(end, 0);
-    await expect(row(page, "task")).toBeAttached();
   });
 
   test("shows the first 14 output lines, then the full replacement snapshot", async ({ page }) => {
@@ -171,7 +179,6 @@ test.describe("session content and navigation", () => {
     await expect(command).not.toContainText("commandActions");
     await expect(command).not.toContainText("/synthetic-preview/hey-my-buddy");
     await expect(command.locator('[data-slot="session-output"]').first()).toContainText("最终完整快照");
-    await loadEarlier(page);
 
     const marker = row(page, "marker").filter({ hasText: "Changes in this turn" });
     await expect(marker).toHaveCount(1);
@@ -200,36 +207,23 @@ test.describe("session content and navigation", () => {
     await page.screenshot({ path: `${screenshots}/session-codex-diff-dark.png`, fullPage: true });
   });
 
-  test("restores reading position, disclosure and focus through tabs, reload and history", async ({ page }) => {
-    await openSession(page, long);
-    await loadEarlier(page);
-    const call = await expandTool(page, "tool-long");
-    const trigger = call.locator('[data-slot="trace-collapsible-trigger"]');
-    await viewport(page).evaluate(node => new Promise<void>(resolve => {
-      node.addEventListener("scroll", () => resolve(), { once: true });
-      node.scrollTop = 300;
-    }));
-    await trigger.focus();
-    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    const before = await viewport(page).evaluate(node => node.scrollTop);
+  test("starts from the latest page again after the session tab is left and reopened", async ({ page }) => {
+    await openSession(page, deep);
+    await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const firstPage = await notes(page).count();
+    await expect(row(page, "task")).toHaveCount(0);
+    await readOneEarlierPage(page, firstPage);
+    await readOneEarlierPage(page, await notes(page).count());
+    expect(await notes(page).count()).toBeGreaterThan(firstPage);
     await overviewTab(page).click();
-    await expect(page).toHaveURL(step("preview-run-a1", 7));
     await expect(panel(page)).toBeHidden();
+    const fresh = page.waitForResponse(response => /\/session\?limit=256$/.test(response.url()));
     await sessionTab(page).click();
-    await expect(page).toHaveURL(long);
-    await expect(trigger).toHaveAttribute("aria-expanded", "true");
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
-    await page.reload();
-    await expect(row(page, "task")).toBeAttached();
-    await expect(trigger).toBeFocused();
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
-    await page.goBack();
-    await expect(page).toHaveURL(step("preview-run-a1", 7));
-    await expect(panel(page)).toBeHidden();
-    await page.goForward();
-    await expect(page).toHaveURL(long);
-    await expect(trigger).toBeFocused();
-    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
+    await fresh;
+    // Back exactly as a first open: only the latest page, read from its end.
+    await expect.poll(() => notes(page).count()).toBe(firstPage);
+    await expect(row(page, "task")).toHaveCount(0);
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
   });
 
   test("offers Session only on routing and execution steps", async ({ page }) => {
@@ -360,6 +354,65 @@ test.describe("session content and navigation", () => {
   });
 });
 
+for (const theme of ["dark", "light"] as const) test.describe(`a session of many pages ${theme}`, () => {
+  test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: theme });
+
+  test("reads every earlier page by scrolling to the top and stops at the beginning", async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    let reads = 0;
+    page.on("response", response => { if (response.url().includes("/session?") && response.url().includes("before=")) reads++; });
+    // A short delay keeps the first earlier page in flight long enough to check
+    // that its insertion leaves the newest content where the reader is.
+    await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
+      if (route.request().url().includes("before=")) await page.waitForTimeout(300);
+      await route.continue().catch(() => {});
+    });
+    await openSession(page, deep);
+    await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const firstPage = await notes(page).count();
+    // Only the latest page is loaded; the opening still lies behind earlier pages.
+    await expect(row(page, "task")).toHaveCount(0);
+    const newest = panel(page).getByText("长会话结束：已核对到最新一条。");
+    await reachTop(page);
+    const keptY = (await newest.boundingBox())!.y;
+    await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(firstPage);
+    expect(Math.abs((await newest.boundingBox())!.y - keptY)).toBeLessThan(3);
+
+    for (let guard = 0; guard < 30 && (await row(page, "task").count()) === 0; guard++) {
+      const settled = await notes(page).count();
+      await reachTop(page);
+      await expect.poll(() => notes(page).count(), { timeout: 15_000 }).toBeGreaterThan(settled);
+    }
+    // The task row only renders once the opening event's page has been read.
+    await expect(row(page, "task")).toBeAttached();
+    expect(reads).toBe(12);
+    // The beginning has been reached: scrolling to the top reads nothing more.
+    await reachTop(page);
+    await page.waitForTimeout(400);
+    expect(reads).toBe(12);
+  });
+});
+
+test.describe("the quiet reading line", () => {
+  test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
+
+  test("says once that earlier content is being read, then leaves", async ({ page }) => {
+    await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
+      if (route.request().url().includes("before=")) await page.waitForTimeout(400);
+      await route.continue().catch(() => {});
+    });
+    await openSession(page, deep);
+    await expect(panel(page).getByText("长会话结束：已核对到最新一条。")).toBeAttached();
+    const loaded = await notes(page).count();
+    await reachTop(page);
+    const line = panel(page).locator('[data-slot="session-loading-earlier"]');
+    await expect(line).toBeVisible();
+    await expect(line).toContainText("Reading earlier content…");
+    await expect(line).toHaveCount(0);
+    await expect.poll(() => notes(page).count()).toBeGreaterThan(loaded);
+  });
+});
+
 test.describe("four harness preview records", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
 
@@ -466,7 +519,6 @@ for (const language of ["en", "zh"] as const) for (const theme of ["dark", "ligh
     test("counts each type and names it inside the group", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await openSession(page, long);
-      await loadEarlier(page, language);
       const completed = panel(page).locator('[data-session-focus="calls:tool:codex-setup-00"] [data-slot="session-call-status"]');
       await expect(completed.locator(".lucide-check")).toHaveCount(1);
       const group = row(page, "calls").filter({ has: page.locator('[data-session-focus="calls:tool:codex-no-output-command"]') });
