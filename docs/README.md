@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the implemented 0.7 source in this checkout. Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and `docs/acceptance/` before assuming a checkout matches the running installation.
+These pages describe the implemented 0.8 source in this checkout (contract 0.8.0, schema 10). The installed daily runtime remains 0.7.0 on schema 9 with its own deployment capacity (one local installation runs 6 business attempts plus 1 decision; the source default is 2 plus 1), and installing this source awaits an explicit user notice. Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and `docs/acceptance/` before assuming a checkout matches the running installation.
 
 | Document | Role |
 | --- | --- |
@@ -39,9 +39,9 @@ These pages describe the implemented 0.7 source in this checkout. Installed runt
 | [reference/evaluation.md](reference/evaluation.md) | Shared profiles, cards, preferences, evidence, the reader/writer gate, the private console HTTP surface and the fixed decision profile |
 | [reference/evaluation-maintenance.md](reference/evaluation-maintenance.md) | Harness-owned bounded fact preparation, archived reviews, shared card updates, publication and history |
 | [reference/decision.md](reference/decision.md) | The bounded tool-free DSH routing helper: selection input/output, cache layout and process ownership |
-| [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`command`/`external` adapters, the public `BoardClient` contract, worker identity and receipts, and supervisors |
+| [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`command`/`external` adapters, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
 | [reference/runner.md](reference/runner.md) | DSH-specific `harnesses/dsh/scripts/run.mjs` runner and bridge scripts: options, precedence, governed turn protocol, exit codes and attach mode |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 9, independent execution lanes, identity, recovery and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 10, independent execution lanes, identity, recovery, catalog observation and packaging |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
@@ -49,7 +49,9 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 [ADR-009: Parallel lanes and local console drafts](decisions/009-parallel-lanes-and-local-console-drafts.md) records independent business/routing capacity, cooperative worker-pool retirement, and local drafting with short publication grants.
 
-[ADR-008: Harness-owned evaluation maintenance](decisions/008-harness-owned-evaluation-maintenance.md) is implemented in the 0.7 source: a skill-equipped Harness performs shared evaluation updates on user request or through its own scheduling facility. Evidence is shared across source Hosts/projects and read-only in the console. The blackboard retains ordinary business/routing scheduling but does not schedule evaluation maintenance.
+[ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) is implemented in the 0.8 source: separated user and maintenance publication, user annotations distinct from automatic cards, task-local routing preferences, monotone catalog observation with paged unavailable history, explicit reconnection and bounded activity, scope/integration/cleanup lifecycle operations, a Codex native adapter and adapter-registry decision dispatch. The ZCode inquiry bridge is present only as a first artifact with known fixes underway and no live native acceptance, so it is not claimed as complete. ADR-010 remains the design record for the unit structure and end-to-end acceptance; the owning references above describe what the source actually implements, and installation of 0.8 awaits the user's notice.
+
+[ADR-008: Harness-owned evaluation maintenance](decisions/008-harness-owned-evaluation-maintenance.md) was implemented in the 0.7 source and remains current: a skill-equipped Harness performs shared evaluation updates on user request or through its own scheduling facility, only when the user asks for recurring updates. Evidence is shared across source Hosts/projects and read-only in the console. The blackboard retains ordinary business/routing scheduling but does not schedule evaluation maintenance.
 
 [ADR-007: neutral Buddy core and a single current contract](decisions/007-neutral-core-and-single-current-contract.md) is the accepted 0.6 architecture decision. It defines the source layout, the single current contract, durable default routing, the ZCode rebase and the clean-cut release boundary. Current behavior is maintained in the references above; ADR-007 is not rewritten as behavior changes.
 
@@ -59,15 +61,13 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## Design proposals
 
-[ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) proposes the follow-up to the 2026-09-25 audit: user-owned data and task-local routing, coherent catalog refresh, reconnect/observation, scope recovery, integration and checkout reclamation, ZCode inquiry, Codex parity, and lightweight RPC/distribution. It defines implementation units and end-to-end acceptance; it is not current runtime behavior. The existing 0.7 candidate's passing tests do not cover all newly identified gaps, and full installation remains deferred by the user.
-
 [ADR-004 proposal: decision support, evaluation maintenance and the local console](decisions/004-buddy-decision-support-and-console.md) preserves the consolidated discussion of Host/Worker comparative advantage, blackboard and C-Two boundaries, turn-end yield and continuation, explicit workspaces, bounded assessment cards, evaluation maintenance and a local console. Its section III governance choices were resolved by ADR-005; the remaining recommendations retain their proposal status. Its original interface sketches are historical design text. Supported runtime behavior and callable operations are maintained in the [workflow](reference/workflow.md), [evaluation](reference/evaluation.md), [architecture](reference/architecture.md) and [CLI](reference/cli.md) references.
 
 [ADR-003 draft](decisions/003-harness-model-selection.md) is retained as historical discussion; ADR-004 superseded it as the proposal for model selection, and implemented routing is owned by [workflow.md](reference/workflow.md).
 
 ## History and evidence
 
-Current delivery evidence: [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md) and [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md). The latter records complete validation and the user's deferred-installation boundary.
+Current delivery evidence: [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md) and [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md). The 0.7.0 record documents complete validation, the retained-data verification and the installation the user then requested; that 0.7.0/schema-9 runtime is what the daily installation still runs. The 0.8 source has no acceptance record yet, and its installation awaits the user's notice.
 
 | Document | Role |
 | --- | --- |

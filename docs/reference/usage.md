@@ -57,7 +57,7 @@ For a governed task, state the workspace intent in the packet too: which checkou
 
 Save `runId` and `controlFile` from the submission. The control file is an owner-private `0600` credential bound to that run and owner generation; later Host commands need this exact file, or the explicit `hostId` + `ownerGeneration` + `controlToken` triple. Never copy control tokens into task text, helper prompts, reports or another Buddy, and never adopt another Host's saved capability. A Host name is attribution and never authority.
 
-Ordinary submit fields stay flat. A complete explicit `adapter`, `provider`, `model` and `effort` quadruple is validated and dispatched directly; a partial quadruple is a hard filter; omitted fields are routed by the configured decision Buddy through the bounded current evaluation table. There is no silent DSH default, and the initial fixed decision profile is chosen by the user ([evaluation.md](evaluation.md#fresh-board-and-the-initial-decision-profile)). A programmatic caller persists its own `submissionToken` before the first RPC so a lost reply still recovers its original control. `workspace` only means session grouping; `executionWorkspace` is the Git contract described above. Replaying the identical submission with the same `requestId` recovers the same logical task, while changed workspace, input or Host under that ID is a `CONFLICT`; a successful RPC is admission evidence only. `get` is compact by default; use `includeAudit:true` only when reviewing exact turn inputs, results, decisions and artifact manifests.
+Ordinary submit fields stay flat. A complete explicit `adapter`, `provider`, `model` and `effort` quadruple is validated and dispatched directly; a partial quadruple is a hard filter; omitted fields are routed by the configured decision Buddy through the bounded current evaluation table. A goal may also carry task-local `routingPreferences`: at most eight ordered `{match, reason}` soft preferences that apply only to that goal and to helpers explicitly inheriting them, never to global preferences or another task. There is no silent DSH default, and the initial fixed decision profile is chosen by the user ([evaluation.md](evaluation.md#fresh-board-and-the-initial-decision-profile)). A programmatic caller persists its own `submissionToken` before the first RPC so a lost reply still recovers its original control. `workspace` only means session grouping; `executionWorkspace` is the Git contract described above. Replaying the identical submission with the same `requestId` recovers the same logical task, while changed workspace, input or Host under that ID is a `CONFLICT`; a successful RPC is admission evidence only. `get` is compact by default; use `includeAudit:true` only when reviewing exact turn inputs, results, decisions and artifact manifests.
 
 ### 5. Await that same logical run
 
@@ -77,14 +77,26 @@ The [assistance examples](workflow.md#host-boundaries-and-requests) provide comp
 
 Each continuation gets a fresh attempt and recorded resume mode: DSH reconstructs a fresh session, while ZCode resumes its exact proven native session or explicitly reconstructs a new one after an unproven prior turn. The named integrator applies exact helper commits/patches and checks the combined result. The private console exposes the same decisions and ownership checks.
 
-### 7. Inspect the final artifact and acknowledge
+### 7. Inspect the final artifact, record integration and acknowledge
 
 ```sh
 "$BUDDY" get '{"runId":"<runId>"}'
-"$BUDDY" acknowledge '{"runId":"<runId>","commandId":"review-1","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","note":"Inspected the fixed diff and ran the combined regression suite.","verdict":"accepted"}'
+"$BUDDY" integration-record '{"runId":"<runId>","commandId":"integrate-1","expectedRevision":<get.revision>,"controlFile":"<controlFile>","artifactId":"<finalArtifactId>","strategy":"cherry-pick","target":{"path":"/abs/target/checkout","ref":"main"},"beforeCommit":"<target commit before the integration>","verification":"Applied the sealed artifact commit to the target and ran the combined checks."}'
+"$BUDDY" acknowledge '{"runId":"<runId>","commandId":"review-1","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","integrationId":"<returned integrationId>","note":"Inspected the integrated target diff and ran the combined regression suite.","verdict":"accepted"}'
 ```
 
-Once the goal is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, then record `verdict` `accepted` or `rejected` and a `note` describing what you really checked. Acceptance is separate from execution, is tied to that artifact rather than to whichever branch or directory exists later, and never converts a failed execution into a success. A governed wait's `shutdownConfirmed` requires both self and descendant stop evidence, so a delivered or cancelled goal whose descendants are unconfirmed keeps waiting instead of inventing a stopped state.
+Once the goal is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, then record what you really checked. An `accepted` verdict requires a verified integration record or an explicit `notRequired` record bound to that artifact; the service resolves the target commit/tree relationship from the repository itself rather than trusting a client hash, and `get` exposes the recorded `integrations`. A task with no repository change records `{"notRequired": true, "reason": "..."}` instead. Acceptance is separate from execution, is tied to that artifact rather than to whichever branch or directory exists later, and never converts a failed execution into a success. A governed wait's `shutdownConfirmed` requires both self and descendant stop evidence, so a delivered or cancelled goal whose descendants are unconfirmed keeps waiting instead of inventing a stopped state.
+
+### 8. Reclaim the managed checkout
+
+After acceptance and integration, plan and apply the removal of exactly this run's registered managed checkout:
+
+```sh
+"$BUDDY" workspace-cleanup-plan '{"runId":"<runId>","commandId":"cleanup-plan-1","expectedRevision":<get.revision>,"controlFile":"<controlFile>"}'
+"$BUDDY" workspace-cleanup-apply '{"runId":"<runId>","planId":"<returned plan.planId>","commandId":"cleanup-apply-1","expectedRevision":<get.revision>,"confirmPath":"<returned plan.path>","controlFile":"<controlFile>"}'
+```
+
+The plan names the exact path, its eligibility evidence and retention list and expires after 900 seconds; apply rechecks ownership, acceptance, integration, shutdown, dependencies and Git state and deletes only that checkout, keeping outputs, manifests, fixed refs and receipts. A plan with reasons is blocked, not authorizing; re-read the run and plan again. A repaired workspace conflict is settled first with `workspace-resolve` or `scope-amend` as described in the [workspace lifecycle reference](workspace-lifecycle.md), which owns the complete example and field list.
 
 ## Non-coding execution records
 
@@ -107,9 +119,9 @@ Inspect and review these records with `status`, `result`, `artifacts`, `wait`, t
 "$BUDDY" inquire '{"runId":"<runId>","inquiryId":"q-1","question":"What are you waiting on?","waitMs":20000}'
 ```
 
-The no-question form is bounded observation: execution state from the durable record, an explicitly estimated deadline, and recent tool activity. It is not a percentage and not a guaranteed ETA, and fields the bridge could not observe are named in `live.unavailable` rather than reported as zero.
+The no-question form is bounded observation: execution state from the durable record, an explicitly estimated deadline, recent activity and the bounded native-activity projection on the task view (`phase`, last native/tool activity times, event sequence, tool name, waiting reason and honest counters). It is not a percentage and not a guaranteed ETA, and fields the bridge could not observe are named in `live.unavailable` rather than reported as zero. An empty runner log, a static session list, a missing PID or an expired lease never proves the process stopped; only real shutdown evidence does.
 
-A question goes to the run's own live DSH agent; it never starts a second agent and never extends, shortens, pauses or cancels the task. Answers require the correlated reply tool, so assistant prose is never treated as an answer. Questions and answers are bounded at 4000 UTF-8 bytes each, at most 32 inquiries are retained per task, and an adapter without an inquiry capability (`command`, `external`, `zcode`) reports an honest reason. Repeating the same `inquiryId` with identical text returns the recorded state, while the same id with different text is a `CONFLICT`. The full message contract is in [cli.md](cli.md#messages-and-inquiry).
+A question goes to the run's own live agent when its adapter declares the `inquiry` capability; it never starts a second agent and never extends, shortens, pauses or cancels the task. Answers require the correlated reply tool, so assistant prose is never treated as an answer. Questions and answers are bounded at 4000 UTF-8 bytes each, at most 32 inquiries are retained per task, and an adapter without an inquiry capability (`command`, `external`, `codex`) reports an honest reason. The ZCode inquiry bridge exists in the 0.8 source as a first artifact with known fixes underway and no live native acceptance; treat it as unverified and do not claim it answered. Repeating the same `inquiryId` with identical text returns the recorded state, while the same id with different text is a `CONFLICT`. The full message contract is in [cli.md](cli.md#messages-and-inquiry).
 
 Ask when the user asks or when you need the answer to report honestly; do not build a polling loop. `wait` and `watch` are short bounded waits (at most 30 s) for nearby changes on a service that must already be running; they never cold-start a service and are not a substitute for the durable `await`.
 
@@ -140,11 +152,11 @@ Never describe a wait timeout as an execution failure, never restart work the us
 
 1. `submit` the goal (or `execution-submit` a non-coding record) and capture the `runId` (and `controlFile` for a governed goal).
 2. Register an official App heartbeat automation on the original task before ending the turn; its prompt calls this same CLI to read the result, verify the artifacts and record the governed or execution acknowledgement.
-3. Reuse a matching heartbeat instead of creating duplicates. Keep it quiet while nothing actionable changes; after reviewing the terminal outcome (including failure), record the review and remove the heartbeat. Report unresolved shutdown honestly.
+3. Reuse a matching heartbeat instead of creating duplicates. Keep failures and required intervention visible; after reviewing the terminal outcome (including failure), record the review and remove the heartbeat. Report unresolved shutdown honestly.
+
+Only this explicit user request authorizes a scheduler entry. Never create an automation, and never mute or remove one, merely to save tokens, quota or model calls: suppressing a follow-up that would have surfaced a failure is worse than an extra notification. The service itself has no scheduler; a check-in is a periodic background follow-up, not an immediate completion push, and native post-turn App wakeup is not solved by Buddy.
 
 If the App heartbeat tool is unavailable or registration fails, keep waiting in the current turn. Do not end with an unmonitored job or substitute an unrelated scheduled task.
-
-The heartbeat is a periodic background follow-up, not an immediate completion push. Native post-turn App wakeup is not solved by Buddy, and the service never claims it.
 
 ## More than one task at a time
 
