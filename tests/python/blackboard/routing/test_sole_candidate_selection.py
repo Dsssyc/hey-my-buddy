@@ -254,7 +254,7 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertIsNone(decision["runId"])
         self.assertEqual(decision["taskReference"]["bytes"], len(task.encode()))
         with board.store.db.read() as connection:
-            micro_task = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
+            micro_task = json.loads(connection.execute("SELECT spec_json FROM tasks").fetchone()[0])
             self.assertEqual(micro_task["task"], task)
 
     def test_unlocked_reroute_freezes_its_own_candidate_basis(self):

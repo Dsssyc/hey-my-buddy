@@ -396,15 +396,15 @@ class WorkflowWiringTests(RouterDispatchTestCase):
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
                 "fingerprint_version,adapter,cwd,expected_seconds,state,queue_reason,revision,created_at,updated_at)"
-                " VALUES(?,?,'host','{}','digest',1,'unresolved','/work',60,'queued',"
+                " VALUES(?,?,'host',?,'digest',1,'unresolved','/work',60,'queued',"
                 "'awaiting-model-selection',1,?,?)",
-                (run_id, run_id, T0, T0))
+                (run_id, run_id, canonical_json({"task": "do the thing"}), T0, T0))
             db.execute(
-                "INSERT INTO workflow_runs(run_id,host_id,control_verifier,micro_task_json,micro_task_fingerprint,"
+                "INSERT INTO workflow_runs(run_id,host_id,control_verifier,"
                 " request_fingerprint,execution_workspace_json,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (run_id, "host-1", "verifier", canonical_json({"task": "do the thing"}),
-                 "micro-task-digest", "request-digest", canonical_json({"kind": "existing"}), "executing", T0, T0))
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (run_id, "host-1", "verifier", "request-digest",
+                 canonical_json({"kind": "existing"}), "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
                 db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities)}, manifest=None)
         return response
@@ -413,9 +413,9 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         """The Micro task's owning transaction inserts its pending route link."""
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
-                " VALUES(?,?,1,'pending',?,?)",
-                (decision_id, run_id, T0, T0))
+                "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
+                " VALUES(?,?,1,'pending',?)",
+                (decision_id, run_id, T0))
             db.execute("UPDATE workflow_runs SET current_routing_id=? WHERE run_id=?", (decision_id, run_id))
 
     def test_first_dispatch_needs_no_link_and_the_pending_route_follows_the_pointer(self):
@@ -431,15 +431,15 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         self.assertEqual((micro_task["state"], micro_task["adapter"]), ("queued", "unresolved"))
         self.assertIsNotNone(self.dispatch_of(first_task))
         self.attach_pending_link(decision_id)
-        # An advance re-points the internal task and records it on the pending
-        # route only; the parent business task still waits for routing.
+        # An advance re-points the internal task; the parent business task
+        # still waits for routing.
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
         advanced = self.claim("wf", task_id=first_task)
         self.assertIsNone(advanced["claim"])
         self.assertEqual(advanced["reason"], "decision-dispatch-advanced")
         with self.board_.store.db.read() as db:
-            link = db.execute("SELECT state,updated_at FROM workflow_routes WHERE decision_id=?",
+            link = db.execute("SELECT state FROM workflow_routes WHERE decision_id=?",
                               (decision_id,)).fetchone()
             current = db.execute("SELECT task_id FROM decision_requests WHERE decision_id=?",
                                  (decision_id,)).fetchone()["task_id"]
@@ -456,8 +456,8 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         decision_id = response["decisionId"]
         self.attach_pending_link(decision_id)
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_routes SET state='fenced',updated_at=? WHERE decision_id=?",
-                       (T0, decision_id))
+            db.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?",
+                       (decision_id,))
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (A,))
             row = self.board_.store.decisions._row(db, decision_id)
@@ -466,10 +466,9 @@ class WorkflowWiringTests(RouterDispatchTestCase):
             self.board_.store.decisions._queue_router_dispatch(db, row, resolution=resolution,
                                                                now=self.clock.value)
         with self.board_.store.db.read() as db:
-            link = db.execute("SELECT state,updated_at FROM workflow_routes WHERE decision_id=?",
+            link = db.execute("SELECT state FROM workflow_routes WHERE decision_id=?",
                               (decision_id,)).fetchone()
         self.assertEqual(link["state"], "fenced")
-        self.assertEqual(link["updated_at"], T0)
 
 
 class HostReviewRegressionTests(RouterDispatchTestCase):

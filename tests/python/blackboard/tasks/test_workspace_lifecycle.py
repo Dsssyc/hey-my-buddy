@@ -1639,8 +1639,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         (checkout / "smuggled.txt").write_text("never authorized\n")
         with board.store.db.write() as connection:
             connection.execute(
-                "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, source_task_id, kind,"
-                " manifest_json, manifest_sha256, created_at) VALUES('art-forged', ?, NULL, NULL, NULL,"
+                "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"
+                " manifest_json, manifest_sha256, created_at) VALUES('art-forged', ?, NULL, NULL,"
                 " 'resolved-output', ?, '0' * 64wait, '2020-01-01T00:00:00.000Z')"
                 .replace("'0' * 64wait", "'0'"),
                 (submitted["runId"], canonical_json({

@@ -751,7 +751,6 @@ class DecisionCoordinator:
         )
         connection.execute("UPDATE evaluation_decisions SET status='queued',buddy_id=NULL,reason_code=NULL,reason_params_json=NULL,note=NULL WHERE decision_id=?",
                            (decision_id,))
-        self.board.workflow.routing_dispatched(connection, decision_id=decision_id, task_id=task_id, now=now)
         return task_id
 
     def prepare_router_claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, now: str) -> str | None:

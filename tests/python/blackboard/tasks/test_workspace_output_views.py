@@ -30,7 +30,7 @@ class WorkspaceOutputViewTests(unittest.TestCase):
             "cumulativePatch": {"path": "/private/cumulative.patch", "changedPaths": self.paths},
         }
         row = {"artifact_id": "artifact", "kind": "output", "attempt_id": "attempt", "turn_id": "turn",
-               "source_task_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
+               "run_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
                "manifest_json": json.dumps(manifest)}
         view = WorkflowCoordinator._artifact_view(row)
         self.assertEqual(len(json.loads(row["manifest_json"])["changedPaths"]), 3000)

@@ -92,9 +92,9 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
-                " VALUES('standalone-deletion','micro-task-tree',?,?,1)",
-                ("run:" + run["runId"], board.store.now()),
+                " (deletion_id,target_kind,target_id)"
+                " VALUES('standalone-deletion','micro-task-tree',?)",
+                ("run:" + run["runId"],),
             )
         with self.assertRaises(BoardError) as continued:
             board.call("workflow_continue", {
@@ -115,9 +115,9 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
-                " VALUES('deletion-1','macro-task',?,?,1)",
-                (identifier, board.store.now()),
+                " (deletion_id,target_kind,target_id)"
+                " VALUES('deletion-1','macro-task',?)",
+                (identifier,),
             )
         for presentation in ({"macroTaskId": identifier}, {"macroTaskOf": first["runId"]}):
             with self.subTest(presentation=presentation), self.assertRaises(BoardError) as caught:
@@ -145,9 +145,9 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
-                " VALUES('recovery-deletion','macro-task',?,?,1)",
-                (run["macroTaskId"],board.store.now()),
+                " (deletion_id,target_kind,target_id)"
+                " VALUES('recovery-deletion','macro-task',?)",
+                (run["macroTaskId"],),
             )
         with self.assertRaises(BoardError) as caught:
             self.submit(board, macroTask={"title":"recovering group"})
@@ -197,7 +197,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(head, db.execute('SELECT MAX(seq) FROM events').fetchone()[0])
             self.assertEqual(shape, [tuple(r) for r in db.execute('PRAGMA table_info(macro_tasks)')])
-            for row in db.execute('SELECT micro_task_json FROM workflow_runs'):
+            for row in db.execute('SELECT spec_json FROM tasks'):
                 self.assertNotIn(metadata['description'], row[0])
         self.register(board)
         self.assertNotIn(metadata['description'], json.dumps(self.claim(board)))
@@ -380,7 +380,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual((row['fixesTitle'], row['fixesTitleSource']), ('do the thing', 'task'))
 
         with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','') WHERE run_id=?",
+            db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','') WHERE task_id=?",
                        (target['runId'],))
         target_timeline = board.call('macro_task_timeline', {'macroTaskId': target['macroTaskId']})
         self.assertEqual((target_timeline['rows'][0]['title'], target_timeline['rows'][0]['titleSource']),
@@ -392,8 +392,8 @@ class MacroTaskReadTests(WorkflowTestCase):
         board = self.board()
         run = self.submit(board, request_id='untitled')
         with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET title=NULL,micro_task_json=json_set(micro_task_json,'$.task','') WHERE run_id=?",
-                       (run['runId'],))
+            db.execute("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (run['runId'],))
+            db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','') WHERE task_id=?", (run['runId'],))
         standalone = next(group for group in self.list_(board)['macroTasks']
                           if group['macroTaskId'] == f"run:{run['runId']}")
         self.assertEqual((standalone['title'], standalone['titleSource']), (None, 'none'))
@@ -578,14 +578,14 @@ class MacroTaskReadTests(WorkflowTestCase):
             })
             connection.execute(
                 'INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,'
-                ' elapsed_seconds,tool_in_progress,created_at) VALUES(?,?,?,?,?,?,?)',
-                (run_id, attempt_id, 'expected-duration', 1, 37, 0, now),
+                ' tool_in_progress,created_at) VALUES(?,?,?,?,?,?)',
+                (run_id, attempt_id, 'expected-duration', 1, 0, now),
             )
             connection.execute(
                 'INSERT INTO attempt_reminders(task_id,attempt_id,kind,silence_started_at,'
-                ' elapsed_seconds,last_native_event_at,tool_in_progress,created_at)'
-                ' VALUES(?,?,?,?,?,?,?,?)',
-                (run_id, attempt_id, 'native-silence', now, 37, now, 1, now),
+                ' last_native_event_at,tool_in_progress,created_at)'
+                ' VALUES(?,?,?,?,?,?,?)',
+                (run_id, attempt_id, 'native-silence', now, now, 1, now),
             )
         timeline = board.call('macro_task_timeline', {'macroTaskId': f'run:{run_id}'})
         execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
@@ -918,8 +918,8 @@ class RoutingSpanTests(WorkflowTestCase):
                        " VALUES('current-decision','current-request','select','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')",
                        (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))
             for decision_id in ('recorded-decision', 'current-decision'):
-                db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
-                           " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')", (decision_id, task_id))
+                db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
+                           " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z')", (decision_id, task_id))
         self.assertEqual(self.spans(board, task_id)[0], before)
 
     def test_missing_details_are_null_and_current_pointer_cannot_rewrite_dispatch(self):

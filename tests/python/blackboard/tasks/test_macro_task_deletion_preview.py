@@ -162,7 +162,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         second = self.create(board, 'task-line', macroTaskId=first['macroTaskId'], task='  Task   first line\nLater line')
         third = self.create(board, 'no-name', macroTaskId=first['macroTaskId'])
         with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','') WHERE run_id=?",
+            connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','') WHERE task_id=?",
                                (third['runId'],))
         before = self.dump(board)
         preview = deletion.preview(board.store, first['macroTaskId'])

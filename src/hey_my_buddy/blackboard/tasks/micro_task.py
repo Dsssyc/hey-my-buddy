@@ -196,7 +196,7 @@ SELECT
     dr.run_id AS route_run_id,
     r.title AS workflow_title,
     routed_run.title AS route_run_title,
-    json_extract(routed_run.micro_task_json, '$.task') AS route_run_task,
+    json_extract(routed_task.spec_json, '$.task') AS route_run_task,
     routed_run.macro_task_id AS route_macro_task_id,
     routed_macro.title AS route_macro_task_title,
     dr.harness AS router_harness,
@@ -233,7 +233,7 @@ SELECT
           ORDER BY artifact.rowid LIMIT 1),
         json_extract(root_run.workspace_manifest_json, '$.snapshot.repositoryPath')
     ) AS project_repository_path,
-    COALESCE(json_extract(r.micro_task_json, '$.task'), json_extract(t.spec_json, '$.task')) AS task,
+    json_extract(t.spec_json, '$.task') AS task,
     t.adapter AS effective_adapter,
     COALESCE(json_extract(r.buddy_json, '$.model'), json_extract(t.spec_json, '$.model'))
         AS effective_model,
@@ -256,6 +256,7 @@ LEFT JOIN workflow_lead_tasks lead ON lead.owned_run_id = t.task_id
 LEFT JOIN roots rt ON rt.task_id = t.task_id
 LEFT JOIN routing_tasks dr ON dr.task_id = t.task_id
 LEFT JOIN workflow_runs routed_run ON routed_run.run_id = dr.run_id
+LEFT JOIN tasks routed_task ON routed_task.task_id = routed_run.run_id
 LEFT JOIN macro_tasks routed_macro ON routed_macro.macro_task_id = routed_run.macro_task_id
 LEFT JOIN roots wr_roots ON wr_roots.task_id = dr.run_id
 LEFT JOIN source_hosts source_run ON source_run.run_id = COALESCE(r.run_id, dr.run_id)

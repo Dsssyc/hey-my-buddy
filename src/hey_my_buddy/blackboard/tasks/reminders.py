@@ -16,7 +16,7 @@ def view(row) -> dict:
         'reminderId': row['reminder_id'], 'kind': row['kind'],
         'attemptId': row['attempt_id'], 'runId': row['task_id'],
         'expectedMultiple': row['expected_multiple'],
-        'elapsedSeconds': row['elapsed_seconds'],
+        'elapsedSeconds': max(0.0, _seconds(row['created_at']) - _seconds(row['started_at'])),
         'lastNativeEventAt': row['last_native_event_at'],
         'toolInProgress': bool(row['tool_in_progress']), 'createdAt': row['created_at'],
     }
@@ -120,10 +120,14 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
             for kind, multiple, silence in due:
                 cursor = connection.execute(
                     'INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,silence_started_at,'
-                    'elapsed_seconds,last_native_event_at,tool_in_progress,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
-                    (attempt['task_id'], attempt['attempt_id'], kind, multiple, silence, elapsed, native_at, int(tool), now),
+                    'last_native_event_at,tool_in_progress,created_at) VALUES(?,?,?,?,?,?,?,?)',
+                    (attempt['task_id'], attempt['attempt_id'], kind, multiple, silence, native_at, int(tool), now),
                 )
-                row = connection.execute('SELECT * FROM attempt_reminders WHERE reminder_id=?', (cursor.lastrowid,)).fetchone()
+                row = connection.execute(
+                    'SELECT r.*, a.started_at FROM attempt_reminders r'
+                    ' JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.reminder_id=?',
+                    (cursor.lastrowid,),
+                ).fetchone()
                 connection.execute('UPDATE tasks SET revision=revision+1,updated_at=? WHERE task_id=?', (now, attempt['task_id']))
                 revision = connection.execute('SELECT revision FROM tasks WHERE task_id=?', (attempt['task_id'],)).fetchone()[0]
                 store._append_event(connection, 'attempt.reminder', task_id=attempt['task_id'],
@@ -138,7 +142,11 @@ def consume(store, selector: dict) -> dict | None:
     with store.db.write() as connection:
         task = store._task_row(connection, selector)
         delivery_id = selector['reminderWaitId']
-        delivered = connection.execute('SELECT * FROM attempt_reminders WHERE delivery_id=?', (delivery_id,)).fetchone()
+        delivered = connection.execute(
+            'SELECT r.*, a.started_at FROM attempt_reminders r'
+            ' JOIN attempts a ON a.attempt_id=r.attempt_id WHERE r.delivery_id=?',
+            (delivery_id,),
+        ).fetchone()
         if delivered is not None:
             if delivered['task_id'] != task['task_id']:
                 from ...errors import BoardError
@@ -148,7 +156,9 @@ def consume(store, selector: dict) -> dict | None:
         if attempt is None or attempt['execution_state'] == 'finished' or attempt['result_json'] is not None:
             return None
         row = connection.execute(
-            'SELECT * FROM attempt_reminders WHERE attempt_id=? AND delivered_at IS NULL ORDER BY reminder_id LIMIT 1',
+            'SELECT r.*, a.started_at FROM attempt_reminders r'
+            ' JOIN attempts a ON a.attempt_id=r.attempt_id'
+            ' WHERE r.attempt_id=? AND r.delivered_at IS NULL ORDER BY r.reminder_id LIMIT 1',
             (attempt['attempt_id'],),
         ).fetchone()
         if row is None:

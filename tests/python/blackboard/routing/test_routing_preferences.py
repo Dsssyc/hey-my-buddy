@@ -329,7 +329,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             requested = json.loads(connection.execute(
                 "SELECT payload_json FROM events WHERE kind='workflow.routing_requested'").fetchone()[0])
-            micro_task = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
+            micro_task = json.loads(connection.execute("SELECT spec_json FROM tasks").fetchone()[0])
         self.assertNotIn("routingPreferences", requested)
         self.assertNotIn("routingPreferences", micro_task)
 

@@ -322,7 +322,8 @@ def _candidate_problem(connection, candidate, request, run, now):
         return problem("unavailable")
     constraints = request.get("constraints") or {}
     if run is not None and run["buddy_locked"]:
-        constraints = {**constraints, **schemas.buddy_constraints(_json(run["micro_task_json"], {}))}
+        spec = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
+        constraints = {**constraints, **schemas.buddy_constraints(_json(spec["spec_json"], {}))}
     if any(candidate.get(key) != value for key, value in constraints.items()):
         return problem("constraints")
     from ...protocol.capabilities import buddy_capabilities

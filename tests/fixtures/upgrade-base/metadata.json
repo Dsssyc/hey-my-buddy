@@ -11,7 +11,7 @@
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
   "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/schema27-fixture3 --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "6d40b6de8d8e2b0d47d20f3aa3867afd45efd88771b977f6893003e157300b4e",
+  "generatorSha256": "ac39276c3a57ac62a6141524725ac4573efd65db78e359eb95f694d51eb0bc1a",
   "loadedSourceModules": [
     "src/hey_my_buddy/blackboard/__init__.py",
     "src/hey_my_buddy/blackboard/catalog/__init__.py",
@@ -155,8 +155,8 @@
     "src/hey_my_buddy/protocol/usage.py",
     "src/hey_my_buddy/protocol/windows_process.py"
   ],
-  "operationsSha256": "4b97da12b206a27bf89a5e9b34b799a34ac6937ab5c954e053d7039ab520df61",
-  "resourcesSha256": "8393dd54617ac25118738ed9da4ab9cb2a6d2192dc0052f234e3f702fd4f7ec2",
+  "operationsSha256": "52e33688fe2105151972b7129fe1fddc188394a166ac4ffe5103c8d61f9437e1",
+  "resourcesSha256": "450c343367143941468f92e7d3804ae1025c7dddad803b921cefb20efec59240",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 26; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -354,7 +354,7 @@
   },
   "sourceTree": "ae4b1b72eb3234410c67dae4324ad5506de02508",
   "sourceVersion": "0.48.0",
-  "sqlSha256": "976aeadcf75c33c1e224c6fe4f7c692f4a51b9bfb13de799588beb03d48254e4",
+  "sqlSha256": "6b760d56bd955df3aefe20f1c9ec393944ee7fdaf0031d18a20de25605f643f3",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000001b",
     "cancelled": "00000000-0000-0000-0000-000000000035",
@@ -365,7 +365,15 @@
     "cursors",
     "evaluation_state.decision_buddy_id",
     "tasks.queue_position",
-    "attempt_interruptions"
+    "attempt_interruptions",
+    "workflow_children",
+    "workflow_suggestions.worker",
+    "workflow_suggestions.agent",
+    "attempt_activity",
+    "attempt_reminders.expected-duration",
+    "attempt_reminders.native-silence",
+    "workflow_routes",
+    "workflow_continuations"
   ],
   "workspaceInputCommit": "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 }

@@ -57,8 +57,6 @@ CREATE TABLE IF NOT EXISTS macro_task_deletions (
     deletion_id      TEXT PRIMARY KEY,
     target_kind      TEXT NOT NULL CHECK (target_kind IN ('macro-task','micro-task-tree')),
     target_id        TEXT NOT NULL,
-    started_at       TEXT NOT NULL,
-    micro_task_count INTEGER NOT NULL,
     UNIQUE(target_kind, target_id)
 );
 """
@@ -303,13 +301,8 @@ CREATE INDEX IF NOT EXISTS resource_claims_state_idx ON resource_claims(state, k
 CREATE TABLE IF NOT EXISTS attempt_activity (
     attempt_id     TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     task_id        TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    generation     INTEGER NOT NULL,
-    event_seq      INTEGER,
-    observed_at    TEXT,
     activity_json  TEXT NOT NULL,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL,
-    revision       INTEGER NOT NULL DEFAULT 1
+    updated_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS attempt_activity_task_idx ON attempt_activity(task_id, updated_at);
 """
@@ -509,8 +502,8 @@ CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq 
 CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);
 """,
     # The logical micro task plus its Host ownership generation and prepared workspace.
-    # ``micro_task_json``/``micro_task_fingerprint`` are immutable: continuations record their
-    # own effective input in ``workflow_continuations``.
+    # The immutable submitted spec and fingerprint live in tasks; continuations
+    # record their own effective input in workflow_continuations.
     """
 CREATE TABLE IF NOT EXISTS workflow_runs (
     run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
@@ -521,8 +514,6 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     host_id                 TEXT,
     owner_generation        INTEGER NOT NULL DEFAULT 1,
     control_verifier        TEXT NOT NULL,
-    micro_task_json               TEXT NOT NULL,
-    micro_task_fingerprint        TEXT NOT NULL,
     request_fingerprint     TEXT,
     buddy_json TEXT,
     buddy_revision INTEGER NOT NULL DEFAULT 0,
@@ -531,8 +522,6 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     submission_verifier     TEXT,
     execution_workspace_json TEXT NOT NULL,
     workspace_manifest_json TEXT,
-    workspace_id            TEXT,
-    workspace_manifest_sha256 TEXT,
     state                   TEXT NOT NULL
         CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
     active_request_id       TEXT,
@@ -562,8 +551,7 @@ CREATE TABLE IF NOT EXISTS workflow_routes (
     run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     owner_generation    INTEGER NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('pending','resolved','needs-host','fenced')),
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL
 );
 """,
     """
@@ -593,13 +581,9 @@ CREATE TABLE IF NOT EXISTS workflow_children (
     role                TEXT NOT NULL DEFAULT 'helper',
     integrator          INTEGER NOT NULL DEFAULT 0,
     state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
-    auto_continue       INTEGER NOT NULL DEFAULT 0,
-    workspace_intent_json TEXT NOT NULL,
     workspace_manifest_json TEXT,
-    workspace_manifest_sha256 TEXT,
     created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL,
-    revision            INTEGER NOT NULL DEFAULT 1
+    updated_at          TEXT NOT NULL
 );
 """,
     """
@@ -631,7 +615,6 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     trigger_event_json TEXT,
     expected_revision INTEGER NOT NULL,
     input_text        TEXT NOT NULL,
-    input_bytes       INTEGER NOT NULL,
     note              TEXT,
     helper_policy     TEXT NOT NULL DEFAULT 'keep' CHECK (helper_policy IN ('cancel','keep')),
     helper_outcomes_json TEXT NOT NULL DEFAULT '[]',
@@ -674,7 +657,6 @@ CREATE TABLE IF NOT EXISTS workspace_reservations (
     manifest_sha256 TEXT NOT NULL,
     state           TEXT NOT NULL CHECK (state IN ('held','transferred','released')),
     created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
     released_at     TEXT
 );
 """,
@@ -823,16 +805,10 @@ CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_
 CREATE TABLE IF NOT EXISTS agent_credentials (
     credential_id   TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    task_id         TEXT NOT NULL,
     attempt_id      TEXT,
-    generation      INTEGER,
     turn_id         TEXT,
     token_verifier  TEXT NOT NULL,
-    state           TEXT NOT NULL CHECK (state IN ('active','revoked','expired')),
-    created_at      TEXT NOT NULL,
-    expires_at      TEXT,
-    revoked_at      TEXT,
-    revision        INTEGER NOT NULL DEFAULT 1
+    state           TEXT NOT NULL CHECK (state IN ('active','revoked'))
 );
 """,
     """
@@ -850,7 +826,6 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     attempt_id      TEXT,
-    source_task_id  TEXT,
     kind            TEXT NOT NULL,
     manifest_json   TEXT NOT NULL,
     manifest_sha256 TEXT NOT NULL,
@@ -867,7 +842,6 @@ CREATE TABLE IF NOT EXISTS workflow_suggestions (
     suggestion_id TEXT PRIMARY KEY,
     run_id        TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     attempt_id    TEXT,
-    author        TEXT NOT NULL,
     body          TEXT NOT NULL,
     created_at    TEXT NOT NULL
 );
@@ -925,9 +899,7 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
     note             TEXT,
     reason_code      TEXT,
     reason_params_json TEXT,
-    evidence_json    TEXT NOT NULL DEFAULT '{"references":[]}',
     artifact_id      TEXT REFERENCES workflow_artifacts(artifact_id) ON DELETE RESTRICT,
-    integration_id   TEXT REFERENCES workflow_integrations(integration_id) ON DELETE RESTRICT,
     actor_role       TEXT NOT NULL,
     actor_id         TEXT NOT NULL,
     command_id       TEXT NOT NULL UNIQUE,
@@ -1030,7 +1002,6 @@ CREATE TABLE IF NOT EXISTS attempt_reminders (
     kind TEXT NOT NULL CHECK (kind IN ('expected-duration','native-silence')),
     expected_multiple INTEGER,
     silence_started_at TEXT,
-    elapsed_seconds REAL NOT NULL,
     last_native_event_at TEXT,
     tool_in_progress INTEGER NOT NULL CHECK (tool_in_progress IN (0,1)),
     created_at TEXT NOT NULL,

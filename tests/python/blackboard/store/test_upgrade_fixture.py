@@ -48,7 +48,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         for key, adapter in (('delivered', 'command'), ('accepted', 'external')):
             run_id = fixture['stableIds'][key]
             original = json.loads(connection.execute(
-                'SELECT micro_task_json FROM workflow_runs WHERE run_id=?', (run_id,)
+                'SELECT spec_json FROM tasks WHERE task_id=?', (run_id,)
             ).fetchone()[0])
             for field in ('harness', 'provider', 'model', 'effort'):
                 original.pop(field, None)
@@ -57,9 +57,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             payload = _json({'source': 'original-explicit', 'adapter': adapter})
             connection.execute('UPDATE tasks SET adapter=? WHERE task_id=?', (adapter, run_id))
             connection.execute('UPDATE attempts SET adapter=? WHERE task_id=?', (adapter, run_id))
-            connection.execute('UPDATE workflow_runs SET buddy_json=?,micro_task_json=?,micro_task_fingerprint=?'
-                               ' WHERE run_id=?', (None, original_raw,
-                                                  hashlib.sha256(original_raw.encode()).hexdigest(), run_id))
+            connection.execute('UPDATE tasks SET spec_json=?,input_fingerprint=? WHERE task_id=?',
+                               (original_raw, hashlib.sha256(original_raw.encode()).hexdigest(), run_id))
+            connection.execute('UPDATE workflow_runs SET buddy_json=NULL WHERE run_id=?', (run_id,))
             connection.execute("UPDATE events SET kind='workflow.execution_selected',payload_json=?"
                                " WHERE task_id=? AND kind='workflow.buddy_selected'", (payload, run_id))
             event = connection.execute(
@@ -232,6 +232,44 @@ class UpgradeFixtureTests(unittest.TestCase):
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
         self.assertEqual(upgrade.preflight(state, contract_changed=False)['schema'], SCHEMA_VERSION)
 
+    def test_upgraded_in_progress_deletion_removes_its_commands_events_and_fence(self):
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion
+
+        fixture, connection = self.restored()
+        store = BoardStore(fixture['state'])
+        store.initialize()
+        self.addCleanup(store.db.close)
+        deletion = connection.execute('SELECT target_id FROM macro_task_deletions').fetchone()
+        self.assertIsNotNone(deletion)
+        target = deletion['target_id']
+        with store.db.read() as db:
+            scope = macro_task_deletion._collect(db, target)
+        identifiers = {target, *scope.runs, *scope.tasks, *scope.attempts, *scope.decisions}
+        self.assertTrue(scope.runs)
+        self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands').fetchone()[0], 0)
+        with mock.patch.object(macro_task_deletion, '_delete_sessions', return_value=[]):
+            result = macro_task_deletion.delete(store, target, len(scope.runs))
+        self.assertEqual(result['state'], 'deleted')
+        self.assertTrue(result['duplicate'])
+        self.assertEqual(result['microTaskCount'], len(scope.runs))
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 0)
+        for table in ('commands', 'events'):
+            for row in connection.execute(f'SELECT * FROM {table}'):
+                text = json.dumps(tuple(row))
+                self.assertFalse(any(identifier in text for identifier in identifiers), (table, tuple(row)))
+        for operation in (macro_task_deletion.preview, lambda store, target: macro_task_deletion.delete(store, target, 0)):
+            with self.assertRaises(BoardError) as caught:
+                operation(store, target)
+            self.assertEqual(caught.exception.code, 'NOT_FOUND')
+
+    def test_reminder_sequence_keeps_deleted_high_water_mark(self):
+        fixture, connection = self.restored(convert=False)
+        connection.execute("UPDATE sqlite_sequence SET seq=seq+100 WHERE name='attempt_reminders'")
+        previous = connection.execute("SELECT seq FROM sqlite_sequence WHERE name='attempt_reminders'").fetchone()[0]
+        connection.commit()
+        schema_upgrade.upgrade(fixture['state'])
+        self.assertEqual(connection.execute("SELECT seq FROM sqlite_sequence WHERE name='attempt_reminders'").fetchone()[0], previous)
+
     def test_failed_conversion_rolls_back_all_rows_and_ddl(self):
         fixture, connection = self.restored(convert=False)
         before = list(connection.iterdump())
@@ -250,10 +288,25 @@ class UpgradeFixtureTests(unittest.TestCase):
             ('acceptance', "UPDATE tasks SET acceptance_verdict=NULL WHERE accepted_at IS NOT NULL"),
             ('correlation', "UPDATE messages SET correlation_id='different'"),
             ('body-bytes', "UPDATE messages SET body_bytes=body_bytes+1"),
+            ('run-spec', "UPDATE workflow_runs SET micro_task_json='{}'"),
+            ('run-fingerprint', "UPDATE workflow_runs SET micro_task_fingerprint='different'"),
+            ('run-workspace', "UPDATE workflow_runs SET workspace_id='different'"),
+            ('run-manifest', "UPDATE workflow_runs SET workspace_manifest_sha256='different'"),
+            ('child-manifest', "UPDATE workflow_children SET workspace_manifest_sha256='different'"),
+            ('child-auto', "UPDATE workflow_children SET auto_continue=1"),
+            ('credential-task', "UPDATE agent_credentials SET task_id='different'"),
+            ('credential-generation', "UPDATE agent_credentials SET generation=generation+1"),
+            ('credential-expiry', "UPDATE agent_credentials SET expires_at='2026-01-02T00:00:00Z'"),
+            ('artifact-source', "UPDATE workflow_artifacts SET source_task_id='different'"),
+            ('suggestion-author', "UPDATE workflow_suggestions SET author='different'"),
+            ('conclusion-evidence', "UPDATE workflow_host_conclusions SET evidence_json='{\"references\":[\"different\"]}'"),
+            ('conclusion-integration', "UPDATE workflow_host_conclusions SET integration_id=(SELECT integration_id FROM workflow_integrations LIMIT 1)"),
+            ('reminder-elapsed', "UPDATE attempt_reminders SET elapsed_seconds=elapsed_seconds+1"),
         ):
             with self.subTest(form=name):
                 fixture, connection = self.restored(name, convert=False)
-                connection.execute(mutation)
+                changed = connection.execute(mutation).rowcount
+                self.assertGreater(changed, 0)
                 connection.commit()
                 before = list(connection.iterdump())
                 with self.assertRaisesRegex(ValueError, 'Inconsistent'):
@@ -283,6 +336,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         for table in ('cursors', 'evaluation_state', 'model_facts', 'attempt_interruptions'):
             self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
         self.assertGreater(connection.execute('SELECT COUNT(*) FROM tasks WHERE queue_position IS NOT NULL').fetchone()[0], 0)
+        for table in ('workflow_runs', 'workflow_children', 'agent_credentials', 'workflow_artifacts',
+                      'workflow_suggestions', 'workflow_host_conclusions', 'attempt_activity',
+                      'attempt_reminders', 'workflow_routes', 'workflow_continuations', 'workspace_reservations'):
+            self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
+        self.assertEqual({row[0] for row in connection.execute('SELECT kind FROM attempt_reminders')},
+                         {'expected-duration', 'native-silence'})
+        self.assertEqual({row[0] is None for row in connection.execute('SELECT attempt_id FROM workflow_suggestions')},
+                         {True, False})
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials WHERE expires_at IS NOT NULL').fetchone()[0], 0)
+
 
         self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands WHERE deletion_id=?',
                                              (deletion['deletion_id'],)).fetchone()[0], 0)

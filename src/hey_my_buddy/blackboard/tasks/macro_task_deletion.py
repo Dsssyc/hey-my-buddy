@@ -253,9 +253,9 @@ def _busy(connection, scope):
     return any(row['state'] == 'applying' for row in _rows(connection, 'workspace_cleanup_plans', 'run_id', scope.runs))
 
 
-def _summary(row, *, duplicate):
+def _summary(row, scope, *, duplicate):
     return {'deletionId':row['deletion_id'], 'macroTaskId':row['target_id'], 'state':'deleting',
-            'deletedAt':None, 'microTaskCount':row['micro_task_count'], 'duplicate':duplicate}
+            'deletedAt':None, 'microTaskCount':len(scope.runs), 'duplicate':duplicate}
 
 
 def _scope_summary(store, scope):
@@ -485,7 +485,7 @@ def _delete_rows(store, connection, scope, deletion):
         ('workflow_suggestions',[('run_id',r),('attempt_id',a)]),('workflow_scope_versions',[('run_id',r)]),
         ('workflow_workspace_conflicts',[('run_id',r)]),('workspace_cleanup_plans',[('run_id',r)]),
         ('workspace_reservations',[('holder_task_id',t),('parent_run_id',r)]),
-        ('agent_credentials',[('run_id',r),('task_id',t),('attempt_id',a)]),
+        ('agent_credentials',[('run_id',r),('attempt_id',a)]),
         ('workflow_integrations',[('run_id',r)]),('workflow_artifacts',[('run_id',r)]),
         ('workflow_turns',[('run_id',r)]),('workflow_children',[('parent_run_id',r),('child_task_id',t)]),
         ('workflow_routes',[('run_id',r)]),('router_claims',[('task_id',t),('attempt_id',a)]),
@@ -554,8 +554,8 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                         raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE','A harness with stored sessions is unavailable',
                                          macroTaskId=target,harnesses=unavailable)
                     kind,identifier = _target(target)
-                    connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,started_at,micro_task_count)'
-                                       ' VALUES(?,?,?,?,?)',('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
+                    connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id)'
+                                       ' VALUES(?,?,?)',('del-'+uuid.uuid4().hex,kind,identifier))
                     deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
@@ -565,7 +565,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
             try:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:
-                return {**_summary(deletion,duplicate=duplicate),
+                return {**_summary(deletion,scope,duplicate=duplicate),
                         'reason':reason('macro-task-deletion.physical-failed',
                                         errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR'),
                         'objectKind':phase}
@@ -576,7 +576,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
             assert (current_scope.runs,current_scope.tasks,current_scope.attempts,current_scope.decisions) == (
                     scope.runs,scope.tasks,scope.attempts,scope.decisions), 'Deletion scope grew after its fence'
             head = _delete_rows(store,connection,scope,current)
-            result = {**_summary(current,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
+            result = {**_summary(current,scope,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
         store._notify(head)
         if skipped:
             result['skipped'] = skipped

@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from .db import SCHEMA_VERSION, Database, utc_now
+from .db import SCHEMA_VERSION, utc_now
 from .upgrade import BASE_SCHEMA_VERSION, upgrade as upgrade_schema
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
@@ -267,7 +267,6 @@ def _verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
         if manifest['schema'] == BASE_SCHEMA_VERSION:
             upgrade_schema(trial)
-        Database(trial).initialize()
     return manifest
 
 
