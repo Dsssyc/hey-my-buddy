@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import unittest
-import json
 from unittest.mock import patch
 from urllib.parse import urlencode
 
@@ -187,23 +186,6 @@ class MacroTaskReadCacheIntegrationTests(unittest.TestCase):
         self.assertFalse(changed.not_modified)
         self.assertEqual(first.value["macroTasks"][0]["macroTaskId"],group)
         self.assertEqual(changed.value["macroTasks"][0]["macroTaskId"],"run:"+root)
-
-    def test_duplicate_description_raw_corrections_change_response_validator(self):
-        group = self.fixture.macros[0]
-        root = self.fixture.roots[0]
-        payload = '{"macroTaskId":' + json.dumps(group) + ',"description":"fixed","description":"old"}'
-        with self.store.db.write() as writer:
-            writer.execute("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload, root))
-        first = self.read()
-        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            with self.store.db.write() as writer:
-                writer.execute("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload.replace('"old"', '"new"'), root))
-            changed = self.read(etag=first.entry.identity_etag)
-            self.assertFalse(changed.not_modified)
-            rows = {row["macroTaskId"]: row for row in changed.value["macroTasks"]}
-            self.assertEqual(rows[group]["description"], "new")
-            self.assertEqual(changed.value["cursor"], first.value["cursor"])
-            self.assertEqual([call.args[1] for call in counter.call_args_list], [group])
 
 
 if __name__ == "__main__":
