@@ -54,7 +54,6 @@ class SkillInstallTests(unittest.TestCase):
         self.assertTrue((self.claude / "hey-my-buddy").is_symlink())
         self.assertEqual(os.path.realpath(self.claude / "hey-my-buddy"), os.path.realpath(skill))
         self.assertEqual(result["service"]["action"], "none")
-        self.assertNotIn("legacyPlugins", result)
 
     def test_a_second_host_with_the_same_version_only_repairs_the_link(self):
         self.install()
@@ -100,16 +99,13 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         self.assertFalse(self.agents.exists())
 
-    def test_an_installed_skill_copies_itself_and_reports_a_legacy_plugin(self):
+    def test_an_installed_skill_copies_itself(self):
         built = load_build_skill().build(ROOT, self.base / "built/hey-my-buddy")
-        (self.base / "codex/plugins/cache/personal/hey-my-buddy").mkdir(parents=True)
         with patch("hey_my_buddy.install.skill_install.project_root", return_value=built / "package"):
             result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(json.loads((self.agents / "hey-my-buddy/skill.json").read_text(encoding="utf-8")),
                          json.loads((built / "skill.json").read_text(encoding="utf-8")))
-        self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
-        self.assertIn("codex plugin remove", result["next"])
 
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
         from hey_my_buddy.errors import BoardError

@@ -84,10 +84,9 @@ class InstallationPublicationPathTests(unittest.TestCase):
                   mock.patch.object(runtime, "missing_resources", return_value=[]),
                   mock.patch.object(runtime, "manifest", return_value={"manifestSha256": "digest"}),
                   mock.patch.object(runtime.subprocess, "run", side_effect=install),
-                  mock.patch.object(runtime, "_rewrite_environment_paths"),
-                  mock.patch.object(runtime, "_source_commit", return_value=None),
+                  mock.patch("hey_my_buddy.install.skill_package.source_commit", return_value=None),
                   mock.patch.object(runtime, "resource_paths", return_value={})):
-                result = runtime.materialize(source, destination=linked, uv_bin="fixture-uv", timeout_seconds=10)
+                result = runtime.materialize(source, destination=linked, uv_bin="fixture-uv")
 
             self.assertTrue(result["installed"])
             self.assertEqual((real / target.name / "manifest.json").read_bytes(),
@@ -95,6 +94,5 @@ class InstallationPublicationPathTests(unittest.TestCase):
             self.assertEqual((target / runtime.READY_FILE).read_bytes(),
                              (real / target.name / runtime.READY_FILE).read_bytes())
             self.assertEqual(runtime.read_ready(target)["state"], "READY")
-            with mock.patch.object(launcher, "_bootstrap_runtime", return_value=None):
-                self.assertTrue(launcher._runtime_ready(target))
+            self.assertTrue(runtime.is_ready(target))
             self.assertEqual(list(linked.glob(".*.build-*")), [])

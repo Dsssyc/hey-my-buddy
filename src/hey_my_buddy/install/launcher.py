@@ -185,41 +185,6 @@ def write_active_runtime(state: Path, target: Path, settings: dict[str, str] | N
         write_private(state / 'launch-settings.json', {'environment':settings})
 
 
-def _bootstrap_runtime() -> object | None:
-    # A system Python need not have the runtime's third-party dependencies.
-    try:
-        from hey_my_buddy.install import runtime
-        return runtime
-    except ModuleNotFoundError:
-        return None
-
-
-def _runtime_root() -> Path:
-    from hey_my_buddy.home import default_runtime_root
-    return Path(os.environ.get('HMB_RUNTIME_ROOT') or default_runtime_root()).expanduser().resolve()
-
-
-def _installed_package() -> bool:
-    runtime = _bootstrap_runtime()
-    return (runtime.project_root() if runtime is not None else Path(__file__).resolve().parents[3]).name == 'package'
-
-
-def _runtime_python(target: Path) -> Path:
-    return target / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
-
-
-def _runtime_ready(target: Path) -> bool:
-    runtime = _bootstrap_runtime()
-    if runtime is not None:
-        return runtime.is_ready(target)
-    try:
-        from hey_my_buddy.private_files import read_bytes
-        marker = json.loads(read_bytes(target / 'READY.json'))
-    except (OSError, ValueError):
-        return False
-    return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()
-
-
 def entry_modules(target: Path) -> dict[str, str]:
     """The entry modules of a materialized runtime's *own* package layout.
 
@@ -232,18 +197,17 @@ def entry_modules(target: Path) -> dict[str, str]:
     """
     from hey_my_buddy.errors import BoardError
     from hey_my_buddy.install.entrypoints import COORDINATED_ROLES, ENTRY_MODULES
-    found = [modules for package, modules in ENTRY_MODULES.items()
-             if (target / 'src' / package).is_dir()]
-    if len(found) != 1:
+    if not (target / 'src' / 'hey_my_buddy').is_dir():
         raise BoardError('RUNTIME_LAYOUT_UNKNOWN',
                          'The runtime ships no single package layout this coordinator can address',
                          runtimeDir=str(target), known=sorted(ENTRY_MODULES))
-    return {role: found[0][role] for role in COORDINATED_ROLES}
+    return {role: ENTRY_MODULES['hey_my_buddy'][role] for role in COORDINATED_ROLES}
 
 
 def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | None:
     from hey_my_buddy.errors import BoardError
     from hey_my_buddy.paths import is_absolute_path
+    from hey_my_buddy.install import runtime
     if allow_overrides and os.environ.get('HMB_RUNTIME'):
         target = Path(os.environ['HMB_RUNTIME']).expanduser().resolve()
     elif allow_overrides and os.environ.get('HMB_DEV_SOURCE') == '1':
@@ -260,19 +224,13 @@ def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | Non
             if pointer.get('format') != 1 or pointer.get('contentId') != target.name:
                 raise BoardError('ACTIVE_RUNTIME_INVALID', 'Active runtime metadata is inconsistent')
         else:
-            # First upgrade from a release without a pointer: follow its recorded
-            # stable runtime with that version's client; never invent a facade.
-            endpoint = read_private(state / 'control.json') or {}
-            identity = endpoint.get('runtimeIdentity', '')
-            if not isinstance(identity, str) or not identity.startswith('runtime:'):
-                if _installed_package():
-                    raise BoardError('ACTIVE_RUNTIME_MISSING', 'Installed runtime pointer is missing; rerun the fixed-version package install command')
-                raise BoardError('DEV_SOURCE_REQUIRED', 'Source commands require HMB_DEV_SOURCE=1; use install for a stable runtime')
-            target = _runtime_root() / identity.removeprefix('runtime:')
-        if (not is_absolute_path(target) or target.parent.resolve() != _runtime_root()
+            if runtime.project_root().name == 'package':
+                raise BoardError('ACTIVE_RUNTIME_MISSING', 'Installed runtime pointer is missing; rerun the fixed-version package install command')
+            raise BoardError('DEV_SOURCE_REQUIRED', 'Source commands require HMB_DEV_SOURCE=1; use install for a stable runtime')
+        if (not is_absolute_path(target) or target.parent.resolve() != runtime.runtime_root().resolve()
                 or not re.fullmatch(r'[0-9a-f]{32}', target.name) or target.is_symlink()):
             raise BoardError('ACTIVE_RUNTIME_INVALID', 'Active runtime is outside the configured root')
-    if not _runtime_ready(target):
+    if not runtime.is_ready(target):
         raise BoardError('ACTIVE_RUNTIME_UNAVAILABLE', 'Selected runtime is not READY; use the new package upgrade command to recover')
     return target
 
@@ -311,7 +269,10 @@ def bootstrap_contract_version() -> str:
     # This bootstrap runs with the system Python before package dependencies exist.
     match = re.search(r'^CONTRACT_VERSION = "([^"]+)"',
                       (Path(__file__).resolve().parents[1] / 'protocol' / 'contracts.py').read_text(encoding="utf-8"), re.MULTILINE)
-    return match.group(1) if match else 'unknown'
+    if match is None:
+        from hey_my_buddy.errors import BoardError
+        raise BoardError('BUILD_CONTRACT_INVALID', 'The package has no declared contract version')
+    return match.group(1)
 
 
 @contextmanager
@@ -363,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise BoardError('UPGRADE_IN_PROGRESS', 'Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity')
             target = selected_runtime(state)
             if target is not None:
-                python = str(_runtime_python(target))
+                from hey_my_buddy.install.runtime import runtime_python
+                python = str(runtime_python(target))
                 environment = runtime_environment(target)
                 if credential is not None:
                     # The source file was read once. Transfer its validated contents

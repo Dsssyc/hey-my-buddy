@@ -146,7 +146,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                                      self.directory, service=waiting_service)
                 try:
                     self.assertTrue(entered.wait(15))
-                    first_install = upgrade.upgrade({})
+                    first_install = upgrade.upgrade()
                     self.assertTrue(first_install["upgraded"], first_install)
                     self.assertNotIn("backup", first_install)
                     self.assertEqual(first_install["verification"]["schemaVersion"], SCHEMA_VERSION)
@@ -157,7 +157,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                     self.assertEqual(attached["selectedAttempt"]["attemptId"], original["attemptId"])
                     third = self.private_runtime("patch-three", 3)
                     with mock.patch.object(upgrade.runtime, "materialize", return_value={"runtimeDir": str(third)}):
-                        second_install = upgrade.upgrade({})
+                        second_install = upgrade.upgrade()
                     self.assertTrue(second_install["upgraded"], second_install)
                     self.assertNotIn("backup", second_install)
                     self.assertTrue(first.exists(), "runtime still serving an execution must survive a second prune")
@@ -211,7 +211,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 return original_verify(state, target, health, expected, **kwargs)
 
             with mock.patch.object(upgrade, "verify_started", side_effect=fail_after_target_event):
-                result = upgrade.upgrade({})
+                result = upgrade.upgrade()
             self.assertFalse(result["upgraded"], result)
             self.assertEqual(result["error"]["code"], "UPGRADE_ROLLED_BACK")
             self.assertNotIn("backup", result)
@@ -241,7 +241,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             with mock.patch.object(upgrade, "SCHEMA_VERSION", SCHEMA_VERSION + 1), \
                  mock.patch.object(upgrade.runtime, "materialize", side_effect=AssertionError("materialized")):
                 with self.assertRaises(BoardError) as caught:
-                    upgrade.upgrade({})
+                    upgrade.upgrade()
             self.assertEqual(caught.exception.code, "UNSUPPORTED_SCHEMA")
             self.assertEqual(self.event_head(), head)
             self.assertFalse((self.directory / "upgrade.json").exists())
@@ -267,7 +267,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             with mock.patch.object(upgrade, "CONTRACT_VERSION", target_contract), \
                  mock.patch.object(upgrade.runtime, "materialize", side_effect=AssertionError("materialized")):
                 with self.assertRaises(BoardError) as caught:
-                    upgrade.upgrade({})
+                    upgrade.upgrade()
             self.assertEqual(caught.exception.code, "UPGRADE_NOT_IDLE")
             self.assertEqual(self.event_head(), head)
             self.assertFalse((self.directory / "upgrade.json").exists())
@@ -286,7 +286,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             head = self.event_head()
             with mock.patch.object(upgrade, "verify_started", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
-                    upgrade.upgrade({})
+                    upgrade.upgrade()
             journal = json.loads((self.directory / "upgrade.json").read_text(encoding="utf-8"))
             self.assertFalse(journal["contractChanged"])
             self.assertEqual(journal["before"]["schema"], SCHEMA_VERSION)
@@ -322,7 +322,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             self.assertIsNotNone(running, self.client().get(runId=run_id))
             before = running["selectedAttempt"]
             identity = before["processIdentity"]
-            result = upgrade.upgrade({})
+            result = upgrade.upgrade()
             self.assertTrue(result["upgraded"], result)
             self.assertNotIn("backup", result)
             self.assertEqual(inspect_process_identity(identity), "alive")
@@ -353,7 +353,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 run_id, release, before = self.command("frozen-install")
                 identity = before["processIdentity"]
                 os.kill(identity["pid"], signal.SIGSTOP)
-                result = upgrade.upgrade({})
+                result = upgrade.upgrade()
                 self.assertTrue(result["upgraded"], result)
                 self.assertNotIn("backup", result)
                 unknown = wait_for(lambda: recovery_fixture.PrivateExecutionRecoveryTests._unknown(self, run_id), timeout=35)

@@ -1,6 +1,6 @@
 """Private upgrade refusal, admission fence and backup restoration."""
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, contextmanager
+from contextlib import closing
 import json
 import os
 import stat
@@ -12,7 +12,7 @@ from threading import Event
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-from hey_my_buddy import private_dirs
+from hey_my_buddy import locking, private_dirs
 from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.install import upgrade
 from hey_my_buddy.install import launcher
@@ -26,7 +26,7 @@ class UpgradeTests(BoardTestCase):
         target = self.directory / 'runtimes' / ('a' * 32)
         target.mkdir(parents=True)
         attempted, entered = Event(), Event()
-        original_lock = upgrade.runtime.locking.lock
+        original_lock = locking.lock
 
         def observe_lock(fd, **options):
             attempted.set()
@@ -53,69 +53,12 @@ class UpgradeTests(BoardTestCase):
         with ThreadPoolExecutor(max_workers=1) as pool, \
              mock.patch.object(upgrade.runtime, 'materialize', side_effect=materialize):
             with storage.locked(board.store), \
-                 mock.patch.object(upgrade.runtime.locking, 'lock', side_effect=observe_lock):
+                 mock.patch.object(locking, 'lock', side_effect=observe_lock):
                 future = pool.submit(prepare)
                 self.assertTrue(attempted.wait(5))
                 self.assertFalse(entered.is_set())
             self.assertEqual(future.result(timeout=10), {'runtimeDir': str(target)})
         with storage.locked(board.store):
-            pass
-
-    def test_upgrade_retires_identity_locks_only_after_closing_them(self):
-        state = self.directory / 'state'
-        state.mkdir()
-        root = self.directory / 'runtimes'
-        target = root / ('a' * 32)
-        target.mkdir(parents=True)
-        legacy = [root / ('.' + identity * 32 + '.install.lock') for identity in ('a', 'b')]
-        unrelated = root / '.other.install.lock'
-        for path in [*legacy, unrelated]:
-            path.touch(mode=0o600)
-        real_lock, real_unlink = upgrade.runtime.installation_lock, Path.unlink
-        opened = set()
-        deleted = []
-
-        @contextmanager
-        def tracked_lock(path, **options):
-            with real_lock(path, **options) as fd:
-                opened.add(path)
-                try:
-                    yield fd
-                finally:
-                    opened.remove(path)
-
-        def windows_unlink(path, *args, **kwargs):
-            if path in opened:
-                raise PermissionError('Windows refuses deletion of an open file')
-            deleted.append(path)
-            return real_unlink(path, *args, **kwargs)
-
-        with mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch.object(upgrade.runtime, 'installation_lock', side_effect=tracked_lock), \
-             mock.patch.object(Path, 'unlink', windows_unlink):
-            with upgrade._prepare_runtime(state, skill_source=None):
-                pass
-        self.assertEqual(deleted, legacy)
-        self.assertTrue(unrelated.is_file())
-        self.assertTrue((root / upgrade.runtime.INSTALL_LOCK).is_file())
-        self.assertTrue((state / 'storage/.lock').is_file())
-
-    def test_upgrade_refuses_to_retire_a_live_old_installers_lock(self):
-        state = self.directory / 'state'
-        state.mkdir()
-        root = self.directory / 'runtimes'
-        target = root / ('a' * 32)
-        target.mkdir(parents=True)
-        legacy = root / ('.' + 'a' * 32 + '.install.lock')
-        with upgrade.runtime.installation_lock(legacy), \
-             mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}):
-            with self.assertRaises(BlockingIOError):
-                with upgrade._prepare_runtime(state, skill_source=None):
-                    pass
-        self.assertTrue(legacy.is_file())
-        # Both current fences were released even though retirement failed.
-        with upgrade.runtime.installation_lock(root / upgrade.runtime.INSTALL_LOCK, blocking=False), \
-             upgrade.runtime.installation_lock(state / 'storage/.lock', blocking=False):
             pass
 
     def test_detach_uses_only_the_old_services_restart_fields(self):
@@ -155,9 +98,106 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(environment['HMB_WAIT_CAPACITY'], '48')
         self.assertEqual(json.loads((state / 'launch-settings.json').read_text(encoding="utf-8"))['environment'], settings)
 
-    def test_verified_recovery_keeps_journal_when_clear_fails_without_rollback(self):
+    def test_upgrade_environment_rejects_invalid_persisted_launch_capacity(self):
         state = self.directory / 'state'
         state.mkdir()
+        for settings in ({'HMB_MAX_CONCURRENT': '99'}, {'HMB_WAIT_CAPACITY': '0'}, {'OTHER': '1'}):
+            launcher.write_private(state / 'launch-settings.json', {'environment': settings})
+            with self.subTest(settings=settings), self.assertRaises(BoardError) as failure:
+                upgrade._environment(state, self.directory / 'runtime')
+            self.assertEqual(failure.exception.code, 'LAUNCH_SETTINGS_INVALID')
+
+    def test_verification_uses_health_runtime_stability_without_a_second_request(self):
+        target = self.directory / 'runtimes' / ('a' * 32)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        with mock.patch.object(upgrade, 'command', side_effect=AssertionError('extra runtime request')):
+            self.assertEqual(upgrade.verify_started(self.directory, target, health, {}, contract_changed=False)['sourceLeaks'], [])
+            health['runtimeStable'] = False
+            with self.assertRaises(BoardError) as failure:
+                upgrade.verify_started(self.directory, target, health, {}, contract_changed=False)
+        self.assertEqual(failure.exception.code, 'UPGRADE_VERIFY_FAILED')
+
+    def test_verified_upgrade_reports_skill_cleanup_failure_without_rollback(self):
+        board = self.board()
+        state, root = board.directory, self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        skill = self.directory / 'skills/hey-my-buddy'
+        source = self.directory / 'new-skill'
+        for path, content in ((skill, 'old'), (source, 'new')):
+            path.mkdir(parents=True)
+            (path / 'skill.json').write_text(json.dumps({'name': 'hey-my-buddy', 'contract': CONTRACT_VERSION, 'sourceCommit': None}), encoding='utf-8')
+            (path / 'SKILL.md').write_text(content, encoding='utf-8')
+        launcher.write_private(state / 'control.json', {'runtimeIdentity': 'runtime:' + previous.name,
+                               'serviceId': 'owner', 'pid': 123, 'contractVersion': CONTRACT_VERSION})
+        health = {'serviceId': 'owner', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32,
+                  'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION,
+                  'contractVersion': CONTRACT_VERSION}
+        remove = upgrade.shutil.rmtree
+
+        def refuse_previous(path, *args, **kwargs):
+            if path.name.startswith('.hey-my-buddy-upgrade-previous-'):
+                raise PermissionError('skill cleanup denied')
+            return remove(path, *args, **kwargs)
+
+        with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
+             mock.patch.object(upgrade, 'get_state_dir', return_value=state), \
+             mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade.runtime, 'read_ready', return_value={'sourceCommit': None}), \
+             mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch.object(upgrade, 'probe', return_value=health), \
+             mock.patch.object(upgrade, 'detach'), \
+             mock.patch.object(upgrade, 'start', return_value=health) as start, \
+             mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
+             mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
+             mock.patch.object(upgrade.shutil, 'rmtree', side_effect=refuse_previous):
+            result = upgrade.upgrade(skill_source=source, skill_target=skill)
+        self.assertTrue(result['upgraded'], result)
+        self.assertIn('skill cleanup denied', result['skillCleanupError'])
+        self.assertFalse((state / 'upgrade.json').exists())
+        self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(target))
+        self.assertEqual((skill / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+        start.assert_called_once_with(state, target)
+
+    def test_verified_recovery_reports_skill_cleanup_failure_without_rollback(self):
+        state, root = self.directory / 'state', self.directory / 'runtimes'
+        state.mkdir()
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        skill = self.directory / 'skills/hey-my-buddy'
+        staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'c' * 32)
+        old_skill = skill.with_name('.hey-my-buddy-upgrade-previous-' + 'c' * 32)
+        old_skill.mkdir(parents=True)
+        journal = {'phase': 'verified', 'contractChanged': False, 'previous': str(previous), 'target': str(target),
+                   'before': {}, 'expected': {}, 'skillTarget': str(skill), 'skillStage': str(staged), 'skillPrevious': str(old_skill)}
+        upgrade.write_journal(state / 'upgrade.json', journal)
+        with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
+             mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
+             mock.patch.object(upgrade, 'verify_started', return_value={}), \
+             mock.patch.object(upgrade, '_verify_skill_generation'), \
+             mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
+             mock.patch.object(upgrade.shutil, 'rmtree', side_effect=PermissionError('cleanup denied')), \
+             mock.patch.object(upgrade, 'start', side_effect=AssertionError('rollback')):
+            result = upgrade.recover(state, root)
+        self.assertTrue(result['upgraded'])
+        self.assertIn('cleanup denied', result['skillCleanupError'])
+        self.assertTrue(old_skill.exists())
+        self.assertFalse((state / 'upgrade.json').exists())
+
+    def test_runtime_retention_reports_expected_errors_and_propagates_defects(self):
+        for error in (BoardError('STORAGE_BUSY', 'in use'), OSError('retention write denied')):
+            with self.subTest(error=type(error).__name__), mock.patch.object(upgrade, 'write_journal', side_effect=error):
+                result = upgrade.retain_runtimes(self.directory, self.directory / 'new', self.directory / 'old')
+            self.assertFalse(result['complete'])
+            self.assertIn(str(error), result['message'])
+        with mock.patch.object(upgrade, 'write_journal', side_effect=TypeError('defect')), self.assertRaises(TypeError):
+            upgrade.retain_runtimes(self.directory, self.directory / 'new', self.directory / 'old')
+
+    def test_verified_recovery_keeps_journal_when_clear_fails_without_rollback(self):
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        state = self.directory / 'state'
+        state.mkdir()
+        BoardStore(state).initialize()
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous),
@@ -211,7 +251,7 @@ class UpgradeTests(BoardTestCase):
                 mock.patch('hey_my_buddy.install.upgrade.ensure_idle', side_effect=busy), \
                 mock.patch('hey_my_buddy.install.upgrade.runtime.materialize') as materialize:
             with self.assertRaises(BoardError) as caught:
-                upgrade.upgrade({}, skill_source=source, skill_target=skill)
+                upgrade.upgrade(skill_source=source, skill_target=skill)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
         self.assertEqual(caught.exception.details['active'][0]['runId'], 'busy')
         materialize.assert_not_called()
@@ -236,9 +276,9 @@ class UpgradeTests(BoardTestCase):
                    'skillPrevious': str(previous), 'skillHadPrevious': True}
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
              mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}):
-            upgrade._publish_skill(journal)
+            upgrade._publish_skill(journal, (skill, staged, previous))
             self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'new')
-            upgrade._restore_skill(journal)
+            upgrade._restore_skill(journal, (skill, staged, previous))
         self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'old')
         self.assertEqual((skill / 'scripts/hey-my-buddy').read_text(encoding="utf-8"), 'old launcher')
         self.assertFalse(previous.exists())
@@ -251,10 +291,13 @@ class UpgradeTests(BoardTestCase):
         unrelated.mkdir()
         keep = unrelated / 'keep.txt'
         keep.write_text('user data', encoding="utf-8", newline="\n")
-        journal = {'skillTarget': str(unrelated), 'skillStage': str(self.directory / 'stage'),
+        journal = {'contractChanged': False, 'skillTarget': str(unrelated), 'skillStage': str(self.directory / 'stage'),
                    'skillPrevious': str(self.directory / 'previous'), 'skillHadPrevious': False}
         with self.assertRaises(BoardError) as caught:
-            upgrade._restore_skill(journal)
+            state = self.directory / 'state'
+            state.mkdir()
+            upgrade.write_journal(state / 'upgrade.json', journal)
+            upgrade.recover(state, self.directory / 'runtimes')
         self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
         self.assertEqual(keep.read_text(encoding="utf-8"), 'user data')
 
@@ -277,7 +320,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.install.upgrade.ensure_idle', return_value=SCHEMA_VERSION), \
              mock.patch('hey_my_buddy.install.upgrade.detach', side_effect=busy) as detach, \
              mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
-            result = upgrade.upgrade({})
+            result = upgrade.upgrade()
         self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
         self.assertEqual(result['error']['details']['active'][0]['runId'], 'raced')
         self.assertNotIn('failure', result)
@@ -332,7 +375,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.install.upgrade.write_journal', side_effect=fenced_write), \
              mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
              mock.patch('hey_my_buddy.install.upgrade.start', return_value=health) as start:
-            result = upgrade.upgrade({})
+            result = upgrade.upgrade()
         self.assertTrue(inserted)
         self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK', result)
         self.assertEqual(result['error']['message'], 'Installation failed; the previous runtime was restored')

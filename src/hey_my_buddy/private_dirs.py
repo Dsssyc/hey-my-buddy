@@ -66,6 +66,18 @@ def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
         raise
 
 
+def open_lock_fd(path: Path, *, blocking: bool = True, create: bool = True) -> int:
+    """Open and lock an ordinary leaf; closing the descriptor releases the lock."""
+    from . import locking
+    fd = open_regular_fd(path, os.O_RDWR | (os.O_CREAT if create else 0))
+    try:
+        locking.lock(fd, blocking=blocking)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _adapter(adapter: str) -> str:
     if adapter not in ADAPTERS:
         raise BoardError('INVALID_ARGUMENT', 'Unknown adapter for private state', adapter=adapter)
