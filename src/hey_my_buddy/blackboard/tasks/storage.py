@@ -310,13 +310,18 @@ def inspect(store) -> dict:
             manifest = json.loads(run['workspace_manifest_json'])
             retained = store.workflow._allocation_provenance(connection, run)
             reasons = None
-            if run['state'] in ('accepted', 'concluded') and manifest['kind'] == 'worktree':
+            # An existing checkout is borrowed unless retained provenance ties
+            # this run to a managed worktree at the same checkout root.
+            managed_workspace = (manifest['kind'] == 'worktree' or any(
+                item['kind'] == 'worktree' and item['checkoutRoot'] == manifest['checkoutRoot']
+                for item in retained))
+            if managed_workspace and run['state'] in ('accepted', 'concluded'):
                 plan = connection.execute(
                     "SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND path=?"
                     " ORDER BY rowid DESC LIMIT 1", (run['run_id'], manifest['checkoutRoot'])).fetchone()
                 if plan is None or plan['state'] != 'applied':
                     reasons = repository_check
-            elif run['state'] not in ('accepted', 'concluded'):
+            elif managed_workspace:
                 task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
                 reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons))

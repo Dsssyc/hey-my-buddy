@@ -30,7 +30,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.object_id = self.git("hash-object", "-w", "--stdin", input=b"frozen bytes").strip()
         self.tree = self.git("mktree", input=b"100644 blob " + self.object_id + b"\tfirst.txt\n").strip().decode()
         self.manifest = {"checkoutRoot": str(self.checkout), "inputTree": self.tree}
-        self.enterContext(mock.patch.object(router_input.workspace, "verify"))
+        self.enterContext(mock.patch.object(router_input.workspace, "verify_frozen_input"))
 
     def git(self, *arguments, input=None):
         return subprocess.run(["git", "-C", str(self.checkout), *arguments],
@@ -215,7 +215,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.assertFalse((directory / "frozen-input").exists())
 
     def test_indeterminate_workspace_verification_stays_unknown(self):
-        self.enterContext(mock.patch.object(router_input.workspace, "verify",
+        self.enterContext(mock.patch.object(router_input.workspace, "verify_frozen_input",
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
         result = router_input.verify(self.manifest, self.checkout, "expected", deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertIsNone(result["unchanged"])
@@ -224,7 +224,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_indeterminate_workspace_preparation_keeps_unknown_cause(self):
         directory = self.root / "unknown-workspace"
         directory.mkdir()
-        self.enterContext(mock.patch.object(router_input.workspace, "verify",
+        self.enterContext(mock.patch.object(router_input.workspace, "verify_frozen_input",
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
         with mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:

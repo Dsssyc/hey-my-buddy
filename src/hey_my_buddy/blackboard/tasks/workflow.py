@@ -4726,9 +4726,11 @@ class WorkflowCoordinator:
             self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
             run_row = self._target_run(connection, owner, target_id)
             target_id = run_row["run_id"]
+            reject_deleting_run(connection, target_id)
         request_cwd = schemas.canonical_cwd(params["cwd"]) if "cwd" in params else None
         result = self._reclaim_checkout(run_id=target_id, cwd=request_cwd)
         with self.db.read() as connection:
+            reject_deleting_run(connection, target_id)
             run_row = self._run_row(connection, target_id)
             response = {**self.compact(connection, run_row), "targetRunId": target_id,
                         "targetRevision": run_row["revision"], **result}
@@ -4760,6 +4762,8 @@ class WorkflowCoordinator:
         planned = None
         try:
             with self._cleanup_allocation_lock(self.board.directory, physical):
+                with self.db.read() as connection:
+                    reject_deleting_run(connection, run_id)
                 repository = workspace_module().locate_repository(
                     physical, cwd=cwd, candidates=lambda: repository_candidates(self.db, physical),
                     repair=True, removal_started=interrupted)

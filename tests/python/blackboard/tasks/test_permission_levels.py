@@ -101,7 +101,7 @@ class PermissionLevelsTests(WorkflowTestCase):
             self.assertIsNotNone(claim['claim'])
             workspace = claim['claim']['turn']['input']['executionWorkspace']
             self.assertEqual(workspace['access'], access)
-            self.assertEqual(workspace['version'], 3)
+            self.assertEqual(workspace['version'], 4)
             self.assertNotIn('accessNote', workspace)
             self.assertNotIn('accessReason', workspace)
             self.finish_turn(board, claim, session_id=f'session-{index}')

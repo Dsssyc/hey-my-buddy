@@ -885,6 +885,14 @@ def verify(manifest: dict, *, state_dir, require_unchanged: bool = True) -> dict
                 "unchanged": True if require_unchanged or manifest["access"] == "read" else None}
 
 
+def verify_frozen_input(manifest: dict, *, state_dir) -> None:
+    """Prove a Router's pinned contents at its recorded root, without project refs."""
+    with _errors():
+        _validate_manifest(manifest)
+        _inspect(manifest["path"], checkout=manifest)
+        _verify_contents(manifest, state_dir=state_dir, require_unchanged=True)
+
+
 def _verify(manifest, *, state_dir, require_unchanged):
     """Observe one validated checkout, then verify its pinned contents."""
     actual = inspect(manifest["path"], checkout=manifest)
