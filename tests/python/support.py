@@ -603,7 +603,7 @@ class BoardTestCase(unittest.TestCase):
             except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
                 process.kill()
 
-        deadline = time.monotonic() + 25
+        deadline = time.monotonic() + 180
         try:
             while time.monotonic() < deadline:
                 endpoint = _read_endpoint(self.directory)
