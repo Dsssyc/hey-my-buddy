@@ -178,8 +178,8 @@ export function stepForItem(result: Steps, key: string, timeline: MacroTaskTimel
   const direct = result.steps.findIndex(step => step.key === key);
   if (direct >= 0) return direct;
   if (key.startsWith("inquiry:")) {
-    const span = timeline?.spans.find(span => span.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === key));
-    return span ? result.steps.findIndex(step => step.span?.spanId === span.spanId) : null;
+    const step = result.steps.findIndex(step => step.span?.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === key));
+    return step >= 0 ? step : null;
   }
   if (key.startsWith("settle:")) return result.steps.findIndex(step => step.kind === "acceptance");
   if (key.startsWith("event:")) {

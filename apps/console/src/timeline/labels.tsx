@@ -3,14 +3,15 @@ import { useLayoutEffect, useRef, useState } from "react";
 export type Interval = { left: number; right: number };
 export type Label = Interval & { text: string; y: number; className: string };
 
-/** Place a measured candidate in free space. Full, short, then no label. */
+/** Keep twelve pixels between neighbours. Full, short, then no label. */
 export function fitLabel(candidates: readonly string[], bounds: Interval, occupied: readonly Interval[], measure: (text: string) => number, preferred = bounds.left): (Interval & { text: string }) | null {
   const free: Interval[] = [];
   let left = bounds.left;
   for (const item of [...occupied].sort((a, b) => a.left - b.left)) {
-    if (item.right <= left || item.left >= bounds.right) continue;
-    if (item.left > left) free.push({ left, right: Math.min(bounds.right, item.left - 4) });
-    left = Math.max(left, item.right + 4);
+    const before = item.left - 12, after = item.right + 12;
+    if (after <= left || before >= bounds.right) continue;
+    if (before > left) free.push({ left, right: Math.min(bounds.right, before) });
+    left = Math.max(left, after);
   }
   if (left < bounds.right) free.push({ left, right: bounds.right });
   for (const text of candidates) {

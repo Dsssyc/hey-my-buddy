@@ -8,14 +8,16 @@ import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, rowStateInfo } from "../macro-task-display";
 import { formatDuration } from "../i18n/format";
 import type { FriendlyBuddy } from "../macro-task-display";
-import type { MacroTaskSummary, MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
+import type { MacroTaskSummary, MacroTaskTimeline, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
 import { timelineScaleInput } from "./scale";
 import { useTimelineZoom } from "./useTimelineZoom";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { Minus, Plus, ScanLine } from "lucide-react";
 import { RowName } from "./RowName";
-import { Axis, Track, spanReadout, eventReadout } from "./Tracks";
+import { markerAt } from "./MarkerCluster";
+import type { TimelineMarker } from "./MarkerCluster";
+import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 
 export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
@@ -47,7 +49,7 @@ export function TaskWork(props: TaskWorkProps) {
   const [focusedRow, setFocusedRow] = useState<TimelineRow | null>(null);
   const [focusedSpan, setFocusedSpan] = useState<TimelineSpan | null>(null);
   const [pointerX, setPointerX] = useState<number | null>(null);
-  const [activeEvent, setActiveEvent] = useState<TimelineEvent | null>(null);
+  const [activeMarker, setActiveMarker] = useState<TimelineMarker | null>(null);
   const [hoveredSpan, setHoveredSpan] = useState<TimelineSpan | null>(null);
   const [narrow, setNarrow] = useState(false);
   useEffect(() => {
@@ -67,8 +69,23 @@ export function TaskWork(props: TaskWorkProps) {
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
   const displayed = useMemo(() => timeline ? { ...timeline, observedAt: displayObservedAt ?? timeline.observedAt } : null, [timeline, displayObservedAt]);
   const input = useMemo(() => displayed ? timelineScaleInput(displayed) : null, [displayed]);
-  const selectedSpan = timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
-  const selectedAt = selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const selectedEvent = timeline?.events.find(event => event.runId === selectedRunId && `event:${event.seq}` === selectedKey);
+  const inquirySpan = timeline?.spans.find(span => span.runId === selectedRunId && span.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey));
+  const selectedInquiry = inquirySpan?.inquiries?.find(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey);
+  const selectedMarker: TimelineMarker | null = selectedEvent ? { kind: "event", event: selectedEvent, x: 0 }
+    : selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null;
+  const selectedSpan = inquirySpan ?? timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
+  const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const modelColors = useMemo(() => {
+    const colors = new Map<string, string>();
+    const executions = (timeline?.spans ?? []).filter(span => span.kind === "execution" && instant(span.startAt) !== null)
+      .sort((a, b) => instant(a.startAt)! - instant(b.startAt)!);
+    for (const span of executions) {
+      const model = span.buddy?.model;
+      if (model && !colors.has(model)) colors.set(model, `var(--model-${colors.size % 6 + 1})`);
+    }
+    return colors;
+  }, [timeline]);
   const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, width, timeline?.macroTask.macroTaskId, trackRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs);
   useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [timeline?.macroTask.macroTaskId]);
   useEffect(() => {
@@ -113,20 +130,21 @@ export function TaskWork(props: TaskWorkProps) {
   const activeRow = hoveredRow ?? focusedRow ?? rows.find(row => row.runId === selectedRunId);
   const pointerGap = scale?.breaks.find(gap => pointerX !== null && pointerX >= gap.startX && pointerX <= gap.endX);
   const pointerLine = pointerGap ? t("drawing.gap", { start: clockTime(pointerGap.startMs), end: clockTime(pointerGap.endMs), duration: formatDuration(pointerGap.endMs - pointerGap.startMs) }) : null;
-  const facts = activeEvent ? eventReadout(activeEvent) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
+  const marker = activeMarker ?? (!hoveredRow && !hoveredSpan && !focusedRow && !focusedSpan ? selectedMarker : null);
+  const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
   const readout = pointerLine ?? facts;
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
   const select = (runId: string, key?: string) => {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
-    setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveEvent(null);
+    setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveMarker(null);
     if (open && runId !== openedRunId) props.onOpen(runId, key);
   };
   const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
     <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
       row={row} tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
       onClick={() => select(row.runId)} onOpen={() => props.onOpen(row.runId)}
-      onEnter={() => { setPointerX(null); setActiveEvent(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
+      onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>
     <CollapsibleContent className="bg-sunk">
       {(openedRunId ?? shownRunId) === row.runId && <div ref={setRailTarget} data-slot="task-steps-drawer"/>}
     </CollapsibleContent>
@@ -138,7 +156,7 @@ export function TaskWork(props: TaskWorkProps) {
     }
   }} onFocusCapture={event => {
     const key = (event.target as Element).closest("[data-key]")?.getAttribute("data-key");
-    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); }
+    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); }
   }} onBlurCapture={event => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusKey(null);
   }} onKeyDown={event => {
@@ -190,11 +208,11 @@ export function TaskWork(props: TaskWorkProps) {
                 setPointerX(x); lastPointerAt.current = scale.toTime(x);
                 const runId = target.closest("[data-slot=timeline-row]")?.getAttribute("data-run-id");
                 setHoveredRow(rows.find(row => row.runId === runId) ?? null);
-              }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveEvent(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (trackRef.current?.scrollLeft ?? 0) - 24), right: Math.min(scale.widthPx, (trackRef.current?.scrollLeft ?? 0) + width - 24) }}/></div>
+              }} onPointerLeave={() => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); }}>{narrow && <svg aria-hidden="true" data-slot="timeline-break-columns" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full">{scale.breaks.map(gap => <rect key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={1} className="fill-sunk"/>)}</svg>}<div className="sticky top-0 z-10 bg-card"><Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (trackRef.current?.scrollLeft ?? 0) - 24), right: Math.min(scale.widthPx, (trackRef.current?.scrollLeft ?? 0) + width - 24) }}/></div>
                 {rows.map(row => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId} onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }} onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }} className={cn("relative transition-colors duration-150 motion-reduce:transition-none", selectedRunId === row.runId && "bg-live-wash")}>
                   {narrow && !open && <div className="sticky left-0 z-10" style={{ width: Math.max(1, width - 32) }}>{renderName(row)}</div>}
-                  <Track boundary={trackRef.current} tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onEvent={event => { setActiveEvent(event); if (event) setHoveredSpan(null); }} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
-                    onOpen={props.onOpen} onSelect={select} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveEvent(null); setFocusedSpan(span); }} onHover={span => { setActiveEvent(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
+                  <Track boundary={trackRef.current} tabKey={tabKey} selected={selectedRunId === row.runId} row={row} spans={spansByRow.get(row.runId) ?? []} events={timeline!.events.filter(event => event.runId === row.runId)} onMarker={marker => { setActiveMarker(marker); if (marker) setHoveredSpan(null); }} modelColors={modelColors} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd} buddies={props.buddies}
+                    onOpen={props.onOpen} onSelect={select} onFocusSpan={span => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedSpan(span); }} onHover={span => { setActiveMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); }}/>
                 </div>)}
                 {pointerX !== null && <svg data-slot="timeline-pointer" aria-hidden="true" viewBox={`-8 0 ${scale.widthPx + 16} 1`} preserveAspectRatio="none" className="pointer-events-none absolute inset-x-0 top-[22px] bottom-0 z-20 h-[calc(100%-22px)] w-full"><line x1={pointerX} x2={pointerX} y2={1} className="stroke-ink3" vectorEffect="non-scaling-stroke"/></svg>}
               </div>}

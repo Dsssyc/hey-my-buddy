@@ -52,6 +52,7 @@ async function expectSvgLabelsWholeAndApart(svg: Locator, slots: string): Promis
       const a = labels[first]!, b = labels[second]!;
       if (a.left < b.right - .5 && b.left < a.right - .5 && a.top < b.bottom - .5 && b.top < a.bottom - .5)
         overlaps.push(`${a.text} / ${b.text}`);
+      else if (a.top < b.bottom - .5 && b.top < a.bottom - .5 && Math.max(b.left - a.right, a.left - b.right) < 11.5) overlaps.push(`${a.text} / ${b.text}: gap below 12px`);
     }
     const marks = [...node.querySelectorAll('[data-slot="inquiry-mark"], [data-slot="expected-mark"], [data-slot="event-mark"], [data-slot="accept-mark"], [data-slot="waiting-diamond"], [data-slot="unconfirmed-end"]')].map(mark => mark.getBoundingClientRect());
     for (const a of labels) for (const b of marks) {
@@ -139,6 +140,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const axis = (await page.locator('[data-slot="timeline-axis"]').boundingBox())!;
       await page.mouse.move(mark.x + mark.width / 2, axis.y + 12);
       await expect(page.locator('[data-slot="timeline-pointer"]')).toHaveCount(1);
+      await expect(page.locator('[data-slot="pointer-clock"]')).toHaveCount(0);
       const status = page.locator('[data-slot="timeline-status"]');
       await expect(status).toContainText(locale === "zh-CN"
         ? /空闲\s+\d{2}:\d{2}–\d{2}:\d{2}\s+·\s+\S+/
@@ -192,5 +194,25 @@ test.describe("unreached expected duration", () => {
     await track.locator('[data-key="span:execution:att-a3-1"]').hover();
     await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 h");
     await expectDrawingGeometry(page);
+  });
+});
+
+test.describe("inquiry beside a short wait", () => {
+  test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
+  test("keeps twelve pixels between the inquiry label and the following waiting duration, or omits it", async ({ page }) => {
+    await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
+      const response = await route.fetch();
+      const data = comparison(await response.json() as MacroTaskTimeline);
+      const last = data.spans.find(span => span.spanId === "repair")!;
+      last.endAt = last.inquiries![0]!.createdAt;
+      data.spans.push({ ...last, spanId: "short-wait", kind: "host", startAt: last.endAt, endAt: new Date(Date.parse(last.endAt!) + 60000).toISOString(), state: "approved", inquiries: null, expectedSeconds: null, reminders: null });
+      data.totals.spans = data.spans.length;
+      data.rows[4] = { ...data.rows[4]!, state: "accepted", category: "ended", acceptedAt: null };
+      await route.fulfill({ response, json: data });
+    });
+    await open(page, `#tasks/${macro}`);
+    const track = page.locator('[data-slot=timeline-track]').last();
+    await expect(track.locator('[data-slot=track-label][y="12"]').filter({ hasText: "问询" })).toHaveCount(1);
+    await expectSvgLabelsWholeAndApart(track, '[data-slot=track-label]');
   });
 });

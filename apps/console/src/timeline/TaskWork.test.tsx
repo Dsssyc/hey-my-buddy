@@ -213,3 +213,46 @@ it("selects empty track space without opening, and opens it on a double click", 
   fireEvent.doubleClick(track);
   expect(props.onOpen).toHaveBeenCalledWith("r2");
 });
+
+it("assigns colours by the first model execution and preserves them when a new model is appended", () => {
+  const timeline = macroTaskTimelineFixture();
+  const source = timeline.spans.find(span => span.kind === "execution")!;
+  const start = Date.parse(source.startAt!);
+  timeline.spans = ["gpt-6.1-sol", "claude-opus-5-5", "gpt-6.1-sol"].map((model, index) => ({ ...source, spanId: `model-${index}`, startAt: new Date(start + index * 120000).toISOString(), endAt: new Date(start + index * 120000 + 60000).toISOString(), state: "finished", uncertain: false, shutdownConfirmed: true, resultStatus: "ok", buddy: { ...source.buddy!, model } }));
+  const { props, rerender } = setup({ timeline });
+  const colors = () => [...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill);
+  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)"]);
+  const next = { ...timeline, spans: [...timeline.spans, { ...timeline.spans[2]!, spanId: "later-model", startAt: new Date(start + 360000).toISOString(), endAt: new Date(start + 420000).toISOString(), buddy: { ...source.buddy!, model: "new-model" } }] };
+  rerender(<TooltipProvider><TaskWork {...props} timeline={next}/></TooltipProvider>);
+  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)", "var(--model-3)"]);
+});
+
+it("retains an inquiry's own readout after selecting it without opening", () => {
+  const timeline = macroTaskTimelineFixture();
+  const span = timeline.spans.find(span => span.kind === "execution")!;
+  span.inquiries = [{ inquiryId: "selected-question", createdAt: span.endAt!, author: "host-select", state: "answered" }];
+  const { props } = setup({ timeline });
+  const mark = document.querySelector('[data-key="inquiry:selected-question"]')!;
+  fireEvent.pointerEnter(mark);
+  const hovered = status();
+  fireEvent.click(mark);
+  fireEvent.pointerLeave(mark);
+  expect(props.onOpen).not.toHaveBeenCalled();
+  expect(status()).toBe(hovered);
+  expect(status()).toContain("host-select");
+  expect(row(span.runId).className).toContain("bg-live-wash");
+});
+
+it("resolves a selected inquiry inside its own micro task when another task uses the same inquiry id", () => {
+  const timeline = macroTaskTimelineFixture();
+  const executions = timeline.spans.filter(span => span.kind === "execution");
+  const first = executions[0]!, second = executions.find(span => span.runId !== first.runId)!;
+  for (const [span, author] of [[first, "first-host"], [second, "second-host"]] as const) {
+    span.inquiries = [{ inquiryId: "shared-question", createdAt: span.endAt!, author, state: "answered" }];
+  }
+  timeline.events = [];
+  setup({ timeline });
+  fireEvent.click(document.querySelector(`[data-slot=timeline-row][data-run-id="${second.runId}"] [data-key="inquiry:shared-question"]`)!);
+  expect(status()).toContain("second-host");
+  expect(status()).not.toContain("first-host");
+});

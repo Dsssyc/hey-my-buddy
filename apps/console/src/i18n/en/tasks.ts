@@ -6,7 +6,7 @@ export const tasks = {
     eventCluster: "{{count}} markers",
     stopUnconfirmed: "Stop unconfirmed",
     running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
-    expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Silent tail",
+    expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Possibly stuck",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
     gap: "Idle {{start}}–{{end}} · {{duration}}", routingMode: "Routing · {{mode}}",
     events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", cancel: "Cancelled", takeover: "Takeover" },

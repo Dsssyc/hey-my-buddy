@@ -10,7 +10,7 @@ import type { TaskDetailClient } from "./client";
 import { DecisionPane } from "./DecisionPane";
 import { DelegationPane } from "./DelegationPane";
 import { EventPane } from "./EventPane";
-import { Header } from "./Header";
+import { DetailBack, Header } from "./Header";
 import { placeInquiries } from "./inquiries";
 import { modelEffort } from "./names";
 import { Rail } from "./Rail";
@@ -110,7 +110,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
     <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card [container-type:inline-size]">{body}</section>
   </TooltipProvider>;
   if (!view) {
-    return bare(<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+    return bare(<><header data-slot="detail-header" className="shrink-0 border-b bg-card px-4 py-3 sm:px-6"><DetailBack onBack={onBack}/></header><div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       {read.error
         ? <>
           <h2 className="text-base font-semibold">{t("failed")}</h2>
@@ -118,7 +118,7 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, railTarge
           <Button variant="outline" onClick={read.refresh}>{t("retry")}</Button>
         </>
         : <p role="status" className="text-ink2">{t("loading")}</p>}
-    </div>);
+    </div></>);
   }
   const ctx: Context | null = workflow ? {
     view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, highlightedInquiry: origin?.startsWith("inquiry:") ? origin.slice(8) : null, nowMs: now, open: onOpenRun,
