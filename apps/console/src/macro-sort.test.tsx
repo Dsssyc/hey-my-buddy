@@ -25,7 +25,7 @@ describe("macro sort menu", () => {
     const trigger = screen.getByRole("button", { name: copy.trigger });
     expect(document.querySelectorAll('[data-slot="macro-sort-button"]')).toHaveLength(1);
     expect(trigger.querySelector(".lucide-arrow-down-wide-narrow")).toBeTruthy();
-    expect(trigger.getAttribute("aria-description")).toBe(copy.trigger);
+    expect(trigger.getAttribute("aria-description")).toBeNull();
 
     trigger.focus();
     await user.keyboard("{Enter}");

@@ -228,11 +228,11 @@
 /* A clipped title scrolls to its end, rests for a second, then reads again. */
 .scrolling-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; }
 .scrolling-title > span { display: inline-block; width: max-content; }
-.scrolling-title[data-overflow="true"] { mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.scrolling-title[data-overflow="true"] { mask-image: linear-gradient(to right, #000 calc(100% - var(--title-fade)), transparent); }
 @media (prefers-reduced-motion: no-preference) {
   .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible),
   button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] {
-    mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--title-fade), #000 calc(100% - var(--title-fade)), transparent);
   }
   .scrolling-title[data-overflow="true"]:is(:hover, :focus-visible) > span,
   button:is(:hover, :focus-visible) .scrolling-title[data-overflow="true"] > span {

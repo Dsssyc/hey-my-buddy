@@ -433,9 +433,10 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(detail(page)).toBeVisible();
         await expect(detail(page).locator("input, textarea, select, form")).toHaveCount(0);
         await expect(pane(page).locator("[data-slot=detail-live]")).toBeVisible();
-        // The refresh reads again, with its time in the hint.
+        // The refresh reads again without a checking-time tooltip.
         await detail(page).getByRole("button", { name: refresh }).hover();
-        await expect(page.locator("[data-slot=tooltip-content][data-state$=open]")).toContainText(/\d{2}:\d{2}:\d{2}/);
+        await page.waitForTimeout(700);
+        await expect(page.getByRole("tooltip")).toHaveCount(0);
         await detail(page).getByRole("button", { name: refresh }).click();
         await expect.poll(() => operations.length).toBeGreaterThan(0);
         expect(new Set(operations.filter(Boolean))).toEqual(new Set(["workflow_get", "message_list"]));

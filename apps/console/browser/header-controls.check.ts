@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { open, settle, test } from "./preview";
 
@@ -34,6 +34,7 @@ async function setup(page: Page, language: string, long = false, single = false)
   });
   await open(page, `#tasks/${macro}`);
   await expect(page.locator('[data-slot="macro-goal-trigger"]')).toBeVisible();
+  await expect(page.locator('[data-slot="macro-entry"]').first()).toBeVisible();
 }
 
 async function shot(page: Page, name: string) {
@@ -61,6 +62,7 @@ for (const language of ["zh", "en"]) test(`header controls and goal geometry ${l
   expect(Math.abs(button.y + button.height / 2 - before.y - before.height / 2)).toBeLessThan(1);
   await expect(trigger).toHaveAttribute("data-size", "icon-sm");
   await expect(header.locator('[data-slot="macro-overview-facts"] dt')).toHaveText(language === "zh" ? ["项目", "Host", "历时", "ID"] : ["Project", "Host", "Elapsed", "ID"]);
+  await expect(title).toHaveAttribute("data-overflow", "false");
   await noHint(page, title);
   await trigger.hover();
   await expect(page.getByRole("tooltip")).toHaveText(language === "zh" ? "目标说明" : "Goal");
@@ -85,6 +87,8 @@ for (const language of ["zh", "en"]) test(`header controls and goal geometry ${l
       background: getComputedStyle(history).backgroundColor, sunk: getComputedStyle(document.documentElement).getPropertyValue("--sunk").trim(),
       fontSize: parseFloat(getComputedStyle(body).fontSize), chars: body.clientWidth / parseFloat(getComputedStyle(body).fontSize) };
   });
+  await mkdir(captures, { recursive: true });
+  await writeFile(`${captures}/${language}-goal-geometry.json`, JSON.stringify({ ...geometry, triggerGap: bounds.y - button.y - button.height }, null, 2) + "\n");
   expect(geometry.headingY).toBeCloseTo(geometry.headY, 0);
   expect(Math.abs(geometry.versionY - geometry.bodyY)).toBeLessThanOrEqual(4);
   expect(geometry.historyTop - geometry.top).toBeLessThanOrEqual(1);
@@ -103,9 +107,13 @@ for (const language of ["zh", "en"]) test(`header controls and goal geometry ${l
   await noHint(page, card.locator(".goal-close"));
   if (language === "zh") await shot(page, "zh-dark-1280-goal-history");
   await page.keyboard.press("Escape");
+  await expect(card).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await trigger.blur();
 
   const copy = header.locator('[data-slot="copyable-identifier"]');
   await noHint(page, copy);
+  expect(await copy.locator(":scope > span").evaluate(node => node.scrollWidth <= node.clientWidth + 1), "the middle-shortened ID still shows its tail").toBe(true);
   await copy.click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(macro);
   await expect(copy.locator(".lucide-check")).toBeVisible();
@@ -160,12 +168,24 @@ for (const reduced of [false, true]) test(`shared titles scroll by pointer and k
         const at = (ms: number) => { animation.currentTime = ms; return new DOMMatrix(getComputedStyle(node).transform).m41; };
         const start = at(0), middle = at(500), next = at(1000);
         const duration = Number(animation.effect!.getComputedTiming().duration);
-        return { start, middle, next, end: at(duration - 1000), rest: at(duration - 500) };
+        const end = at(duration - 1000), rest = at(duration - 500);
+        const viewport = node.parentElement!.getBoundingClientRect();
+        const range = document.createRange();
+        range.setStart(node.firstChild!, node.textContent!.length - 1); range.setEnd(node.firstChild!, node.textContent!.length);
+        const glyph = range.getBoundingClientRect();
+        return { start, middle, next, end, rest, lastGlyphRightInset: viewport.right - glyph.right, lastGlyphLeftInset: glyph.left - viewport.left };
       });
+      await mkdir(captures, { recursive: true });
+      await writeFile(`${captures}/title-movement-${index}.json`, JSON.stringify(movement, null, 2) + "\n");
       expect(movement.start).toBeCloseTo(0, 0); expect(movement.middle).toBeCloseTo(-20, 0); expect(movement.next).toBeCloseTo(-40, 0);
       expect(movement.rest).toBeCloseTo(movement.end, 0);
-      expect(await target.evaluate(node => getComputedStyle(node).maskImage)).toMatch(/0px|28px/);
-      if (index === 0) await shot(page, "zh-dark-1280-long-title-scrolling");
+      expect(movement.lastGlyphRightInset, "the last glyph clears the right fade at the end").toBeGreaterThanOrEqual(27.5);
+      expect(movement.lastGlyphLeftInset).toBeGreaterThanOrEqual(27.5);
+      expect(await target.evaluate(node => getComputedStyle(node).maskImage)).toMatch(/^linear-gradient\((?:to right|90deg), rgba\(0, 0, 0, 0\)/);
+      if (index === 0) {
+        await text.evaluate(node => { const animation = node.getAnimations()[0]!; animation.currentTime = (Number(animation.effect!.getComputedTiming().duration) - 1000) / 2; });
+        await shot(page, "zh-dark-1280-long-title-scrolling");
+      }
     }
     await page.mouse.move(0, 0);
     await expect(text).toHaveCSS("transform", "none");
@@ -189,7 +209,26 @@ for (const reduced of [false, true]) test(`shared titles scroll by pointer and k
   await expect(title).toHaveAttribute("data-overflow", "true");
   await title.hover();
   expect(await title.locator("span").evaluate(node => node.getAnimations().length)).toBe(reduced ? 0 : 1);
-  await expect(detail.locator("dt")).not.toContainText(["开始"]);
+  await expect(detail.getByText("开始", { exact: true })).toHaveCount(0);
   await noHint(page, detail.locator('[data-slot="detail-back"]'));
   await noHint(page, detail.locator('[data-slot="detail-refresh"]'));
+});
+
+test("removed macro controls and time-label hints stay absent", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await setup(page, "zh");
+  const list = page.locator('[data-slot="macro-list"]');
+  await noHint(page, list.locator('[data-slot="macro-fold"]'));
+  for (const tab of await list.getByRole("tab").all()) await noHint(page, tab);
+  const group = list.locator('[data-slot="macro-group"]').first();
+  await group.locator('[data-slot="macro-group-heading"]').hover();
+  await noHint(page, group.locator('[data-slot="macro-sort-button"]'));
+  const selected = list.locator(`[data-macro-task-id="${macro}"]`);
+  await noHint(page, selected.locator('[data-slot="macro-menu-button"]'));
+  await noHint(page, selected.locator('[data-slot="state-mark"]'));
+  const header = page.locator('[data-slot="macro-overview-header"]');
+  await header.getByRole("button", { name: "时间统计", exact: true }).click();
+  const stats = page.locator('[data-slot="time-stats-values"]');
+  await expect(stats.locator("dt")).toHaveText(["从开始到最近活动", "有工作在运行的时间", "各回合相加"]);
+  for (const label of await stats.locator("dt").all()) await noHint(page, label);
 });

@@ -65,7 +65,7 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
       <div data-slot="macro-goal-scroll" className="goal-scroll" data-history={!!goals && goals.length > 1}>
         <div className="goal-main">
           <div className="goal-heading">
-            <Dialog.Title className="text-[15px] font-semibold">{t("goalTitle")}</Dialog.Title>
+            <Dialog.Title className="text-base font-semibold">{t("goalTitle")}</Dialog.Title>
             <span className="text-xs text-ink3 tabular-nums">{t("goalRevision", { revision: selected.revision })} · {formatMomentMinutes(Date.parse(selected.createdAt), Date.now())}</span>
           </div>
           <div data-slot="macro-goal-body" className="goal-body"><MessageResponse remarkPlugins={goalRemarkPlugins}>{selected.body}</MessageResponse></div>

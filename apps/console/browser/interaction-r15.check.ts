@@ -91,7 +91,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
   });
 });
 
-test("retains the name heading inset and lane totals beside a detail, and aligns copied IDs with other facts", async ({ page }) => {
+test("retains the name heading inset without row hints and aligns copied IDs with other facts", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const beta = "macro-22222222-2222-4222-8222-222222222222";
   await open(page, `#tasks/${beta}`);
@@ -100,7 +100,8 @@ test("retains the name heading inset and lane totals beside a detail, and aligns
   await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b1"]').click();
   expect(Math.abs((await header.boundingBox())!.x - x)).toBeLessThanOrEqual(1);
   await page.locator('[data-slot=task-names] [data-run-id="preview-run-b1"][data-slot=timeline-row-name]').hover();
-  await expect(page.getByRole("tooltip")).toContainText("3 个微任务");
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${macro}/preview-run-a1/1`);
   const id = page.locator('[data-slot=detail-pane] button[aria-label*="preview-run-a1"]').first();
   await expect(id).toBeVisible();
@@ -108,8 +109,9 @@ test("retains the name heading inset and lane totals beside a detail, and aligns
     const cell = button.closest("dd")!.getBoundingClientRect();
     const text = button.querySelector("span")!.getBoundingClientRect();
     const box = button.getBoundingClientRect();
-    return { text: text.left, cell: cell.left, hit: box.left };
+    return { text: text.left, cell: cell.left, hit: box.left, textRight: text.right, right: box.right };
   });
   expect(Math.abs(geometry.text - geometry.cell)).toBeLessThanOrEqual(1);
-  expect(geometry.text - geometry.hit).toBeGreaterThanOrEqual(8);
+  expect(geometry.hit).toBeLessThanOrEqual(geometry.text);
+  expect(geometry.right).toBeGreaterThanOrEqual(geometry.textRight);
 });

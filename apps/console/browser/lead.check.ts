@@ -114,7 +114,7 @@ for (const { locale, language, tasks } of [
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator("#stop-macro-task-name")).toHaveAttribute("aria-description", summary.title!);
+      await expect(dialog.locator("#stop-macro-task-name")).not.toHaveAttribute("aria-description");
       await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title!);
       await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
       await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title!);
@@ -183,7 +183,7 @@ for (const { locale, language, tasks } of [
 
 for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${locale} at narrow width`, () => {
   test.use({ locale, viewport: { width: 390, height: 844 } });
-  test("truncates only the title while keeping the scope and controls readable", async ({ page }) => {
+  test("wraps the title and keeps the scope and controls readable", async ({ page }) => {
     const title = "核对完整范围与全部已交付结果的宏任务标题：".repeat(10);
     await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
       const response = await route.fetch();
@@ -201,13 +201,16 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     const dialog = page.getByRole("dialog");
     const titleLine = dialog.locator("#stop-macro-task-name");
     await settle(page);
-    await expect(titleLine).toHaveAttribute("aria-description", title);
+    await expect(titleLine).not.toHaveAttribute("aria-description");
     await expect(titleLine).toHaveText(title);
     await expect(dialog).toHaveAccessibleDescription(new RegExp(title.slice(0, 24)));
     expect(await titleLine.evaluate(element => {
-      const style = getComputedStyle(element);
-      return style.whiteSpace === "nowrap" && element.scrollWidth > element.clientWidth;
+      const range = document.createRange(); range.selectNodeContents(element);
+      return getComputedStyle(element).whiteSpace === "normal" && range.getClientRects().length > 1;
     })).toBe(true);
+    await titleLine.hover();
+    await page.waitForTimeout(700);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
     await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
     await expectNoSidewaysScroll(page);

@@ -29,7 +29,7 @@ function Identifier({ value, hint }: { value: string; hint?: string }) {
   }
   return <>
       <Button type="button" variant="ghost" size="sm" data-slot="copyable-identifier" data-feedback={feedback?.kind}
-        className="h-6 max-w-full shrink-0 justify-start gap-1 -ml-2 font-mono text-xs font-normal text-ink"
+        className="h-6 max-w-full shrink-0 justify-start gap-1 px-0 has-[>svg]:px-0 font-mono text-xs font-normal text-ink"
         aria-label={t("identifier.copy", { value })} aria-description={hint} onClick={() => void copy()}>
         <span className="truncate">{shortened}</span>
         {feedback?.kind === "copied" ? <Check aria-hidden="true" /> : feedback?.kind === "failed" ? <CircleX aria-hidden="true" className="text-fail"/> : <Copy aria-hidden="true" className="text-ink3"/>}

@@ -1,12 +1,9 @@
 import { StrictMode } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
 import { createApi } from "./api";
-import { MacroTaskList } from "./MacroTaskList";
-import { TooltipProvider } from "./components/ui/tooltip";
 import { macroTaskGroups } from "./macro-task-fixtures";
-import * as formatting from "./i18n/format";
 import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
@@ -44,7 +41,7 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); localStorage.clear(); });
 
 describe("grouped macro task list hook", () => {
-  it("keeps the 304 envelope reference and does not redraw entries on verification", async () => {
+  it("keeps the grouped entries by reference when a verification returns 304", async () => {
     const body = page([summary("first", 3)]);
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { ETag: '"list"', Date: "Thu, 01 Jan 1970 00:00:01 GMT" } }))
