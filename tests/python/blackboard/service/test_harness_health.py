@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
-from support import BoardTestCase
+from support import BoardTestCase, FakeClock
 
 
 class HarnessHealthTests(BoardTestCase):
@@ -252,6 +252,113 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertFalse(result['available'], 'The post-callback record leads')
         self.assertEqual(result['reasonCode'], 'CATALOG_UNAVAILABLE')
         self.assertEqual(self.health.get('codex')['revision'], result['revision'])
+
+
+class CatalogHealthOwnershipTests(BoardTestCase):
+    """Every health write preserves adopted catalog facts, including NULL rows."""
+
+    def setUp(self):
+        super().setUp()
+        self.clock = FakeClock()
+        self.board = self.board(clock=self.clock)
+        self.evaluation = self.board.evaluation
+        self.health = HarnessHealth(self.board.store, catalog_refresh=self.unknown_read)
+        self.ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0', 'command': ['/fixture/dsh']}
+        for target, result in (
+            ('_snapshot', {'paths': [{'path': '/fixture/dsh', 'mtimeNs': 1}]}),
+            ('_discover', self.ready),
+        ):
+            stub = patch('hey_my_buddy.blackboard.service.harness_health.' + target, return_value=result)
+            stub.start()
+            self.addCleanup(stub.stop)
+        self.evaluation.record_catalog(self.reading(('high', 'low'), beta=True))
+        self.evaluation.record_catalog(self.reading(('high',), beta=False))
+        self.clock.advance(3601)
+        self.evaluation.record_catalog(self.reading(('high',), beta=False))
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.before = self.profiles()
+
+    def reading(self, efforts, *, beta):
+        models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
+                  {'id': 'gamma', 'efforts': ['high'], 'available': False, 'unavailableReason': 'native-disabled'}]
+        if beta:
+            models.append({'id': 'beta', 'efforts': ['high'], 'available': True})
+        return {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+
+    def unknown_read(self, *args):
+        self.evaluation.record_catalog({'source': 'fixture-native', 'providers': [],
+            'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
+
+    def profiles(self):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        return {item['profileId']: item for item in catalog_store.profiles(
+            self.evaluation, {'includeUnavailable': True})['profiles']}
+
+    def assert_catalog_survives(self):
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        profiles = self.profiles()
+        self.assertTrue(profiles['dsh:fixture:alpha:high']['available'])
+        self.assertFalse(profiles['dsh:fixture:alpha:low']['available'])
+        self.assertEqual(profiles['dsh:fixture:alpha:low']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
+        self.assertFalse(profiles['dsh:fixture:beta:high']['available'])
+        self.assertEqual(profiles['dsh:fixture:beta:high']['catalogStatus'], 'unavailable')
+        self.assertEqual(profiles['dsh:fixture:beta:high']['unavailableReason'], catalog.CONFIRMED_ABSENCE_REASON)
+        self.assertFalse(profiles['dsh:fixture:gamma:high']['available'], 'Native unavailable stays grounded')
+        self.assertTrue(all(item['enabled'] for item in profiles.values()))
+        self.assertEqual(set(profiles), set(self.before), 'Profile identities survive')
+        with self.board.store.db.read() as db:
+            candidates = [row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            transitions = [row[0] for row in db.execute("SELECT kind FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq")]
+        self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
+        self.assertEqual(transitions, ['catalog.model_pending', 'catalog.model_unavailable'])
+
+    def assert_not_checked_keeps_catalog_reasons(self):
+        from hey_my_buddy.blackboard.catalog import catalog
+        profiles = self.profiles()
+        self.assertFalse(profiles['dsh:fixture:alpha:high']['available'])
+        self.assertEqual(profiles['dsh:fixture:alpha:high']['unavailableReason'], 'HARNESS_NOT_CHECKED',
+                         'A NULL reason must still receive the health write')
+        self.assertEqual(profiles['dsh:fixture:alpha:low']['unavailableReason'], catalog.RETIRED_EFFORT_REASON)
+        self.assertEqual(profiles['dsh:fixture:beta:high']['unavailableReason'], catalog.CONFIRMED_ABSENCE_REASON)
+
+    def test_same_harness_path_recheck_preserves_confirmed_absence_and_retired_effort(self):
+        # Reproduce the in-process cache stub boundary before a normal health
+        # publication, then exercise the real refresh and unknown catalog read.
+        with patch.object(self.health, 'refresh', return_value={}):
+            self.health.set_path('dsh', None)
+        self.assert_not_checked_keeps_catalog_reasons()
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        self.assert_catalog_survives()
+
+    def test_initialize_existing_profiles_preserves_catalog_reasons(self):
+        with self.board.store.db.write() as db:
+            db.execute("DELETE FROM harness_health WHERE adapter='dsh'")
+        self.health.initialize()
+        self.assert_not_checked_keeps_catalog_reasons()
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        self.assert_catalog_survives()
+
+    def test_invalidate_updates_null_reason_and_preserves_catalog_reasons(self):
+        revision = self.health.get('dsh')['revision']
+        self.health.invalidate('dsh', revision, 'HARNESS_HANDSHAKE_FAILED')
+        high = self.profiles()['dsh:fixture:alpha:high']
+        self.assertFalse(high['available'])
+        self.assertEqual(high.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        self.assert_catalog_survives()
+
+    def test_unhealthy_refresh_updates_null_reason_and_preserves_catalog_reasons(self):
+        with patch('hey_my_buddy.blackboard.service.harness_health._discover',
+                   return_value={'adapter': 'dsh', 'status': 'unhealthy', 'reasonCode': 'HARNESS_HANDSHAKE_FAILED'}):
+            self.assertFalse(self.health.refresh('dsh', force=True)['available'])
+        high = self.profiles()['dsh:fixture:alpha:high']
+        self.assertFalse(high['available'])
+        self.assertEqual(high.get('unavailableReason'), 'HARNESS_HANDSHAKE_FAILED')
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        self.assert_catalog_survives()
 
 
 class StaleRereadServiceCallbackTests(BoardTestCase):

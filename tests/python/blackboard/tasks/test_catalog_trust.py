@@ -225,6 +225,61 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.validate()
         self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
 
+    def assert_only_high_is_usable(self, *, pending=False):
+        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})['profiles']
+        alpha = {item['effort']: item for item in listed if item['model'] == 'alpha'}
+        self.assertEqual(sorted(effort for effort, item in alpha.items() if item['available']), ['high'])
+        self.assertTrue(all(item['enabled'] for item in alpha.values()), 'User intent survives retirement and health noise')
+        high = {**IDENTITY, 'effort': 'high'}
+        self.assertEqual(self.validate(high), high)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate({**IDENTITY, 'effort': 'low'})
+        self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
+        self.assertEqual(rejected.exception.details['legalEfforts'], ['high'])
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        with self.board.store.db.read() as db:
+            candidates = [row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+        self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
+        if pending:
+            self.assertEqual(alpha['high']['catalogStatus'], 'pending')
+            self.assertEqual(alpha['high']['pendingSince'], self.clock.value)
+
+    def masked_retired_effort(self):
+        self.evaluation.record_catalog(reading(efforts=('high', 'low')))
+        self.evaluation.record_catalog(reading(efforts=('high',)))
+        # Before this fix old health code could overwrite the retirement reason
+        # on every profile. The last adopted native reading still proves that
+        # only high is legal, even when no row keeps the retirement reason.
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET available=0,enabled=1,"
+                       "unavailable_reason='HARNESS_HANDSHAKE_FAILED' WHERE adapter='dsh'")
+
+    def test_health_mask_cannot_restore_a_retired_effort_on_unknown_read(self):
+        self.masked_retired_effort()
+        self.evaluation.record_catalog(reading(models=(), account_status='unknown'))
+        self.assert_only_high_is_usable()
+
+    def test_first_absence_and_pending_recovery_keep_only_last_legal_efforts(self):
+        self.masked_retired_effort()
+        self.evaluation.record_catalog(reading(models=()))
+        self.assert_only_high_is_usable(pending=True)
+        first_absence = self.clock.value
+        self.fail_health_then_recover()
+        self.evaluation.record_catalog(reading(models=(), account_status='unknown'))
+        self.assert_only_high_is_usable(pending=True)
+        self.clock.advance(3599)
+        self.evaluation.record_catalog(reading(models=()))
+        self.assert_only_high_is_usable()
+        self.clock.advance(2)
+        self.evaluation.record_catalog(reading(models=()))
+        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})['profiles']
+        self.assertTrue(all(not item['available'] for item in listed))
+        with self.board.store.db.read() as db:
+            events = db.execute("SELECT kind,payload_json FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq").fetchall()
+        import json
+        self.assertEqual([row['kind'] for row in events], ['catalog.model_pending', 'catalog.model_unavailable'])
+        self.assertEqual(json.loads(events[1]['payload_json'])['pendingSince'], first_absence)
+
     def strip_confirmed_read_meta(self):
         """A board that adopted catalogs before the ADR-027 keys existed."""
         with self.board.store.db.write() as db:

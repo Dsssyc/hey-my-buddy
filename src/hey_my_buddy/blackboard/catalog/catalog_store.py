@@ -84,7 +84,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         from .accounts import identity, selection
         from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
                               TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
-                              _write_pending_map, families_from_payload, note_confirmed_read,
+                              _write_pending_map, identities_from_payload, _pending_entry, note_confirmed_read,
                               restore_retained_availability)
         saved_accounts = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(observation_id),)).fetchone()
         frozen_accounts = json.loads(saved_accounts[0]) if saved_accounts else {}
@@ -144,8 +144,9 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # The families the last adopted catalog still listed as available.
             # Health 0s on profile rows are deliberately absent here: they are
             # not evidence that a native model disappeared (ADR-027 rule 2).
-            retained = families_from_payload(prior['payload_json'] if prior is not None else None, name)
-            existing = db.execute('SELECT profile_id,provider,model,available,unavailable_reason'
+            retained_identities = identities_from_payload(prior['payload_json'] if prior is not None else None, name)
+            retained = {(provider, model) for provider, model, _effort in retained_identities}
+            existing = db.execute('SELECT profile_id,provider,model,effort,available,unavailable_reason'
                                   ' FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall()
             family_rows: dict[tuple[str, str], list] = {}
             for row in existing:
@@ -160,18 +161,20 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 # effort that vanished while its model remains is a metadata
                 # retirement, never a model disappearance.
                 key = _family_key(*family)
-                since = pending.get(key)
+                since = _pending_entry(pending.get(key))['since']
                 first_absence, moment = _parse_time(since), _parse_time(now)
                 if since is None:
-                    pending[key] = now
-                    if any(not row['available'] and row['unavailable_reason'] not in
-                           (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON) for row in rows):
-                        # Health noise masked a model the adopted catalog still
-                        # lists; the pending window keeps it routable.
-                        db.execute('UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL'
-                                   ' WHERE adapter=? AND provider=? AND model=? AND available=0'
-                                   ' AND unavailable_reason NOT IN (?,?)', (name, *family,
-                                   CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON))
+                    efforts = sorted(effort for provider, model, effort in retained_identities
+                                     if (provider, model) == family)
+                    pending[key] = {'since': now, 'efforts': efforts}
+                    # The prior adopted reading proves the legal efforts even
+                    # when old health code overwrote a retirement reason. Save
+                    # those efforts before the empty reading replaces it.
+                    for row in rows:
+                        if (row['effort'] in efforts and not row['available'] and
+                                row['unavailable_reason'] not in (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)):
+                            db.execute('UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL'
+                                       ' WHERE profile_id=?', (row['profile_id'],))
                     transitions.append({'kind': 'catalog.model_pending', 'adapter': name,
                                         'provider': family[0], 'model': family[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
@@ -204,7 +207,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 key = _family_key(*family)
                 if key not in pending and family not in absent_before:
                     continue
-                since = pending.pop(key, None)
+                since = _pending_entry(pending.pop(key, None))['since']
                 usable = db.execute('SELECT 1 FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=? AND available=1 LIMIT 1',
                                     (name, *family)).fetchone() is not None
                 if usable:

@@ -147,7 +147,7 @@ def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[s
     if value is None:
         return None
     efforts = _pending_entry(value)["efforts"]
-    if efforts:
+    if efforts is not None:
         return list(efforts)
     rows = db.execute(
         "SELECT effort FROM evaluation_profiles WHERE adapter=? AND provider=? AND model=?"
@@ -195,19 +195,15 @@ def identities_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, s
     if not isinstance(payload_json, str) or not payload_json:
         return identities
     try:
-        providers = json.loads(payload_json).get("providers")
-    except ValueError:
+        view = CatalogView.from_payload(json.loads(payload_json))
+    except (ValueError, BoardError):
         return identities
-    if not isinstance(providers, list):
-        return identities
-    for entry in providers:
-        if not isinstance(entry, dict) or entry.get("adapter") != adapter:
+    for entry in view.payload["providers"]:
+        if entry["adapter"] != adapter:
             continue
-        for model in entry.get("models") or []:
-            if isinstance(model, dict) and model.get("available", True):
-                for effort in model.get("efforts") or []:
-                    if isinstance(effort, str) and effort:
-                        identities.add((str(entry.get("provider")), str(model.get("id")), effort))
+        for model in entry["models"]:
+            if model["available"]:
+                identities.update((entry["provider"], model["id"], effort) for effort in model["efforts"])
     return identities
 
 
@@ -236,7 +232,7 @@ def restore_retained_availability(db, adapter: str) -> int:
     pending_efforts = {}
     for key, value in _pending_map(db, adapter).items():
         provider, _, model = key.partition("\x1f")
-        pending_efforts[(provider, model)] = _pending_entry(value)["efforts"]
+        pending_efforts[(provider, model)] = pending_model_efforts(db, adapter, provider, model) or []
     restored = 0
     for profile in db.execute(
             "SELECT profile_id, provider, model, effort, available, unavailable_reason"
@@ -247,7 +243,7 @@ def restore_retained_availability(db, adapter: str) -> int:
         family = (profile["provider"], profile["model"])
         identity = (*family, profile["effort"])
         legal_pending = pending_efforts.get(family)
-        if identity in identities or (family in pending_efforts and (legal_pending is None or profile["effort"] in legal_pending)):
+        if identity in identities or (legal_pending is not None and profile["effort"] in legal_pending):
             db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
                        (profile["profile_id"],))
             restored += 1
