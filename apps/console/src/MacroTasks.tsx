@@ -119,7 +119,7 @@ function StopDialog({ summary, onConfirm, onCancel }: {
       </p>
       <div className="actions">
         <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>
-        <button type="button" className="button danger" onClick={onConfirm}>确认停止目标</button>
+        <button type="button" className="button danger" onClick={onConfirm}>确认停止宏任务</button>
       </div>
     </div>
   </div>;
@@ -337,8 +337,8 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     stopControl = <span className="stop-control">
       {showButton && <button type="button" className="button small-button danger"
         disabled={!stop.writable || stopping}
-        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收微任务及协助任务（需确认）。"}
-        onClick={() => stop.requestStop(selectedSummary)}>停止目标</button>}
+        title={!stop.writable ? LOGIN_EXPIRED_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该宏任务全部未验收微任务及协助任务（需确认）。"}
+        onClick={() => stop.requestStop(selectedSummary)}>停止宏任务</button>}
       {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
         title={stopState.detail}>{stopState.label}</span>}
       {stopState?.phase === "unknown" && stop.writable && !stopping

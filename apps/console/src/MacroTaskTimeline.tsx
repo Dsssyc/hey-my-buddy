@@ -86,7 +86,7 @@ export type MacroTaskTimelineProps = {
   openedRunId: string | null;
   /** The pinned inspector selection; a refresh never clears it. */
   selection: InspectorSelection | null;
-  /** MacroTask-level actions rendered in the overview header (停止目标, U4). */
+  /** MacroTask-level actions rendered in the overview header (停止宏任务, U4). */
   headerActions?: ReactNode;
   /** Snapshot buddies for friendly buddy names (0.16 0.3). */
   buddies?: readonly FriendlyBuddy[] | null;

@@ -192,7 +192,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
     <div className="list-filters">
       <div className="list-filter-row">
         <label className="search"><span className="sr-only">搜索宏任务</span><input value={props.query} maxLength={200}
-          onChange={event => props.onQueryChange(event.target.value)} placeholder="搜索目标、项目或 ID" /></label>
+          onChange={event => props.onQueryChange(event.target.value)} placeholder="搜索宏任务、项目或 ID" /></label>
         <button ref={filterButton} type="button" className="button small-button filters-button"
           id="macro-task-filters-button" aria-expanded={filtersShown} aria-controls="macro-task-filters-popover"
           onClick={() => setFiltersOpen(current => !current)}>筛选{nonDefaultCount > 0 ? ` · ${nonDefaultCount}` : ""}</button>

@@ -33,7 +33,7 @@ export function errorOfStopReply(expectedMacroTaskId: string, value: unknown): M
       return resultIds.length === scope.size && resultIds.every(runId => scope.has(runId));
     })();
   if (!valid) {
-    throw new ApiError("INVALID_RESPONSE", "停止目标的响应不完整，提交结果尚未确认。");
+    throw new ApiError("INVALID_RESPONSE", "停止宏任务的响应不完整，提交结果尚未确认。");
   }
   return {
     macroTaskId: reply.macroTaskId!,

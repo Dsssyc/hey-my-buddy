@@ -293,14 +293,14 @@ describe("macroTask timeline rendering", () => {
     const cards = [...strip.querySelectorAll<HTMLElement>(".micro-task-card")];
     expect(cards.length).toBe(5);
     // T3: bold two-line title, top-right status, one-line result with the
-    // Worker 自述 label, and no 做什么/目标摘要 labels.
+    // Worker 自述 label, and no 做什么/微任务摘要 labels.
     const first = cards[0]!;
     expect(first.querySelector(".micro-task-card-title")!.textContent).toBe("设计宏任务时间轴视图与交互规范");
     expect(first.querySelector(".micro-task-card-state")!.textContent).toContain("已验收");
     expect(first.textContent).toContain("结果：已完成时间轴视图与交互规范设计并交付审阅。");
     expect(within(first).getByText("Worker 自述")).toBeTruthy();
     expect(first.textContent).not.toContain("做什么");
-    expect(first.textContent).not.toContain("目标摘要");
+    expect(first.textContent).not.toContain("微任务摘要");
     const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
     expect(executing.textContent).toContain("结果未知");
     expect(within(executing).queryByText("Worker 自述")).toBeNull();

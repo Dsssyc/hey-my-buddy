@@ -11,7 +11,7 @@ import {
 import { macroTaskMetrics, rootRollups, type RunRollup } from "./macro-task-metrics";
 
 /**
- * The detail overview's two rows (0.16 T4): 目标摘要 and the Worker's own
+ * The detail overview's two rows (0.16 T4): 微任务摘要 and the Worker's own
  * result line. The intent title is the detail heading's job and never repeats
  * here.
  */
@@ -21,7 +21,7 @@ export function MicroTaskDetailRows({ taskSummary, resultSummary }: {
 }) {
   return <div className="card-rows detail-rows">
     <span className="card-row">
-      <span className="card-row-label">目标摘要</span>
+      <span className="card-row-label">微任务摘要</span>
       <span className="card-row-text" title={taskSummary ?? undefined}>{taskSummary ?? "未记录任务原文"}</span>
     </span>
     <span className="card-row">
@@ -260,7 +260,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, onBackToL
   loading: boolean;
   stale: boolean;
   onBackToList: () => void;
-  /** MacroTask-level actions (停止目标 and its honest status). */
+  /** MacroTask-level actions (停止宏任务 and its honest status). */
   headerActions?: ReactNode;
   /** Compact form at viewport heights of 800px or less (P2.1). */
   compact?: boolean;

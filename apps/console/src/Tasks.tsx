@@ -98,7 +98,7 @@ export function Tasks({ snapshot, api, refresh, active = true, listNavigation, l
     <div className="list-filters">
       <div className="segmented" aria-label="任务筛选">{([["all", "全部"], ["active", "进行中"], ["host", "等待 Host"], ["review", "等待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>)}</div>
-      <label className="search"><span className="sr-only">搜索微任务</span><input value={query} maxLength={200} onChange={e => setQuery(e.target.value)} placeholder="目标、项目、委派方或 ID" /></label>
+      <label className="search"><span className="sr-only">搜索微任务</span><input value={query} maxLength={200} onChange={e => setQuery(e.target.value)} placeholder="微任务、项目、委派方或 ID" /></label>
       <div className="filter-pair"><label><span className="sr-only">项目筛选</span><select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">全部项目</option>
         {choices.projects.map(p => <option key={p.id} value={p.id}>{p.label} — {p.path || p.id}</option>)}</select></label>
         <label><span className="sr-only">委派方筛选</span><select value={hostId} onChange={e => setHostId(e.target.value)}><option value="">全部委派方</option>{choices.hosts.map(id => <option key={id}>{id}</option>)}</select></label></div>

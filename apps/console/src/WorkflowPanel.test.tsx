@@ -178,7 +178,7 @@ describe("micro task workflow console (0.15.1 read-only)", () => {
     const user = userEvent.setup();
     render(<WorkflowPanel {...f.props} />);
     await user.click(await screen.findByRole("tab", { name: "概览" }));
-    expect(screen.getByText(/目标范围内共 1 项执行尚未核实/)).toBeTruthy();
+    expect(screen.getByText(/微任务范围内共 1 项执行尚未核实/)).toBeTruthy();
     expect(screen.getByText("已验收")).toBeTruthy();
   });
 
@@ -197,8 +197,8 @@ describe("micro task workflow console (0.15.1 read-only)", () => {
   f.workflow.currentTurn!.summary = summary;
   const user = userEvent.setup();
   render(<WorkflowPanel {...f.props} initialSection="overview" />);
-  await screen.findByText("记录细节（目标与回合）");
-  await user.click(screen.getByText("记录细节（目标与回合）"));
+  await screen.findByText("记录细节（微任务与回合）");
+  await user.click(screen.getByText("记录细节（微任务与回合）"));
   const button = await screen.findByRole("button", { name: "展开" });
   const paragraph = button.closest("p")!;
   expect(paragraph.textContent).toBe(summary.slice(0, 360) + "… 展开");

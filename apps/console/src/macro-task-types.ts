@@ -51,7 +51,7 @@ export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
   title: string;
   titleSource: "title" | "task" | "none";
-  /** First nonempty task line (at most 200 characters); the 做什么/目标摘要 source. */
+  /** First nonempty task line (at most 200 characters); the 做什么/微任务摘要 source. */
   taskSummary: string | null;
   summary: string | null;
   createdAt: string;

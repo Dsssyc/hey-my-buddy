@@ -29,7 +29,7 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     kind: "macro-task",
     title: "宏任务时间轴：设计、接口与实现",
     titleSource: "macro-task",
-    description: "按用户认可的第 X 节设计宏任务时间轴。本目标覆盖只读接口、前端呈现与离线升级验证。",
+    description: "按用户认可的第 X 节设计宏任务时间轴。本宏任务覆盖只读接口、前端呈现与离线升级验证。",
     summary: null,
     project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
     sourceHostId: "codex-desktop",
