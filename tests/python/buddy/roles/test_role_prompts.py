@@ -10,7 +10,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import adapter
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
-from hey_my_buddy.buddy.roles import router, run_execution, turn_io
+from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install.runtime import resource_path
@@ -19,6 +19,12 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 class RolePromptTests(unittest.TestCase):
+    def test_wrap_up_prompt_is_packaged_beside_worker_role_text(self):
+        prompt = prompts.wrap_up_prompt()
+        self.assertIn("The Host has stopped this micro task", prompt)
+        self.assertIn("Do not continue implementation", prompt)
+        self.assertIn("normal structured Worker outcome", prompt)
+
     def test_resources_define_each_roles_authority_and_boundaries(self):
         essentials = {
             "worker": (

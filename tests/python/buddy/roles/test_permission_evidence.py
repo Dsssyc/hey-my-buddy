@@ -37,7 +37,11 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
     def execute(self, request, *, status="ok", operation="worker"):
         control = {"operation": operation, "harness": "codex",
                    "privateRoot": str(self.root), "requestFile": str(self.root / "request.json"),
+                   "inputFile": str(self.root / "input.json"),
                    "verdictFile": str(self.root / "verdict.json")}
+        (self.root / "input.json").write_text(canonical_json({
+            "taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
+            "generation": request.identity.generation, "turnId": request.identity.turn_id}))
         result = rc.RunResult(identity=request.identity, harness=request.harness,
                               end=rc.RunEnd(status=status, reason_code="native-refused" if status != "ok" else None),
                               stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))
@@ -46,6 +50,7 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
                                   "worker_request" if operation == "worker" else "fast_request",
                                   return_value=(request, None, None, None)), \
                 mock.patch.object(run_controller, "run_harness", return_value=result) as native_run, \
+                mock.patch.object(run_controller.run_execution, "_worker_result"), \
                 mock.patch("hey_my_buddy.buddy.harnesses.registry.worker_format", return_value=None):
             frame, code = run_controller.execute(control, threading.Event(), self.root.parent)
         self.assertEqual(rc.decode_run_request((self.root / "request.json").read_bytes()), request)

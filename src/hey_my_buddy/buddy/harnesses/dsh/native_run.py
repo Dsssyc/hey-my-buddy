@@ -387,14 +387,13 @@ def _binding_path(native_root: Path, session_id: str) -> Path:
     return Path(native_root) / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
 
 
-def _micro_task_binding(request: RunRequest, session_id: str, *, status: str) -> dict:
+def _micro_task_binding(request: RunRequest, session_id: str) -> dict:
     """The resumable micro task binding of one session: task, session, cwd, buddy.
 
     The buddy is the frozen requested selection — the same values the
     native readback confirmed for the turn that wrote the binding.
     """
     return {"taskId": request.identity.task_id, "sessionId": session_id,
-            "lastTurnStatus": status,
             "cwd": request.cwd,
             "buddy": {"provider": request.buddy.provider,
                               "model": request.buddy.model,
@@ -402,9 +401,7 @@ def _micro_task_binding(request: RunRequest, session_id: str, *, status: str) ->
 
 
 def _valid_micro_task_binding(request: RunRequest, session_id: str, binding: object) -> bool:
-    status = binding.get("lastTurnStatus") if isinstance(binding, dict) else None
-    return (status in ("completed", "cancelled")
-            and binding == _micro_task_binding(request, session_id, status=status))
+    return binding == _micro_task_binding(request, session_id)
 
 
 def _continuation_of(request: RunRequest) -> tuple[str, str | None]:
@@ -1121,17 +1118,17 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                    and state.prompt_stop_reason == "cancelled" and state.interrupted_turn_closed)
     if micro_task and sessions and (completed or interrupted) and state.stop.get("shutdown") is True:
         # The reusable binding needs the complete native turn, its verified
-        # provenance or acknowledged cancellation, plus the really-gone
-        # group. A resumed prompt invalidated its old binding before admission.
+        # provenance or acknowledged cancellation, plus the really-gone group.
         session_id = sessions[-1]
-        expected = _micro_task_binding(request, session_id,
-                                       status="cancelled" if interrupted else "completed")
+        expected = _micro_task_binding(request, session_id)
         try:
             binding_file = _binding_path(native_root, session_id)
-            private_json(binding_file, expected, exclusive=True)
-        except (OSError, ValueError, BoardError) as error:
-            state.status, state.reason = "error", "native-binding-save-failed"
-            state.error_text = f"the DSH session binding could not be saved: {error}"[:512]
+            try:
+                private_json(binding_file, expected, exclusive=True)
+            except FileExistsError:
+                if decode_json(binding_file.read_bytes()) != expected:
+                    raise ValueError("the existing DSH session binding differs")
+        except (OSError, ValueError, BoardError):
             continuation = ContinuationFacts(resumable=False)
         else:
             continuation = ContinuationFacts(resumable=True)
@@ -1411,11 +1408,6 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
         inquiry_bridge.activate(session_id)
     state.configured = True
     state.checked = _configure(client, session_id, snapshot, request.buddy, state.native_facts)
-    if mode == "native-session":
-        # The previous terminal binding ceases to describe the session when
-        # another prompt is admitted. A fresh one follows this turn's own
-        # confirmed terminal response and group stop.
-        _binding_path(Path(request.private_state.native_root), session_id).unlink()
     publisher = ActivityPublisher(services.live.publish_activity if services.live else None)
 
     def micro_task_fold(message: object) -> bool:

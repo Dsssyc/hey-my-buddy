@@ -125,10 +125,11 @@ export function countsText(activity: TaskActivity): string {
 }
 
 const terminationLabels: Record<string, string> = {
-  "graceful-stop": "有序收尾完成",
+  "wrap-up": "Host 收尾完成",
   "grace-expired": "收尾宽限到期后停止",
   "forced-stop": "强制停止",
-  "console-stop": "控制台急停",
+  "console-stop": "在控制台停止",
+  "service-stop": "服务停止",
   "unknown-stop": "停止（发起者未知）",
   deadline: "Router 预算用完",
   "harness-error": "Harness 错误",
@@ -150,6 +151,7 @@ function cancellationDetails(task: Task): { label: string; hostId: string | null
   const safeReason = typeof reason === "string" && reason.trim() && reason.length <= 4000
     ? reason.trim() : null;
   if (initiator === "console") return { label: "在控制台停止", hostId: null, reason: safeReason };
+  if (initiator === "service") return { label: "服务停止", hostId: null, reason: safeReason };
   if (initiator === "unknown") return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
   if (typeof actor === "string" && actor.startsWith("host:") && actor.length <= 261) {
     const hostId = actor.slice(5);
@@ -160,7 +162,7 @@ function cancellationDetails(task: Task): { label: string; hostId: string | null
   }
   if (actor === "service-stop") return { label: "服务停止", hostId: null, reason: safeReason };
   if (initiator === "host") return { label: "Host 停止", hostId: null, reason: safeReason };
-  return { label: "取消（发起者未知）", hostId: null, reason: safeReason };
+  return { label: "停止（发起者未知）", hostId: null, reason: safeReason };
 }
 
 /**
@@ -245,9 +247,9 @@ export function TaskActivityView({ task }: { task: Task }) {
         </p>
       )}
       {cancellation && <dl className="facts">
-        {termination !== cancellation.label && <><dt>取消发起</dt><dd>{cancellation.label}</dd></>}
+        {termination !== cancellation.label && <><dt>停止发起</dt><dd>{cancellation.label}</dd></>}
         {cancellation.hostId && <><dt>发起 Host</dt><dd className="mono wrap">{cancellation.hostId}</dd></>}
-        {cancellation.reason && <><dt>取消理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
+        {cancellation.reason && <><dt>停止理由</dt><dd className="wrap">{cancellation.reason}</dd></>}
       </dl>}
     </section>
   );

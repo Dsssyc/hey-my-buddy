@@ -48,8 +48,8 @@ TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
 #: The observed outcome of one attempt. The stop initiator is recorded separately.
 TERMINATION_REASONS = (
-    "completed", "graceful-stop", "grace-expired", "forced-stop", "console-stop",
-    "unknown-stop", "deadline", "harness-error", "transport-error",
+    "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
+    "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error",
 )
 
 WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
-    stop_initiator      TEXT CHECK (stop_initiator IN ('host','console','unknown')),
+    stop_initiator      TEXT CHECK (stop_initiator IN ('host','console','service','unknown')),
     grace_deadline      TEXT,
     exit_code           INTEGER,
     signal              TEXT,

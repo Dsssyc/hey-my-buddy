@@ -846,6 +846,9 @@ class WorkerSeamTests(MockNativeCase):
         first = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(first.end.status, "ok")
         session = first.native_identity.session_id
+        binding = Path(request.private_state.native_root) / (
+            hashlib.sha256(session.encode()).hexdigest() + ".json")
+        original = binding.read_bytes()
         second_input = self.turn_input(previous=session)
         request, services = self.worker_request(
             second_input,
@@ -854,8 +857,9 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(second.end.status, "ok")
         self.assertEqual(second.native_identity.session_id, session)
         self.assertTrue(second.continuation.resumable)
+        self.assertEqual(binding.read_bytes(), original)
 
-    def test_failed_resumed_turn_invalidates_its_previous_binding(self):
+    def test_failed_resumed_turn_retains_its_previous_binding(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         request, services = self.worker_request(self.turn_input())
@@ -865,17 +869,17 @@ class WorkerSeamTests(MockNativeCase):
         binding = request.private_state.native_root
         binding = Path(binding) / (hashlib.sha256(session.encode()).hexdigest() + ".json")
         self.assertTrue(binding.is_file())
+        original = binding.read_bytes()
         request, services = self.worker_request(
             self.turn_input(previous=session),
             continuation=RunContinuation(mode="native-session", previous_session_id=session))
         os.environ["HMB_ZCODE_TEST_CASE"] = "wrong-input"
         failed = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(failed.end.reason_code, "wrong-native-turn")
-        self.assertFalse(binding.exists())
-        refused = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
-        self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
+        self.assertEqual(binding.read_bytes(), original)
+        self.assertFalse(failed.continuation.resumable)
 
-    def test_binding_write_failure_is_a_reported_run_error(self):
+    def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         request, services = self.worker_request(self.turn_input())
@@ -889,9 +893,8 @@ class WorkerSeamTests(MockNativeCase):
 
         with mock.patch.object(native_run, "private_json", side_effect=write):
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-binding-save-failed")
-        self.assertIn("fixture binding write denied", result.end.message)
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(result.end.reason_code)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIs(result.continuation.resumable, False)
 

@@ -329,6 +329,7 @@ class _RunState:
     checkpoint: dict | None = None
     turn_evidence: TurnEvidence | None = None
     binding_saved: bool = False
+    binding_save_failed: bool = False
     binding_path: Path | None = None
     token_usage: dict | None = None
     usage_rounds: list[TurnEvidence] = dataclasses.field(default_factory=list)
@@ -597,7 +598,7 @@ def _binding_path(root: Path, thread_id: str) -> Path:
 
 
 def _write_binding(root: Path, thread_id: str, binding: dict) -> None:
-    private_json(_binding_path(root, thread_id), binding, exclusive=True)
+    private_json(_binding_path(root, thread_id), binding)
 
 
 def _read_binding(root: Path, thread_id: str) -> dict:
@@ -642,18 +643,13 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
         binding = _read_binding(prep.native_root, previous)
         expected = {"taskId": request.identity.task_id, "threadId": previous,
                     "cwd": request.cwd, "buddy": requested}
-        terminal_status = binding.get("lastTurnStatus")
-        fields = set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256", "lastTurnStatus"}
-        if (set(binding) != fields
-                or terminal_status not in ("completed", "interrupted")) \
+        fields = set(expected) | {"lastTurnId", "lastAttemptId", "lastInputSha256"}
+        if set(binding) != fields \
                 or {key: binding.get(key) for key in expected} != expected \
                 or not isinstance(binding.get("lastTurnId"), str):
             raise CodexProtocolError("native-resume-unavailable",
                                      "the Codex thread binding differs from this micro task, checkout or buddy")
         checkpoint = request.continuation.checkpoint
-        if terminal_status == "interrupted" and checkpoint is None:
-            raise CodexProtocolError("native-resume-unavailable",
-                                     "an interrupted Codex turn requires its exact previous attempt checkpoint")
         if checkpoint is not None and any(
                 binding.get(key) != getattr(checkpoint, field) for key, field in (
                         ("lastTurnId", "native_turn_id"), ("lastAttemptId", "attempt_id"),
@@ -664,9 +660,12 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
             read = connection.call("thread/read", {"threadId": previous, "includeTurns": True}).get("thread")
             turns = read.get("turns") if isinstance(read, dict) else None
             if not isinstance(turns, list) or not turns or turns[-1].get("id") != binding["lastTurnId"] \
-                    or turns[-1].get("status") != terminal_status:
+                    or turns[-1].get("status") not in ("completed", "interrupted"):
                 raise CodexProtocolError("native-resume-unavailable",
                                          "the Codex thread has changed since its bound terminal turn")
+            if turns[-1]["status"] == "interrupted" and checkpoint is None:
+                raise CodexProtocolError("native-resume-unavailable",
+                                         "an interrupted Codex turn requires its exact previous attempt checkpoint")
             response = connection.call("thread/resume", {"threadId": previous, "cwd": request.cwd,
                                                          "model": requested["model"], "modelProvider": requested["provider"],
                                                          "approvalPolicy": "never", "sandbox": sandbox})
@@ -1147,10 +1146,6 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  state: _RunState, thread_id: str,
                  observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
     """The micro task turn: one admission, settlement, usage, quota, checkpoint."""
-    if state.binding_path is not None:
-        # Once another turn can start, the preceding terminal binding no
-        # longer proves the session's last turn. Settlement writes a new one.
-        state.binding_path.unlink()
     state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
     turn = response.get("turn")
@@ -1427,7 +1422,7 @@ def _stop_collection(request: RunRequest, prep: _Preparation,
     if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
         state.status, state.reason = "error", "native-shutdown-failed"
         state.error_text = "Codex App Server did not exit with confirmed process-group shutdown"
-    if cancel.is_set() and state.status != "ok" and state.reason != "native-binding-save-failed":
+    if cancel.is_set() and state.status != "ok":
         state.status, state.reason = "cancelled", "user-cancel"
         state.error_text = "the Codex execution was cancelled"
 
@@ -1443,13 +1438,11 @@ def _save_binding(request: RunRequest, prep: _Preparation,
         return
     binding = {"taskId": checkpoint["taskId"], "threadId": state.thread_id, "cwd": request.cwd,
                "buddy": state.requested, "lastTurnId": state.turn_id,
-               "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"],
-               "lastTurnStatus": checkpoint["nativeTurnStatus"]}
+               "lastAttemptId": checkpoint["attemptId"], "lastInputSha256": checkpoint["inputSha256"]}
     try:
         _write_binding(prep.native_root, state.thread_id, binding)
-    except (OSError, BoardError) as error:
-        state.status, state.reason = "error", "native-binding-save-failed"
-        state.error_text = f"the Codex thread binding could not be saved: {error}"[:512]
+    except (OSError, BoardError):
+        state.binding_save_failed = True
         return
     checkpoint["bindingSaved"] = True
     state.binding_saved = True
@@ -1583,9 +1576,8 @@ def _last_assistant_message(checkpoint: dict | None) -> dict | None:
 def _continuation_facts(state: _RunState, mode: str) -> ContinuationFacts | None:
     if mode != "worker" or state.thread_id is None:
         return None
-    if state.reason == "native-binding-save-failed":
-        return ContinuationFacts(resumable=False)
-    return ContinuationFacts(resumable=True if state.binding_saved else None)
+    return ContinuationFacts(resumable=False if state.binding_save_failed
+                             else True if state.binding_saved else None)
 
 
 def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> tuple[EvidenceRef, ...]:

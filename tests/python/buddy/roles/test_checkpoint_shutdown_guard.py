@@ -76,6 +76,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         refs.append(self._checkpoint_ref(context, fields, checkpoint_status))
         fields["evidenceRefs"] = refs
         path.write_text(encode_run_result(decode_run_result(fields)))
+        context.turn_output_file().unlink(missing_ok=True)
         return fields
 
     def _rewrite(self, handle, fields):
@@ -91,9 +92,6 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         self.assertIs(session["resumable"], True,
                       "a confirmed two-layer stop with a resumable checkpoint and no complete "
                       "turn is still the one resumable fact")
-        self.assertEqual(outcome.result["code"], "invalid-role-result",
-                         "the run's own delivery stayed incomplete: the checkpoint is the only "
-                         "continuation material this witness has")
         self.assertNotIn("turn", outcome.result,
                          "the witness must be the checkpoint path, not an imported turn")
         self.assertIn("turnError", outcome.result)

@@ -1033,7 +1033,6 @@ class ContinuationTests(NativeRunCase):
         self.assertEqual(json.loads(binding.read_text()),
                          {"taskId": request.identity.task_id,
                           "sessionId": result.native_identity.session_id,
-                          "lastTurnStatus": "completed",
                           "cwd": request.cwd,
                           "buddy": {"provider": "fake", "model": "m1", "effort": "high"}})
         self.assertTrue(native_run.session_facts(self.root,

@@ -111,7 +111,7 @@ def outcome(case):
         request = {"summary": "Contradictory request", "attempted": "Finished", "neededWork": "None",
                    "expectedArtifacts": [], "acceptance": "Already complete", "suggestedBuddyId": None}
     summary = "fixture work completed"
-    if case == "graceful-stop":
+    if case == "wrap-up":
         summary = "Stopped partial work summary"
     if case == "long-summary-citation":
         summary = "调研结论。" * 600 + "\n<oai-mem-citation>reference</oai-mem-citation>"
@@ -319,7 +319,7 @@ def main():
                 state["threads"][thread_id]["turns"].append(turn)
                 write_state(state)
                 continue
-            if case in ("hang", "interrupt-settled", "interrupt-foreign") or (case == "graceful-stop" and turn_index == 0):
+            if case in ("hang", "interrupt-settled", "interrupt-foreign") or (case == "wrap-up" and turn_index == 0):
                 # These scenarios record an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
                 # were actually emitted: a thread merely existing never counts as a

@@ -42,6 +42,7 @@ from ..harnesses.run_contract import (
 )
 from . import run_execution
 from .controller import run_harness
+from .prompts import wrap_up_prompt
 from .turn_io import _private_bytes, guard_private_path, private_json
 
 
@@ -71,8 +72,8 @@ def _host_stop(control: dict, request) -> float | None:
         value = decode_strict_json(guard_private_path(path).read_bytes())
     except (OSError, ValueError, BoardError):
         return None
-    if (not isinstance(value, dict) or set(value) != {"kind", "stopInitiator", "graceDeadline", "binding"}
-            or value["kind"] != "host-graceful-stop" or value["stopInitiator"] != "host"
+    if (not isinstance(value, dict) or set(value) != {"kind", "graceDeadline", "binding"}
+            or value["kind"] != "host-wrap-up"
             or value["binding"] != request.identity.to_payload()
             or type(value["graceDeadline"]) not in (float, int)
             or not math.isfinite(value["graceDeadline"])):
@@ -100,29 +101,22 @@ def _stop_checkpoint(result: RunResult, request) -> ResumeCheckpoint | None:
 
 
 def _summary_run(control, request, result, module, state_dir, deadline):
-    """Resume one stopped native session for a bounded, structured work summary."""
+    """Resume one stopped native session and record the delivery clock once."""
     from ...private_dirs import ensure_private_dir
-    from ..harnesses.registry import worker_format
     identity = result.native_identity
-    if (result.identity != request.identity or result.harness != request.harness
-            or identity is None or not identity.session_id
+    if _signal_generation > 1:
+        return control, request, result, False, time.monotonic() >= deadline
+    if (identity is None or not identity.session_id
             or result.stop_evidence.native.group_state != "gone"
-            or result.continuation is None or result.continuation.resumable is not True
-            or time.monotonic() >= deadline):
-        return None
+            or result.continuation is None or result.continuation.resumable is not True):
+        return control, request, result, False, time.monotonic() >= deadline
     checkpoint = _stop_checkpoint(result, request)
-    if request.harness == "codex" and checkpoint is None:
-        return None
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        return None
+        return control, request, result, False, True
     root = ensure_private_dir(Path(control["privateRoot"]) / "stop-summary")
     task_path = root / "summary-task.txt"
-    _private_bytes(task_path, (
-        "The Host has stopped this micro task. Resume this exact session only to report the work already done, "
-        "what remains, decisions, and artifacts. Do not continue implementation. Deliver the normal structured "
-        "Worker outcome promptly. State that this is a stopped partial result; do not claim Host acceptance."
-    ).encode(), exclusive=True)
+    _private_bytes(task_path, wrap_up_prompt().encode(), exclusive=True)
     next_control = {**control, "privateRoot": str(root), "taskFile": str(task_path),
                     "requestFile": str(root / run_execution._REQUEST),
                     "verdictFile": str(root / run_execution._VERDICT),
@@ -132,28 +126,23 @@ def _summary_run(control, request, result, module, state_dir, deadline):
                              "token": os.urandom(32).hex(), "readyFile": str(root / "live-ready.json")}}
     next_request, services, observer, error = run_execution.worker_request(next_control, module)
     if error is not None:
-        return None
+        return control, request, result, False, time.monotonic() >= deadline
     next_request = next_request.model_copy(update={
         "continuation": RunContinuation(mode="native-session", previous_session_id=identity.session_id,
                                         checkpoint=checkpoint),
         "budget": RunBudget(timeout_seconds=next_control["timeoutSeconds"]),
     })
     private_json(Path(control["privateRoot"]) / run_execution._STOP_SUMMARY,
-                 {"parent": request.identity.to_payload(), "identity": next_request.identity.to_payload(),
-                  "control": next_control}, exclusive=True)
+                 {"identity": next_request.identity.to_payload()}, exclusive=True)
     request_path = guard_private_path(Path(next_control["requestFile"]))
     _private_bytes(request_path, encode_run_request(next_request).encode(), exclusive=True)
     next_request = decode_run_request(request_path.read_bytes())
-    generation = _signal_generation
     def summary_cancelled():
-        return (time.monotonic() >= deadline or _signal_generation != generation
-                or _host_stop(control, request) != deadline)
+        return time.monotonic() >= deadline or _signal_generation > 1
     if summary_cancelled():
-        return None
+        return control, request, result, False, time.monotonic() >= deadline
     try:
         with _controller_live(next_control, next_request, services, state_dir) as live_services:
-            if summary_cancelled():
-                return None
             summary = run_harness(module, next_request, observer=observer, services=live_services,
                                   cancelled=summary_cancelled)
     except Exception:
@@ -164,25 +153,16 @@ def _summary_run(control, request, result, module, state_dir, deadline):
                        message="The summary run produced no verified stop receipt"),
             buddy=ResultBuddy(requested=next_request.buddy),
             stop_evidence=StopEvidence(native=StopLayer(group_state="unknown")))
-        return next_control, next_request, summary, False
-    if (time.monotonic() >= deadline or summary_cancelled()
-            or summary.identity != next_request.identity or summary.harness != request.harness
-            or summary.native_identity is None or summary.native_identity.session_id != identity.session_id
+        return next_control, next_request, summary, False, time.monotonic() >= deadline
+    expired = time.monotonic() >= deadline
+    if (expired or _signal_generation > 1
             or summary.stop_evidence.native.group_state != "gone" or summary.end.status != "ok"):
-        return next_control, next_request, summary, False
-    # The role's own delivery policy validates the structured outcome and its
-    # correlated native facts; no success is inferred from an exit code alone.
-    try:
-        format = worker_format(request.harness)
-        if format is not None and format.parse_value(summary)[0] is None:
-            return next_control, next_request, summary, False
-        run_execution.worker_delivery(summary)
-    except (BoardError, OSError, ValueError, RecursionError):
-        return next_control, next_request, summary, False
-    return next_control, next_request, summary, True
+        return next_control, next_request, summary, False, expired
+    return next_control, next_request, summary, True, False
 
 
 def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
+    parent_control = control
     if control["operation"] == "review" and not adapter(control["harness"]).read_only_structured:
         raise BoardError("INVALID_ARGUMENT", "The harness has no review carrier")
     module = run_seam(control["harness"])
@@ -216,6 +196,7 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
     request_path = guard_private_path(Path(control["requestFile"]))
     _private_bytes(request_path, encode_run_request(request).encode(), exclusive=True)
     request = decode_run_request(request_path.read_bytes())
+    original_identity = request.identity
     if input_error is None:
         with _controller_live(control, request, services, state_dir) as live_services:
             result = run_harness(module, request, observer=observer, services=live_services, cancelled=cancelled.is_set)
@@ -224,14 +205,14 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
             buddy=ResultBuddy(requested=request.buddy), model_started=False,
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
-    graceful_stop = False
+    wrap_up_candidate = False
+    grace_expired = False
     if (control["operation"] == "worker" and cancelled.is_set()
-            and result.end.status == "cancelled" and adapter(control["harness"]).native_resume):
+            and result.end.status == "cancelled" and adapter(control["harness"]).interrupted_resume):
         deadline = _host_stop(control, request)
         if deadline is not None:
-            resumed = _summary_run(control, request, result, module, state_dir, deadline)
-            if resumed is not None:
-                control, request, result, graceful_stop = resumed
+            control, request, result, wrap_up_candidate, grace_expired = _summary_run(
+                control, request, result, module, state_dir, deadline)
     if control["operation"] == "worker" and request.worker_permission is not None:
         # This is the harness mapping selected for the call, not an observation
         # that the native process obeyed it. Bind it to this exact run on both
@@ -249,20 +230,24 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
         "stopReason": correction.stop_reason if correction is not None else None,
         "elapsedMs": round((time.monotonic() - started) * 1000),
     }
-    if control["operation"] == "worker":
-        verdict["gracefulStop"] = graceful_stop
     code = 0 if result.end.status == "ok" else 1
-    if control["operation"] == "worker" and code == 0:
-        from ..harnesses.registry import worker_format
-        if worker_format(control["harness"]) is not None:
+    if control["operation"] == "worker":
+        delivered = False
+        wrap_up_run = result.identity != original_identity
+        if code == 0 and (not wrap_up_run or wrap_up_candidate):
             try:
-                run_execution.worker_delivery(result)
+                turn_input = decode_strict_json(guard_private_path(Path(control["inputFile"])).read_bytes())
+                facts = {"sessionId": result.native_identity.session_id if result.native_identity else None}
+                run_execution._worker_result(result, control, turn_input, request.input_text, facts)
+                delivered = wrap_up_candidate
             except (BoardError, OSError, ValueError, RecursionError) as error:
                 verdict["workerError"] = ({"code": error.code, "message": error.message}
                     if isinstance(error, BoardError) else
                     {"code": "invalid-role-result", "message": "The run's role evidence could not be collected"})
                 code = 1
-    private_json(Path(control["verdictFile"]), verdict, exclusive=True)
+        verdict["wrapUpDelivered"] = delivered
+        verdict["graceExpired"] = grace_expired
+    private_json(Path(parent_control["verdictFile"]), verdict, exclusive=True)
     # Stdout is one RunResult frame; the owning role decodes and projects it.
     return encode_run_result(result), code
 

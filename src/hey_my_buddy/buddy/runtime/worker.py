@@ -36,10 +36,11 @@ def supervisor_start_stop_path(directory: Path) -> Path | None:
 
 (
     TERMINATION_COMPLETED,
-    TERMINATION_GRACEFUL_STOP,
+    TERMINATION_WRAP_UP,
     TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP,
     TERMINATION_CONSOLE_STOP,
+    TERMINATION_SERVICE_STOP,
     TERMINATION_UNKNOWN_STOP,
     TERMINATION_DEADLINE,
     TERMINATION_HARNESS_ERROR,
@@ -101,16 +102,15 @@ def classify_termination(outcome, *, timed_out: bool, cancel_requested: bool,
     A real completion keeps its reason; an exhausted Router budget and transport
     failure keep theirs. Stop classification belongs to the shared role layer.
     """
-    if outcome.status == "ok" and not grace_expired:
+    if outcome.status == "ok":
         return TERMINATION_COMPLETED
     if timed_out:
         return TERMINATION_DEADLINE
     if cancel_requested:
-        if not grace_expired and "stopReason" in outcome.result:
-            return outcome.result["stopReason"]
         return role_seam.stop_termination_reason(shutdown_confirmed=outcome.shutdown_confirmed,
-            stop_initiator=stop_initiator, grace_expired=grace_expired,
-            graceful_delivered=outcome.result.get("stopReason") == TERMINATION_GRACEFUL_STOP)
+            stop_initiator=stop_initiator,
+            grace_expired=outcome.result.get("graceExpired", grace_expired),
+            wrap_up_delivered=outcome.result.get("wrapUpDelivered", False))
     if is_transport_failure(getattr(outcome, "result", None)):
         return TERMINATION_TRANSPORT_ERROR
     return TERMINATION_HARNESS_ERROR
@@ -789,16 +789,14 @@ class Worker:
             while True:
                 if self.stop_requested() and not handle.cancel_requested:
                     self.log("stop requested; cancelling this owned process group")
-                    handle.stop_initiator = "unknown"
-                    role_seam.worker_cancel(implementation, handle)
-                grace_deadline = getattr(handle, "grace_deadline", None)
-                if (grace_deadline is not None and time.monotonic() >= grace_deadline
-                        and not getattr(handle, "grace_expired", False)):
-                    handle.grace_expired = True
-                    self.log("Host stop grace reached; forcing the owned run to stop")
-                    role_seam.worker_cancel(implementation, handle, grace_seconds=0)
+                    role_seam.worker_stop(implementation, handle, stop_initiator="unknown", grace_deadline=None)
                 if handle.wait(timeout=0.25) is not None:
                     break
+                if (handle.grace_deadline is not None and time.monotonic() >= handle.grace_deadline
+                        and not handle.force_stop_requested):
+                    handle.grace_expired = True
+                    self.log("Host stop grace reached; forcing the owned run to stop")
+                    role_seam.worker_cancel(implementation, handle)
                 if deadline is not None and time.monotonic() >= deadline:
                     timed_out = True
                     self.log("Router budget reached; cancelling this owned process group")
@@ -834,21 +832,25 @@ class Worker:
                 outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
         from .partial_outputs import enrich
         enrich(context, outcome)
-        report = outcome.to_report()
-        if holder.get('harnessHistory'):
-            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
-        report["terminationReason"] = classify_termination(
+        termination_reason = classify_termination(
             outcome,
             timed_out=timed_out,
             cancel_requested=bool(handle.cancel_requested),
-            stop_initiator=getattr(handle, "stop_initiator", None),
-            grace_expired=getattr(handle, "grace_expired", False),
+            stop_initiator=handle.stop_initiator,
+            grace_expired=handle.grace_expired,
         )
-        report["stopInitiator"] = ((getattr(handle, "stop_initiator", None) or "unknown")
-                                   if handle.cancel_requested and not timed_out else None)
+        if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
+                                  TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
+            outcome.status = "cancelled"
+        if "partialOutput" in outcome.result:
+            outcome.result["partialOutput"]["reason"] = termination_reason
+        report = outcome.to_report()
+        if holder.get('harnessHistory'):
+            report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
+        report["terminationReason"] = termination_reason
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         report["logPaths"] = context.log_paths()
         report["runtimeIdentity"] = context.runtime.get("identity")
@@ -973,7 +975,7 @@ class _Renewal(threading.Thread):
 
     def _request_cancel(self, view: dict) -> bool:
         initiator = view.get("stopInitiator") or "unknown"
-        current = getattr(self.handle, "stop_initiator", None)
+        current = self.handle.stop_initiator
         if not self.handle.cancel_requested or current != initiator:
             deadline = None
             if initiator == "host" and view.get("graceDeadline") is not None:
@@ -985,7 +987,7 @@ class _Renewal(threading.Thread):
                                   stop_initiator=initiator, grace_deadline=deadline)
         # During a summary turn keep the lease and keep observing a console
         # escalation. The original durable deadline is never extended.
-        return getattr(self.handle, "grace_deadline", None) is None
+        return False
 
     def _renew(self) -> bool:
         """Renew the lease; returns False when this worker must stop touching it."""

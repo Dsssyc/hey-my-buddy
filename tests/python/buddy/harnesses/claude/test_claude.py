@@ -319,7 +319,9 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         outcome = self.executor.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
-        self.assertEqual(outcome.result["stopReason"],
+        from hey_my_buddy.buddy.runtime.worker import classify_termination
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator=initiator),
                          "forced-stop" if initiator == "host" else "console-stop")
         self.assertNotIn("turn", outcome.result)
         self.assertFalse((Path(handle.role_run_control["privateRoot"]) /

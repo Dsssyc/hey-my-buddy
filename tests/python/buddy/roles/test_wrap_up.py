@@ -59,13 +59,20 @@ class RoleStopTests(unittest.TestCase):
                         "cwd": str(self.root), "harness": "zcode", "operation": "worker",
                         "invocationId": "first-invocation", "requestFile": str(self.invocation / "request.json"),
                         "verdictFile": str(self.invocation / "verdict.json"),
+                        "inputFile": str(self.root / "turn-input.json"),
                         "outputFile": str(self.root / "turn-output.json"), "timeoutSeconds": None}
         self.identity = request_for({**self.control, "timeoutSeconds": 60}).identity
 
+    def _stop_handle(self):
+        return SimpleNamespace(role_run_control=self.control, role_run_identity=self.identity,
+            cancel_requested=False, force_stop_requested=False, wrap_up_started=False,
+            stop_initiator=None, grace_deadline=None, grace_expired=False,
+            stop_lock=threading.RLock(), signal_group=mock.Mock())
+
     def test_host_stop_signals_once_and_keeps_original_deadline(self):
-        handle = SimpleNamespace(role_run_control=self.control, role_run_identity=self.identity,
-                                 cancel_requested=False, signal_group=mock.Mock())
-        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True), cancel=mock.Mock())
+        handle = self._stop_handle()
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+            name="zcode", interrupted_resume=True), SimpleNamespace())
         deadline = time.monotonic() + 300
         controller.worker_stop(executor, handle, stop_initiator="host", grace_deadline=deadline)
         controller.worker_stop(executor, handle, stop_initiator="host", grace_deadline=deadline + 300)
@@ -74,68 +81,82 @@ class RoleStopTests(unittest.TestCase):
         value = run_controller.decode_strict_json((self.invocation / run_execution._STOP_CONTROL).read_bytes())
         self.assertEqual(value["binding"], self.identity.to_payload())
         self.assertEqual(value["graceDeadline"], deadline)
-        executor.cancel.assert_not_called()
+        self.assertEqual(value["kind"], "host-wrap-up")
 
     def test_console_and_unsupported_harness_force_immediate_cancel(self):
         for initiator, resume in (("console", True), ("host", False)):
             with self.subTest(initiator=initiator, resume=resume):
-                handle = SimpleNamespace()
-                executor = SimpleNamespace(description=SimpleNamespace(native_resume=resume), cancel=mock.Mock())
+                handle = self._stop_handle()
+                executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+                    name="zcode", interrupted_resume=resume), SimpleNamespace())
+                executor.cancel = mock.Mock()
                 controller.worker_stop(executor, handle, stop_initiator=initiator,
                                        grace_deadline=time.monotonic() + 300)
-                executor.cancel.assert_called_once_with(handle, grace_seconds=0)
+                executor.cancel.assert_called_once_with(handle)
                 self.assertEqual(handle.stop_initiator, initiator)
 
-    def test_missing_host_deadline_forces_stop_and_console_clears_grace(self):
-        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True), cancel=mock.Mock())
-        handle = SimpleNamespace(grace_deadline=time.monotonic() + 300,
-                                 grace_expired=True, stop_initiator="host")
+    def test_missing_host_deadline_forces_stop_and_console_keeps_grace_history(self):
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+            name="zcode", interrupted_resume=True), SimpleNamespace())
+        executor.cancel = mock.Mock()
+        handle = self._stop_handle()
+        handle.grace_deadline = time.monotonic() + 300
+        handle.grace_expired = True
+        handle.stop_initiator = "host"
         controller.worker_stop(executor, handle, stop_initiator="console", grace_deadline=None)
-        self.assertIsNone(handle.grace_deadline)
-        self.assertIs(handle.grace_expired, False)
+        self.assertIsNotNone(handle.grace_deadline)
+        self.assertIs(handle.grace_expired, True)
         self.assertEqual(handle.stop_initiator, "console")
         self.assertIs(handle.force_stop_requested, True)
-        executor.cancel.assert_called_once_with(handle, grace_seconds=0)
-        other = SimpleNamespace()
+        executor.cancel.assert_called_once_with(handle)
+        other = self._stop_handle()
         executor.cancel.reset_mock()
         controller.worker_stop(executor, other, stop_initiator="host", grace_deadline=None)
         self.assertIsNone(other.grace_deadline)
         self.assertIs(other.force_stop_requested, True)
-        executor.cancel.assert_called_once_with(other, grace_seconds=0)
+        executor.cancel.assert_called_once_with(other)
 
-    def test_expired_grace_allows_only_controller_reaping_before_outer_kill(self):
-        handle = SimpleNamespace(stop_initiator="host", grace_expired=True,
-                                 role_run_control=self.control, role_run_identity=self.identity)
-        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True), cancel=mock.Mock())
-        controller.worker_cancel(executor, handle, grace_seconds=0)
-        executor.cancel.assert_called_once_with(handle, grace_seconds=5.0)
-        value = run_controller.decode_strict_json((self.invocation / run_execution._STOP_CONTROL).read_bytes())
-        self.assertEqual(value, {"kind": "force-stop", "stopInitiator": "host",
-                                 "binding": self.identity.to_payload()})
+    def test_expired_grace_keeps_worker_recovery_time(self):
+        handle = self._stop_handle()
+        handle.stop_initiator = "host"
+        handle.grace_expired = True
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+            name="zcode", interrupted_resume=True), SimpleNamespace())
+        executor.cancel = mock.Mock()
+        controller.worker_cancel(executor, handle)
+        executor.cancel.assert_called_once_with(handle)
+        self.assertFalse((self.invocation / run_execution._STOP_CONTROL).exists())
 
-    def test_registered_role_force_overwrites_host_stop_and_reaps_before_outer_kill(self):
-        handle = SimpleNamespace(role_run_control=self.control, role_run_identity=self.identity,
-                                 cancel_requested=False, signal_group=mock.Mock())
-        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True), cancel=mock.Mock())
+    def test_console_force_preserves_host_stop_file_and_grace_history(self):
+        handle = self._stop_handle()
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(
+            name="zcode", interrupted_resume=True), SimpleNamespace())
+        executor.cancel = mock.Mock()
         controller.worker_stop(executor, handle, stop_initiator="host",
                                grace_deadline=time.monotonic() + 300)
         controller.worker_stop(executor, handle, stop_initiator="console", grace_deadline=None)
         value = run_controller.decode_strict_json((self.invocation / run_execution._STOP_CONTROL).read_bytes())
-        self.assertEqual(value, {"kind": "force-stop", "stopInitiator": "console",
-                                 "binding": self.identity.to_payload()})
-        self.assertIsNone(handle.grace_deadline)
+        self.assertEqual(value["kind"], "host-wrap-up")
+        self.assertIsNotNone(handle.grace_deadline)
         self.assertIs(handle.force_stop_requested, True)
-        executor.cancel.assert_called_once_with(handle, grace_seconds=5.0)
+        executor.cancel.assert_called_once_with(handle)
 
     def _execute(self, *, resumable=True, native_gone=True, summary_session="native-session",
                  summary_native_gone=True, summary_status="ok", summary_raises=False,
-                 force_before_summary=False, force_during_setup=False, expired=False):
+                 force_before_summary=False, force_during_setup=False, expired=False,
+                 late_summary=False, invalid_summary=False):
         control = {**self.control, "timeoutSeconds": 60}
         request = request_for(control)
         deadline = time.monotonic() - 1 if expired else time.monotonic() + 300
+        native_clock = time.monotonic
+        late_now = [False]
+        def clock():
+            return deadline + 1 if late_now[0] else native_clock()
         private_json(self.invocation / run_execution._STOP_CONTROL,
-                     {"kind": "host-graceful-stop", "stopInitiator": "host",
-                      "graceDeadline": deadline, "binding": request.identity.to_payload()}, exclusive=True)
+                     {"kind": "host-wrap-up", "graceDeadline": deadline,
+                      "binding": request.identity.to_payload()}, exclusive=True)
+        private_json(Path(control["inputFile"]), {"taskId": "task-stop", "attemptId": "attempt-stop",
+                     "generation": 1, "turnId": "turn-stop", "resumeMode": "initial"})
         cancellation = threading.Event()
         calls = []
         def run(_module, native_request, *, observer, services, cancelled):
@@ -143,27 +164,30 @@ class RoleStopTests(unittest.TestCase):
             if len(calls) == 1:
                 cancellation.set()
                 if force_before_summary:
-                    private_json(self.invocation / run_execution._STOP_CONTROL,
-                                 {"kind": "force-stop", "stopInitiator": "console",
-                                  "binding": request.identity.to_payload()})
+                    run_controller._signal_generation = 2
                 return result_for(native_request, resumable=resumable, native_gone=native_gone)
             if summary_raises:
                 raise OSError("native summary failed after launch")
+            if late_summary:
+                late_now[0] = True
             return result_for(native_request, status=summary_status, session=summary_session,
                               native_gone=summary_native_gone)
         def prepare(candidate, _module):
             if force_during_setup and candidate["privateRoot"] != str(self.invocation):
-                private_json(self.invocation / run_execution._STOP_CONTROL,
-                             {"kind": "force-stop", "stopInitiator": "console",
-                              "binding": request.identity.to_payload()})
+                run_controller._signal_generation = 2
             return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None
         module = SimpleNamespace()
+        previous_generation = run_controller._signal_generation
+        run_controller._signal_generation = 0
+        self.addCleanup(setattr, run_controller, "_signal_generation", previous_generation)
         with mock.patch.object(run_controller, "run_seam", return_value=module), \
-             mock.patch.object(run_controller, "adapter", return_value=SimpleNamespace(native_resume=True)), \
+             mock.patch.object(run_controller, "adapter", return_value=SimpleNamespace(interrupted_resume=True)), \
              mock.patch.object(run_controller.run_execution, "worker_request", side_effect=prepare), \
              mock.patch.object(run_controller, "_controller_live", side_effect=lambda *args: nullcontext(None)), \
              mock.patch.object(run_controller, "run_harness", side_effect=run), \
-             mock.patch.object(run_controller.run_execution, "worker_delivery", return_value=({}, {}, {})):
+             mock.patch.object(run_controller.time, "monotonic", side_effect=clock), \
+             mock.patch.object(run_controller.run_execution, "_worker_result",
+                               side_effect=ValueError("invalid summary") if invalid_summary else lambda *args: None):
             frame, code = run_controller.execute(control, cancellation, self.root)
         return rc.decode_run_result(frame), code, calls
 
@@ -213,15 +237,30 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertTrue((self.invocation / run_execution._STOP_SUMMARY).is_file())
 
-    def test_foreign_summary_session_is_not_accepted_as_graceful(self):
+    def test_foreign_summary_session_is_rejected_at_collection_boundary(self):
         result, code, calls = self._execute(summary_session="foreign-session")
         self.assertEqual(len(calls), 2)
         self.assertEqual(code, 0)
         self.assertEqual(result.identity, calls[1][0].identity)
         self.assertEqual(result.native_identity.session_id, "foreign-session")
-        verdict = run_controller.decode_strict_json(
-            (self.invocation / "stop-summary" / run_execution._VERDICT).read_bytes())
-        self.assertIs(verdict["gracefulStop"], False)
+        stdout = self.root / "foreign-controller.stdout"
+        stdout.write_text(rc.encode_run_result(result) + "\n")
+        handle = SimpleNamespace(role_run_control={**self.control, "timeoutSeconds": 60},
+            role_run_identity=self.identity, stop_initiator="host", wrap_up_started=True,
+            cancel_requested=True, process=SimpleNamespace(returncode=code),
+            log_paths={"stdout": str(stdout)}, shutdown_confirmed=lambda: True)
+        context = SimpleNamespace(turn_input={"resumeMode": "initial"}, spec={"harness": "zcode"},
+            effective_workspace=None, turn_output_file=lambda: self.root / "turn-output.json")
+        module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
+                                 validate_turn_provenance=lambda record: None)
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
+        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
+             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+            outcome = executor.collect(handle, context)
+        read_turn.assert_not_called()
+        self.assertEqual(outcome.status, "cancelled")
+        self.assertNotIn("turn", outcome.result)
+        self.assertNotIn("wrapUpDelivered", outcome.result)
 
     def test_second_native_unknown_or_failed_result_replaces_first_stop_receipt(self):
         for case in ("unknown", "failed"):
@@ -241,12 +280,12 @@ class RoleStopTests(unittest.TestCase):
                 stdout = sub / "controller.stdout"
                 stdout.write_text(rc.encode_run_result(result) + "\n")
                 handle = SimpleNamespace(role_run_control={**self.control, "timeoutSeconds": 60},
-                                         role_run_identity=self.identity, stop_initiator="host")
+                                         role_run_identity=self.identity, stop_initiator="host",
+                                         wrap_up_started=True)
                 self.assertEqual(run_execution._read_run(handle, stdout), result)
                 self.assertEqual(handle.role_run_active_control["privateRoot"], str(sub / "stop-summary"))
-                verdict = run_controller.decode_strict_json(
-                    (sub / "stop-summary" / run_execution._VERDICT).read_bytes())
-                self.assertIs(verdict["gracefulStop"], False)
+                verdict = run_controller.decode_strict_json(Path(self.control["verdictFile"]).read_bytes())
+                self.assertIs(verdict["wrapUpDelivered"], False)
 
     def test_exception_after_second_native_launch_reports_unknown_stop(self):
         result, code, calls = self._execute(summary_raises=True)
@@ -256,7 +295,7 @@ class RoleStopTests(unittest.TestCase):
         self.assertEqual(result.stop_evidence.native.group_state, "unknown")
         self.assertEqual(code, 1)
 
-    def test_unknown_second_native_stop_cannot_seal_or_claim_graceful(self):
+    def test_unknown_second_native_stop_cannot_seal_or_claim_wrap_up(self):
         for summary_raises in (False, True):
             with self.subTest(summary_raises=summary_raises):
                 sub = ensure_private_dir(self.root / f"collect-{summary_raises}")
@@ -270,6 +309,7 @@ class RoleStopTests(unittest.TestCase):
                 handle = SimpleNamespace(
                     role_run_control={**self.control, "timeoutSeconds": 60},
                     role_run_identity=self.identity, stop_initiator="host",
+                    wrap_up_started=True,
                     grace_deadline=time.monotonic() - 1 if summary_raises else time.monotonic() + 300,
                     cancel_requested=True, grace_expired=summary_raises,
                     process=SimpleNamespace(returncode=code), log_paths={"stdout": str(stdout)},
@@ -284,7 +324,7 @@ class RoleStopTests(unittest.TestCase):
                     outcome = executor.collect(handle, context)
                 self.assertEqual(outcome.status, "failed")
                 self.assertFalse(outcome.shutdown_confirmed)
-                self.assertIsNone(outcome.result["stopReason"])
+                self.assertNotIn("stopReason", outcome.result)
                 self.assertNotIn("turn", outcome.result)
                 self.assertNotIn("workspaceSeal", outcome.result)
                 seal.assert_not_called()
@@ -298,6 +338,7 @@ class RoleStopTests(unittest.TestCase):
         handle = SimpleNamespace(
             role_run_control={**self.control, "timeoutSeconds": 60},
             role_run_identity=self.identity, stop_initiator="host", grace_deadline=time.monotonic() + 300,
+            wrap_up_started=True,
             cancel_requested=True, grace_expired=False,
             process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
             shutdown_confirmed=lambda: True)
@@ -315,7 +356,7 @@ class RoleStopTests(unittest.TestCase):
              mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled")
-        self.assertEqual(outcome.result["stopReason"], "graceful-stop")
+        self.assertIs(outcome.result["wrapUpDelivered"], True)
         self.assertEqual(outcome.result["turn"], turn)
         seal.assert_not_called()
 
@@ -343,7 +384,8 @@ class RoleStopTests(unittest.TestCase):
             budget=rc.RunBudget(timeout_seconds=None))
         Path(control["requestFile"]).write_text(rc.encode_run_request(request))
         private_json(Path(control["verdictFile"]),
-                     {"stopReason": None, "elapsedMs": 1, "gracefulStop": False})
+                     {"stopReason": None, "elapsedMs": 1, "wrapUpDelivered": False,
+                      "graceExpired": False})
         facts = {"harness": "codex", "nativeThreadId": "session-complete",
                  "nativeTurnId": "native-turn-complete", "finalMessageCompleted": True,
                  "nativeTurnStarted": True, "nativeTurnCompleted": True,
@@ -367,6 +409,8 @@ class RoleStopTests(unittest.TestCase):
         for initiator in ("host", "console"):
             with self.subTest(initiator=initiator):
                 context.turn_output_file().unlink(missing_ok=True)
+                run_execution._worker_result(result, control, turn_input, request.input_text,
+                                             {"sessionId": "session-complete"})
                 handle = SimpleNamespace(role_run_control=control, role_run_identity=identity,
                     stop_initiator=initiator, grace_deadline=time.monotonic() + 300 if initiator == "host" else None,
                     grace_expired=False, force_stop_requested=True, cancel_requested=True,
@@ -378,13 +422,14 @@ class RoleStopTests(unittest.TestCase):
                 self.assertEqual(collected.result["turn"]["outcome"], outcome)
                 self.assertNotIn("stopReason", collected.result)
 
-    def test_console_escalation_reads_second_receipt_without_graceful_label(self):
+    def test_console_escalation_keeps_controller_delivery_fact(self):
         result, code, _calls = self._execute()
         stdout = self.root / "console-controller.stdout"
         stdout.write_text(rc.encode_run_result(result) + "\n")
         handle = SimpleNamespace(
             role_run_control={**self.control, "timeoutSeconds": 60},
-            role_run_identity=self.identity, stop_initiator="console", graceful_stop_started=True,
+            role_run_identity=self.identity, stop_initiator="console",
+            wrap_up_started=True,
             force_stop_requested=True, grace_deadline=None, grace_expired=False,
             cancel_requested=True, process=SimpleNamespace(returncode=code),
             log_paths={"stdout": str(stdout)}, shutdown_confirmed=lambda: True)
@@ -398,16 +443,16 @@ class RoleStopTests(unittest.TestCase):
              mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertEqual(outcome.result["stopReason"], "console-stop")
+        self.assertIs(outcome.result["wrapUpDelivered"], True)
 
-    def test_expired_grace_overrides_even_a_valid_summary(self):
+    def test_late_collection_preserves_controller_delivery(self):
         result, _, _ = self._execute()
         stdout = self.root / "controller.stdout"
         stdout.write_text(rc.encode_run_result(result) + "\n")
         handle = SimpleNamespace(
             role_run_control={**self.control, "timeoutSeconds": 60},
             role_run_identity=self.identity, stop_initiator="host", grace_deadline=time.monotonic() - 1,
-            cancel_requested=True, grace_expired=True,
+            cancel_requested=True, grace_expired=True, wrap_up_started=True,
             process=SimpleNamespace(returncode=0), log_paths={"stdout": str(stdout)},
             shutdown_confirmed=lambda: True)
         context = SimpleNamespace(turn_input={"resumeMode": "initial"}, spec={"harness": "zcode"},
@@ -415,8 +460,58 @@ class RoleStopTests(unittest.TestCase):
         module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
                                  validate_turn_provenance=lambda record: None)
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
-        with mock.patch.object(run_execution, "_worker_result"), \
-             mock.patch.object(run_execution.turn_io, "read_turn", return_value=({"sessionId": "native-session"}, None)), \
+        with mock.patch.object(run_execution.turn_io, "read_turn", return_value=({"sessionId": "native-session"}, None)), \
              mock.patch.object(run_execution, "_artifacts", return_value=[]):
             outcome = executor.collect(handle, context)
-        self.assertEqual(outcome.result["stopReason"], "grace-expired")
+        self.assertIs(outcome.result["wrapUpDelivered"], True)
+        self.assertIs(outcome.result["graceExpired"], False)
+        self.assertIn("turn", outcome.result)
+
+    def test_late_summary_is_not_imported_as_turn(self):
+        result, code, _calls = self._execute(late_summary=True)
+        self.assertEqual(code, 0)
+        verdict = run_controller.decode_strict_json(Path(self.control["verdictFile"]).read_bytes())
+        self.assertIs(verdict["wrapUpDelivered"], False)
+        self.assertIs(verdict["graceExpired"], True)
+        stdout = self.root / "late-controller.stdout"
+        stdout.write_text(rc.encode_run_result(result) + "\n")
+        handle = SimpleNamespace(role_run_control={**self.control, "timeoutSeconds": 60},
+            role_run_identity=self.identity, stop_initiator="host", wrap_up_started=True,
+            cancel_requested=True, process=SimpleNamespace(returncode=code),
+            log_paths={"stdout": str(stdout)}, shutdown_confirmed=lambda: True)
+        context = SimpleNamespace(turn_input={"resumeMode": "initial"}, spec={"harness": "zcode"},
+            effective_workspace=None, turn_output_file=lambda: self.root / "turn-output.json")
+        module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
+                                 validate_turn_provenance=lambda record: None)
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
+        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
+             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+            outcome = executor.collect(handle, context)
+        read_turn.assert_not_called()
+        self.assertNotIn("turn", outcome.result)
+        self.assertEqual(outcome.status, "cancelled")
+
+    def test_invalid_summary_is_a_confirmed_cancel_without_turn(self):
+        result, code, _calls = self._execute(invalid_summary=True)
+        self.assertEqual(code, 1)
+        verdict = run_controller.decode_strict_json(Path(self.control["verdictFile"]).read_bytes())
+        self.assertIs(verdict["wrapUpDelivered"], False)
+        self.assertIs(verdict["graceExpired"], False)
+        stdout = self.root / "invalid-controller.stdout"
+        stdout.write_text(rc.encode_run_result(result) + "\n")
+        handle = SimpleNamespace(role_run_control={**self.control, "timeoutSeconds": 60},
+            role_run_identity=self.identity, stop_initiator="host", wrap_up_started=True,
+            cancel_requested=True, process=SimpleNamespace(returncode=code),
+            log_paths={"stdout": str(stdout)}, shutdown_confirmed=lambda: True)
+        context = SimpleNamespace(turn_input={"resumeMode": "initial"}, spec={"harness": "zcode"},
+            effective_workspace=None, turn_output_file=lambda: self.root / "turn-output.json")
+        module = SimpleNamespace(session_facts=lambda root, session: {"bindingPresent": True},
+                                 validate_turn_provenance=lambda record: None)
+        executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="zcode"), module)
+        with mock.patch.object(run_execution.turn_io, "read_turn") as read_turn, \
+             mock.patch.object(run_execution, "_artifacts", return_value=[]):
+            outcome = executor.collect(handle, context)
+        read_turn.assert_not_called()
+        self.assertEqual(outcome.status, "cancelled")
+        self.assertNotIn("turn", outcome.result)
+        self.assertIs(outcome.result["wrapUpDelivered"], False)

@@ -34,8 +34,11 @@ class WorkflowTestCase(BoardTestCase):
         self.addCleanup(self._restore_workspace)
         self.catalog_validation = self.enterContext(patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy", create=True,
                                                         side_effect=lambda buddy, **_: dict(buddy)))
-        self.executors = {name: SimpleNamespace(native_resume=name == "zcode", native_resume_permission_change=name == "zcode", validate_turn_provenance=lambda record: None)
-                          for name in ("dsh", "zcode", "command", "external")}
+        self.executors = {name: SimpleNamespace(native_resume=name == "zcode",
+                                               interrupted_resume=name in ("codex", "dsh"),
+                                               native_resume_permission_change=name == "zcode",
+                                               validate_turn_provenance=lambda record: None)
+                          for name in ("dsh", "zcode", "codex", "claude", "command", "external")}
         self.enterContext(patch.object(workflow_module.WorkflowCoordinator, "_execution_adapter",
                                        side_effect=lambda name: self.executors[name]))
 

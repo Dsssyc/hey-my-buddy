@@ -24,7 +24,7 @@ from unittest import mock
 from support import BoardTestCase, wait_for
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 from hey_my_buddy.blackboard.store.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
 from hey_my_buddy.buddy.runtime.worker import Worker
@@ -345,10 +345,11 @@ class TestCrashWindows(BoardTestCase):
 
     @staticmethod
     def _finished_fake_handle():
-        return SimpleNamespace(
-            pid=123, pgid=123, cancel_requested=False,
-            wait=lambda timeout: 0, shutdown_confirmed=lambda: True,
-        )
+        handle = ProcessHandle(mock.Mock(pid=123), own_group=False, log_paths={})
+        handle.pgid = 123
+        handle.wait = lambda timeout: 0
+        handle.shutdown_confirmed = lambda: True
+        return handle
 
     def test_crash_before_spawn_releases_the_attempt_honestly(self):
         board = self.board()

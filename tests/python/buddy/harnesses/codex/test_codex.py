@@ -222,9 +222,7 @@ class CodexAdapterTests(unittest.TestCase):
                              first.result['sessionId'])
         binding = json.loads(path.read_text())
         self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'buddy',
-                                        'lastTurnId', 'lastAttemptId', 'lastInputSha256',
-                                        'lastTurnStatus'})
-        self.assertEqual(binding['lastTurnStatus'], 'completed')
+                                        'lastTurnId', 'lastAttemptId', 'lastInputSha256'})
         second = self.execute(self.context(index=2, previous=first.result['sessionId']))
         self.assertEqual(second.status, 'ok', second.to_report())
         self.assertEqual(second.result['sessionId'], first.result['sessionId'])
@@ -428,8 +426,8 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertNotIn("turn", outcome.result)
 
-    def test_host_graceful_stop_resumes_same_native_session_for_structured_summary(self):
-        context = self.context("graceful-stop", timeout=None)
+    def test_host_wrap_up_resumes_same_native_session_for_structured_summary(self):
+        context = self.context("wrap-up", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         started = self.wait_native_turn_start()
@@ -438,7 +436,10 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(15), "Codex fixture summary controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
-        self.assertEqual(outcome.result["stopReason"], "graceful-stop")
+        self.assertIs(outcome.result.get("wrapUpDelivered"), True, outcome.to_report())
+        from hey_my_buddy.buddy.runtime.worker import classify_termination
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator="host"), "wrap-up")
         self.assertTrue(outcome.shutdown_confirmed)
         turn = outcome.result["turn"]
         from hey_my_buddy.buddy.roles.turn_io import validate_outcome

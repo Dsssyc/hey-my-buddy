@@ -35,10 +35,11 @@ from hey_my_buddy.buddy.runtime.worker import (
     TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR,
     TERMINATION_UNKNOWN_STOP,
-    TERMINATION_GRACEFUL_STOP,
+    TERMINATION_WRAP_UP,
     TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP,
     TERMINATION_CONSOLE_STOP,
+    TERMINATION_SERVICE_STOP,
     Worker,
     _Renewal,
     classify_termination,
@@ -388,7 +389,8 @@ class TerminationTruth(RecoveryBase):
         cancelled = client.result(runId=pending["runId"])
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertEqual(cancelled["resultMeta"]["terminationReason"], TERMINATION_UNKNOWN_STOP)
-        self.assertEqual(cancelled["resultMeta"]["stopInitiator"], "unknown")
+        self.assertEqual(cancelled["stopInitiator"], "unknown")
+        self.assertNotIn("stopInitiator", cancelled["resultMeta"])
 
     def test_the_classification_keeps_every_real_reason_distinct(self):
         completed = AdapterOutcome(status="ok", result={"status": "ok"}, shutdown_confirmed=True)
@@ -397,17 +399,24 @@ class TerminationTruth(RecoveryBase):
         self.assertEqual(classify_termination(completed, timed_out=True, cancel_requested=True), TERMINATION_COMPLETED)
         self.assertEqual(classify_termination(failed, timed_out=True, cancel_requested=True), TERMINATION_DEADLINE)
         self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True), TERMINATION_UNKNOWN_STOP)
-        summary = AdapterOutcome(status="cancelled", result={"stopReason": "graceful-stop"}, shutdown_confirmed=True)
+        summary = AdapterOutcome(status="cancelled", result={"wrapUpDelivered": True, "graceExpired": False},
+                                 shutdown_confirmed=True)
         self.assertEqual(classify_termination(summary, timed_out=False, cancel_requested=True,
-                                             stop_initiator="host"), TERMINATION_GRACEFUL_STOP)
+                                             stop_initiator="host"), TERMINATION_WRAP_UP)
         self.assertEqual(classify_termination(summary, timed_out=False, cancel_requested=True,
-                                             stop_initiator="host", grace_expired=True), TERMINATION_GRACE_EXPIRED)
+                                             stop_initiator="host", grace_expired=True), TERMINATION_WRAP_UP)
+        expired = AdapterOutcome(status="cancelled", result={"wrapUpDelivered": False, "graceExpired": True},
+                                 shutdown_confirmed=True)
+        self.assertEqual(classify_termination(expired, timed_out=False, cancel_requested=True,
+                                             stop_initiator="host"), TERMINATION_GRACE_EXPIRED)
         self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True,
                                              stop_initiator="host"), TERMINATION_FORCED_STOP)
         self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True,
                                              stop_initiator="console"), TERMINATION_CONSOLE_STOP)
+        self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=True,
+                                             stop_initiator="service"), TERMINATION_SERVICE_STOP)
         unconfirmed = AdapterOutcome(status="cancelled", result={}, shutdown_confirmed=False)
-        for initiator in ("host", "console", "unknown"):
+        for initiator in ("host", "console", "service", "unknown"):
             with self.subTest(initiator=initiator):
                 self.assertIsNone(classify_termination(unconfirmed, timed_out=False, cancel_requested=True,
                                                        stop_initiator=initiator, grace_expired=initiator == "host"))
@@ -415,8 +424,8 @@ class TerminationTruth(RecoveryBase):
         self.assertEqual(classify_termination(failed, timed_out=False, cancel_requested=False), TERMINATION_HARNESS_ERROR)
         self.assertEqual(
             {TERMINATION_COMPLETED, TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
-             TERMINATION_TRANSPORT_ERROR, TERMINATION_GRACEFUL_STOP, TERMINATION_GRACE_EXPIRED,
-             TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP},
+             TERMINATION_TRANSPORT_ERROR, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
+             TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP},
             set(TERMINATION_REASONS),
         )
 
@@ -443,7 +452,8 @@ class TerminationTruth(RecoveryBase):
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(result["resultMeta"]["terminationReason"], TERMINATION_UNKNOWN_STOP)
-        self.assertEqual(result["resultMeta"]["stopInitiator"], "unknown")
+        self.assertEqual(result["stopInitiator"], "unknown")
+        self.assertNotIn("stopInitiator", result["resultMeta"])
 
 
 

@@ -77,7 +77,7 @@ class NativeResumeCase(NativeRunCase):
 class ResumeTurnTests(NativeResumeCase):
     """V-R2 and V-R4: the resumed turn itself, its launch and its buddy."""
 
-    def test_binding_write_failure_reports_error_after_confirmed_stop(self):
+    def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount)
         self.extra_agent_args += ["--session-record", "usage"]
@@ -91,9 +91,8 @@ class ResumeTurnTests(NativeResumeCase):
         with mock.patch.object(native_run, "private_json", side_effect=write):
             result = run(request, observer=worker_observer, services=bound.services,
                          cancelled=lambda: False)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-binding-save-failed")
-        self.assertIn("fixture binding write denied", result.end.message)
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(result.end.reason_code)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIs(result.continuation.resumable, False)
 
@@ -120,11 +119,13 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertIs(first.continuation.resumable, True)
         previous = first.native_identity.session_id
         binding = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
-        self.assertEqual(json.loads(binding.read_text())["lastTurnStatus"], "cancelled")
+        self.assertEqual(set(json.loads(binding.read_text())), {"taskId", "sessionId", "cwd", "buddy"})
+        original = binding.read_bytes()
         _, _, _, second = self.resumed_turn(previous)
         self.assertEqual(second.end.status, "ok", second.end.message)
         self.assertEqual(second.native_identity.session_id, previous)
         self.assertTrue(second.continuation.resumable)
+        self.assertEqual(binding.read_bytes(), original)
 
     def assert_same_permission(self, level, mode):
         _, _, _, first = self.first_turn(level=level)
@@ -300,7 +301,6 @@ class ResumeFailureTests(NativeResumeCase):
         self.micro_task_agent_args(mount)
         binding = self.root / (hashlib.sha256(b"foreign-micro-task-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": "another-task", "sessionId": "foreign-micro-task-session",
-                                       "lastTurnStatus": "completed",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
@@ -318,7 +318,7 @@ class ResumeFailureTests(NativeResumeCase):
         self.micro_task_agent_args(mount)
         binding = self.root / (hashlib.sha256(b"ghost-session").hexdigest() + ".json")
         binding.write_text(json.dumps({"taskId": request.identity.task_id,
-                                       "sessionId": "ghost-session", "lastTurnStatus": "completed",
+                                       "sessionId": "ghost-session",
                                        "cwd": request.cwd,
                                        "buddy": {"provider": "fake", "model": "m1",
                                                          "effort": "high"}}))
@@ -331,13 +331,13 @@ class ResumeFailureTests(NativeResumeCase):
         self.assertEqual(self.methods_after_last_initialize(), ["initialize", "session/resume"])
         self.assertIsNone(result.native_identity)
 
-    def test_binding_without_terminal_status_is_refused(self):
+    def test_binding_with_an_unexpected_field_is_refused(self):
         request, bound, mount, first = self.first_turn()
         self.assertEqual(first.end.status, "ok")
         previous = first.native_identity.session_id
         binding_path = self.root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
         binding = json.loads(binding_path.read_text())
-        self.assertEqual(binding.pop("lastTurnStatus"), "completed")
+        binding["lastTurnStatus"] = "completed"
         binding_path.write_text(json.dumps(binding))
         _, _, _, refused = self.resumed_turn(previous)
         self.assertEqual(refused.end.reason_code, "native-resume-unavailable")

@@ -10,12 +10,15 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ...errors import BoardError
+
+COMMAND_STOP_GRACE_SECONDS = 3.0
 
 
 @dataclass
@@ -185,6 +188,7 @@ class Adapter:
     name = "base"
     capabilities: tuple[str, ...] = ()
     native_resume = False
+    interrupted_resume = False
     native_resume_permission_change = False
     model_discovery = False
     read_only_structured = False
@@ -222,7 +226,13 @@ class Adapter:
     def collect(self, handle: "ProcessHandle", context: ExecutionContext) -> AdapterOutcome:
         raise NotImplementedError
 
-    def cancel(self, handle: "ProcessHandle", *, grace_seconds: float = 3.0) -> None:
+    def stop(self, handle: "ProcessHandle", *, stop_initiator: str,
+             grace_deadline: float | None) -> None:
+        """Stop work using this executor's own cancellation policy."""
+        handle.force_stop_requested = True
+        self.cancel(handle)
+
+    def cancel(self, handle: "ProcessHandle", *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS) -> None:
         handle.terminate(grace_seconds=grace_seconds)
 
 
@@ -239,6 +249,16 @@ class ProcessHandle:
         self.log_paths = log_paths
         self.cancel_requested = False
         self.signalled_at: float | None = None
+        self.stop_lock = threading.RLock()
+        self.stop_initiator: str | None = None
+        self.grace_deadline: float | None = None
+        self.grace_expired = False
+        self.force_stop_requested = False
+        self.wrap_up_started = False
+        self.role_run_control: dict | None = None
+        self.role_run_identity = None
+        self.role_run_active_control: dict | None = None
+        self.role_run_active_identity = None
         self.job = vars(process).get("_buddy_job")
         # Capture the process-group id while the leader is alive. Looking it up
         # later with os.getpgid(child.pid) would fail as soon as the leader exits,
@@ -301,7 +321,7 @@ class ProcessHandle:
             # An unavailable process-group observation is not termination evidence.
             return True
 
-    def terminate(self, *, grace_seconds: float = 3.0) -> None:
+    def terminate(self, *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS) -> None:
         """Ask the child to stop, then terminate only its owned group or Job."""
         self.cancel_requested = True
         self.signalled_at = time.monotonic()

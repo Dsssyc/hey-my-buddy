@@ -844,7 +844,14 @@ class WorkerSeamTests(CodexSeamCase):
                                        output_schema=OUTCOME_SCHEMA, prompt="Work",
                                        turn_id="turn-check", input_sha256="a" * 64)
                 root = ensure_private_dir(Path(request.private_state.invocation_root))
+                turn_input = {"taskId": request.identity.task_id, "attemptId": request.identity.attempt_id,
+                              "generation": request.identity.generation, "turnId": request.identity.turn_id}
+                input_file = root / "turn-input.json"
+                native_run.private_json(input_file, turn_input, exclusive=True)
+                request = request.model_copy(update={"identity": request.identity.model_copy(
+                    update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
+                           "inputFile": str(input_file), "outputFile": str(root / "turn-output.json"),
                            "requestFile": str(root / "request.json"), "verdictFile": str(root / "verdict.json")}
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):
@@ -1017,8 +1024,7 @@ class WorkerSeamTests(CodexSeamCase):
         path = native_run._binding_path(root, first.native_identity.session_id)
         binding = json.loads(path.read_text())
         self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
-                                        "lastAttemptId", "lastInputSha256", "lastTurnStatus"})
-        self.assertEqual(binding["lastTurnStatus"], "completed")
+                                        "lastAttemptId", "lastInputSha256"})
         binding.update(codexHome="<old-private-home>", credentialSource={"source": "native"})
         path.write_text(json.dumps(binding))
         continuation = RunContinuation(mode="native-session", previous_session_id=first.native_identity.session_id)
@@ -1026,32 +1032,31 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(resumed.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(resumed.model_started)
 
-    def test_binding_without_terminal_status_is_refused(self):
+    def test_binding_with_an_unexpected_field_is_refused(self):
         first = self.worker_run("ok")
         previous = first.native_identity.session_id
         path = native_run._binding_path(self.base / "worker-native", previous)
         binding = json.loads(path.read_text())
-        del binding["lastTurnStatus"]
+        binding["lastTurnStatus"] = "completed"
         path.write_text(json.dumps(binding))
         result = self.worker_run("ok", continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "native-resume-unavailable")
         self.assertIsNone(result.model_started)
 
-    def test_binding_write_failure_reports_error_after_confirmed_stop(self):
+    def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
         original = native_run.private_json
         native_root = self.base / "worker-native"
 
         def write(path, value, *, exclusive=False):
-            if Path(path).parent == native_root and exclusive:
+            if Path(path).parent == native_root and Path(path).suffix == ".json":
                 raise OSError("fixture binding write denied")
             return original(path, value, exclusive=exclusive)
 
         with mock.patch.object(native_run, "private_json", side_effect=write):
             result = self.worker_run("ok")
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-binding-save-failed")
-        self.assertIn("fixture binding write denied", result.end.message)
+        self.assertEqual(result.end.status, "ok")
+        self.assertIsNone(result.end.reason_code)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertIs(result.continuation.resumable, False)
 
@@ -1304,15 +1309,17 @@ class WorkerSeamTests(CodexSeamCase):
     def test_resume_without_answer_keeps_deadline_reason(self):
         self.assert_resume_failed_without_new_thread('resume-no-answer', 'deadline')
 
-    def test_failed_resumed_turn_invalidates_the_previous_binding(self):
+    def test_failed_resumed_turn_retains_previous_binding_without_a_new_resume_fact(self):
         first = self.worker_run("ok")
         previous = first.native_identity.session_id
         path = native_run._binding_path(self.base / "worker-native", previous)
         self.assertTrue(path.is_file())
+        original = path.read_bytes()
         result = self.worker_run("hang", timeout=2, continuation=RunContinuation(
             mode="native-session", previous_session_id=previous))
         self.assertEqual(result.end.reason_code, "deadline")
-        self.assertFalse(path.exists())
+        self.assertEqual(path.read_bytes(), original)
+        self.assertFalse(result.continuation.resumable)
 
     def test_resume_without_a_binding_is_refused(self):
         result = self.worker_run(
@@ -1456,6 +1463,10 @@ class WorkerSeamTests(CodexSeamCase):
                                           if ref.kind == "native-checkpoint")).read_text())
         self.assertEqual(checkpoint["nativeTurnStatus"], "interrupted")
         previous = first.native_identity.session_id
+        binding = json.loads(native_run._binding_path(
+            self.base / "worker-native", previous).read_text())
+        self.assertEqual(set(binding), {"taskId", "threadId", "cwd", "buddy", "lastTurnId",
+                                        "lastAttemptId", "lastInputSha256"})
         resumed = self.worker_run("ok", continuation=RunContinuation(
             mode="native-session", previous_session_id=previous,
             checkpoint=ResumeCheckpoint(native_turn_id=checkpoint["nativeTurnId"],

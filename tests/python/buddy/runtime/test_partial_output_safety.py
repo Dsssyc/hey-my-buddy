@@ -44,8 +44,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
                 self.assertEqual(result.result["partialWorkspaceSeal"]["changedPaths"], ["src/one.py"])
                 self.assertEqual(result.result["workspaceManifest"], {"path": "/private/fixture"})
                 self.assertEqual(result.result["partialOutput"],
-                                 {"partial": True, "verified": False, "final": False,
-                                  "reason": payload.get("code") or "failed"})
+                                 {"partial": True, "verified": False, "final": False})
 
     def test_out_of_scope_failure_preserves_conflict_instead_of_a_partial_output(self):
         module = SimpleNamespace(seal=Mock(side_effect=BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope")))
@@ -56,7 +55,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         self.assertNotIn("partialWorkspaceSeal", result.result)
 
     def test_all_confirmed_host_stop_paths_seal_partial_changes(self):
-        for reason in ("graceful-stop", "grace-expired", "forced-stop"):
+        for reason in ("wrap-up", "grace-expired", "forced-stop"):
             with self.subTest(reason=reason):
                 module = SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))
                 result = AdapterOutcome("cancelled", {"modelStarted": True, "stopReason": reason},

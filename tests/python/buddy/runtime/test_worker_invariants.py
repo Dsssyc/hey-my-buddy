@@ -22,6 +22,7 @@ from unittest import mock
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.buddy.harnesses.base import Adapter, ProcessHandle
 from hey_my_buddy.buddy.runtime import worker as worker_module
 from hey_my_buddy.buddy.runtime.worker import TERMINATION_COMPLETED, TERMINATION_HARNESS_ERROR, Worker
 
@@ -108,29 +109,64 @@ class MarkerWriteFailureTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
         from hey_my_buddy.buddy.runtime.worker import TERMINATION_GRACE_EXPIRED
 
-        handle = SimpleNamespace(pid=None, pgid=None, cancel_requested=True, stop_initiator="host",
-                                 grace_deadline=0.0, wait=lambda timeout: 0)
+        handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+        handle.cancel_requested, handle.stop_initiator = True, "host"
+        handle.wrap_up_started, handle.grace_deadline = True, 0.0
+        handle.wait = mock.Mock(side_effect=[None, 0])
         executor = SimpleNamespace(
             name="command", available=lambda: (True, None), prepare=lambda context: None,
             start=lambda context: handle,
-            collect=lambda owned, context: AdapterOutcome("cancelled", {"stopReason": "graceful-stop"},
+            collect=lambda owned, context: AdapterOutcome("cancelled", {},
                                                           shutdown_confirmed=True),
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor), \
                 mock.patch.object(worker_module.role_seam, "worker_cancel") as forced:
             report = self.worker.execute(self.claim("attempt-grace", "task-grace"))["report"]
-        forced.assert_called_once_with(executor, handle, grace_seconds=0)
+        forced.assert_called_once_with(executor, handle)
         self.assertTrue(handle.grace_expired)
         self.assertEqual(report["terminationReason"], TERMINATION_GRACE_EXPIRED)
-        self.assertEqual(report["stopInitiator"], "host")
+        self.assertNotIn("stopInitiator", report)
+
+    def test_timely_wrap_up_keeps_its_reason_and_partial_reason_when_collected_late(self):
+        from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+        handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+        handle.cancel_requested, handle.stop_initiator = True, "console"
+        handle.grace_deadline, handle.grace_expired = 0.0, True
+        handle.wait = lambda timeout: 0
+        executor = SimpleNamespace(name="command", available=lambda: (True, None),
+            prepare=lambda context: None, start=lambda context: handle,
+            collect=lambda owned, context: AdapterOutcome("cancelled", {
+                "wrapUpDelivered": True, "graceExpired": False,
+                "partialOutput": {"partial": True, "verified": False, "final": False},
+            }, shutdown_confirmed=True))
+        with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor):
+            report = self.worker.execute(self.claim("attempt-timely", "task-timely"))["report"]
+        self.assertEqual(report["terminationReason"], "wrap-up")
+        self.assertEqual(report["result"]["partialOutput"]["reason"], report["terminationReason"])
 
 
 class DurableStopObservationTests(unittest.TestCase):
+    def test_immediate_stop_keeps_each_executors_reaping_grace(self):
+        from hey_my_buddy.buddy.harnesses.registry import adapter, run_seam
+        from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
+        from hey_my_buddy.buddy.roles.router import DecisionAdapter
+        from hey_my_buddy.buddy.runtime.command import CommandAdapter
+        executors = ((CommandAdapter(), 3.0),
+                     (WorkerRunExecutor(adapter("codex"), run_seam("codex")), 8.0),
+                     (DecisionAdapter(), 12.0))
+        for executor, grace in executors:
+            with self.subTest(executor=executor.name):
+                handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+                handle.terminate = mock.Mock()
+                worker_module.role_seam.worker_stop(executor, handle, stop_initiator="console", grace_deadline=None)
+                handle.terminate.assert_called_once_with(grace_seconds=grace)
+
     def renewal(self, view):
         client = SimpleNamespace(call=lambda *args: {"task": view}, renew=lambda *args: view)
         worker = SimpleNamespace(client=client, log=lambda message: None, _nonce=lambda: "nonce", worker_id="worker")
-        handle = SimpleNamespace(cancel_requested=False)
-        executor = SimpleNamespace(description=SimpleNamespace(native_resume=True))
+        handle = ProcessHandle(mock.Mock(pid=None), own_group=False, log_paths={})
+        executor = Adapter()
+        executor.cancel = mock.Mock(side_effect=lambda owned: setattr(owned, "cancel_requested", True))
         renewal = worker_module._Renewal(worker, {"attempt": {"taskId": "task", "attemptId": "attempt",
                                                              "generation": 1}}, handle, executor)
         return renewal, handle, executor
@@ -153,25 +189,38 @@ class DurableStopObservationTests(unittest.TestCase):
         self.assertEqual(handle.grace_deadline, deadline)
         stop.assert_called_once()
 
-    def test_console_escalation_clears_host_grace_and_forces_immediate_stop(self):
-        view = {"cancelRequested": True, "stopInitiator": "console", "graceDeadline": None}
+    def test_console_escalation_stops_immediately_using_the_executor_default(self):
+        view = {"cancelRequested": True, "stopInitiator": "console", "graceDeadline": "old deadline"}
         renewal, handle, executor = self.renewal(view)
         handle.cancel_requested, handle.stop_initiator = True, "host"
+        handle.wrap_up_started = True
         handle.grace_deadline, handle.grace_expired = 123.0, True
-        executor.cancel = mock.Mock()
-        self.assertTrue(renewal._cancel_observed())
-        executor.cancel.assert_called_once_with(handle, grace_seconds=0)
+        self.assertFalse(renewal._cancel_observed())
+        executor.cancel.assert_called_once_with(handle)
         self.assertEqual(handle.stop_initiator, "console")
-        self.assertIsNone(handle.grace_deadline)
-        self.assertFalse(handle.grace_expired)
+        self.assertEqual(handle.grace_deadline, 123.0)
+        self.assertTrue(handle.force_stop_requested)
 
     def test_host_without_confirmed_execution_has_no_summary_deadline(self):
         renewal, handle, executor = self.renewal({"cancelRequested": True, "stopInitiator": "host",
                                                 "graceDeadline": None})
-        executor.cancel = mock.Mock()
-        self.assertTrue(renewal._cancel_observed())
-        executor.cancel.assert_called_once_with(handle, grace_seconds=0)
+        self.assertFalse(renewal._cancel_observed())
+        executor.cancel.assert_called_once_with(handle)
         self.assertIsNone(handle.grace_deadline)
+
+    def test_runtime_stop_before_host_stop_keeps_renewal_alive_without_wrap_up(self):
+        view = {"cancelRequested": True, "stopInitiator": "host", "graceDeadline":
+                (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()}
+        renewal, handle, executor = self.renewal(view)
+        worker_module.role_seam.worker_cancel(executor, handle)
+        with mock.patch.object(worker_module.role_seam, "start_wrap_up") as wrap_up, \
+                mock.patch.object(renewal, "_refresh_live_binding"):
+            self.assertFalse(renewal._cancel_observed())
+            self.assertTrue(renewal._renew())
+        executor.cancel.assert_called_once_with(handle)
+        wrap_up.assert_not_called()
+        self.assertEqual(handle.stop_initiator, "unknown")
+        self.assertTrue(handle.force_stop_requested)
 
 
 class PreparationBoardErrorTests(unittest.TestCase):
@@ -261,10 +310,9 @@ class PreparationBoardErrorTests(unittest.TestCase):
             def renew(self, *args, **kwargs):
                 return {}
 
-        class Handle:
-            cancel_requested = False
-            pid = 4242
-            pgid = None
+        class Handle(ProcessHandle):
+            def __init__(self):
+                super().__init__(mock.Mock(pid=None), own_group=False, log_paths={})
 
             def wait(self, timeout=None):
                 return 0
