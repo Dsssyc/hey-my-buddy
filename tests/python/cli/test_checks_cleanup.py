@@ -322,32 +322,39 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertTrue(available)
 
-    def test_idle_process_is_excluded_but_running_denied_reads_are_unknown(self):
+    def test_failed_argv_reads_use_current_starting_or_ending_state(self):
+        for failure in (observation.psutil.AccessDenied(123), SystemError('proc_cmdline failed')):
+            for state in ('idle', 'zombie', 'gone', 'running', 'denied'):
+                with self.subTest(failure=type(failure).__name__, state=state):
+                    target = process(123, uid=1, effective_uid=0)
+                    target.cmdline.side_effect = failure
+                    if state == 'gone':
+                        target.status.side_effect = observation.psutil.NoSuchProcess(123)
+                    elif state == 'denied':
+                        target.status.side_effect = observation.psutil.AccessDenied(123)
+                    else:
+                        target.status.return_value = state
+                    with processes(target):
+                        table = checks._ps_argv_table()
+                    self.assertEqual(table, [] if state in ('idle', 'zombie', 'gone') else None)
+                    target.status.assert_called_once_with()
+
+    def test_successful_reads_keep_positive_results_without_reading_status(self):
         root = Path('/private/checks-fixture')
-        for status in (observation.psutil.STATUS_IDLE, observation.psutil.STATUS_RUNNING):
-            with self.subTest(status=status):
-                included = process(123, ['python'], uid=1, effective_uid=0)
-                target = process(456, uid=1, effective_uid=0, cwd=str(root))
-                target.status.return_value = status
-                target.cmdline.side_effect = observation.psutil.AccessDenied(456)
-                target.cwd.side_effect = observation.psutil.AccessDenied(456)
-                with processes(included, target), native_references() as native:
-                    table = checks._ps_argv_table()
-                    known = storage.process_inventory(root)[2]
-                    _, error, available = checks._open_file_pids(root)
-                self.assertTrue(available)
-                if status == observation.psutil.STATUS_IDLE:
-                    self.assertEqual(table, [(123, ['python'])])
-                    self.assertTrue(known)
-                    self.assertIsNone(error)
-                    target.cmdline.assert_not_called()
-                    target.cwd.assert_not_called()
-                    command = native.call_args.args[0]
-                    self.assertEqual(command[command.index('-p') + 1], '123')
+        for state in (observation.psutil.STATUS_IDLE, observation.psutil.AccessDenied(123)):
+            with self.subTest(state=state):
+                target = process(123, ['python', str(root / 'state')], cwd=str(root))
+                if isinstance(state, Exception):
+                    target.status.side_effect = state
                 else:
-                    self.assertIsNone(table)
-                    self.assertFalse(known)
-                    self.assertIsNotNone(error)
+                    target.status.return_value = state
+                with processes(target), native_references():
+                    self.assertEqual(checks._ps_argv_table(), [(123, ['python', str(root / 'state')])])
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, {123})
+                self.assertIsNone(error)
+                self.assertTrue(available)
+                target.status.assert_not_called()
 
     def test_unreadable_uids_are_unknown_and_cannot_exclude_a_process(self):
         included = process(123, effective_uid=0)
@@ -366,7 +373,6 @@ class ProcessObservationTests(unittest.TestCase):
             _, error, _ = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNone(error)
         included.uids.assert_called_once_with()
-        included.status.assert_called_once_with()
 
     def test_native_argv_tokens_keep_spaces_and_chinese_without_matching_text(self):
         root = Path('/private/检查 fixture with spaces')
@@ -420,14 +426,14 @@ class ProcessObservationTests(unittest.TestCase):
 
     def test_lsof_exit_one_missing_ended_process_is_complete(self):
         root = Path('/private/checks-fixture')
-        for state in ('gone', 'zombie'):
+        for state in ('gone', 'zombie', 'idle'):
             with self.subTest(state=state):
                 survivor = process(123)
                 ended = process(456, cwd=str(root))
                 if state == 'gone':
-                    ended.is_running.return_value = False
+                    ended.status.side_effect = observation.psutil.NoSuchProcess(456)
                 else:
-                    ended.status.return_value = observation.psutil.STATUS_ZOMBIE
+                    ended.status.return_value = state
                 with processes(survivor, ended), native_references('p123\n', returncode=1):
                     pids, error, available = checks._open_file_pids(root)
                 self.assertEqual(pids, set())
@@ -446,7 +452,10 @@ class ProcessObservationTests(unittest.TestCase):
     def test_process_becoming_zombie_after_snapshot_explains_missing_lsof_result(self):
         root = Path('/private/checks-fixture')
         target = process(456, cwd=str(root))
-        target.status.side_effect = [observation.psutil.STATUS_RUNNING, observation.psutil.STATUS_ZOMBIE]
+        def cwd_before_exit():
+            target.status.return_value = observation.psutil.STATUS_ZOMBIE
+            return str(root)
+        target.cwd.side_effect = cwd_before_exit
         with processes(target), native_references('', returncode=1) as native:
             pids, error, available = checks._open_file_pids(root)
         self.assertEqual(pids, set())
@@ -459,7 +468,7 @@ class ProcessObservationTests(unittest.TestCase):
         for returncode, stderr in ((2, ''), (0, 'denied'), (1, 'denied')):
             with self.subTest(returncode=returncode, stderr=stderr):
                 ended = process(123)
-                ended.is_running.return_value = False
+                ended.status.side_effect = observation.psutil.NoSuchProcess(123)
                 with (processes(ended),
                       native_references('', returncode=returncode, stderr=stderr)):
                     _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
@@ -547,11 +556,11 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertTrue(available)
 
     def test_incomplete_paths_cannot_report_a_clear_root(self):
-        for attribute in ('cwd', 'memory_maps', 'uids', 'status', 'is_running'):
+        for attribute in ('cwd', 'memory_maps', 'uids', 'status'):
             with self.subTest(attribute=attribute):
                 target = process(123)
                 getattr(target, attribute).side_effect = observation.psutil.AccessDenied(123)
-                linux = attribute not in ('status', 'is_running')
+                linux = attribute != 'status'
                 with (processes(target),
                       patch.object(observation.psutil, 'LINUX', linux),
                       patch.object(observation.psutil, 'MACOS', not linux),
@@ -559,6 +568,50 @@ class ProcessObservationTests(unittest.TestCase):
                     _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
+
+    def test_failed_path_reads_drop_references_of_starting_or_ending_processes(self):
+        root = Path('/private/checks-fixture')
+        for channel in ('cwd', 'memory_maps', 'proc-fd', 'open_files'):
+            for state in ('idle', 'zombie', 'gone'):
+                with self.subTest(channel=channel, state=state):
+                    target = process(123, cwd=str(root), mappings=[root / 'library'])
+                    if state == 'gone':
+                        target.status.side_effect = observation.psutil.NoSuchProcess(123)
+                    else:
+                        target.status.return_value = state
+                    if channel != 'proc-fd':
+                        getattr(target, channel).side_effect = observation.psutil.AccessDenied(123)
+                    windows = channel == 'open_files'
+                    with (processes(target), patch.object(observation.psutil, 'WINDOWS', windows),
+                          patch.object(observation.psutil, 'LINUX', not windows),
+                          patch.object(observation.psutil, 'MACOS', False),
+                          proc_references(PermissionError('fd denied')) if channel == 'proc-fd' else proc_references()):
+                        pids, error, available = checks._open_file_pids(root)
+                    self.assertEqual(pids, set())
+                    self.assertTrue(available)
+                    if windows:
+                        self.assertIn('Windows open-file observation is incomplete', error)
+                    else:
+                        self.assertIsNone(error)
+
+    def test_system_error_from_path_reads_is_not_caught(self):
+        for attribute in ('cwd', 'memory_maps', 'open_files'):
+            with self.subTest(attribute=attribute):
+                target = process(123)
+                getattr(target, attribute).side_effect = SystemError('path read failed')
+                with (processes(target), patch.object(observation.psutil, 'WINDOWS', True),
+                      patch.object(observation.psutil, 'LINUX', False),
+                      patch.object(observation.psutil, 'MACOS', False)):
+                    with self.assertRaises(SystemError):
+                        checks._open_file_pids(Path('/checks-fixture'))
+
+    def test_system_error_from_status_is_not_caught(self):
+        target = process(123)
+        target.cmdline.side_effect = observation.psutil.AccessDenied(123)
+        target.status.side_effect = SystemError('status read failed')
+        with processes(target):
+            with self.assertRaises(SystemError):
+                checks._ps_argv_table()
 
     def test_windows_paths_are_positive_evidence_and_empty_handles_remain_unknown(self):
         root = Path('/checks-fixture')

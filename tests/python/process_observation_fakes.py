@@ -12,7 +12,7 @@ def process(pid, argv=(), *, files=(), cwd='/', mappings=(), uid=None, effective
     uid = getattr(os, 'geteuid', lambda: 0)() if uid is None else uid
     effective_uid = uid if effective_uid is None else effective_uid
     return SimpleNamespace(
-        pid=pid, is_running=Mock(return_value=True),
+        pid=pid,
         status=Mock(return_value=observation.psutil.STATUS_RUNNING),
         cmdline=Mock(return_value=list(argv)), cwd=Mock(return_value=cwd),
         uids=Mock(return_value=SimpleNamespace(real=uid, effective=effective_uid)),

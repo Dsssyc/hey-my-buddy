@@ -14,8 +14,7 @@ def _processes() -> tuple[list[psutil.Process], bool]:
     """One PID snapshot, scoped on POSIX to this effective user's processes.
 
     Private state belongs to this user; other effective users are outside the
-    scope. Creating (idle) processes have not run yet; zombies have ended.
-    An unreadable UID or status cannot establish either exclusion.
+    scope. An unreadable UID cannot establish that exclusion.
     """
     try:
         pids = psutil.pids()
@@ -27,13 +26,22 @@ def _processes() -> tuple[list[psutil.Process], bool]:
         try:
             process = psutil.Process(pid)
             if psutil.WINDOWS or process.uids().effective == effective_uid:
-                if process.status() not in (psutil.STATUS_IDLE, psutil.STATUS_ZOMBIE):
-                    processes.append(process)
+                processes.append(process)
         except psutil.NoSuchProcess:
             continue
         except (psutil.Error, OSError):
             known = False
     return processes, known
+
+
+def _starting_or_ending(process: psutil.Process) -> bool:
+    """After a failed read, macOS idle can mean creation or exit teardown."""
+    try:
+        return process.status() in (psutil.STATUS_IDLE, psutil.STATUS_ZOMBIE)
+    except psutil.NoSuchProcess:
+        return True
+    except (psutil.Error, OSError):
+        return False
 
 
 def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], bool]:
@@ -42,11 +50,16 @@ def observe_process_argv() -> tuple[list[tuple[psutil.Process, list[str]]], bool
     rows = []
     for process in processes:
         try:
-            rows.append((process, process.cmdline()))
+            argv = process.cmdline()
         except psutil.NoSuchProcess:
             continue
-        except (psutil.Error, OSError):
-            known = False
+        # On macOS psutil 7.2.2 can raise SystemError when proc_cmdline
+        # leaves an exception set on its forced-permission-denial path.
+        except (psutil.Error, OSError, SystemError):
+            if not _starting_or_ending(process):
+                known = False
+        else:
+            rows.append((process, argv))
     return rows, known
 
 
@@ -89,7 +102,10 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
         except psutil.NoSuchProcess:
             paths.pop(process.pid, None)
         except (psutil.Error, OSError) as error:
-            problems.append(f'process path observation failed: {type(error).__name__}')
+            if _starting_or_ending(process):
+                paths.pop(process.pid)
+            else:
+                problems.append(f'process path observation failed: {type(error).__name__}')
     available = psutil.LINUX or psutil.MACOS or psutil.WINDOWS
     native_pids = None
     if psutil.WINDOWS:
@@ -120,15 +136,10 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
     for process in processes:
         if native_pids is None or process.pid not in paths or process.pid in native_pids:
             continue
-        try:
-            if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
-                problems.append('lsof has no result for a live snapshot process')
-            else:
-                paths.pop(process.pid)
-        except psutil.NoSuchProcess:
+        if _starting_or_ending(process):
             paths.pop(process.pid)
-        except (psutil.Error, OSError) as error:
-            problems.append(f'process liveness observation failed: {type(error).__name__}')
+        else:
+            problems.append('lsof observation incomplete for a snapshot process')
     normalized = {pid: {path.removesuffix(' (deleted)') for path in values}
                   for pid, values in paths.items()}
     return normalized, '; '.join(dict.fromkeys(problems)) or None, available
