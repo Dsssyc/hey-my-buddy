@@ -1,7 +1,9 @@
 import type zh from "../zh/shell";
 
 export default {
+  identifier: { copy: "Copy identifier {{value}}", copied: "Copied", failed: "Copy failed; try again" },
   actor: {
+    delegator: "Delegated by: {{source}}", originalDelegator: "Originally delegated by", unrecordedDelegator: "Delegator not recorded",
     currentOwner: "Current owner",
     unknownOrigin: "Unrecorded initiator", microTask: "Micro task {{id}}",
     events: {

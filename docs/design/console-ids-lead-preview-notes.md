@@ -22,6 +22,14 @@ Lead 对每份交付读取固定 Git 产物的差异与范围，在该微任务�
 
 本轮提交两项后返回 `waiting`，等待产品的 `waiting-owned` 叫醒路径；后续回合验明投递与恢复上下文。
 
+第二回合由 A 的 `workflow.turn_returned` 自动叫醒，`resumeMode` 为 `native-session`，输入恢复两项的当前状态与变化标记，新的执行凭据路径也随角色说明到达。A 已交回，B 仍执行中；读取两项的 `get` 都成功，不需要 Host 控制文件，也不读凭据内容。A 路由为 Codex CLI 的 `openai / gpt-6.1-sol / high`，B 路由为 Codex CLI 的 `openai / gpt-6.1-sol / max`。
+
 ## 交付与验收
 
-待名下微任务交回后记录固定产物、buddy、返修次数、审查与检查结果，以及验收和整合的实际结果。
+A 的固定产物为 `e52a083f-e826-4d95-98e5-1b77ca4bb8d5`，输出提交 `d9392b57`，12 个改动文件均在 `apps/console/src/` 内；交付了共享复制标识组件及三处入口、命令执行的 buddy 隐藏、Lead 原始来源显示、中英文文案及行为回归测试。Lead 读取固定 Git 差异并核对：按 `spec.adapter === command` 判断命令执行；原始来源保留 `sourceHostId`，无来源 Host 时采用直接 Lead / 根 Lead；当前管理方仍独立显示；剪贴板成功与失败经边界反馈，保留已选记录离开读取范围后的标识。
+
+Lead 在 A 的检出使用 Node.js 24.21.0 重跑 `npm --prefix apps/console test -- src/components/CopyableIdentifier.test.tsx src/task-presentation.test.tsx src/console-data.test.ts src/task-title.test.tsx src/macro-task-timeline.test.tsx src/i18n/language.test.ts src/i18n/sources.test.ts src/i18n/unused.test.ts`，8 个文件 71 项全部通过，退出码 0；固定差异的 `git diff --check` 也通过。A 返修 0 次，真实布局与原生剪贴板留待整合后的浏览器检查。
+
+A 固定差异通过 `git diff --binary <原始输入提交> <固定输出提交> -- apps/console/src` 和 `git apply --index` 整合，在 Lead 的独立检出生成提交 `5a873a48`，未碰分支、标签或 stash。验收调用为 `HMB_AGENT_CREDENTIAL_FILE=<第二回合执行凭据> <启动器> accept '{"runId":"79771ce9-890b-4cab-867b-4e05c68791da","artifactId":"e52a083f-e826-4d95-98e5-1b77ca4bb8d5","note":"<差异审查与 71 项检查记录>","target":{"path":"<Lead 自己的受管检出>","ref":"5a873a48"}}'`，退出码 0，返回 `state: accepted`、`integration.state: verified`、`strategy: patch`、`reclaim.removed: true`，整合标识为 `int-b5214ce3-185e-49ab-8463-6bc54ba03543`；实际提交目标可用，没有要求调整验收条件。
+
+B 尚在执行，未交回；目前没有产品流程拒绝，等待第二份交付后继续。

@@ -14,6 +14,7 @@ import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
 import { tokenUsageView } from "./host-workflow";
 import { effortText } from "./buddy-name";
+import { CopyableIdentifier } from "./components/CopyableIdentifier";
 
 /**
  * One micro task's detail (0.15.1 U4): read-only browsing of the recorded
@@ -90,7 +91,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const project = taskProject(task);
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
-    <dt>原始委派方</dt><dd>{taskHost(task)}</dd><dt>{i18n.t("shell:actor.currentOwner")}</dt><dd>{workflowOwnerText(task)}</dd>
+    <dt>{i18n.t("shell:actor.originalDelegator")}</dt><dd>{taskHost(task)}</dd><dt>{i18n.t("shell:actor.currentOwner")}</dt><dd>{workflowOwnerText(task)}</dd>
     <dt>来源项目</dt><dd>{project.path || "未记录"}</dd><dt>微任务 ID</dt><dd>{task.runId}</dd>
     <dt>上级微任务</dt><dd>{task.lineage?.parentRunId || "无"}</dd><dt>执行位置</dt><dd>{task.cwd}</dd>
   </dl></details>;
@@ -100,9 +101,10 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   const titleNote = title.source === "task" ? TASK_TITLE_SOURCE_LABEL.task : "";
   const delegationAuthority = task.delegationAuthority ?? task.lineage?.delegationAuthority;
   const assignedBuddy = task.lineage?.buddy;
-  const executor = delegationAuthority && assignedBuddy
+  const recordedExecutor = taskExecutor(task);
+  const executor = recordedExecutor && delegationAuthority && assignedBuddy
     ? `${assignedBuddy.harness} · ${assignedBuddy.provider} · ${assignedBuddy.model} / ${effortText(assignedBuddy.effort)}`
-    : taskExecutor(task);
+    : recordedExecutor;
   // One execution's own recorded usage; unknown stays unknown (ADR-018 §22).
   const usage = tokenUsageView(task.tokenUsage ?? task.selectedAttempt?.tokenUsage);
   const quotaFailureLabel = task.quotaFailure?.code === "quota-exceeded" ? "额度耗尽" : task.quotaFailure?.code === "rate-limited" ? "原生服务限流" : null;
@@ -111,18 +113,21 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回微任务列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
       {!task.workflow && quotaFailureLabel && <p className="error-message">执行原因：{quotaFailureLabel}</p>}
-      <h2 className="detail-title" title={titleTooltip(title)}>
-        {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
-      </h2>
+      <div className="flex flex-wrap items-center gap-x-2">
+        <h2 className="detail-title" title={titleTooltip(title)}>
+          {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
+        </h2>
+        <CopyableIdentifier value={task.runId} />
+      </div>
       <div className="local-read-toolbar" aria-label="微任务详情读取">
         <button type="button" className="button small-button" aria-label="刷新微任务详情" title="只重新读取当前微任务详情" disabled={!active || busy} onClick={() => { void readTask(); }}>{busy ? "正在读取…" : "刷新详情"}</button>
         <span className="small muted" title="当前微任务详情读取的服务器核对时间">{readVerificationText(verifiedAt)}</span>
       </div>
       {error && <p role="alert" className="error-message">{error}
         <button type="button" className="button small-button" disabled={!active || busy} onClick={() => { void readTask(); }}>重试读取</button></p>}
-      <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
-        {task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={executor} onClick={() => setRoutingRequest(n => n + 1)}>
-          <span>→ {executor}</span><span>查看选择依据</span></button> : <span title={executor}>→ {executor}</span>}
+      <p className="assignment-line"><span title={taskHost(task)}>{i18n.t("shell:actor.delegator", { source: taskHost(task) })}</span>
+        {executor && (task.workflow ? <button className="routing-link" aria-label="查看选择依据" title={executor} onClick={() => setRoutingRequest(n => n + 1)}>
+          <span>→ {executor}</span><span>查看选择依据</span></button> : <span title={executor}>→ {executor}</span>)}
         {delegationAuthority && <span>带委派权</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
