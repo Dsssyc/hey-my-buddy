@@ -56,7 +56,7 @@ for (const scene of [
   await expect(trigger).toHaveCSS("text-overflow", "ellipsis");
   const header = page.locator('[data-slot="macro-overview-header"]');
   const facts = header.locator('[data-slot="macro-overview-facts"]');
-  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["项目", "Host", "开始", "历时", "编号", "目标"] : ["Project", "Host", "Started", "Elapsed", "ID", "Goal"]);
+  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["项目", "Host", "历时", "编号", "目标"] : ["Project", "Host", "Elapsed", "ID", "Goal"]);
   expect(reads).toBe(0);
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-closed.png` });
@@ -148,7 +148,7 @@ for (const scene of [
   await expect(list).toBeVisible();
   const rows = list.locator('[data-slot="macro-entry"]:visible');
   for (const row of await rows.all()) {
-    expect((await row.boundingBox())!.height).toBe(32);
+    expect((await row.boundingBox())!.height).toBe(28);
     expect(await row.locator("time").count()).toBe(0);
   }
   await page.screenshot({ path: `${captures}/${name}-list.png` });

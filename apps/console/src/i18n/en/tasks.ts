@@ -24,6 +24,7 @@ export const tasks = {
   },
 
   waiting: "Waiting on someone", failed: "Failed",
+  resizeList: "Resize macro task list",
   macro: "Macro tasks", list: "Macro task list", entries: "Macro task entries", collapse: "Collapse macro task list", expand: "Expand macro task list",
   search: "Search title, project, Host or ID", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", accepted: "Accepted", ended: "Ended",
   filterHost: "Host", filterReview: "Acceptance", standalone: "Standalone micro tasks", source: "From the first line", unnamed: "Unnamed", entryStarted: "Started", entryActivity: "Last activity", entryTime: "{{basis}}: {{time}}", update: "New activity; update order", showMore: "Show more", loading: "Reading", retry: "Reconnect",

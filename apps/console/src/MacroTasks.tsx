@@ -1,3 +1,4 @@
+import { Cell, Grid, Gridline, useGridRef } from "react-resizable-panels";
 import { cn } from "cn";
 import { Button } from "./components/ui/button";
 import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
@@ -32,7 +33,7 @@ import type { AuthorityLatch } from "./console-session";
 import { displayTitle } from "./macro-task-display";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 
-import { useViewPreference } from "./view-preferences";
+import { useNumberViewPreference, useViewPreference } from "./view-preferences";
 
 
 function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; verifiedAtMs: number | null; retry: () => void; busy: boolean }) {
@@ -149,7 +150,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
   useEffect(() => { if (detailRunId) setShowNarrowList(false); }, [detailRunId]);
-  const [narrow, setNarrow] = useState(false);
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.("(max-width: 760px)").matches ?? false);
+  const [sidebarWidth, setSidebarWidth] = useNumberViewPreference("macro-task-list-width", 288);
+  const workspaceGrid = useGridRef();
+  useEffect(() => {
+    if (!narrow) workspaceGrid.current!.getTrackById("column", "sidebar").resize(listCollapsed ? "0px" : `${sidebarWidth}px`);
+  }, [listCollapsed, narrow]);
   useEffect(() => {
     if (!window.matchMedia) return;
     const media = window.matchMedia("(max-width: 760px)");
@@ -288,11 +294,21 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
       </div>}
       {disconnected && <ConnectionStrip busy={!connectionError && list.loading} error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
-      <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} asChild>
-        <div data-slot="macro-workspace" className={cn("grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none max-[760px]:flex max-[760px]:flex-col", listCollapsed ? "grid-cols-[0px_minmax(0,1fr)]" : "grid-cols-[316px_minmax(0,1fr)]")}>
-          <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "max-[760px]:hidden", empty && "max-[760px]:h-auto max-[760px]:shrink-0")}>{listPane}</CollapsibleContent>
+      <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} className="flex min-h-0 flex-1 flex-col">
+        {narrow ? <div data-slot="macro-workspace" className="flex min-h-0 flex-1 flex-col">
+          <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "hidden", empty && "h-auto shrink-0")}>{listPane}</CollapsibleContent>
           {detailPane}
-        </div>
+        </div> : <Grid data-slot="macro-workspace" gridRef={workspaceGrid}
+          className="min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none has-[[data-separator=active]]:transition-none has-[[data-separator=focus]]:transition-none"
+          columns={[{ id: "sidebar", defaultSize: listCollapsed ? "0px" : `${sidebarWidth}px`, minSize: listCollapsed ? "0px" : "288px", maxSize: listCollapsed ? "0px" : "50vw", groupResizeBehavior: "preserve-pixel-size" }, { id: "detail", minSize: "0px" }]}
+          rows={1} resizeTargetMinimumSize={{ fine: 12, coarse: 24 }}
+          onLayoutChanged={(_, meta) => { if (meta.isUserInteraction) setSidebarWidth(workspaceGrid.current!.getTrackById("column", "sidebar").getSize().inPixels); }}>
+          <Cell row={0} column={0} className="min-h-0 min-w-0 overflow-hidden">
+            <CollapsibleContent data-slot="macro-sidebar" className="h-full min-h-0 min-w-0 w-full">{listPane}</CollapsibleContent>
+          </Cell>
+          <Gridline data-slot="macro-sidebar-resize" type="column" column={1} disabled={listCollapsed} aria-hidden={listCollapsed || undefined} aria-label={t("resizeList")} className={cn("sidebar-resize", listCollapsed && "invisible")}/>
+          <Cell row={0} column={1} className="min-h-0 min-w-0 overflow-hidden">{detailPane}</Cell>
+        </Grid>}
       </Collapsible>
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}

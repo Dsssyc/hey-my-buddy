@@ -7,7 +7,7 @@ import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { formatDateTime, formatNumber } from "./i18n/format";
 import { cn } from "cn";
-import { CopyMinus, Folder, FolderOpen, PanelLeft, RefreshCw } from "lucide-react";
+import { ChevronDown, CopyMinus, Folder, FolderOpen, PanelLeft, RefreshCw } from "lucide-react";
 import { MacroSort } from "./MacroSort";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -47,12 +47,13 @@ function GroupHeading({ label, count, open, standalone }: { label: string; count
   const [labelRef, clipped] = useTextClipped<HTMLSpanElement>(label);
   return <Hint text={clipped ? label : undefined}><CollapsibleTrigger asChild><button type="button" data-slot="macro-group-heading" className="disclosure-trigger grid h-8 w-full grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-x-2 pr-4 pl-3 text-left text-sm motion-reduce:transition-none">
     <Icon aria-hidden="true" className="size-4 text-ink2" strokeWidth={1.75} strokeDasharray={standalone ? "3 2.4" : undefined}/>
-    <span ref={labelRef} className="min-w-0 truncate font-semibold">{label}</span><span className="text-xs text-ink3 tabular-nums">{formatNumber(count)}</span>
+    <span ref={labelRef} className={cn("sidebar-label min-w-0 font-semibold", clipped && "sidebar-label-fade")}>{label}</span><span className="text-xs text-ink3 tabular-nums">{formatNumber(count)}</span>
   </button></CollapsibleTrigger></Hint>;
 }
 const Entry = memo(function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basis: "created" | "activity"; selected: boolean; onSelect: (id: string) => void }) {
   const { t } = useTranslation("tasks");
   const text = row.titleSource === "none" ? t("unnamed") : row.titleSource === "task" ? Array.from(row.title!).slice(0, 40).join("") : row.title!;
+  const [titleRef, clipped] = useTextClipped<HTMLSpanElement>(text);
   const waiting = row.counts.host + row.counts.review > 0;
   const mark = waiting ? "hand" : row.counts.active > 0 ? "live" : row.counts.failed > 0 ? "fail" : null;
   const status = waiting ? row.counts.host > 0 ? "host" : "review" : row.counts.active > 0 ? "active" : row.counts.failed > 0 ? "failed" : row.counts.roots > 0 && row.counts.accepted === row.counts.roots ? "accepted" : "ended";
@@ -62,9 +63,9 @@ const Entry = memo(function Entry({ row, basis, selected, onSelect }: { row: Mac
     time: stamp === null ? t("unknown") : formatDateTime(Date.parse(stamp)),
   })}${row.titleSource === "task" ? ` · ${t("source")}` : ""}`;
   return <li data-macro-task-id={row.macroTaskId}><Hint text={hint}>
-    <button type="button" data-slot="macro-entry" className={cn("grid h-8 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[13px] text-foreground hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
+    <button type="button" data-slot="macro-entry" className={cn("grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[13px] text-ink2 hover:text-ink aria-pressed:text-ink hover:bg-selected-row aria-pressed:hover:bg-selection transition-colors duration-150 motion-reduce:transition-none outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", selected ? "bg-selection" : "bg-transparent")} aria-pressed={selected} onClick={() => onSelect(row.macroTaskId)}>
       <span className="flex items-center justify-center">{mark && <Hint text={t(status)}><span className="flex"><StateMark kind={mark} className="size-2.5"/></span></Hint>}</span>
-      <span data-slot="macro-entry-title" className="min-w-0 truncate">{text}</span><span className="sr-only">{t(status)}</span>
+      <span ref={titleRef} data-slot="macro-entry-title" className={cn("sidebar-label min-w-0", clipped && "sidebar-label-fade")}>{text}</span><span className="sr-only">{t(status)}</span>
     </button>
   </Hint></li>;
 });
@@ -112,7 +113,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
   useEffect(idle, [props.reorder, visible]);
   const groups = props.groups;
   const empty = !groups.length && !props.loading && !props.error;
-  return <section data-slot="macro-list" className="flex h-full min-h-0 w-[316px] flex-col border-r bg-card text-sm max-[760px]:w-full" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
+  return <section data-slot="macro-list" className="flex h-full min-h-0 w-full flex-col border-r bg-card text-sm max-[760px]:w-full" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
     <div className="shrink-0 px-4 pt-3.5">
       <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2"><MacroListHeading count={props.totals.all}/>
         {props.reorder && <Hint text={t("update")}><Button data-slot="macro-update" variant="ghost" size="icon-sm" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><RefreshCw aria-hidden="true"/></Button></Hint>}
@@ -136,11 +137,11 @@ export function MacroTaskList(props: MacroTaskListProps) {
     </div>
     <ScrollArea ref={scroll} className="min-h-0 flex-1" viewportProps={{ "aria-label": t("entries"), tabIndex: 0 }} onScrollCapture={idle}>
       <div className="pt-1.5 pb-4">
-      {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" className="[&+&]:mt-2.5" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
+      {groups.map(group => <Collapsible key={group.id} data-slot="macro-group" className="[&+&]:mt-5" open={!collapsed.has(group.id)} onOpenChange={open => setCollapsed(old => { const next = new Set(old); if (open) next.delete(group.id); else next.add(group.id); return next; })}>
         <GroupHeading label={group.project?.label ?? t("standalone")} count={group.total} open={!collapsed.has(group.id)} standalone={group.id === "standalone"}/>
         <CollapsibleContent>
           <GroupEntries key={`${props.sort}:${props.filter}:${props.query}`} rows={group.macroTasks} basis={basis} selected={props.selected} onSelect={onSelect}/>
-          {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-7 w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span/><span>{t("showMore")}</span></button>}
+          {group.nextCursor && <button type="button" data-slot="macro-group-more" className="grid h-[26px] w-full grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2 pr-4 pl-3 text-left text-[12.5px] text-ink3 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-busy={props.loading} disabled={props.loading} onClick={() => props.onMore(group.id)}><span className="flex justify-center"><ChevronDown aria-hidden="true" className="size-3"/></span><span>{t("showMore")}</span></button>}
         </CollapsibleContent>
       </Collapsible>)}
       {empty && <p className="p-4 text-xs text-ink3">{t(props.query || props.filter !== "all" ? "noMatch" : "noTasks")}</p>}
