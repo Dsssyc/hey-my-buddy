@@ -17,7 +17,8 @@ from hey_my_buddy.buddy.harnesses import discovery
 class HarnessDiscoveryTests(unittest.TestCase):
     def test_claude_reports_native_provider_and_unknown_billing_without_refusal(self):
         for account, provider in (({"loggedIn": True, "apiProvider": "bedrock", "authMethod": "api_key"}, "bedrock"),
-                                  ({"loggedIn": True, "apiProvider": "firstParty"}, "firstParty"),
+                                  ({"loggedIn": True, "apiProvider": "firstParty"}, "anthropic"),
+                                  ({"loggedIn": True, "apiProvider": "firstParty", "authMethod": "api_key"}, "anthropic"),
                                   ({"loggedIn": True}, "unknown")):
             with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
                 home = Path(directory)

@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     discovery_args,
     execution_args,
     native_environment,
+    provider_from_account,
     sandbox_settings,
 )
 from hey_my_buddy.buddy.roles.turn_io import canonical_json
@@ -43,6 +44,13 @@ FOCUSED_CLEARED_VARIABLES = (
 
 
 class ClaudeConfigTests(unittest.TestCase):
+    def test_native_provider_label_keeps_anthropic_identity_and_other_names(self):
+        self.assertEqual(provider_from_account({"apiProvider": "firstParty"}), "anthropic")
+        for provider in ("anthropic", "bedrock", "vertex", "foundry", "custom-gateway"):
+            self.assertEqual(provider_from_account({"apiProvider": provider}), provider)
+        for account in (None, {}, {"apiProvider": None}):
+            self.assertEqual(provider_from_account(account), "unknown")
+
     def setUp(self):
         # The override cases below need the explicit development switch, and this
         # focused file must supply it rather than rely on hey_my_buddy.cli.checks having set it.
@@ -157,7 +165,7 @@ class ClaudeConfigTests(unittest.TestCase):
                "ANTHROPIC_AUTH_TOKEN": "bearer-secret", "ANTHROPIC_BASE_URL": "https://gateway.example.invalid",
                "BUDDY_AGENT_CREDENTIAL": "worker-secret", "BUDDY_AGENT_CREDENTIAL_FILE": "/private/cred.json",
                "BUDDY_STATE_DIR": "/private/state", "SOME_OTHER_HARNESS_TOKEN": "peer-secret",
-               "BUDDY_CLAUDE_FIXTURE_CASE": "ok", "BUDDY_CLAUDE_SETTINGS_POLICY": "isolated"}
+               "BUDDY_CLAUDE_FIXTURE_CASE": "ok"}
         with mock.patch('hey_my_buddy.buddy.harnesses.claude.config.cli_command', return_value=[]):
             result = native_environment(env)
         self.assertEqual(result["PATH"], "/bin")
@@ -175,7 +183,7 @@ class ClaudeConfigTests(unittest.TestCase):
         # No host, worker, agent-credential or other-harness value may leak.
         for banned in ("CLAUDECODE", "CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_MODEL", "ANTHROPIC_AUTH_TOKEN",
                        "ANTHROPIC_BASE_URL", "BUDDY_AGENT_CREDENTIAL", "BUDDY_AGENT_CREDENTIAL_FILE",
-                       "BUDDY_STATE_DIR", "BUDDY_CLAUDE_SETTINGS_POLICY", "SOME_OTHER_HARNESS_TOKEN"):
+                       "BUDDY_STATE_DIR", "SOME_OTHER_HARNESS_TOKEN"):
             self.assertNotIn(banned, result)
 
     def test_subagent_tool_list_names_the_current_agent_tool(self):

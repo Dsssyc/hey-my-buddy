@@ -15,7 +15,7 @@ from support import wait_for
 from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
 
 
-CONFIGURATION = {"adapter": "claude", "provider": "firstParty",
+CONFIGURATION = {"adapter": "claude", "provider": "anthropic",
                  "model": "claude-opus-5-5[1m]", "effort": "high"}
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -31,14 +31,14 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
-            "adapter": "claude", "provider": "firstParty", "displayName": "firstParty",
+            "adapter": "claude", "provider": "anthropic", "displayName": "Anthropic",
             "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": CONFIGURATION["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
         FIXTURE.chmod(0o755)
 
     def env(self):
-        return {"BUDDY_CLAUDE_CLI": str(FIXTURE), "BUDDY_CLAUDE_SETTINGS_POLICY": "isolated",
+        return {"BUDDY_CLAUDE_CLI": str(FIXTURE),
                 "BUDDY_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
                 "BUDDY_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
 

@@ -76,7 +76,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                       "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="goal-1", attempt_id=f"attempt-{index}", generation=index,
                                 spec={"cwd": str(self.cwd), "task": "Write a fixture result", "timeoutSeconds": timeout,
-                                      "provider": "firstParty", "model": model, "effort": effort},
+                                      "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "BUDDY_CLAUDE_FIXTURE_CASE": case},
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
@@ -397,7 +397,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         with mock.patch.dict("os.environ", self.environment, clear=False):
             catalog = self.adapter.discover_models()
         provider = catalog["providers"][0]
-        self.assertEqual(provider["provider"], "firstParty")
+        self.assertEqual(provider["provider"], "anthropic")
         # The account fact comes from the same initialize session's validation.
         self.assertEqual(catalog["discoveries"],
                          [{"adapter": "claude", "status": "complete", "accountStatus": "confirmed"}])

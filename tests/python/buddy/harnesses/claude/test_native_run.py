@@ -143,7 +143,7 @@ class WorkerCarrierTests(NativeRunCase):
         checked = result.configuration.checked
         # Provider comes from initialize, while the directory confirms the
         # requested model and effort; no per-check ledger travels beside it.
-        self.assertEqual(checked.provider.value, "firstParty")
+        self.assertEqual(checked.provider.value, "anthropic")
         self.assertEqual(checked.model.value, CONFIGURATION["model"])
         self.assertEqual(checked.effort.value, CONFIGURATION["effort"])
 
@@ -609,7 +609,6 @@ class DiscoveryTests(NativeRunCase):
 
         self.fixture_case("third-party")
         os.environ["ANTHROPIC_BASE_URL"] = "https://shell-only.example.invalid"
-        os.environ["BUDDY_CLAUDE_SETTINGS_POLICY"] = "global"
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "third-party-discovery",
                                 native_root=self.base / "third-party-native", timeout_seconds=25,
                                 cancelled=lambda: False)
@@ -631,7 +630,6 @@ class DiscoveryTests(NativeRunCase):
         state = self.fixture_state()
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertEqual(state["seenAnthropicEnv"], [])
-        self.assertNotIn("BUDDY_CLAUDE_SETTINGS_POLICY", state["seenBuddyEnv"])
         settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text())
         self.assertEqual(set(settings), {"sandbox"})
 
@@ -643,7 +641,7 @@ class DiscoveryTests(NativeRunCase):
                                         native_root=self.base / f"native-{case}", timeout_seconds=25,
                                         cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["accountStatus"], "unknown")
-                self.assertEqual(catalog["providers"][0]["provider"], "unknown" if case == "missing-account" else "firstParty")
+                self.assertEqual(catalog["providers"][0]["provider"], "unknown" if case == "missing-account" else "anthropic")
                 self.assertNotIn("authStatusRuns", self.fixture_state())
                 result = self.execute(self.request())
                 self.assertEqual(result.end.status, "ok", result.end.message)
@@ -716,8 +714,7 @@ class RoleSurfaceTests(NativeRunCase):
     def test_check_preparation_refuses_before_any_spawn(self):
         from hey_my_buddy.buddy.harnesses.claude.config import ClaudeUnavailable
         native_run.check_preparation({"provider": "bedrock"},
-                                     {**os.environ, "BUDDY_CLAUDE_SETTINGS_POLICY": "global",
-                                      "ANTHROPIC_BASE_URL": "https://gateway.example"})
+                                     {**os.environ, "ANTHROPIC_BASE_URL": "https://gateway.example"})
         with mock.patch.dict(os.environ, {"BUDDY_DEV_SOURCE": "1", "BUDDY_CLAUDE_CLI": str(self.base / "nope")}):
             with mock.patch.object(native_run, "cli_command", side_effect=ClaudeUnavailable("CLI missing")):
                 with self.assertRaises(BoardError) as caught:

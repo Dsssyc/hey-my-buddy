@@ -18,6 +18,35 @@ class CatalogObservationTests(BoardTestCase):
     def record(self, payload, observation=None):
         return self.e.record_catalog(payload, observation)
 
+    def test_claude_first_party_reread_preserves_existing_buddy(self):
+        from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
+
+        existing = catalog(adapter='claude', models=('claude-fixture',))
+        existing['providers'][0]['provider'] = 'anthropic'
+        self.record(existing)
+        profile_id = 'claude:anthropic:claude-fixture:max'
+        with self.e.db.write() as db:
+            db.execute('UPDATE evaluation_profiles SET enabled=1 WHERE profile_id=?', (profile_id,))
+            db.execute("INSERT INTO evaluation_preferences VALUES(?,'prefer','keep this buddy',1)", (profile_id,))
+            created_revision = db.execute('SELECT created_revision FROM evaluation_profiles WHERE profile_id=?',
+                                          (profile_id,)).fetchone()[0]
+        native = _catalog({'account': {'apiProvider': 'firstParty', 'tokenSource': 'subscription'},
+                           'models': [{'value': 'fixture', 'resolvedModel': 'claude-fixture',
+                                       'supportedEffortLevels': ['max']}]}, 'fixture')
+        self.assertEqual(native['providers'][0]['provider'], 'anthropic')
+        for _ in range(2):
+            self.clock.advance(3601)
+            self.record(native)
+            with self.e.db.read() as db:
+                rows = db.execute("SELECT profile_id,provider,enabled,available,created_revision "
+                                  "FROM evaluation_profiles WHERE adapter='claude'").fetchall()
+                self.assertEqual([tuple(row) for row in rows],
+                                 [(profile_id, 'anthropic', 1, 1, created_revision)])
+                self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_preferences WHERE profile_id=?',
+                                                  (profile_id,)).fetchone()),
+                                 (profile_id, 'prefer', 'keep this buddy', 1))
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM catalog_pending WHERE adapter='claude'").fetchone()[0], 0)
+
     def test_a_ba_restores_identity_and_preserves_human_intent(self):
         first = self.record(catalog())
         profile_id = 'dsh:fixture:alpha:max'

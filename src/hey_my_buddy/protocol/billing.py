@@ -30,10 +30,10 @@ def claude_status(status: object, observed_at: str) -> dict:
     kind = UNKNOWN
     if isinstance(status, dict) and status.get("loggedIn") is True:
         method = status.get("authMethod")
-        if method in ("claude.ai", "claudeai") and isinstance(status.get("subscriptionType"), str):
+        if status.get("apiProvider") == "anthropic" and method in ("claude.ai", "claudeai") and isinstance(status.get("subscriptionType"), str):
             kind = "subscription"
-        elif status.get("apiProvider") in ("anthropic", "firstParty") and method in ("api_key", "apiKey", "console"):
-            kind = "metered"
+        # An API key and Claude's provider label do not establish the endpoint
+        # or its funding. A redirected first-party API can still say anthropic.
     return fact(kind, "claude/auth-status", observed_at)
 
 

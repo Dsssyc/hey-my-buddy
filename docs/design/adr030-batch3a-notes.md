@@ -63,15 +63,15 @@
 
 清单 D 类八行全部删除：`_catalog` 的账户第一方/登录证明两行，`_prepare` 的供应方覆盖/isolated 策略两行，`run_discovery` 的覆盖拒绝一行，`check_preparation` 的固定 anthropic/isolated/覆盖拒绝三行。相关 `account_problem`、`token_source_missing`、`auth_status_problem`、`read_auth_status`、`third_party_overrides`、`settings_policy` 与仅为它们存在的测试同批删除。Adapter 的可用性预拒绝和公共健康握手的第一方供应方门槛也删除。
 
-`_check_catalog` 只保留本次目录的模型与 effort 成员检查，不再要求 anthropic。目录使用 `account.apiProvider` 原名，`firstParty` 不映射为 anthropic，缺失为 unknown；四段配置名因此直接使用该供应方。执行 checked.provider 使用本次初始化实际报告值，不能由调用方的请求冒充已读回值。原生额度事实也使用同一次初始化的供应方，独立的 TurnEvidence 测试没有账户来源时是 unknown。原生真正失败、归属校验、有界输入与实际停止证据不变。
+`_check_catalog` 只保留本次目录的模型与 effort 成员检查，不再要求 anthropic。Claude 自己的 `config.provider_from_account` 将内部接口标签 `firstParty` 表达为既有供应方名字 `anthropic`，其他值用 `account.apiProvider` 原拼写，缺失为 unknown；四段配置名使用该语义供应方。执行 checked.provider 使用本次初始化报告的语义供应方，不能由调用方的请求冒充已读回值。原生额度事实也使用同一次初始化的供应方，独立的 TurnEvidence 测试没有账户来源时是 unknown。原生真正失败、归属校验、有界输入与实际停止证据不变。
 
 初始化里有非空且非 none 的 tokenSource 时账户事实为 confirmed，缺失、null、none 或不可读时为 unknown，不再拒绝或另起登录证明进程。ADR-027 的公共目录信任规则未改：unknown 账户读数被记录但不替换已确认目录，新的配置因此可能仍等进一步原生账户证据。这不是计费标签带来的拒绝。公共健康扫描仍处理原生 loggedIn:false、命令非零与停止未知；没有在这一批处理 F/G 类的固定字段判定。
 
 共用改动，供 3b/3c/3d 沿用：
 
 - `protocol.billing.native_provider(account, field)` 是新增的原生供应方读取函数，保持 harness 的拼写，缺失为 unknown，不限制供应方或登录方式。
-- `protocol.billing.claude_status` 保持原生已知 subscription/metered 分类，第三方或未知供应方的 API key 不能单独证明付费方式，标 unknown；API key 可能是套餐或网关凭据，不能估算计费。
-- `buddy/harnesses/discovery._candidate_handshake` 的 Claude 分支接受原生第三方供应方，并把计费放在实际报告的 provider 键下。
+- `protocol.billing.claude_status` 接收已由 Claude 模块统一为 anthropic 的状态，只凭已报告的 Anthropic 订阅事实标 subscription；任一供应方的 API key 都不能单独证明接口地址与付费方式，标 unknown，不能估算计费。
+- `buddy/harnesses/discovery._candidate_handshake` 的 Claude 分支接受原生第三方供应方，并把计费放在 Claude 模块统一后的语义 provider 键下。
 - `buddy/harnesses/discovery._discover` 原先丢掉候选握手的 billingByProvider，本批修在返回结果的根因处：保留被选中候选的已有计费事实，才会到达健康记录和 `billing.for_provider`。
 - `buddy/harnesses/runtime_selection.controller_environment` 与 `install/launcher` 的 allowlist 只清掉被删除的 Claude 策略与假 auth-status 控制变量，其他 harness 的运行模块和环境选择不变。
 
@@ -147,3 +147,68 @@ buddy.harnesses.claude.test_claude_worker.ClaudeWorkerTests.test_quota_failure_i
 ```
 
 Host 后续：在无套接字限制的环境跑上述测试与完整 Python 检查；执行计划所需的真实 Claude Worker/Router 回合要核对实际供应方、用户 MCP/skill、角色说明、会话不写盘；故障注入要核对杀子进程不虚报已停以及不留隔离主目录或凭据残余；将实际验收写入 `docs/acceptance/`，再决定安装。
+
+## Host 首轮打回后的修正
+
+Host 同意参数、环境与文件归类和假进程竞态根因，但未接受首轮产物；首轮的 192 项局部通过没有覆盖检查运行器和已有 Anthropic buddy 的持久目录重读，因此不能作为这两处行为的证明。Host 报告的前端通过由 Host 验证，本回合不运行前端。
+
+`cli/checks.test_environment` 曾从被删除的 Claude 配置模块导入第三方覆盖变量清单；它原本用来清除开发者 shell 中的供应方开关。原生子进程已由公共 allowlist 构造，额外按供应方清单过滤没有作用，现删掉该依赖与附加过滤。全仓审计又发现 `tests/python/support._child_environment` 的同一依赖，一并删除；两个函数保留私有测试根、运行时 pin 和凭据的过滤，不改原生环境的公共 allowlist。旧 SETTINGS_POLICY 在 Worker 夹具与原生用量夹具中的残余设置也删除，首轮测试里对退役开关的设置及断言同步清掉。
+
+供应方命名只在 `buddy/harnesses/claude/config.provider_from_account` 处理：firstParty 是 Claude Code 对厂商自己接口的标签，对应同一个既有 anthropic 供应方，不是新供应方，也不是限制第三方。目录、执行、额度与公共发现的计费键统一经过此函数；共用 `billing.native_provider` 仍保持任意 harness 的原值，没有 Claude 特例。计费函数只看已统一的 anthropic 名字，不再以 API key 推定按量收费。
+
+边界：用户把接口地址改到别处时，Claude Code 仍可能报告第一方，黑板分不出来，目录里就是 `anthropic`，计费标未知，这是它报告的事实，不另行识别接口地址。
+
+新增持久目录回归先建立并启用 `claude:anthropic:claude-fixture:max`、写入偏好，再用取消隔离后的 firstParty 原生握手目录进行两次相隔超过一小时的重读，断言只有同一个 profile_id，创建代次、启用、可用性和偏好保持，不进入 pending，也不出现 firstParty 的第二个 buddy；另保留 bedrock 原名进入目录并选中执行的回归。新增环境回归直接调用检查运行器与公共测试夹具的环境函数，确认 shell provider 开关不用旧清单过滤、仍不能进入原生子进程。修复前，两个新增回归分别因 ImportError 与 firstParty≠anthropic 失败；修复后通过。
+
+删除项审计使用 `rg -n -w` 在 `src tests packaging skills` 四个目录搜索下列每个名字，最终无匹配，没有引用、导入、设置或旧读法残留；文档中列名只说明删除事实。
+
+```text
+FIRST_PARTY_API_PROVIDERS
+THIRD_PARTY_OVERRIDE_VARIABLES
+MODEL_FALLBACK_VARIABLES
+NATIVE_ENVIRONMENT_ALLOWLIST
+EMPTY_MCP_CONFIG
+AUTH_STATUS_ARGUMENTS
+AUTH_STATUS_TIMEOUT_SECONDS
+AUTH_STATUS_MAX_BYTES
+third_party_overrides
+account_problem
+token_source_missing
+auth_status_problem
+read_auth_status
+settings_policy
+BUDDY_CLAUDE_SETTINGS_POLICY
+BUDDY_CLAUDE_FIXTURE_AUTH_STATUS
+AUTH_STATUS_RESPONSES
+verify_login
+```
+
+实际检查运行器验证用只读解释器 import `hey_my_buddy.cli.checks` 并调用 `test_environment(Path.cwd())`，成功；随后经真实 `checks.run_suite_child` 和它的 `child_environment` 跑 `buddy.harnesses.claude.test_claude_config`，9 项通过，未分发完整检查。CLI 没有只选一个文件的参数，`--jobs 1` 会跑全套并启动沙盒不支持的服务，因此按 Host 给出的最小验证边界运行；完整入口和其余需套接字的用例仍由 Host 运行。
+
+本回合最终复验 240 项通过，覆盖上一轮可运行测试、目录持久重读、checks 环境及并行运行器、纯原生用量回放；日志在忽略的 `tmp/batch3a-return-tests-final.log`，`git diff --check` 通过。纯第一方用量回放已有 anthropic 预期，现显式传入其夹具握手供应方，避免用没有账户来源的 unknown 默认来测试已知的第一方录音；未改原生额度的判定。
+
+一次较广的 244 项试跑中，除已修复的这处用量夹具外，以下四项因沙盒禁止 ps 进程枚举失败，错误明确为 residue status is unknown；最终 240 项不包含它们，不修改生产观察、不模拟已停，由 Host 在可观察进程的环境运行。
+
+```text
+cli.test_checks_cleanup.PrivateRootTeardownTests.test_teardown_drains_a_cooperative_supervisor
+cli.test_checks_cleanup.PrivateRootTeardownTests.test_teardown_removes_a_clean_private_root
+cli.test_checks_cleanup.PrivateRootTeardownTests.test_teardown_reports_a_surviving_process_with_unlinked_lock
+cli.test_checks_cleanup.PrivateRootTeardownTests.test_teardown_waits_out_a_live_process_with_unlinked_lock
+```
+
+受影响的原生用量文件还包含以下启动完整控制器的用例，未运行，由 Host 补全文件级检查（ZCode 类没有改动）：
+
+```text
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_completed_turn_publishes_the_execution_summary_and_quota
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_missing_result_usage_falls_back_to_the_bound_assistant_records
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_a_quota_rejection_retains_usage_quota_and_the_last_root_message
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_an_oversized_assistant_text_is_bounded_with_its_full_provenance
+blackboard.evaluation.test_other_native_observations.ClaudeAdapterObservationTests.test_no_native_usage_reports_unknown_not_zero
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_delta_only_turn_uses_the_partial_stream_fallback
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_failed_quota_turn_keeps_its_native_code_and_last_message
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_lost_cursor_is_never_counted_as_this_attempt
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_resumed_session_counts_only_the_new_turn
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_stalled_optional_read_cannot_change_the_turn
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_turn_publishes_the_bound_root_message_tokens
+blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_no_native_usage_reports_unknown_not_zero
+```

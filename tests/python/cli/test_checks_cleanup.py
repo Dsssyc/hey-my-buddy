@@ -41,6 +41,21 @@ def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01):
 
 
 class ChecksEnvironmentTests(unittest.TestCase):
+    def test_shell_provider_flags_need_no_retired_isolation_list(self):
+        from hey_my_buddy.buddy.harnesses.discovery import native_environment
+        from support import _child_environment
+
+        with patch.dict(os.environ, {"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1"}):
+            environment = checks.test_environment(Path("/repo"))
+            with tempfile.TemporaryDirectory() as directory:
+                fixture_environment = _child_environment(Path(directory))
+        self.assertEqual(environment["CLAUDE_CODE_USE_BEDROCK"], "1")
+        self.assertEqual(fixture_environment["CLAUDE_CODE_USE_BEDROCK"], "1")
+        native = native_environment(environment)
+        self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", native)
+        self.assertNotIn("CLAUDE_CODE_USE_VERTEX", native)
+        self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", native_environment(fixture_environment))
+
     def test_environment_is_private_and_unpinned(self):
         inherited = {
             "BUDDY_STATE_DIR": "/wrong-state",

@@ -94,6 +94,7 @@ from .config import (
     discovery_args,
     execution_args,
     native_environment,
+    provider_from_account,
     sandbox_settings,
 )
 from .protocol import (
@@ -125,10 +126,8 @@ supported_request_controls = ("network_allowed_domains", "additional_denied_tool
 
 def _catalog(initialize: dict, version: str) -> dict:
     """Read native model and account facts without selecting a provider or login."""
-    from ....protocol.billing import native_provider
-
     account = initialize.get("account")
-    provider = native_provider(account, "apiProvider")
+    provider = provider_from_account(account)
     token_source = account.get("tokenSource") if isinstance(account, dict) else None
     account_status = "confirmed" if isinstance(token_source, str) and token_source not in ("", "none") else "unknown"
     entries = initialize.get("models")

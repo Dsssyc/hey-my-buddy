@@ -51,11 +51,11 @@ class BillingQuotaTests(BoardTestCase):
         self.assertEqual(codex_account({"type": "chatgpt", "planType": "free"}, stamp())["kind"], "unknown")
         self.assertEqual(codex_account({"type": "apiKey"}, stamp())["kind"], "metered")
         self.assertEqual(codex_account({"type": "other"}, stamp())["kind"], "unknown")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic",
                                        "authMethod": "claude.ai", "subscriptionType": "pro"}, stamp())["kind"], "subscription")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty",
-                                       "authMethod": "api_key"}, stamp())["kind"], "metered")
-        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "firstParty"}, stamp())["kind"], "unknown")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic",
+                                       "authMethod": "api_key"}, stamp())["kind"], "unknown")
+        self.assertEqual(claude_status({"loggedIn": True, "apiProvider": "anthropic"}, stamp())["kind"], "unknown")
         self.assertEqual(zcode_access("zhipu-coding-plan-api-key", stamp())["kind"], "subscription")
         self.assertEqual(zcode_access("api-key", stamp())["kind"], "metered")
         self.assertEqual(zcode_access("oauth", stamp())["kind"], "unknown")
@@ -65,7 +65,7 @@ class BillingQuotaTests(BoardTestCase):
             self.assertEqual(native_provider({"apiProvider": provider}, "apiProvider"), provider)
         for account in (None, {}, {"apiProvider": None}, {"apiProvider": ""}):
             self.assertEqual(native_provider(account, "apiProvider"), "unknown")
-        for provider in ("bedrock", "vertex", "foundry", "custom-gateway", None):
+        for provider in ("anthropic", "bedrock", "vertex", "foundry", "custom-gateway", None):
             billing = claude_status({"loggedIn": True, "apiProvider": provider, "authMethod": "api_key"}, stamp())
             self.assertEqual(billing["kind"], "unknown")
             self.assertEqual(billing["source"], "claude/auth-status")

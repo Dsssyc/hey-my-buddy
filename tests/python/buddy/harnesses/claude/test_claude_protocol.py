@@ -86,7 +86,7 @@ class QuotaParsingTests(unittest.TestCase):
 
 class TurnEvidenceTests(unittest.TestCase):
     def test_quota_facts_keep_the_native_provider_without_assuming_anthropic(self):
-        for provider in ("bedrock", "firstParty", "unknown"):
+        for provider in ("bedrock", "anthropic", "unknown"):
             with self.subTest(provider=provider):
                 evidence = TurnEvidence("session", "/fixture", provider=provider)
                 evidence.observe({"type": "rate_limit_event", "rate_limit_info": {

@@ -54,6 +54,14 @@ class ClaudeUnavailable(Exception):
     pass
 
 
+def provider_from_account(account: object) -> str:
+    """Claude's firstParty API label names the existing Anthropic provider."""
+    from ....protocol.billing import native_provider
+
+    provider = native_provider(account, "apiProvider")
+    return "anthropic" if provider == "firstParty" else provider
+
+
 def cli_command(environment: dict | None = None) -> list[str]:
     env = os.environ if environment is None else environment
     if not (os.environ.get("BUDDY_DEV_SOURCE") == "1" and env.get("BUDDY_CLAUDE_CLI")):

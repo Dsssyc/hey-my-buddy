@@ -675,10 +675,12 @@ def _candidate_handshake(adapter: str, candidate: dict, environment: dict, deadl
             if code is not None:
                 result["reasonCode"] = code
                 return result
-            from ...protocol.billing import claude_status, native_provider
+            from .claude.config import provider_from_account
+            from ...protocol.billing import claude_status
             from datetime import datetime, timezone
             observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            result["billingByProvider"] = {native_provider(account, "apiProvider"): claude_status(account, observed_at)}
+            provider = provider_from_account(account)
+            result["billingByProvider"] = {provider: claude_status({**account, "apiProvider": provider}, observed_at)}
         result.update(status="ready", command=command,
                       reasonCode="version-unknown" if match is None else None)
         return result
