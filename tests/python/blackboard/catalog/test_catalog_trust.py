@@ -86,6 +86,42 @@ class CatalogTrustTests(BoardTestCase):
         with self.board.store.db.read() as db:
             self.assertIsNone(catalog.pending_model_efforts(db, 'dsh', 'fixture', 'alpha'))
 
+    def publish_with_retained_old_account(self, account_status):
+        # Legacy retained rows may survive until publication. The publisher
+        # checks their binding before overwriting catalog-account, independently
+        # of the normal Accounts._invalidate path.
+        from hey_my_buddy.blackboard.catalog import accounts
+        from hey_my_buddy.blackboard.store.db import canonical_json
+        self.record(reading())
+        self.record(reading(models=()))
+        with self.evaluation.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+            accounts._write(db, 'account-credential:' + canonical_json(['dsh', 'native']), 1)
+            row = db.execute("SELECT record_json FROM harness_health WHERE adapter='dsh'").fetchone()
+            health = json.loads(row[0])
+            health['account'] = accounts.identity(accounts.selection(db, 'dsh'))
+            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='dsh'", (canonical_json(health),))
+            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'), 'Even a persisted TTL belongs to its account')
+            self.assertEqual(catalog.pending_families(db), {})
+            db.execute("UPDATE evaluation_profiles SET available=0,unavailable_reason='HARNESS_UNHEALTHY' WHERE adapter='dsh'")
+            self.assertEqual(catalog.restore_retained_availability(db, 'dsh'), 0)
+        self.record(reading(models=(), account_status=account_status))
+        row, pending, read_at, profiles = self.state()
+        self.assertEqual(pending, {})
+        self.assertFalse(profiles[0]['available'])
+        self.assertEqual(profiles[0]['unavailable_reason'], 'ACCOUNT_BINDING_CHANGED')
+        self.assertEqual(read_at, self.clock.value if account_status == 'confirmed' else None)
+        if account_status == 'unknown':
+            self.assertIsNone(row['discovery_id'], 'An unknown read cannot keep a different account payload current')
+        self.assertEqual([kind for kind, _ in self.events()], ['catalog.model_pending'],
+                         'The new account does not transition the old account model')
+
+    def test_publication_unknown_cannot_restore_a_retained_old_account_directory(self):
+        self.publish_with_retained_old_account('unknown')
+
+    def test_publication_confirmed_empty_checks_old_binding_before_adoption(self):
+        self.publish_with_retained_old_account('confirmed')
+
     def test_c03_first_absence_is_pending_before_the_window_and_unavailable_after(self):
         self.record(reading())
         self.record(reading(models=()))

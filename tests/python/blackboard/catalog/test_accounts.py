@@ -275,6 +275,12 @@ class AccountServiceTests(WorkflowTestCase):
             pass
         self.ready(board, 'dsh')
         with board.store.db.read() as db:
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [],
+                             'New credentials need their own trusted catalog before routing')
+        from support import FIXTURE_CATALOG
+        board.evaluation.record_catalog({**FIXTURE_CATALOG, 'discoveries': [
+            {'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]})
+        with board.store.db.read() as db:
             self.assertEqual(len(DecisionCoordinator._select_candidates(db, [], coding_only=True)), 1)
 
     def test_account_query_limits_and_late_readback_are_bound_to_frozen_credentials(self):

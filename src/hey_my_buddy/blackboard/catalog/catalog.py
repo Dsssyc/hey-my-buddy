@@ -48,7 +48,7 @@ RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
 #: Unavailable reasons that are catalog facts, never undone by health recovery.
 #: A 0 left behind by a harness health failure is a health fact, not evidence
 #: that the native model disappeared (ADR-027 rules 1 and 2).
-CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
+CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "ACCOUNT_BINDING_CHANGED")
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 CATALOG_REMEDY = "Run buddy adapters with refresh:true"
@@ -85,7 +85,18 @@ def _family_key(provider: str, model: str) -> str:
     return provider + "\x1f" + model
 
 
+def catalog_account_matches(db, adapter: str, *, account: dict | None = None) -> bool:
+    """Whether retained catalog facts belong to the selected credential identity."""
+    from .accounts import identity, selection
+    saved = db.execute("SELECT value FROM meta WHERE key=?", ("catalog-account:" + adapter,)).fetchone()
+    retained = json.loads(saved[0]) if saved else {"source": "native", "credentialRevision": 0}
+    selected = account if account is not None else selection(db, adapter)
+    return identity(retained) == identity(selected)
+
+
 def _pending_map(db, adapter: str) -> dict:
+    if not catalog_account_matches(db, adapter):
+        return {}
     row = db.execute("SELECT value FROM meta WHERE key=?", (_PENDING_PREFIX + adapter,)).fetchone()
     if row is None:
         return {}
@@ -167,6 +178,8 @@ def catalog_read_at(db, adapter: str) -> str | None:
     account binding never inherits the old account's time, and a board without
     an adopted discovery stays without a read time (cold start).
     """
+    if not catalog_account_matches(db, adapter):
+        return None
     row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
     if row is not None:
         return row[0]
@@ -175,11 +188,6 @@ def catalog_read_at(db, adapter: str) -> str | None:
         " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
         (adapter,)).fetchone()
     if current is None or current["discovery_id"] is None or current["discovered_at"] is None:
-        return None
-    from .accounts import identity, selection
-    saved = db.execute("SELECT value FROM meta WHERE key=?", ("catalog-account:" + adapter,)).fetchone()
-    account = json.loads(saved[0]) if saved else {"source": "native", "credentialRevision": 0}
-    if identity(account) != identity(selection(db, adapter)):
         return None
     return current["updated_at"] if current["status"] == "complete" else current["discovered_at"]
 
@@ -224,6 +232,8 @@ def restore_retained_availability(db, adapter: str) -> int:
     confirmed absence, a retired effort and a native unavailable declaration are
     catalog facts and are never restored here.
     """
+    if not catalog_account_matches(db, adapter):
+        return 0
     row = db.execute(
         "SELECT d.payload_json FROM catalog_current c"
         " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
@@ -252,6 +262,8 @@ def restore_retained_availability(db, adapter: str) -> int:
 
 def catalog_account_status(db, adapter: str) -> str:
     """The account-status fact of the last trusted reading; unknown without one."""
+    if not catalog_account_matches(db, adapter):
+        return "unknown"
     row = db.execute("SELECT value FROM meta WHERE key=?", (_ACCOUNT_STATUS_PREFIX + adapter,)).fetchone()
     return row[0] if row is not None and row[0] in ACCOUNT_STATUSES else "unknown"
 

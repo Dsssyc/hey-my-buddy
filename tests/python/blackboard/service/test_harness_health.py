@@ -360,6 +360,31 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertTrue(self.health.refresh('dsh', force=True)['available'])
         self.assert_catalog_survives()
 
+    def test_new_credential_health_refresh_cannot_restore_old_catalog_profiles(self):
+        from hey_my_buddy.blackboard.catalog import accounts, catalog
+        from hey_my_buddy.blackboard.store.db import canonical_json
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        with self.board.store.db.write() as db:
+            accounts._write(db, 'account-credential:' + canonical_json(['dsh', 'native']), 1)
+            accounts._invalidate(db, 'dsh', accounts.selection(db, 'dsh'))
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        profiles = self.profiles()
+        self.assertEqual(set(profiles), set(self.before))
+        self.assertTrue(all(item['enabled'] and not item['available'] for item in profiles.values()))
+        self.assertTrue(all(item['catalogStatus'] == 'unavailable' for item in profiles.values()))
+        # A path recheck and non-ready health write must preserve the binding
+        # reason, so later unknown reads cannot disguise these historical rows.
+        with patch.object(self.health, 'refresh', return_value={}):
+            self.health.set_path('dsh', None)
+        self.health.invalidate('dsh', self.health.get('dsh')['revision'], 'HARNESS_HANDSHAKE_FAILED')
+        self.assertTrue(self.health.refresh('dsh', force=True)['available'])
+        self.assertTrue(all(item.get('unavailableReason') == 'ACCOUNT_BINDING_CHANGED'
+                            for item in self.profiles().values()))
+        with self.board.store.db.read() as db:
+            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'))
+            self.assertEqual(catalog.pending_families(db), {})
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
+
 
 class StaleRereadServiceCallbackTests(BoardTestCase):
     """The stale-catalog re-read through the real service callback (rule 4)."""

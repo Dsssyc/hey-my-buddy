@@ -7,9 +7,12 @@ remedy (C05). Health availability and adopted catalog facts stay separate: a
 health failure never masks or resurrects catalog state.
 """
 from datetime import datetime, timedelta, timezone
+import json
+from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog import catalog, catalog_store
+from hey_my_buddy.blackboard.catalog import accounts, catalog, catalog_store
+from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 
 
@@ -52,7 +55,166 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
     def listed_profile(self):
         listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})
-        return next(item for item in listed['profiles'] if item['model'] == 'alpha')
+        return next(item for item in listed['profiles'] if item['profileId'] == 'dsh:fixture:alpha:max')
+
+    def switch_catalog_account(self, *, source='native', credential_revision=1):
+        # Only private, nonsecret selection metadata changes. No account flow,
+        # environment provider, credential file or native discovery is used.
+        if source == 'worker':
+            self.enterContext(patch.object(accounts, 'capabilities', return_value={
+                name: True for name in accounts.CAPABILITIES}))
+        with self.board.store.db.write() as db:
+            accounts._write(db, 'account-selection:dsh', {'source': source, 'revision': 1})
+            accounts._write(db, 'account-credential:' + canonical_json(['dsh', source]), credential_revision)
+            selected = accounts.selection(db, 'dsh')
+            accounts._invalidate(db, 'dsh', selected)
+            db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE adapter='dsh'",
+                       (_later(3600), _later(180)))
+        self.assertTrue(self.board.service.harnesses.get('dsh')['available'])
+        return selected
+
+    def assert_old_account_model_is_excluded(self):
+        profile = self.listed_profile()
+        self.assertFalse(profile['available'], 'A healthy new account cannot adopt the old account model')
+        self.assertEqual(profile['catalogStatus'], 'unavailable')
+        self.assertNotIn('pendingSince', profile)
+        self.assertTrue(profile['enabled'], 'Account invalidation preserves user intent')
+        snapshot = self.evaluation.snapshot({})
+        self.assertNotIn(profile['profileId'], [item['profileId'] for item in snapshot['profiles']],
+                         'The current snapshot excludes the old account candidate')
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        with self.board.store.db.read() as db:
+            self.assertEqual(DecisionCoordinator._select_candidates(db, [], coding_only=True), [])
+            self.assertEqual(catalog.pending_families(db), {})
+        calls = []
+        catalog.register_catalog_reread(self.directory, calls.append)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate()
+        self.assertEqual(rejected.exception.code, 'CONFIGURATION_UNAVAILABLE')
+        self.assertEqual(calls, ['dsh'])
+
+    def account_change_reading(self, *, source, account_status):
+        self.evaluation.record_catalog(reading())
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.switch_catalog_account(source=source, credential_revision=1 if source == 'native' else 0)
+        # Direct health restoration also obeys the catalog binding before any
+        # new observation is published.
+        with self.board.store.db.write() as db:
+            self.assertEqual(catalog.restore_retained_availability(db, 'dsh'), 0)
+        self.evaluation.record_catalog(reading(models=(), account_status=account_status))
+        self.assert_old_account_model_is_excluded()
+        with self.board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
+            self.assertEqual(catalog.catalog_read_at(db, 'dsh'),
+                             self.clock.value if account_status == 'confirmed' else None)
+
+    def test_credential_change_unknown_read_cannot_restore_old_account_model(self):
+        self.account_change_reading(source='native', account_status='unknown')
+
+    def test_credential_change_confirmed_empty_does_not_pend_old_account_model(self):
+        self.account_change_reading(source='native', account_status='confirmed')
+
+    def test_source_change_unknown_read_cannot_restore_old_account_model(self):
+        self.account_change_reading(source='worker', account_status='unknown')
+
+    def test_source_change_confirmed_empty_does_not_pend_old_account_model(self):
+        self.account_change_reading(source='worker', account_status='confirmed')
+
+    def new_account_reports_same_model(self, *, source):
+        self.evaluation.record_catalog(reading())
+        self.evaluation.record_catalog(reading(models=()))
+        old_observation = catalog_store.begin(self.evaluation, 'old-account-slow')
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.clock.advance(7 * 3600)
+        self.switch_catalog_account(source=source, credential_revision=1 if source == 'native' else 0)
+        self.assert_old_account_model_is_excluded()
+        self.evaluation.record_catalog(reading(models=(), account_status='unknown'))
+        with self.board.store.db.read() as db:
+            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'))
+            self.assertEqual(catalog.catalog_account_status(db, 'dsh'), 'unknown')
+        slow = catalog_store.begin(self.evaluation, 'new-account-slow')
+        fast = catalog_store.begin(self.evaluation, 'new-account-fast')
+        payload = reading(models=('alpha', 'beta'), efforts=('high',))
+        for model in payload['providers'][0]['models']:
+            model.update(description='new account metadata', contextWindow=123456)
+        result = self.evaluation.record_catalog(payload, fast['observationId'])
+        duplicate = self.evaluation.record_catalog(payload, fast['observationId'])
+        self.assertTrue(duplicate['duplicate'])
+        self.assertEqual(duplicate['tableRevision'], result['tableRevision'])
+        for observation in (old_observation, slow):
+            stale = self.evaluation.record_catalog(reading(models=()), observation['observationId'])
+            self.assertEqual(stale['staleAdapters'], ['dsh'])
+            self.assertEqual(stale['appliedAdapters'], [])
+        profiles = {item['profileId']: item for item in catalog_store.profiles(
+            self.evaluation, {'includeUnavailable': True})['profiles']}
+        self.assertFalse(profiles['dsh:fixture:alpha:max']['available'])
+        self.assertTrue(profiles['dsh:fixture:alpha:max']['enabled'])
+        alpha = profiles['dsh:fixture:alpha:high']
+        self.assertTrue(alpha['available'])
+        self.assertFalse(alpha['enabled'], 'A new effort still requires user enablement')
+        self.assertEqual(alpha['description'], 'new account metadata')
+        self.assertEqual(alpha['contextWindow'], 123456)
+        self.assertEqual(alpha['catalogStatus'], 'available')
+        self.assertEqual(self.validate({**IDENTITY, 'effort': 'high'}), {**IDENTITY, 'effort': 'high'})
+        with self.assertRaises(BoardError) as rejected:
+            self.validate()
+        self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
+        self.assertEqual(rejected.exception.details['legalEfforts'], ['high'])
+        # Restore the original exact profile only when the new account reports
+        # that effort. Its metadata changes; its ID and enabled intent survive.
+        payload = reading(models=('alpha', 'beta'))
+        payload['providers'][0]['models'][0].update(description='new exact profile', contextWindow=654321)
+        self.evaluation.record_catalog(payload)
+        alpha = self.listed_profile()
+        self.assertEqual(alpha['profileId'], 'dsh:fixture:alpha:max')
+        self.assertEqual(alpha['description'], 'new exact profile')
+        self.assertEqual(alpha['contextWindow'], 654321)
+        self.assertTrue(alpha['available'])
+        self.assertTrue(alpha['enabled'])
+        self.assertEqual(self.validate(), IDENTITY)
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        with self.board.store.db.read() as db:
+            self.assertEqual([row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)],
+                             ['dsh:fixture:alpha:max'])
+            self.assertEqual(catalog.catalog_read_at(db, 'dsh'), self.clock.value)
+        snapshot = next(item for item in self.evaluation.snapshot({})['profiles'] if item['profileId'] == alpha['profileId'])
+        self.assertEqual(snapshot['description'], 'new exact profile')
+        self.assertEqual(snapshot['catalogStatus'], 'available')
+        self.assertNotIn('pendingSince', snapshot)
+        # A later absence starts this account's own full one-hour window.
+        self.evaluation.record_catalog(reading(models=('beta',)))
+        first_absence = self.clock.value
+        self.clock.advance(3599)
+        self.evaluation.record_catalog(reading(models=('beta',)))
+        self.assertTrue(self.listed_profile()['available'])
+        self.clock.advance(2)
+        self.evaluation.record_catalog(reading(models=('beta',)))
+        self.assertFalse(self.listed_profile()['available'])
+        self.evaluation.record_catalog(reading(models=('alpha', 'beta')))
+        with self.board.store.db.read() as db:
+            events = db.execute("SELECT kind,payload_json FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq").fetchall()
+        self.assertEqual([row['kind'] for row in events], ['catalog.model_pending', 'catalog.model_pending',
+                         'catalog.model_unavailable', 'catalog.model_recovered'])
+        self.assertEqual(json.loads(events[1]['payload_json'])['pendingSince'], first_absence)
+        self.assertEqual(json.loads(events[2]['payload_json'])['pendingSince'], first_absence)
+
+    def test_credential_change_same_model_uses_new_metadata_and_observation_fences(self):
+        self.new_account_reports_same_model(source='native')
+
+    def test_source_change_same_model_uses_new_metadata_and_observation_fences(self):
+        self.new_account_reports_same_model(source='worker')
+
+    def test_source_round_trip_without_trusted_reading_cannot_reuse_old_directory(self):
+        self.evaluation.record_catalog(reading())
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.switch_catalog_account(source='worker', credential_revision=0)
+        self.evaluation.record_catalog(reading(models=(), account_status='unknown'))
+        self.switch_catalog_account(source='native', credential_revision=0)
+        self.evaluation.record_catalog(reading(models=()))
+        self.assert_old_account_model_is_excluded()
 
     def test_c02_pending_model_is_still_accepted_explicitly(self):
         self.evaluation.record_catalog(reading())

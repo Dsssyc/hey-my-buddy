@@ -2634,7 +2634,7 @@ class EvaluationStore:
             if since:
                 view["catalogStatus"] = "pending"
                 view["pendingSince"] = since
-            elif not row["available"] and row["unavailable_reason"] == CONFIRMED_ABSENCE_REASON:
+            elif not row["available"] and row["unavailable_reason"] in (CONFIRMED_ABSENCE_REASON, 'ACCOUNT_BINDING_CHANGED'):
                 view["catalogStatus"] = "unavailable"
             else:
                 view["catalogStatus"] = "available"
