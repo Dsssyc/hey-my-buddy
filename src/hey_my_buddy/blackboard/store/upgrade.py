@@ -122,16 +122,25 @@ def _account_reason(code: str | None, *, harness: str) -> dict | None:
     return make_reason(_ACCOUNT_CODES[code])
 
 
+# Fields read_health added to the schema-24 record before freezing an observation.
+_HEALTH_VIEW_FIELDS = frozenset({
+    'billingByProvider', 'quota', 'quotaRouting', 'harness', 'available', 'status',
+    'account', 'revision', 'manualPath', 'checkedAt', 'expiresAt', 'scanAfter',
+    'systemSandbox', 'readOnlyStructured',
+})
+
+
 def _health_record(value: dict, *, owning_harness: str | None = None, status: str | None = None,
-                   refresh_errors: set[tuple[str, str]] | None = None) -> dict:
+                   refresh_errors: set[tuple[str, str]] | None = None, snapshot: bool = False) -> dict:
     """Change known health-owned reason sites, leaving native diagnostics intact."""
     harness = value.get('harness') or owning_harness
     if 'reason' not in value and 'reasonCode' not in value:
-        bare_claim = not value or value == {'lastProbe': None}
-        unknown_probe_after_claim = (set(value) == {'lastProbe'} and
-                                     isinstance(value['lastProbe'], dict) and
-                                     set(value['lastProbe']) == {'status', 'reasonCode', 'observedAt', 'candidates'} and
-                                     value['lastProbe']['status'] == 'unknown')
+        record = {key: item for key, item in value.items() if key not in _HEALTH_VIEW_FIELDS} if snapshot else value
+        bare_claim = not record or record == {'lastProbe': None}
+        unknown_probe_after_claim = (set(record) == {'lastProbe'} and
+                                     isinstance(record['lastProbe'], dict) and
+                                     set(record['lastProbe']) == {'status', 'reasonCode', 'observedAt', 'candidates'} and
+                                     record['lastProbe']['status'] == 'unknown')
         ready_without_root_reason = status == 'ready' and value.get('status') == 'ready'
         if status == 'unknown' and (bare_claim or unknown_probe_after_claim):
             # Schema 24's bare scan claim started with {}; an unknown probe
@@ -313,7 +322,7 @@ def _upgrade_catalog_and_health(connection: sqlite3.Connection) -> None:
                            (canonical_json(value), row[0]))
     copied_reasons = {}
     for row in connection.execute('SELECT observation_id,harnesses_json,response_json FROM catalog_observations').fetchall():
-        harnesses = [_health_record(item, status=item['status'], refresh_errors=refresh_errors)
+        harnesses = [_health_record(item, status=item['status'], refresh_errors=refresh_errors, snapshot=True)
                      for item in json.loads(row[1])]
         response = json.loads(row[2]) if row[2] is not None else None
         if response is not None:

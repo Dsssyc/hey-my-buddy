@@ -940,6 +940,51 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(record['lastProbe']['reason'],
                          {'code': 'harness.scan-timeout', 'params': {'operation': 'probe'}})
 
+    def test_unprobed_health_observation_views_use_the_underlying_record_shape(self):
+        raw_records = ({}, {'lastProbe': None}, {
+            'lastProbe': {'status': 'unknown', 'reasonCode': 'scan-timeout',
+                          'observedAt': '2026-10-16T00:00:00Z', 'candidates': []},
+        })
+        for index, raw_record in enumerate(raw_records):
+            with self.subTest(raw_record=raw_record):
+                fixture, connection = self.restored('unprobed-health-view-' + str(index))
+                observation = connection.execute('SELECT observation_id,harnesses_json FROM catalog_observations '
+                                                 'LIMIT 1').fetchone()
+                snapshots = json.loads(observation['harnesses_json'])
+                original = next(item for item in snapshots if item['harness'] == 'codex')
+                # 0.42.0 read_health returned the raw record plus these view
+                # fields; it added no root reasonCode for an existing row.
+                snapshot = {key: original[key] for key in (
+                    'billingByProvider', 'quota', 'quotaRouting', 'harness', 'available', 'status',
+                    'account', 'revision', 'manualPath', 'checkedAt', 'expiresAt', 'scanAfter',
+                    'systemSandbox', 'readOnlyStructured',
+                )}
+                snapshot.update(raw_record)
+                snapshot.update(status='unknown', available=False, revision=1,
+                                billingByProvider={}, manualPath=None, checkedAt=None, expiresAt=None,
+                                account={'harness': 'codex', 'status': 'unknown', 'accountType': None,
+                                         'checkedAt': None, 'reasonCode': 'ACCOUNT_NOT_CHECKED',
+                                         'guidance': 'Refresh the harness to obtain a native observation.'})
+                snapshots[snapshots.index(original)] = snapshot
+                connection.execute('UPDATE catalog_observations SET harnesses_json=? WHERE observation_id=?',
+                                   (json.dumps(snapshots), observation['observation_id']))
+                connection.commit()
+                upgrade_schema_24_to_25(fixture['state'])
+                stored = json.loads(connection.execute('SELECT harnesses_json FROM catalog_observations '
+                                                        'WHERE observation_id=?',
+                                                        (observation['observation_id'],)).fetchone()[0])
+                upgraded = next(item for item in stored if item['harness'] == 'codex')
+                self.assertEqual(upgraded['reason'], {'code': 'harness.not-checked', 'params': {'operation': 'probe'}})
+                self.assertEqual(upgraded['account']['reason'], {'code': 'account.not-checked', 'params': {}})
+                for key in ('billingByProvider', 'quota', 'quotaRouting', 'harness', 'available', 'status',
+                            'revision', 'manualPath', 'checkedAt', 'expiresAt', 'scanAfter', 'systemSandbox'):
+                    self.assertEqual(upgraded[key], snapshot[key])
+                if index == 2:
+                    self.assertEqual(upgraded['lastProbe']['reason'],
+                                     {'code': 'harness.scan-timeout', 'params': {'operation': 'probe'}})
+                else:
+                    self.assertEqual(upgraded.get('lastProbe'), raw_record.get('lastProbe'))
+
     def test_unknown_health_shape_without_reason_rolls_back(self):
         fixture, connection = self.restored('unknown-health-shape')
         connection.execute("UPDATE harness_health SET status='unknown',record_json=? WHERE harness='codex'",
