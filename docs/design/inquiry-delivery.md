@@ -92,7 +92,7 @@ Codex 的 11 条 unavailable 中，**7 条已在同一原生回合内送达并�
 
 `5d4f7824`、`9e29454d`、`7cd124f4`、`1bd9c643`、`67c37d96`、`9d9d9dc8`、`620eb14a` 的答案都早于各自原生回合结束，导出消息却仍 answer:null、state:unavailable。送达耗时是从创建起约 44–181 ms，均有 turn/steer 的成功关联，不支持“回合已完成才尝试送”“桥未激活”“steer 被拒”这几种解释。原生 user message 的写入可能晚于 RPC 接受和 journal.deliveredAt，不能把那几秒差当作运输失败。
 
-`bc620007` / `owner-proposal-review-close-1` 的 J 第 3 行在 2026-10-21T03:05:47.029651Z 已记 answer，原生 N11 第 118 行在 03:05:46.993Z 发起对应答复调用。get.O 的 `unansweredDeliveredInquiries:0` 与此一致。还留存的 `<state>/harnesses/codex/micro-tasks/8990e6ce22dfb31c38f5f22de71ff502fd8b7ae368bead63b4b053c494a8d5bf/attempts/f160eb6b-7cc2-4f88-a22a-5c852212b79a/run-c44de143fe814f0a9992f80426182dbb/inquiry-report.json` 为 answered:1、queued:0、delivered:0、unansweredDelivered:0。该目录 `native-turn-facts.json` 确认同一个原生 turn completed。`native.stderr.log` 有 skill 扫描和一次内部 collab spawn 错误，没有该问询投递失败；J 与 N 已给出成功的直接证据。故这条并非“已送达但模型未答”。
+`bc620007` / `owner-proposal-review-close-1` 的 J 第 3 行在 2026-10-21T03:05:47.029651Z 已记 answer，原生 N11 第 118 行在 03:05:46.993Z 发起对应答复调用。`O.provenance.unansweredDeliveredInquiries:0` 与此一致。还留存的 `<state>/harnesses/codex/micro-tasks/8990e6ce22dfb31c38f5f22de71ff502fd8b7ae368bead63b4b053c494a8d5bf/attempts/f160eb6b-7cc2-4f88-a22a-5c852212b79a/run-c44de143fe814f0a9992f80426182dbb/inquiry-report.json` 为 answered:1、queued:0、delivered:0、unansweredDelivered:0。该目录 `native-turn-facts.json` 确认同一个原生 turn completed。`native.stderr.log` 有 skill 扫描和一次内部 collab spawn 错误，没有该问询投递失败；J 与 N 已给出成功的直接证据。故这条并非“已送达但模型未答”。
 
 ### 源码中的断点
 
@@ -120,7 +120,7 @@ Codex 的 11 条 unavailable 中，**7 条已在同一原生回合内送达并�
 
 ### Lead、静默帧与原生拒绝的排查边界
 
-两条 Lead 自己的异常（`b3-q2`、`b3-q5`）分别在 c23b3dae 第 2、3 回合运行期间提出，而且都已答。`get-c23b3dae…json` 的 `audit.turns` 显示后面的 waiting 回合为 09:31:00.253Z–09:34:51.296Z、10:44:38.477Z–10:54:57.611Z、10:55:01.486Z–11:00:22.573Z、11:00:24.705Z–11:00:57.838Z；这些 waiting 交回后直到下次回合创建的区间不与这两条提问相交。cda72b0d 是名下 Worker，并非当时在等待的 Lead。此 11 条没有一条可确认为“Lead 等待、没有原生回合”导致漏投。
+两条 Lead 自己的异常（`b3-q2`、`b3-q5`）分别在 c23b3dae 第 2、3 回合运行期间提出，而且都已答。`get-c23b3dae-4f00-4877-a1ae-61c89d74291e.json` 的 `audit.turns` 显示第 4、6、7、8 回合以 waiting 交回；从各次交回到下次回合创建的等待区间是 2026-10-18 的 09:34:51.296Z–10:32:01.049Z、10:54:57.611Z–10:55:01.486Z、11:00:22.573Z–11:00:24.705Z、11:00:57.838Z–11:05:53.769Z，均不与这两条提问相交。这里按服务回合记录判断接续间隔，不用它证明底层进程组停止。cda72b0d 是名下 Worker，并非当时在等待的 Lead。此 11 条没有一条可确认为“Lead 等待、没有原生回合”导致漏投。
 
 Codex `protocol.Connection.pump` 在 finally 调用 after_pump；`_pump_one` 的队列等待上限 0.2 秒，超时返回仍走 finally；`native_run._wire.dispatch_feedback` 再调用 poll。因此“没有原生帧，所以 poll 不调用”与当前源码不符。本次假 peer 在首帧前完全静默，仍收到 steer。长工具也不等于 Python 控制器停止 pump；日志里无模型输出不能用来证明控制器阻塞。若未来要归因于 poll 停顿，需控制器 tick/队列时间与调用区间的证据。
 
@@ -128,7 +128,7 @@ Codex `protocol.Connection.pump` 在 finally 调用 after_pump；`_pump_one` 的
 
 ## 四、模型无关复现
 
-脚本在本检出的忽略目录 `tmp/inquiry-diagnosis/reproduce.py`，结果 `tmp/inquiry-diagnosis/reproduction-result.jsonl`；原生时间线字段提取脚本为 `tmp/inquiry-diagnosis/inspect_timeline.py`，只输出必要字段到 `timelines.jsonl`。这些是本次交付的临时材料，不进入产品测试。复现使用锁定依赖（Python 3.12.10），只建全新的 tmp 内私有 BoardStore；以内部 command fixture 记录建立 attempt，不启动命令执行，不创建微任务，不启动服务，不运行真实 harness，也没有模型或日常服务调用。
+脚本在本检出的忽略目录 `tmp/inquiry-diagnosis/reproduce.py`，结果 `tmp/inquiry-diagnosis/reproduction-result.jsonl`；原生时间线字段提取脚本为 `tmp/inquiry-diagnosis/inspect_timeline.py`，只输出必要字段到 `timelines.jsonl`。`verify_report.py` 在原处重读导出、原生记录与问询日志，校验消息表、绑定、时刻、原生行号和分类，输出必要字段到 `verification-result.txt`，退出 0。这些是本次交付的临时材料，不进入产品测试。复现使用锁定依赖（Python 3.12.10），只建全新的 tmp 内私有 BoardStore；以内部 command fixture 记录建立 attempt，不启动命令执行，不创建微任务，不启动服务，不运行真实 harness，也没有模型或日常服务调用。
 
 从检出根运行：
 
@@ -144,6 +144,8 @@ env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY 
 
 假 peer 是同一脚本 `--fake-peer` 分支的普通 Python 子进程，只通过 JSONL 回应 turn/steer 和发起 root answer 请求。运输用真实 `Connection`、投递用真实 `_NativeInquiry.poll/answer`、持久化用真实 InquiryBridge；peer 在收到 steer 之前不输出任何帧。运行先等真实 answer_native 落盘，再令本地 evidence 完成、桥关闭，调用真实 store.execution_result。结果如下，两种情形全部断言通过，命令退出 0：
 
+为固定观察与回答的先后次序，脚本直接调用 `store._message_post` 和 `bridge._ask` 建立已排队的问题；delivered 分支用 `store._message_update(state="delivered")` 固定服务最后一次取样，queued 分支不做这一步。它们模拟的是两种服务快照，没有经完整 inquire 或 C-Two 构造这次取样；随后投递、答复落盘、结果提交和终态 observe 都调用当前实现。
+
 | 服务最后一次采到的状态 | 问询日志 | result 提交后服务状态 | 随后显式 terminal observe |
 | --- | --- | --- | --- |
 | queued | queued → delivered → answered | unavailable，inquiry-queued-at-attempt-end，answer:null | answered，reason:null |
@@ -153,23 +155,23 @@ env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY 
 
 ## 五、ZCode 的输入能力与本批数据
 
-本次未调用真实 ZCode、未运行发现命令、未联网查新版能力。按仓库最近明确记录的无模型发现/Worker 核对版本 **ZCode CLI 0.16.9**（[ADR-030 批次 3c 验收](../acceptance/adr030/batch3c-host-review.md)，2026-10-12；[workers](../reference/workers.md)亦记录 0.16.9），现有代码与文档没有可由客户端绑定到当前活动 turn 的输入能力。它不能据此表述为“2026-10-22 所有新版 ZCode 都没有”；若安装版本变化，应重新核对协议，不猜测。
+本次未调用真实 ZCode、未运行发现命令、未联网查新版能力。按仓库的无模型发现/Worker 核对记录，版本为 **ZCode CLI 0.16.9**（[ADR-030 批次 3c 验收](../acceptance/adr030/batch3c-host-review.md)，2026-10-12；[workers](../reference/workers.md)亦记录 0.16.9），现有代码与文档没有可由客户端绑定到当前活动 turn 的输入能力。它不能据此表述为“2026-10-22 所有新版 ZCode 都没有”；若安装版本变化，应重新核对协议，不猜测。
 
-[ZCode checkpoint 验收](../acceptance/zcode-checkpoint-inquiry.md)明确记录：session/send 没有 delivery / expectedTurn 字段，活动 prompt 中拒绝再 send；v4 sendText 只能延后未绑定输入或开始新 turn，内部 expected-turn-fenced steer 不对客户端公开。该文早期测试段另写过 “3.14.3 CLI”，后续 0.16.9 bundle 核对与较新的发现记录版本一致，本记录不把前者混作当前 CLI 版本。当前 `zcode/native_run.py` 的 `_admit_turn` 只有一次 session/send，参数 sessionId、inputId、message、promptSource；之后的工具与事件消费没有一个实时 steer 投递路径。`InquiryBridge` 按 cooperative-checkpoint 排入，根 hey_my_buddy_checkpoint 或 completed finish 的拒绝路径才把问题送到根工具结果里。只看静态代码能确认“本项目未实现这种输入”，协议不支持的结论以这些已记录的版本核对为依据；本次没有读取或重新验证第三方源码。
+[ZCode checkpoint 验收](../acceptance/zcode-checkpoint-inquiry.md)明确记录：session/send 没有 delivery / expectedTurn 字段，活动 prompt 中拒绝再 send；v4 sendText 只能延后未绑定输入或开始新 turn，内部 expected-turn-fenced steer 不对客户端公开。该文早期测试段另写过 “3.14.3 CLI”；[requestUserInput 探测记录](../acceptance/zcode-request-input-probe.md)将 3.14.3 明确为 App 版本、0.16.9 为 CLI bundle 版本，本记录按两种形态区分。当前 `buddy/harnesses/zcode/native_run.py::_admit_root_input` 只有一次 session/send，参数为 sessionId、inputId、content；之后的工具与事件消费没有一个实时 steer 投递路径。`InquiryBridge` 按 cooperative-checkpoint 排入，根 hey_my_buddy_checkpoint 或 completed finish 的拒绝路径才把问题送到根工具结果里。只看静态代码能确认“本项目未实现这种输入”，协议不支持的结论以这些已记录的版本核对为依据；本次没有读取或重新验证第三方源码。
 
 协作式投递也不能直接解释那 14 条 unavailable。本次附带在相同原处 J 交叉核对：**6 条其实已有 delivered 和 answered，7 条一直 queued 直到强制停止时 unavailable，1 条没有该 inquiry 的日志证据**。这进一步表明消息面板不能直接当作原生未送达率。
 
 | ZCode 消息前缀 / inquiryId | 原处 J 与事实 |
 | --- | --- |
 | 35666961 / release-boundary | task ac8f33ef-b89b-4125-9642-a82c8a3a5376，attempt 5573994e-138c-4711-b890-440605a33b56；J 1–3 行，07:08:43.856563Z queued、07:13:09.041137Z delivered、07:15:27.398944Z answered（10-22） |
-| 0c73215a / owner-design-close-boundary-1 | task 37e04eb9-c490-4442-906c-07fda0a7df22，attempt 45162f54-4058-4074-92d3-0f771d9b84d9；J 同 inquiry 的 queued、delivered、answered，10-21 02:46:48.321326Z 已答 |
-| 7de853ae / keep-baseline-evidence-small；a0afb34a / baseline-before-migration | task 04166768-68d9-492f-b1f5-ff5b703fef85，attempt 以各消息的 attemptId 定位；J 分别在 10-20 16:37:18.962003Z、16:37:07.192097Z 已答 |
-| 4f8216c3 / batch3-lead-turn4-layout-compact-confirm | task da2528ac-0a8f-4e11-a4bc-8569bdc17411，attempt 以消息定位；J 在 10-18 10:31:03.872206Z 已答 |
-| 9b5f3a38 / batch3-turn2-timeline-scroll-buddy-colors | task 7f3c672c-62f1-4bf9-993f-8ab63e16874c，attempt 以消息定位；J 在 10-18 08:58:54.276500Z 已答 |
+| 0c73215a / owner-design-close-boundary-1 | task 37e04eb9-c490-4442-906c-07fda0a7df22，attempt 45162f54-4058-4074-92d3-0f771d9b84d9；J 1 / 2 / 3 行为 queued、delivered、answered，10-21 02:46:48.321326Z 已答 |
+| 7de853ae / keep-baseline-evidence-small；a0afb34a / baseline-before-migration | task 04166768-68d9-492f-b1f5-ff5b703fef85，attempt 9bbbc222-8106-4894-a96c-c5483ac65e11；J 2 / 4 / 6 行和 1 / 3 / 5 行分别为 queued、delivered、answered，在 10-20 16:37:18.962003Z、16:37:07.192097Z 已答 |
+| 4f8216c3 / batch3-lead-turn4-layout-compact-confirm | task da2528ac-0a8f-4e11-a4bc-8569bdc17411，attempt d33d512a-b6f9-469f-8d06-b794383332f2；J 1 / 2 / 3 行为 queued、delivered、answered，10-18 10:31:03.872206Z 已答 |
+| 9b5f3a38 / batch3-turn2-timeline-scroll-buddy-colors | task 7f3c672c-62f1-4bf9-993f-8ab63e16874c，attempt 153a63ce-53d5-489d-b632-cb605a88fb46；J 1 / 2 / 3 行为 queued、delivered、answered，10-18 08:58:54.276500Z 已答 |
 | 421ef1c7、a6c8cdd5、780eca02、0729f3a4、f2df5525、b17c7cd3、970d88af | task 085d3669-0387-46c9-9676-d3a2162090f4，attempt 7deb6fe6-970b-4452-936c-7335974ad767；J 各自 queued 后于 10-20 17:19:57.754662Z–17:19:57.763290Z unavailable，没有 delivered；get.cancellation 明确记 Host 因这 7 条仍排队而接管，terminationReason:forced-stop |
 | 76474859 / release-reuse-regressions | task 203b6c4a-9950-43f2-81db-7c689df33274，attempt 5b948785-c264-4a8e-9cd9-3d1d9b87401c；没有此 inquiry 的 J 记录，不归因于未调用 checkpoint |
 
-前述 7 条最早 queued 于 16:43:39.253387Z，约 36 分钟后强制结束仍未 delivered。直接观察只证明问题未被根检查点消费，不证明模型故意忽略；强制结束也没有经过正常 completed finish 的拒绝机会。此处没有把协作式改称实时，也没有为补投而 stop/restart 或新开回合。
+前述 7 条最早 queued 于 16:43:39.253387Z，到它的 unavailableAt 17:19:57.754662Z 相隔 36 分 18.501 秒，仍未 delivered。直接观察只证明问题未被根检查点消费，不证明模型故意忽略；强制结束也没有经过正常 completed finish 的拒绝机会。此处没有把协作式改称实时，也没有为补投而 stop/restart 或新开回合。
 
 ## 六、修法选项与建议（均未实施）
 
@@ -179,7 +181,7 @@ env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY 
 
 建议选项 B：把问询的最终事实作为执行结果的一部分，在同一个结果提交边界先导入、再结清，结果重放同样幂等。执行侧在关闭 admission、处理完已经接收的根工具证据并关桥后，冻结问询 journal 或规范化后的有界文件；跨进程只传私有文件位置、摘要和完整执行/turn 绑定。服务使用共享的严格读取与合并规则验证 taskId、attemptId、generation、turnId、版本及 questionSha256，事务里应用答案和送达事实，再把确实未答的问题终态化，与完成事件一起提交。不能把密封过的原记录重写，也不能依赖 selectedAttempt 指向旧 attempt；历史消息必须按自身 attemptId 绑定。服务重启、结果重放、通道分页和恢复路径都使用同一个入口。
 
-运行中仍可按现有 live channel 同步增量，调度器可以主动消费该通道的 inquiry 更新，使 Host 更快看到答案；这只是改善时效，最终正确性由结束导入保证。活动执行不另开文件旁路，不在服务数据库事务内做网络等待；解析与验证在边界一次完成后再提交。现有服务 read_journal 只取最后一行，桥读取还做结构合并，绑定规则也不同（已在 backlog 记下）；应收敛到 protocol 的一套读取规则，保留最后 answered 之前的 delivery 与身份字段，不能仅调整一次清扫 SQL。
+运行中仍可按现有 live channel 同步增量，调度器可以主动消费该通道的 inquiry 更新，使 Host 更快看到答案；这只是改善时效，最终正确性由结束导入保证。活动执行不另开文件旁路，不在服务数据库事务内做网络等待；解析与验证在边界一次完成后再提交。现有服务 `blackboard/tasks/inquiry.py::read_journal` 只保留每个 inquiryId 的最后一行，桥读取还做结构合并，绑定规则也不同（[backlog](backlog.md) 已记下）；应收敛到 protocol 的一套读取规则，保留最后 answered 之前的 delivery 与身份字段，不能仅调整一次清扫 SQL。
 
 预期收益是 Host 不再靠第二次提问偶然带回上次答案；回归风险集中在事件/事务原子性、幂等、分页、结果恢复、旧 attempt 绑定及 discarded 竞态。执行结果携带文件证据会改变 execution/service 事实契约，应按项目规则升中间版本与 CONTRACT_VERSION；若选方案需要新增存储形式，必须同批完成显式升级、剪枝和 fixture 库存。这里没有批准改变任何既有 Host API 或 ABI。
 
@@ -187,22 +189,22 @@ env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY 
 
 已经结束的 2 条应在 Host/控制台可见“此回合已结束，问询未排入”；发送时仍在服务边界复核，避免 UI 读到旧 running。Lead 已 waiting 而没有运行回合时，显示“Lead 等待名下任务，当前没有可接收问询的回合”；若要支持稍后带入，必须设计一个显式的待接续消息语义与绑定，由 Host 决定接续，不能把 inquiry 偷换成唤醒。
 
-通道未绑定、原生回合尚未激活、原生明确拒绝与回合收尾分别保留自己的观测事实，不统一说成“Worker 忙”。登记表生命周期沿用已修复的 daemon 唯一实例，不再建设第二个登记机制；服务重启只能按原有完整身份重新附着。短暂 channel-unbound 若保留 queued，应由服务在同一已授权 attempt 的通道恢复后负责重送相同 inquiryId，并给出可观察的未提交状态；若选择立即拒绝，Host 应收到明确可重试原因。两种产品语义应择一明确，不能让一次调用悄悄成为永远无人消费的队列。此组历史 2 条根因仍需原始 inquire.bridge 返回与 registry 生命周期日志才能升为证实，不能声称当前源码仍有已修复的 0.42.1 缺陷。
+通道未绑定、原生回合尚未激活、原生明确拒绝与回合收尾分别保留自己的观测事实，不统一说成“Worker 忙”。登记表生命周期沿用已修复的 daemon 唯一实例，不再建设第二个登记机制；服务重启只能按原有完整身份重新附着。短暂 channel-unbound 若保留 queued，应由服务在同一已授权 attempt 的通道恢复后负责重送相同 inquiryId，并给出可观察的未提交状态；若选择立即拒绝，Host 应收到明确可重试原因。建议没有已验证通道时明确返回未投递与原因，由 Host 在观察到同一回合恢复后显式重试；重试的幂等与状态转换需要随契约明确定义。两种产品语义应择一明确，不能让一次调用悄悄成为永远无人消费的队列。此组历史 2 条根因仍需原始 inquire.bridge 返回与 registry 生命周期日志才能升为证实，不能声称当前源码仍有已修复的 0.42.1 缺陷。
 
 对未来可能出现的 steer/完成竞争，保留 expectedTurnId 和 acknowledgement 的匹配；明确拒绝就记录拒绝码，已完成就关闭本 turn 的投递窗口，不改成 turn/start。若确有控制器 pump 阻塞，再修阻塞的调用处；本次不建议为一个未证实的静默帧原因增添第二条发送线程。
 
 ### 已送达但在回合结束前未答
 
-先导入实际答案，再决定是否未答，避免把本批 bc620007 再次误判。桥的 `close()` 已把 queued/delivered 的未答条目标 unavailable；Codex 角色的 `schema_worker.SchemaWorker.delivery` 也已根据 unansweredDeliveredInquiries 把完成结果改为 attention。缺口是把这些事实投影到每条服务消息，并覆盖异常结束、取消与恢复路径，不是另造一套角色收尾机制。
+先导入实际答案，再决定是否未答，避免把本批 bc620007 再次误判。桥的 `close()` 已把 queued/delivered 的未答条目标 unavailable；Codex 角色的 `buddy/roles/schema_worker.py::NativeSchemaWorker.delivery` 也已根据 unansweredDeliveredInquiries 把完成结果改为 attention。缺口是把这些事实投影到每条服务消息，并覆盖异常结束、取消与恢复路径，不是另造一套角色收尾机制。
 
 建议消息收尾保留 deliveredAt / nativeCorrelation，结为“已送达，本回合结束前未答”，用独立原因区分“从未送达”；界面不再显示无限期“等待答复”。queued 则按有无桥提交、协作式未被取走、明确拒绝等已有事实结清；未知仍为未知。即使导入失败也要展示证据不可用，不能把未知改成未答或已停止。有效的已落盘答案、Host 的显式终态决定与真正晚到的答复分别按现有边界处理，不靠统一放开终态来掩盖顺序问题。
 
 ### 协作式能力如何说明
 
-Host 工具结果和控制台在提问前、排队后都应显示实际 deliveryMode。ZCode CLI 0.16.9 的文案可为“在 Worker 下次检查点交付；当前尚未送达”。显示 queuedAt、最近 checkpoint 与最后原生活动即可；没有检查点时间就写未知。只有验证过的根 checkpoint receipt 才称“已送达”，finish refusal 只是另一个原生工具反馈机会；answer receipt 才称“已答”。不要把 waitMs 当成送达承诺或模型期限，不用“正在通知”暗示实时插入。
+Host 工具结果和控制台在提问前、排队后都应显示实际 deliveryMode。ZCode CLI 0.16.9 的文案可为“在 Worker 下次检查点或完成工具反馈时交付；当前尚未送达”。显示 queuedAt、最近 checkpoint 与最后原生活动即可；没有检查点时间就写未知。只有验证过的根工具 receipt 才称“已送达”，它可以来自 checkpoint 或 finish refusal；answer receipt 才称“已答”。不要把 waitMs 当成送达承诺或模型期限，不用“正在通知”暗示实时插入。
 
 可选方案是要求 Worker 在自然阶段与收尾前调用检查点，并让正常 completed finish 继续拒绝未结的问题；这是现有机制，应核对提示词和界面能否如实呈现。若 Host 必须在长任务中及时改变方向，应根据声明能力选 realtime harness，或显式停止/接续；不能通过隐藏的 ZCode 再 send、新回合、设置覆盖或定时模型调用来模拟实时。强制取消、崩溃与权限阻断没有正常 finish 保证，仍须服务最终结清问询。
 
 ## 验证边界
 
-本次验证的是原始文件对应关系、Codex CLI 0.162.1 会话中的输入/调用/完成时间、源码路径，以及两种真实 bridge/store 的模型无关复现，退出码 0。没有改动产品代码或测试，没有跑完整检查、真实 harness、模型、日常服务、安装或用户验收。没有变更分支、标签或推送。最终 git 差异应只有本文件；tmp 脚本及模型无关私有运行材料留在本检出的忽略目录，Host 需要一并取走才能再次执行复现。
+本次验证的是原始文件对应关系、Codex CLI 0.162.1 会话中的输入/调用/完成时间、源码路径，以及两种真实 bridge/store 的模型无关复现；逐条字段核对与复现命令均退出 0。没有改动产品代码或测试，没有跑完整检查、真实 harness、模型、日常服务、安装或用户验收。没有变更分支、标签或推送。交付的非忽略文件只有本文件；tmp 脚本及模型无关私有运行材料留在本检出的忽略目录，Host 需要一并取走才能再次执行复现。
