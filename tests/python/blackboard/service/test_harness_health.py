@@ -91,13 +91,15 @@ def _stamp(seconds_ago: int) -> str:
 
 
 class CatalogShelfLifeTests(BoardTestCase):
-    """ADR-027 rule 4 (C06): an unchanged health check still re-reads a stale catalog."""
+    """ADR-027 rule 4 (C06): health checks re-read a stale catalog on every path."""
 
     def setUp(self):
         super().setUp()
         from hey_my_buddy.blackboard.store.store import BoardStore
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
         self.board = BoardStore(self.directory / 'health')
         self.board.initialize()
+        self.board.evaluation = EvaluationStore(self.board)
         self.refreshed = []
         self.health = HarnessHealth(self.board, catalog_refresh=lambda name, record: self.refreshed.append(name))
         self.health.initialize()
@@ -120,20 +122,50 @@ class CatalogShelfLifeTests(BoardTestCase):
         with self.board.db.write() as db:
             db.execute("UPDATE harness_health SET scan_after='2000' WHERE adapter='codex'")
 
-    def test_unchanged_health_still_rereads_a_catalog_past_its_shelf_life(self):
+    def expire_catalog_throttle(self):
+        """The bounded catalog re-read cadence (SCAN_SECONDS) has passed."""
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM meta WHERE key='catalog-scan-after:codex'")
+
+    def record_native(self, account_status, *, observed_seconds_ago=None):
+        from hey_my_buddy.blackboard.catalog import catalog_store
+        payload = {'source': 'fixture-native',
+                   'providers': [{'adapter': 'codex', 'provider': 'openai',
+                                  'models': [{'id': 'sol', 'efforts': ['high'], 'available': True}]}],
+                   'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': account_status}]}
+        catalog_store.record(self.board.evaluation, payload)
+        if observed_seconds_ago is not None:
+            with self.board.db.write() as db:
+                db.execute("UPDATE catalog_current SET updated_at=? WHERE adapter='codex'", (_stamp(observed_seconds_ago),))
+
+    def catalog_state(self):
+        with self.board.db.read() as db:
+            row = db.execute("SELECT status, reason FROM catalog_current WHERE adapter='codex'").fetchone()
+            profiles = db.execute("SELECT profile_id, available FROM evaluation_profiles WHERE adapter='codex'").fetchall()
+            read_at = db.execute("SELECT value FROM meta WHERE key='catalog-read-at:codex'").fetchone()
+        return row, profiles, (read_at[0] if read_at else None)
+
+    def test_throttled_scan_still_rereads_a_stale_catalog_once(self):
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex'])
-        self.set_read_at(7 * 3600)
-        self.pass_throttles()
+        # scanAfter stays in the future: no artificial throttle bypass.
+        self.set_read_at(6 * 3600 + 1)
+        self.expire_catalog_throttle()
         result = self.health.refresh('codex')
         self.assertEqual(result['status'], 'ready')
-        self.assertEqual(self.native.call_count, 1, 'An unchanged fingerprint reprobes nothing')
+        self.assertEqual(self.native.call_count, 1, 'A throttled scan reprobes nothing')
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'The stale catalog is re-read once')
+        # The re-read cadence stays bounded: while the catalog-scan window from
+        # that re-read is open, an immediate call does not spawn again.
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex', 'codex'])
 
-    def test_fresh_catalog_read_keeps_the_unchanged_path_quiet(self):
+    def test_fresh_catalog_read_keeps_the_throttled_path_quiet(self):
         self.health.refresh('codex')
         first = list(self.refreshed)
         self.set_read_at(60)
+        self.expire_catalog_throttle()
+        self.health.refresh('codex')
         self.pass_throttles()
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, first)
@@ -147,6 +179,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
         self.assertEqual(self.refreshed, ['codex'], 'A fresh catalog needs no re-read')
         self.set_read_at(6 * 3600 + 1)
+        self.expire_catalog_throttle()
         with self.board.db.write() as db:
             db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE adapter='codex'")
         self.health.refresh('codex')
@@ -157,6 +190,44 @@ class CatalogShelfLifeTests(BoardTestCase):
         with self.board.db.write() as db:
             db.execute("INSERT INTO meta(key,value) VALUES('catalog-read-at:codex','not-a-time') "
                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        self.expire_catalog_throttle()
         self.pass_throttles()
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
+
+    def test_cold_start_unknown_reading_still_expires_by_observation_time(self):
+        # A full but account-unknown reading seven hours ago leaves no confirmed
+        # read time; the observation time must still bring the next health check
+        # to re-read the catalog instead of keeping the cold-start catalog forever.
+        self.record_native('unknown', observed_seconds_ago=7 * 3600)
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex'])
+        self.expire_catalog_throttle()
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE adapter='codex'")
+        self.health.refresh('codex')
+        self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
+        self.assertEqual(self.refreshed, ['codex', 'codex'], 'A never-confirmed catalog is re-read')
+
+    def test_cold_start_unknown_then_confirmed_publishes_the_catalog(self):
+        self.record_native('unknown', observed_seconds_ago=7 * 3600)
+
+        def confirmed_on_reread(name, record):
+            self.refreshed.append(name)
+            if len(self.refreshed) > 1:
+                self.record_native('confirmed')
+
+        self.health.catalog_refresh = confirmed_on_reread
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex'])
+        self.expire_catalog_throttle()
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex', 'codex'], 'The stale cold-start catalog is re-read')
+        row, profiles, read_at = self.catalog_state()
+        self.assertEqual(row['status'], 'complete')
+        self.assertEqual([p['profile_id'] for p in profiles], ['codex:openai:sol:high'])
+        self.assertTrue(profiles[0]['available'])
+        self.assertIsNotNone(read_at, 'The confirmed re-read parks the shelf clock')
+        self.expire_catalog_throttle()
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex', 'codex'], 'A confirmed catalog needs no further re-read')

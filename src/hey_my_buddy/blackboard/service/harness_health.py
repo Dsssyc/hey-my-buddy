@@ -163,6 +163,14 @@ class HarnessHealth:
                 raise
             now = utc_now()
             if not force and not preflight and (old.get('scanAfter') or '') > now:
+                # ADR-027 rule 4: even a throttled scan owes one bounded catalog
+                # re-read once the shelf life passed. The catalog scan marker,
+                # not the health probe schedule, bounds its cadence.
+                if self._stale_catalog(name, now):
+                    current = self.get(name)
+                    if current['available']:
+                        self.catalog_refresh(name, current)
+                        self._note_catalog_scan(name)
                 return old
             environment = self.environment()
             from ..catalog.accounts import execution_environment
@@ -184,10 +192,11 @@ class HarnessHealth:
                     self._codex_account_read(old)
                 # ADR-027 rule 4: an unchanged health state still owes a catalog
                 # re-read once the last confirmed reading passed its shelf life.
-                if not self._closed and self.catalog_refresh and self._catalog_expired(name, now):
+                if self._stale_catalog(name, now):
                     current = self.get(name)
                     if current['available']:
                         self.catalog_refresh(name, current)
+                        self._note_catalog_scan(name)
                 return self.get(name)
             with self.board.db.write() as db:
                 if self._closed or (self.board.directory / 'upgrade.json').exists():
@@ -233,20 +242,53 @@ class HarnessHealth:
                 return current
             if name == "codex" and status == "ready":
                 self._codex_account_read(current)
-            if not self._closed and status == 'ready' and self.catalog_refresh and (force or old['status'] != 'ready' or old.get('version') != record.get('version') or not unchanged or self._catalog_expired(name, now)):
+            if not self._closed and status == 'ready' and self.catalog_refresh and (
+                    force or old['status'] != 'ready' or old.get('version') != record.get('version')
+                    or not unchanged or (self._catalog_scan_due(name, now) and self._catalog_expired(name, now))):
                 self.catalog_refresh(name, current)
+                self._note_catalog_scan(name)
             return self.get(name)
+
+    def _stale_catalog(self, name, now):
+        """True when this harness owes one bounded stale-catalog re-read now.
+
+        ADR-027 rule 4: the catalog is past its shelf life and no earlier re-read
+        inside the current scan window already happened; the marker keeps the
+        re-read on the bounded scan cadence instead of a native process per call.
+        """
+        return (not self._closed and self.catalog_refresh is not None
+                and self._catalog_scan_due(name, now) and self._catalog_expired(name, now))
+
+    def _catalog_scan_due(self, name, now):
+        from ..evaluation.native_observations import _time
+        with self.board.db.read() as db:
+            row = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-scan-after:' + name,)).fetchone()
+        if row is None:
+            return True
+        moment, due = _time(now), _time(row[0])
+        return due is None or moment is None or moment >= due
+
+    def _note_catalog_scan(self, name):
+        with self.board.db.write() as db:
+            db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       ('catalog-scan-after:' + name, _later(SCAN_SECONDS)))
 
     def _catalog_expired(self, name, now):
         """ADR-027 rule 4: a catalog past its shelf life needs a confirmed re-read.
 
-        Only a confirmed (trusted) reading advances the read time, so a streak of
-        unknown readings never extends the deadline.
+        Only a confirmed (trusted) reading advances the confirmed-read time, so
+        a streak of unknown readings never extends that deadline. A board with
+        no confirmed reading yet — cold start, or a cleared account binding —
+        measures the shelf life from the last recorded observation instead, and
+        a harness with no observation at all has nothing stale to re-read.
         """
         from ..catalog.catalog import CATALOG_SHELF_SECONDS, catalog_read_at
         from ..evaluation.native_observations import _time
         with self.board.db.read() as db:
             read_at = catalog_read_at(db, name)
+            if read_at is None:
+                row = db.execute('SELECT updated_at FROM catalog_current WHERE adapter=?', (name,)).fetchone()
+                read_at = row['updated_at'] if row is not None else None
         if read_at is None:
             return False
         read, moment = _time(read_at), _time(now)

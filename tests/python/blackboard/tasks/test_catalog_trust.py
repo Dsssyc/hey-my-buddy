@@ -97,6 +97,27 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
         self.assertEqual(rejected.exception.details["catalogReadAt"], read_at)
 
+    def test_c05_a_reread_that_breaks_health_keeps_the_rejection_context(self):
+        # The bounded re-read's native failure path invalidates the harness; the
+        # fresh health diagnostics lead, but the catalog read time and the
+        # refresh method of rule 3 must survive this boundary too.
+        self.evaluation.record_catalog(reading())
+        read_at = self.clock.value
+        harnesses = self.board.service.harnesses
+
+        def reread(name):
+            record = harnesses.get(name)
+            harnesses.invalidate(name, record["revision"], "HARNESS_HANDSHAKE_FAILED")
+
+        catalog.register_catalog_reread(self.directory, reread)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate({**IDENTITY, "model": "beta"})
+        error = rejected.exception
+        self.assertEqual(error.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(error.details["catalogReadAt"], read_at)
+        self.assertEqual(error.details["remedy"], catalog.CATALOG_REMEDY)
+        self.assertEqual(error.details["harness"]["reasonCode"], "HARNESS_HANDSHAKE_FAILED")
+
     def test_cold_start_without_any_recorded_catalog_is_catalog_unavailable(self):
         catalog.register_catalog_reread(self.directory, None)
         with self.assertRaises(BoardError) as rejected:

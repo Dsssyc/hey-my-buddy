@@ -411,7 +411,17 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
         hook(selected["adapter"])
     except (BoardError, OSError, ValueError, sqlite3.Error):
         pass  # A failed bounded re-read leaves the rejection to speak for itself.
-    return judge()
+    try:
+        return judge()
+    except BoardError as error:
+        if error.code in ("CATALOG_UNAVAILABLE", "CONFIGURATION_UNAVAILABLE", "INVALID_ARGUMENT"):
+            raise
+        # The re-read itself broke the harness (for example the native refresh
+        # invalidated health). The fresh error and its diagnostics lead, while
+        # rule 3's rejection context — catalog read time and refresh method —
+        # still rides along instead of being lost at this boundary.
+        raise BoardError(error.code, error.message,
+                         **{**first.details, **error.details}) from error
 
 
 def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: list[str] | None) -> dict:
