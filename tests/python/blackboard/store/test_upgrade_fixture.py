@@ -252,8 +252,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                                                        (event2,)).fetchone()[0])['note'], authored)
         self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
                                                        (event3,)).fetchone()[0]), route_cancel)
-        self.assertEqual(json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
-                                                       (event4,)).fetchone()[0])['note'], 'signal')
+        self.assertNotIn('note', json.loads(connection.execute('SELECT payload_json FROM events WHERE seq=?',
+                                                               (event4,)).fetchone()[0]))
 
     def prepare_generated_conclusion(self, fixture, connection, *, complete: bool, nested: bool = False):
         conclusions = [dict(row) for row in connection.execute(
@@ -268,6 +268,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         if turn_id is None:
             turn_id = connection.execute('SELECT turn_id FROM workflow_turns LIMIT 1').fetchone()
         self.assertIsNotNone(turn_id)
+        connection.execute('UPDATE workflow_runs SET delegation_authority=1 WHERE run_id=?',
+                           (parent['run_id'],))
         immediate_lead = parent['run_id']
         if nested:
             immediate_lead = next(run_id for (run_id,) in connection.execute('SELECT run_id FROM workflow_runs')
@@ -316,6 +318,28 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual([tuple(row) for row in connection.execute(
             'SELECT command_id,request_hash FROM commands ORDER BY command_id')], commands)
 
+    def test_generated_helper_conclusion_follows_the_lead_ownership_graph(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                fixture, connection = self.restored('generated-helper-conclusion-' + str(nested))
+                child, parent, _note = self.prepare_generated_conclusion(
+                    fixture, connection, complete=True, nested=nested)
+                immediate = connection.execute('SELECT lead_run_id FROM workflow_lead_tasks WHERE owned_run_id=?',
+                                               (child['run_id'],)).fetchone()[0]
+                connection.execute('DELETE FROM workflow_lead_tasks WHERE owned_run_id=?', (child['run_id'],))
+                connection.execute('INSERT INTO workflow_children'
+                                   '(child_task_id,parent_run_id,request_id,decision_command_id,state,'
+                                   'workspace_intent_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+                                   (child['run_id'], immediate, 'fixture-helper-request', 'fixture-helper-decision',
+                                    'failed', '{}', parent['created_at'], parent['created_at']))
+                connection.commit()
+                upgrade_schema_24_to_25(fixture['state'])
+                row = connection.execute('SELECT note,reason_code,reason_params_json FROM workflow_host_conclusions'
+                                         ' WHERE conclusion_id=?', (child['conclusion_id'],)).fetchone()
+                self.assertIsNone(row['note'])
+                self.assertEqual(row['reason_code'], 'lead.owned-concluded')
+                self.assertEqual(json.loads(row['reason_params_json']), {'leadRunId': parent['run_id']})
+
     def test_generated_looking_conclusion_with_incomplete_relation_rolls_back(self):
         fixture, connection = self.restored('ambiguous-conclusion')
         self.prepare_generated_conclusion(fixture, connection, complete=False)
@@ -338,22 +362,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(row['note'], authored)
         self.assertIsNone(row['reason_code'])
 
-    def test_old_full_access_manifest_is_rejected_and_field_rename_changes_digest(self):
-        fixture, connection = self.restored('sealed-full-access-limit')
+    def test_old_full_access_manifest_verifies_with_its_original_field_and_digest(self):
+        fixture, connection = self.restored('sealed-full-access')
         _run_id, manifest, _attempt = self.sample(fixture, connection)
-        old = dict(manifest)
-        old['access'] = 'full'
-        old.pop('accessNote', None)
-        old['accessReason'] = 'Host granted full access'
+        old = dict(manifest, version=2, access='full', accessReason='Host granted full access')
         old['manifestSha256'] = _sha(_json({key: value for key, value in old.items()
                                              if key != 'manifestSha256'}).encode())
-        renamed = dict(old)
-        renamed['accessNote'] = renamed.pop('accessReason')
-        renamed['manifestSha256'] = _sha(_json({key: value for key, value in renamed.items()
-                                                 if key != 'manifestSha256'}).encode())
-        self.assertNotEqual(old['manifestSha256'], renamed['manifestSha256'])
-        with self.assertRaises(BoardError):
-            workspace.verify(old)
+        self.assertEqual(workspace.verify(old)['valid'], True)
+        self.assertEqual(old['accessReason'], 'Host granted full access')
+        self.assertEqual(json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs'
+                                                       ' WHERE run_id=?', (_run_id,)).fetchone()[0]), manifest)
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
         first, c1 = self.restored('first state')

@@ -100,7 +100,9 @@ class PermissionLevelsTests(WorkflowTestCase):
             self.assertIsNotNone(claim['claim'])
             workspace = claim['claim']['turn']['input']['executionWorkspace']
             self.assertEqual(workspace['access'], access)
-            self.assertEqual(workspace.get('accessNote'), reason)
+            self.assertEqual(workspace['version'], 3)
+            self.assertNotIn('accessNote', workspace)
+            self.assertNotIn('accessReason', workspace)
             self.finish_turn(board, claim, session_id=f'session-{index}')
         full = board.call('workflow_get', {'runId': view['runId'], 'includeAudit': True})
         turns = sorted(full['audit']['turns'], key=lambda turn: turn['turnIndex'])
@@ -113,6 +115,27 @@ class PermissionLevelsTests(WorkflowTestCase):
             self.assertEqual([json.loads(row[0])['access'] for row in changes], ['write', 'full'])
             self.assertEqual(json.loads(changes[-1][0])['accessNote'], 'Need system writes')
             self.assertEqual(connection.execute("SELECT access FROM workspace_reservations WHERE state='held'").fetchone()[0], 'write')
+
+    def test_note_only_continuation_reuses_workspace_and_freezes_current_intent_note(self):
+        board = self.board()
+        original = self.claude_run(board, request_id='note-only', executionWorkspace={
+            'kind': 'existing', 'access': 'full', 'accessNote': 'Original explanation'})
+        manifest = self.workspace.manifest_for('note-only')
+        prepared = len(self.workspace.prepare_calls)
+        current = self.continue_run(board, original, access='full', accessNote='  Updated explanation  ')
+        claim = self.claim(board, run_id=original['runId'])
+        execution = claim['claim']['turn']['input']['executionWorkspace']
+        self.assertEqual(execution, manifest)
+        self.assertEqual(len(self.workspace.prepare_calls), prepared)
+        self.assertNotIn('accessNote', execution)
+        self.assertNotIn('accessReason', execution)
+        view = board.call('workflow_get', {'runId': original['runId']})
+        self.assertEqual(view['currentTurn']['accessNote'], '  Updated explanation  ')
+        self.assertEqual(current['accessNote'], '  Updated explanation  ')
+        with board.store.db.read() as connection:
+            row = connection.execute('SELECT access_note FROM workflow_turns WHERE run_id=?',
+                                     (original['runId'],)).fetchone()
+            self.assertEqual(row['access_note'], '  Updated explanation  ')
 
     def test_access_change_before_first_claim_uses_the_new_selection(self):
         board = self.board()

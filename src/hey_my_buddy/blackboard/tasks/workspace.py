@@ -834,14 +834,16 @@ def _record_preparation_cleanup(error, target, facts):
 def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "checkoutId", "repositoryId", "access",
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
-    if isinstance(manifest, dict) and manifest.get("access") == "full":
-        fields.add("accessNote")
-    if not isinstance(manifest, dict) or set(manifest) != fields or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2):
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3):
+        raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
+    if manifest["version"] in (1, 2) and manifest.get("access") == "full":
+        fields.add("accessReason")
+    if set(manifest) != fields:
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
     if expected != manifest["manifestSha256"]:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
-    if manifest["version"] == 2:
+    if manifest["version"] in (2, 3):
         _actor_identity(manifest["integrator"], "Workspace integrator", ("host", "lead"))
     if manifest["exclusionPolicy"] != _EXCLUSION_POLICY:
         raise BoardError("INVALID_WORKSPACE", "Unsupported workspace exclusion policy")
@@ -851,7 +853,6 @@ def _validate_manifest(manifest):
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace snapshot")
     if manifest["kind"] not in ("existing", "worktree") or manifest["access"] not in ("read", "write", "full"):
         raise BoardError("INVALID_WORKSPACE", "Invalid manifest kind or access")
-    normalize_access(manifest)
     for value in (manifest["path"], manifest["checkoutRoot"], manifest["snapshot"]["repositoryPath"]):
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be absolute")
@@ -991,8 +992,9 @@ def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None
 
 
 def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None):
-    _write_once(directory / "request.json", _json({"version": 2, "requestId": request_id, "intent": intent}))
     manifest = _record(directory / "manifest.json")
+    request_version = manifest["version"] if manifest is not None else 3
+    _write_once(directory / "request.json", _json({"version": request_version, "requestId": request_id, "intent": intent}))
     if preparation is not None:
         preparation["replayed"] = manifest is not None
     if manifest is not None:
@@ -1036,14 +1038,12 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
                        _observe(Path(actual["checkoutRoot"]), selectors)["fingerprint"])
         snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
-        manifest = {"version": 2, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
+        manifest = {"version": 3, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
                     "repositoryId": actual["repositoryId"], "access": intent["access"],
                     "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
                     "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
                     "exclusionPolicy": dict(_EXCLUSION_POLICY), "snapshot": snapshot}
-        if intent["access"] == "full":
-            manifest["accessNote"] = intent["accessNote"]
         manifest["manifestSha256"] = _sha(_json(manifest))
         _write_once(directory / "manifest.json", _json(manifest))
         return manifest

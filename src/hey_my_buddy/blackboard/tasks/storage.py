@@ -340,7 +340,7 @@ def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict
         if (directory.parent != state / 'workspaces' or directory.name != expected_id
                 or manifest['workspaceId'] != directory.name or manifest['kind'] != 'worktree'
                 or manifest['checkoutRoot'] != str(path) or str(path.resolve()) != str(path)
-                or type(request.get('version')) is not int or request['version'] not in (1, 2)
+                or type(request.get('version')) is not int or request['version'] not in (1, 2, 3)
                 or request['version'] != manifest['version']
                 or request.get('intent', {}).get('kind') != 'worktree'
                 or pinned.get('inputCommit') != manifest['inputCommit']

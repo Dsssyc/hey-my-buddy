@@ -67,13 +67,12 @@ class MockWorkspace:
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
-            "version": 2,
+            "version": 3,
             "workspaceId": f"ws-{request_id}",
             "kind": kind,
             "path": path,
             **identity,
             "access": intent.get("access", "write"),
-            **({"accessNote": intent["accessNote"]} if intent.get("access") == "full" else {}),
             "baseCommit": base_commit,
             "inputCommit": sha256_text(f"input:{request_id}"),
             "inputTree": "c" * 40,

@@ -2342,7 +2342,6 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             self._run_row(connection, run_id),
-
                             actor=actor,
                             now=now,
                             continuation_id=approve_continuation,
@@ -2394,7 +2393,6 @@ class WorkflowCoordinator:
                             connection,
                             task,
                             run_row,
-
                             actor=actor,
                             now=now,
                             continuation_id=decline_continuation,
@@ -2648,7 +2646,7 @@ class WorkflowCoordinator:
         if extra or pending is not None or self._unfinished_helpers(connection, child_task_id):
             self._sync_boundary(connection, child_task_id, now, default_state="waiting-helpers")
         else:
-            self._requeue(connection, child_task, child_run,  actor=actor, now=now,
+            self._requeue(connection, child_task, child_run, actor=actor, now=now,
                           continuation_id=continuation_id)
         # Existing automatic authority on intermediate parents is untouched. Each
         # still waits for its own dependency before it can consume that authority.
@@ -6445,7 +6443,7 @@ class WorkflowCoordinator:
                 previous_session,
                 input_json,
                 execution_workspace["access"],
-                execution_workspace.get("accessNote"),
+                json.loads(run_row["execution_workspace_json"]).get("accessNote"),
                 task["expected_seconds"],
                 now,
                 now,
@@ -6591,7 +6589,7 @@ class WorkflowCoordinator:
             # stopped worktree; its out-of-scope paths were already rejected above.
             sealed = None
         choice = json.loads(run_row["execution_workspace_json"])
-        changed_access = (choice["access"], choice.get("accessNote")) != (manifest["access"], manifest.get("accessNote"))
+        changed_access = choice["access"] != manifest["access"]
         if sealed is None and recovered_attempt is None and not changed_access:
             return None
         # A permission-only continuation before any seal keeps the original
@@ -6850,7 +6848,7 @@ class WorkflowCoordinator:
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (lead["run_id"],)).fetchone()
         try:
-            self._requeue(connection, task, lead,  actor={"role": "workflow", "id": "auto"},
+            self._requeue(connection, task, lead, actor={"role": "workflow", "id": "auto"},
                           now=now, continuation_id=continuation_id)
         except BoardError as error:
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
@@ -7785,7 +7783,6 @@ class WorkflowCoordinator:
                     connection,
                     parent_task,
                     parent,
-
                     actor={"role": "workflow", "id": "auto"},
                     now=now,
                 )

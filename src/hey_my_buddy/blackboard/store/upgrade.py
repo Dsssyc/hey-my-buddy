@@ -470,7 +470,7 @@ _DEFAULT_NOTES = frozenset({
     'Host cancelled', 'User stopped macro task', 'manual continuation cancelled live helpers',
     'Owned micro task stopped because its Lead is being concluded',
     'Host approved the next turn', 'Host declined assistance', 'Host continuation',
-    'operator request', 'explicit retry', 'service stop requested',
+    'operator request', 'explicit retry', 'service stop requested', 'signal',
 })
 _NOTE_EVENTS = frozenset({
     'workflow.request_declined', 'workflow.review_rejected', 'workflow.buddy_overridden',
@@ -632,10 +632,14 @@ def _auto_conclusion_lead(connection: sqlite3.Connection, row: dict, lead_run_id
 
 def _conclusion_ancestors(connection: sqlite3.Connection, run_id: str) -> list[str]:
     return [row[0] for row in connection.execute(
-        'WITH RECURSIVE ancestors(run_id) AS ('
-        ' SELECT lead_run_id FROM workflow_lead_tasks WHERE owned_run_id=?'
-        ' UNION SELECT l.lead_run_id FROM workflow_lead_tasks l JOIN ancestors a ON l.owned_run_id=a.run_id)'
-        ' SELECT run_id FROM ancestors', (run_id,))]
+        'WITH RECURSIVE edges(owned_run_id,lead_run_id) AS ('
+        ' SELECT owned_run_id,lead_run_id FROM workflow_lead_tasks'
+        ' UNION SELECT child_task_id,parent_run_id FROM workflow_children),'
+        ' ancestors(run_id) AS ('
+        ' SELECT lead_run_id FROM edges WHERE owned_run_id=?'
+        ' UNION SELECT e.lead_run_id FROM edges e JOIN ancestors a ON e.owned_run_id=a.run_id)'
+        ' SELECT a.run_id FROM ancestors a JOIN workflow_runs r ON r.run_id=a.run_id'
+        ' WHERE r.delegation_authority=1', (run_id,))]
 
 
 def _upgrade_host_conclusions(connection: sqlite3.Connection) -> None:
