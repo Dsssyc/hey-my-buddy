@@ -469,7 +469,8 @@ def _prepare_runtime(state: Path, *, skill_source: Path | None):
     """
     storage = state / 'storage'
     private_dirs.ensure_private_dir(storage)
-    with runtime.installation_lock(storage / '.lock', private=True):
+    with os.fdopen(private_dirs.open_regular_fd(storage / '.lock', os.O_CREAT | os.O_RDWR), 'rb') as fence:
+        locking.lock(fence.fileno())
         installed = (runtime.materialize(root=skill_source / 'package')
                      if skill_source is not None else runtime.materialize())
         root = Path(installed['runtimeDir']).parent
@@ -489,7 +490,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     schemas.reject_unknown(params, set(), 'upgrade')
     if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
         raise BoardError('UNAUTHORIZED', 'A Worker cannot upgrade its owning service')
-    state = get_state_dir().resolve()
+    state = get_state_dir()
+    if os.name == 'nt':
+        from ..windows_files import validate_state_root
+        validate_state_root(state)
     root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):

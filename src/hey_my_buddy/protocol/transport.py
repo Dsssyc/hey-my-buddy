@@ -103,9 +103,8 @@ class ServiceError(BoardError):
 
 
 def get_state_dir(state_dir: str | Path | None = None) -> Path:
-    return Path(
-        state_dir or os.environ.get("HMB_STATE_DIR") or home.default_state_dir()
-    ).expanduser().resolve()
+    path = Path(state_dir or os.environ.get("HMB_STATE_DIR") or home.default_state_dir()).expanduser()
+    return path.absolute() if os.name == "nt" else path.resolve()
 
 
 def encode_message(value: Any) -> str:
@@ -150,7 +149,7 @@ def _private_primary_group(gid: int) -> bool:
 def _trusted_ancestors(directory: Path) -> bool:
     """True when no ancestor above the state directory can be swapped by another user."""
     if os.name == 'nt':
-        return True  # _private_directory pins and checks the Windows ancestors.
+        return True  # Windows checks the state boundary only at installation/cold start.
     try:
         current = directory.parent
         while True:
@@ -306,10 +305,15 @@ def _cold_start_preflight(directory: Path) -> None:
     address = None
     try:
         rpc_config._validate_path(directory)
-        private_dirs.ensure_private_dir(directory)
-        rpc_config.configure_local_endpoint(directory)
-        if not _trusted_directory(directory):
-            raise OSError('State directory is not owner-private')
+        if os.name == 'nt':
+            from ..windows_files import validate_state_root
+            validate_state_root(directory, create=True)
+            rpc_config.configure_local_endpoint(directory)
+        else:
+            private_dirs.ensure_private_dir(directory)
+            rpc_config.configure_local_endpoint(directory)
+            if not _trusted_directory(directory):
+                raise OSError('State directory is not owner-private')
         fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         if os.name == 'nt':

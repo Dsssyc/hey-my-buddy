@@ -20,7 +20,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tempfile
+from .. import private_dirs
 import time
 import tomllib
 
@@ -135,7 +135,7 @@ def build(source: Path, destination: Path) -> Path:
     if destination.name != SKILL_NAME:
         raise BoardError("SKILL_INVALID", "The skill directory must be named hey-my-buddy")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(prefix=".hey-my-buddy-build-", dir=destination.parent))
+    staged = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-build-", directory=destination.parent)
     try:
         assemble(source, staged / SKILL_NAME)
         publish(staged / SKILL_NAME, destination)

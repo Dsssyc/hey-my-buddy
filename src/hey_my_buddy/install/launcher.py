@@ -6,7 +6,7 @@ Service processes are started from the explicit allowlist below, never from the
 whole Host session.
 """
 from __future__ import annotations
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 import io
 import json
 import os
@@ -216,7 +216,7 @@ def _runtime_ready(target: Path) -> bool:
         return runtime.is_ready(target)
     try:
         from hey_my_buddy.private_files import read_bytes
-        marker = json.loads(read_bytes(target / 'READY.json', private=False))
+        marker = json.loads(read_bytes(target / 'READY.json'))
     except (OSError, ValueError):
         return False
     return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()
@@ -350,13 +350,12 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(encoding="utf-8", newline="\n")
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        from hey_my_buddy.windows_files import initialize_process_owner
-        initialize_process_owner()
         clean_host_environment()
         from hey_my_buddy.home import default_state_dir
         credential = agent_credential_document()
         scoped_state = credential_state_dir(credential)
-        state = scoped_state or Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
+        state = scoped_state or Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser()
+        state = state.absolute() if os.name == 'nt' else state.resolve()
         if scoped_state is not None:
             os.environ['HMB_STATE_DIR'] = str(scoped_state)
         if args and args[0] not in {'upgrade','install','--help','-h'}:
@@ -371,10 +370,8 @@ def main(argv: list[str] | None = None) -> int:
                 if credential is not None:
                     # The source file was read once. Transfer its validated contents
                     # through an anonymous private descriptor across exec, never argv/env.
-                    from hey_my_buddy.windows_files import parent as private_parent
                     from hey_my_buddy.private_dirs import validate_private_fd
-                    with (private_parent(state / '.credential-transfer') if os.name == 'nt' else nullcontext()), \
-                            tempfile.TemporaryFile(mode='w+b', dir=state) as transfer:
+                    with tempfile.TemporaryFile(mode='w+b', dir=state) as transfer:
                         validate_private_fd(transfer.fileno())
                         transfer.write(json.dumps(credential).encode('utf-8'))
                         transfer.seek(0)

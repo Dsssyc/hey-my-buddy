@@ -474,8 +474,6 @@ def _help_command(arguments: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DOCUMENT) -> int:
-    from ..windows_files import initialize_process_owner
-    initialize_process_owner()
     # The CLI emits UTF-8 JSON through pipes as well as the native console.
     # A caller-supplied in-memory text stream has no byte encoding to configure.
     for stream in (sys.stdout, sys.stderr):

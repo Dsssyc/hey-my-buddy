@@ -1,8 +1,7 @@
 """The Windows private boundary's policy is portable; native checks are explicit."""
-from contextlib import contextmanager
 import ctypes
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -15,7 +14,6 @@ from hey_my_buddy.private_files import publish_bytes
 
 USER = 'S-1-5-21-100-200-300-1001'
 FOREIGN = 'S-1-5-21-100-200-300-1002'
-
 
 class ACLPolicyTests(unittest.TestCase):
     def test_empty_dacl_and_all_whitelisted_ordinary_allows_are_accepted(self):
@@ -54,34 +52,13 @@ class ACLPolicyTests(unittest.TestCase):
             descriptor.GetSecurityDescriptorDacl.return_value = dacl
             with mock.patch.object(files, '_security', return_value=(mock.Mock(), mock.Mock(), security)):
                 with self.assertRaises(BoardError):
-                    files.validate_private_handle(123)
+                    files._validate_root_acl(123)
         security.GetSecurityInfo.assert_called_with(123, 1, 5)
-
-    def test_elevated_owner_setup_runs_once_and_reports_refusal(self):
-        security = mock.MagicMock()
-        security.TokenElevation, security.TokenUser, security.TokenOwner = 20, 1, 4
-        security.GetTokenInformation.side_effect = lambda token, kind: 1 if kind == 20 else (USER, 0)
-        con = mock.Mock(TOKEN_QUERY=8, TOKEN_ADJUST_DEFAULT=128)
-        with mock.patch.object(files.os, 'name', 'nt'), mock.patch.object(files, '_owner_initialized', False), \
-                mock.patch.object(files, '_security', return_value=(mock.Mock(), con, security)):
-            files.initialize_process_owner()
-            files.initialize_process_owner()
-            security.SetTokenInformation.assert_called_once()
-            self.assertEqual(security.SetTokenInformation.call_args.args[1:], (4, USER))
-        security.SetTokenInformation.side_effect = OSError('access denied by policy')
-        with mock.patch.object(files.os, 'name', 'nt'), mock.patch.object(files, '_owner_initialized', False), \
-                mock.patch.object(files, '_security', return_value=(mock.Mock(), con, security)):
-            with self.assertRaises(BoardError) as refused:
-                files.initialize_process_owner()
-            self.assertEqual(refused.exception.code, 'PRIVATE_OWNER_SETUP_FAILED')
-            self.assertIn('access denied by policy', refused.exception.details['reason'])
-            self.assertFalse(files._owner_initialized)
 
     def test_import_needs_no_pywin32_at_module_load(self):
         code = "import sys; sys.path.insert(0, sys.argv[1]); import hey_my_buddy.windows_files; assert 'win32security' not in sys.modules"
         result = subprocess.run([sys.executable, '-S', '-c', code, str(Path(files.__file__).parents[1])], capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-
 
 class HandleBoundaryTests(unittest.TestCase):
     def test_rename_uses_writer_handle_and_posix_replace_flags_once(self):
@@ -109,12 +86,13 @@ class HandleBoundaryTests(unittest.TestCase):
     def test_publication_writer_requests_delete_access_and_all_sharing(self):
         api = mock.Mock()
         api._open.return_value = 123
+        api.info.return_value = (files.FILE_ATTRIBUTE_NORMAL, 0)
+        api.file_type.return_value = files.FILE_TYPE_DISK
         api.fd.return_value = 456
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-        with mock.patch.object(files, '_check'):
-            self.assertEqual(files.open_held_regular_fd(api, Path('new.tmp'), flags, delete=True), 456)
+        self.assertEqual(files.open_regular_fd(Path('new.tmp'), flags, delete=True, api=api), 456)
         api._open.assert_called_once_with(Path('new.tmp'),
-            files.READ_CONTROL | files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
+            files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
         api.close.assert_not_called()
 
     def test_directory_open_pins_against_rename(self):
@@ -128,79 +106,20 @@ class HandleBoundaryTests(unittest.TestCase):
         self.assertEqual(args[5] & (files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS),
                          files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS)
 
-    def test_private_handle_compares_only_this_levels_long_name_without_case_sensitivity(self):
-        api = mock.Mock()
-        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
-        api.file_type.return_value = files.FILE_TYPE_DISK
-        api.long_path.return_value = r'C:\Users\Runner Long Name\AppData'
-        api.name.return_value = 'appdata'
-        requested = PureWindowsPath(r'C:\Users\RUNNER~1\AppData')
-        files._check(api, 123, requested, directory=True)
-        api.long_path.assert_called_once_with(requested)
-        # The same level can be reached through a subst drive or mapped share;
-        # ancestors have already been pinned and checked independently.
-        api.final_path.return_value = r'\\?\C:\Other\Runner Long Name\AppData'
-        files._check(api, 123, requested, directory=True)
-        api.name.return_value = 'another-name'
-        with self.assertRaises(BoardError):
-            files._check(api, 123, requested, directory=True)
-
-    def test_reparse_point_is_rejected_before_expanding_its_path(self):
-        api = mock.Mock()
-        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY | files.FILE_ATTRIBUTE_REPARSE_POINT, 0)
-        with self.assertRaises(BoardError):
-            files._check(api, 123, PureWindowsPath(r'C:\private\junction'), directory=True)
-        api.long_path.assert_not_called()
-
-    def test_subst_drive_root_is_a_pinned_boundary_without_a_level_name(self):
-        api = mock.Mock()
-        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
-        api.file_type.return_value = files.FILE_TYPE_DISK
-        api.name.return_value = 'directory-behind-subst'
-        files._check(api, 123, PureWindowsPath('S:/'), directory=True)
-        api.long_path.assert_not_called()
-        api.name.assert_not_called()
-
-    def test_new_directories_are_created_one_level_at_a_time_with_0700(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary).resolve()
-            target = base / 'one' / 'two'
-            api = mock.Mock()
-            api.open_dir.side_effect = lambda path: path if path.exists() else (_ for _ in ()).throw(FileNotFoundError())
-            original = Path.mkdir
-            created = []
-            def mkdir(path, mode=0o777, parents=False, exist_ok=False):
-                created.append((path, mode, parents))
-                return original(path, mode, parents, exist_ok)
-            with mock.patch.object(Path, 'mkdir', mkdir), mock.patch.object(files, '_check') as check:
-                with files.parent(target / 'leaf', create=True, api=api):
-                    self.assertEqual(created, [(base / 'one', 0o700, False), (target, 0o700, False)])
-                    self.assertEqual(api.close.call_count, 0)
-                checked_private = [call.args[2] for call in check.call_args_list if call.kwargs['private']]
-                self.assertEqual(checked_private, [base / 'one', target])
-            self.assertEqual(api.close.call_count, len(api.open_dir.call_args_list) - 2)
-
     def test_fd_ownership_transfers_once_and_failure_closes_handle(self):
         api = mock.Mock()
         api._open.return_value = 123
+        api.info.return_value = (files.FILE_ATTRIBUTE_NORMAL, 0)
+        api.file_type.return_value = files.FILE_TYPE_DISK
         api.fd.return_value = 456
-        @contextmanager
-        def parent(path):
-            yield api, Path(path)
-        with mock.patch.object(files, 'parent', parent), mock.patch.object(files, '_check') as check:
+        with mock.patch.object(files, 'WindowsFileAPI', return_value=api):
             self.assertEqual(files.open_regular_fd('leaf', os.O_RDONLY), 456)
             api.fd.assert_called_once_with(123, os.O_RDONLY)
             api.close.assert_not_called()
-            check.side_effect = BoardError('PRIVATE_PATH_UNSAFE', 'injected ACL rejection')
-            with self.assertRaises(BoardError):
-                files.open_regular_fd('leaf', os.O_RDONLY)
-            api.close.assert_called_once_with(123)
-            check.side_effect = None
             api.fd.side_effect = OSError('transfer failed')
             with self.assertRaises(OSError):
                 files.open_regular_fd('leaf', os.O_RDONLY)
-            self.assertEqual(api.close.call_count, 2)
-
+            api.close.assert_called_once_with(123)
 
 class LauncherTransferTests(unittest.TestCase):
     def test_windows_descriptor_duplicate_is_owned_until_transfer_finishes(self):
@@ -230,11 +149,8 @@ class LauncherTransferTests(unittest.TestCase):
                 execute.assert_called_once_with(os.P_WAIT, 'python', ['python', '-P', '-m', 'entry'])
                 self.assertEqual(dict(os.environ), selected)
 
-
 @unittest.skipUnless(os.name == 'nt', 'native Windows ACL/handle evidence')
 class NativePrivateFilesTests(unittest.TestCase):
-    def setUp(self):
-        files.initialize_process_owner()
 
     def test_private_path_accepts_different_case(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,7 +160,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             variant = Path(str(path).swapcase())
             with os.fdopen(private_dirs.open_regular_fd(variant, os.O_RDONLY), 'rb') as stream:
                 self.assertEqual(stream.read(), b'case-preserved-content')
-            private_dirs.validate_private_dir(Path(str(root).swapcase()))
+            files.validate_state_root(Path(str(root).swapcase()))
 
     def test_private_path_accepts_an_available_8dot3_alias(self):
         import win32api
@@ -257,7 +173,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             publish_bytes(path, b'short-name-content')
             with os.fdopen(private_dirs.open_regular_fd(Path(short) / path.name, os.O_RDONLY), 'rb') as stream:
                 self.assertEqual(stream.read(), b'short-name-content')
-            private_dirs.validate_private_dir(Path(short))
+            files.validate_state_root(Path(short))
 
     def test_private_path_replaced_by_a_junction_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -270,30 +186,53 @@ class NativePrivateFilesTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
             try:
                 with self.assertRaises(BoardError):
-                    private_dirs.validate_private_dir(root)
+                    files.validate_state_root(root)
             finally:
                 root.rmdir()
                 moved.rename(root)
 
-    def test_elevated_creation_publication_inherited_fd_and_pinned_ancestor(self):
+    def test_inherited_profile_acl_is_accepted_and_foreign_ace_is_refused(self):
+        import win32security as security
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_dirs.ensure_private_dir(Path(temporary) / 'inherited')
+            files.validate_state_root(root)
+            descriptor = security.GetFileSecurity(str(root), security.DACL_SECURITY_INFORMATION)
+            dacl = descriptor.GetSecurityDescriptorDacl()
+            dacl.AddAccessAllowedAce(security.ACL_REVISION, 1, security.CreateWellKnownSid(security.WinWorldSid))
+            security.SetNamedSecurityInfo(str(root), security.SE_FILE_OBJECT,
+                                          security.DACL_SECURITY_INFORMATION, None, None, dacl, None)
+            with self.assertRaisesRegex(BoardError, 'foreign ACE'):
+                files.validate_state_root(root)
+
+    def test_ordinary_creation_does_not_protect_dacl_and_descriptor_only_checks_type(self):
+        import win32security as security
         with tempfile.TemporaryDirectory() as temporary:
             root = private_dirs.ensure_private_dir(Path(temporary) / 'private' / 'nested')
+            descriptor = security.GetFileSecurity(str(root), security.DACL_SECURITY_INFORMATION)
+            control, _ = descriptor.GetSecurityDescriptorControl()
+            self.assertFalse(control & security.SE_DACL_PROTECTED)
+            temporary_root = private_dirs.make_temporary_dir(prefix='inherited-', directory=root)
+            temporary_descriptor = security.GetFileSecurity(str(temporary_root), security.DACL_SECURITY_INFORMATION)
+            self.assertFalse(temporary_descriptor.GetSecurityDescriptorControl()[0] & security.SE_DACL_PROTECTED)
             path = root / 'credential.json'
             publish_bytes(path, b'complete')
             with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY), 'rb') as stream:
                 private_dirs.validate_private_fd(stream.fileno())
                 self.assertEqual(stream.read(), b'complete')
-            with files.parent(path):
-                with self.assertRaises(OSError):
-                    root.rename(root.with_name('renamed'))
-            private_dirs.validate_private_dir(root)
-            import win32api
-            import win32con
-            import win32security as security
-            token = security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+
+    def test_cold_start_refuses_junction_ancestor_without_creating_state(self):
+        from hey_my_buddy.protocol import transport
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            outside = private_dirs.ensure_private_dir(base / 'outside')
+            link = base / 'junction'
+            result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(outside)], capture_output=True)
+            self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
             try:
-                user = security.GetTokenInformation(token, security.TokenUser)[0]
+                state = transport.get_state_dir(link / 'state')
+                self.assertEqual(state, link / 'state')
+                with self.assertRaisesRegex(BoardError, 'linked component'):
+                    transport._cold_start_preflight(state)
+                self.assertFalse((outside / 'state').exists())
             finally:
-                token.Close()
-            descriptor = security.GetFileSecurity(str(path), security.OWNER_SECURITY_INFORMATION)
-            self.assertEqual(descriptor.GetSecurityDescriptorOwner(), user)
+                link.rmdir()

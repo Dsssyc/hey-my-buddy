@@ -2,14 +2,12 @@
 
 Success survives writer-process interruption. POSIX also flushes the parent
 directory; Windows does not claim power-loss durability for directory entries.
-Callers distinguish private state from public installation paths.
 """
 from __future__ import annotations
 
 import os
 import io
 import uuid
-from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -67,40 +65,39 @@ class _PathOperations:
 
 
 class _WindowsPathOperations(_PathOperations):
-    def __init__(self, api, *, private):
+    def __init__(self, api):
         from . import windows_files
         super().__init__(None, None, lambda path, flags, mode:
-                         windows_files.open_held_regular_fd(api, path, flags, private=private,
-                                                           delete=bool(flags & os.O_EXCL)))
+                         windows_files.open_regular_fd(path, flags, api=api,
+                                                       delete=bool(flags & os.O_EXCL)))
         self.api = api
 
     def replace_open(self, descriptor, target):
         self.api.rename(descriptor, target)
 
 
-def open_read(path: Path, *, private: bool = True):
+def open_read(path: Path):
     """Open a published reader with delete sharing on Windows."""
     if os.name != 'nt':
         return Path(path).open('rb')
     from . import windows_files
-    opener = windows_files.open_regular_fd if private else windows_files.open_public_regular_fd
-    return os.fdopen(opener(path, os.O_RDONLY), 'rb')
+    return os.fdopen(windows_files.open_regular_fd(path, os.O_RDONLY), 'rb')
 
 
-def read_bytes(path: Path, *, private: bool = True) -> bytes:
-    with open_read(path, private=private) as stream:
+def read_bytes(path: Path) -> bytes:
+    with open_read(path) as stream:
         return stream.read()
 
 
-def read_text(path: Path, *, private: bool = True) -> str:
+def read_text(path: Path) -> str:
     """Keep UTF-8 text readers' universal-newline behavior on both platforms."""
-    with io.TextIOWrapper(open_read(path, private=private), encoding='utf-8') as stream:
+    with io.TextIOWrapper(open_read(path), encoding='utf-8') as stream:
         return stream.read()
 
 
 def publish_bytes(path: Path, content: bytes, *, immutable: bool = False,
                   operations=None, directory_fd: int | None = None, validate=None,
-                  open_file=None, directory_nofollow: bool = False, private: bool = True) -> None:
+                  open_file=None, directory_nofollow: bool = False) -> None:
     """Flush the complete writer, then replace or compare-and-create its name.
 
     Immutable publication never replaces an existing object. Identical bytes
@@ -110,36 +107,19 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False,
     path = Path(path)
     if os.name == "nt" and operations is None and directory_fd is None:
         from . import windows_files
-        boundary = (windows_files.parent(path) if private else
-                    nullcontext((windows_files.WindowsFileAPI(), path.absolute())))
-        with boundary as (api, path):
-            try:
-                handle = api._open(path, windows_files.READ_CONTROL | windows_files.FILE_READ_ATTRIBUTES,
-                                   windows_files.OPEN_EXISTING, share_delete=True)
-            except FileNotFoundError:
-                pass
-            else:
-                try:
-                    windows_files._check(api, handle, path, directory=False, private=private)
-                finally:
-                    api.close(handle)
-            return publish_bytes(path, content, immutable=immutable,
-                                 operations=_WindowsPathOperations(api, private=private))
+        operations = _WindowsPathOperations(windows_files.WindowsFileAPI())
     operations = operations if operations is not None else _PathOperations(directory_fd, validate, open_file)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     descriptor = operations.open(temporary)
-    complete = published = False
     try:
         with os.fdopen(descriptor, "wb") as stream:
             if hasattr(os, "fchmod"):
                 os.fchmod(stream.fileno(), 0o600)
             stream.write(content)
             stream.flush()
-            complete = True
             os.fsync(stream.fileno())
             if not immutable and os.name == 'nt':
                 operations.replace_open(stream.fileno(), path)
-                published = True
         if immutable:
             try:
                 operations.link(temporary, path)
@@ -148,12 +128,8 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False,
                     raise
         elif os.name != 'nt':
             operations.replace(temporary, path)
-            published = True
     finally:
-        # A complete candidate can be the only surviving generation required
-        # by recovery. Do not discard it after a failed mutable publication.
-        if immutable or not complete or published:
-            operations.unlink(temporary)
+        operations.unlink(temporary)
     if directory_fd is not None:
         os.fsync(directory_fd)
     else:

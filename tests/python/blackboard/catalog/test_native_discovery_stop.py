@@ -63,7 +63,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
 
     def test_codex_directory_creation_failure_preserves_stop_evidence(self):
         error = OSError('fixture catalog directory refused')
-        with patch.object(run_execution.tempfile, 'mkdtemp', side_effect=error):
+        with patch.object(run_execution, 'make_temporary_dir', side_effect=error):
             with self.assertRaises(OSError) as caught:
                 self.invoke(lambda: run_execution.discover_models('codex'))
         self.assertIs(caught.exception, error)

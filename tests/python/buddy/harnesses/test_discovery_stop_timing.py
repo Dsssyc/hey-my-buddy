@@ -372,7 +372,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                     return []
                 return select(timeout)
 
-            with patch.object(discovery.tempfile, 'mkdtemp', return_value=str(private)), \
+            with patch.object(discovery.private_dirs, 'make_temporary_dir', return_value=private), \
                  patch.object(ProcessHandle, 'shutdown_confirmed', final_observation), \
                  patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
                  patch.object(selector, 'select', side_effect=read), \

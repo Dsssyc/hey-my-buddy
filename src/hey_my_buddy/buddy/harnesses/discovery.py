@@ -18,7 +18,7 @@ import signal
 import shutil
 import subprocess
 import sys
-import tempfile
+from ... import private_dirs
 import time
 import selectors
 from xml.parsers.expat import ExpatError
@@ -609,7 +609,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
     start = time.monotonic()
     if start >= deadline:
         return "scan-timeout", b""
-    root = Path(tempfile.mkdtemp(prefix="hey-my-buddy-dsh-probe-")).resolve()
+    root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-dsh-probe-").resolve()
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""

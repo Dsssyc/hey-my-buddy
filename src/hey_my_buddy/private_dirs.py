@@ -9,6 +9,7 @@ import re
 import stat
 import sys
 import tempfile
+import secrets
 
 from .paths import is_absolute_path
 from .errors import BoardError
@@ -150,8 +151,8 @@ def context_root(context, adapter: str | None = None) -> Path:
 def ensure_private_dir(path: Path) -> Path:
     path = _absolute(path)
     if os.name == 'nt':
-        from .windows_files import ensure_directory
-        return ensure_directory(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     _guard_parents(path)
     missing = []
     current = path
@@ -167,6 +168,15 @@ def ensure_private_dir(path: Path) -> Path:
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
     path.chmod(0o700)
+    return path
+
+
+def make_temporary_dir(*, prefix: str, directory: Path | None = None) -> Path:
+    """Keep Windows temporary directories inheriting their parent's ACL too."""
+    if os.name != 'nt':
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=directory))
+    path = Path(directory or tempfile.gettempdir()) / (prefix + secrets.token_urlsafe(6))
+    path.mkdir()
     return path
 
 
@@ -276,13 +286,12 @@ def validate_private_fd(fd: int) -> None:
     """Validate an already opened file without reopening its path."""
     if os.name == 'nt':
         import msvcrt
-        from .windows_files import validate_private_handle, WindowsFileAPI
+        from .windows_files import WindowsFileAPI
         api = WindowsFileAPI()
         handle = msvcrt.get_osfhandle(fd)
         attributes, _ = api.info(handle)
-        if attributes & (0x10 | 0x400) or api.file_type(handle) != 1:
+        if attributes & 0x10 or api.file_type(handle) != 1:
             raise BoardError('PRIVATE_PATH_UNSAFE', 'Private descriptor is not an ordinary file')
-        validate_private_handle(handle)
     else:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -291,10 +300,7 @@ def validate_private_fd(fd: int) -> None:
 
 def validate_private_dir(path: Path) -> None:
     path = _absolute(path)
-    if os.name == 'nt':
-        from .windows_files import validate_directory
-        validate_directory(path)
-    else:
+    if os.name != 'nt':
         _guard_parents(path)
         info = path.stat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:

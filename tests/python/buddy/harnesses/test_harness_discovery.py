@@ -362,7 +362,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 "import os\nfrom pathlib import Path\n"
                 f"Path({str(pid_file)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                 "print('dsh 1.2.0')\n"))
-            with patch.object(discovery.tempfile, "mkdtemp", return_value=str(private)), \
+            with patch.object(discovery.private_dirs, "make_temporary_dir", return_value=private), \
                  patch.object(ProcessHandle, "shutdown_confirmed", return_value=False), \
                  self.assertLogs(discovery.__name__, level="WARNING") as notes:
                 code, output = discovery._probe_dsh_version([sys.executable, str(cli)], {"PATH": ""},
@@ -1093,7 +1093,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                     def actual_stop(handle, **kwargs):
                         actual = observe(handle, **kwargs)
                         return actual and stopped
-                    with patch.object(discovery.tempfile, 'mkdtemp', return_value=str(private)), \
+                    with patch.object(discovery.private_dirs, 'make_temporary_dir', return_value=private), \
                          patch.object(discovery, '_probe_windows' if os.name == 'nt' else '_probe_posix',
                                       side_effect=ValueError('fixture reader failed')), \
                          patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):

@@ -390,7 +390,8 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
     root = state / 'backups'
     incoming, current, previous, journal = _backup_paths(root)
     private_dirs.ensure_private_dir(root)
-    os.chmod(root, 0o700)
+    if os.name != 'nt':
+        os.chmod(root, 0o700)
     lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
     try:
         locking.lock(lock, blocking=False)
