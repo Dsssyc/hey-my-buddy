@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
+from hey_my_buddy.blackboard.routing.router import answer_schema
 from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_services
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.claude.native_run import run, run_discovery
@@ -46,9 +47,7 @@ FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
 USAGE_FIXTURE = Path(__file__).parent / "fixtures/fake_claude_usage.py"
 BUDDY = {"provider": "anthropic", "model": "claude-opus-5-5[1m]", "effort": "high"}
-READ_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId"],
-               "properties": {"buddyId": {"type": "string"}, "reason": {"type": "string"},
-                              "evidence": {"type": "array", "items": {"type": "string"}}}}
+READ_SCHEMA = answer_schema(["legal"])
 
 
 def flag_value(args: list[str], flag: str) -> str | None:
