@@ -229,11 +229,14 @@ def _unheld(path: Path) -> bool:
         os.close(fd)
 
 
-def _owner_absent(directory: Path, *, fenced: bool = True) -> bool:
-    """Observe the owner's lifetime locks; True only when both prove absence.
+def _owner_refusal(directory: Path, *, fenced: bool = True) -> str | None:
+    """Observe the owner's lifetime locks once; None only when both prove absence.
 
-    This is read-only observation: existing files are opened without O_CREAT and
-    nothing is created, deleted or spawned. A held lock, a busy start fence or an
+    Any other outcome returns the refusal naming what the observation actually
+    saw: a start in progress behind a busy start fence, or the owner message for
+    a lifetime lock that is held or cannot be read. This is read-only
+    observation: existing files are opened without O_CREAT and nothing is
+    created, deleted or spawned. A held lock, a busy start fence or an
     unreadable file never proves absence, because a connection failure is not
     stop evidence. ``fenced`` is False only for a caller already holding the
     start lock, which the same process cannot take twice.
@@ -246,13 +249,15 @@ def _owner_absent(directory: Path, *, fenced: bool = True) -> bool:
             except FileNotFoundError:
                 pass
             except (OSError, BoardError):
-                return False
+                return owner_held_message()
             else:
                 try:
                     locking.lock(fence, shared=True, blocking=False)
                 except BlockingIOError:
-                    return False
-        return all(_unheld(directory / name) for name in LIFETIME_LOCKS)
+                    return "A board service start is in progress in this state directory"
+        if not all(_unheld(directory / name) for name in LIFETIME_LOCKS):
+            return owner_held_message()
+        return None
     finally:
         if fence >= 0:
             locking.unlock(fence)
@@ -261,8 +266,9 @@ def _owner_absent(directory: Path, *, fenced: bool = True) -> bool:
 
 def _refuse_without_service(directory: Path, *, under_start_lock: bool = False) -> NoReturn:
     """Every endpoint-less read-only or wait path refuses through one observation."""
-    if not _owner_absent(directory, fenced=not under_start_lock):
-        raise ServiceError("SERVICE_UNAVAILABLE", owner_held_message())
+    refusal = _owner_refusal(directory, fenced=not under_start_lock)
+    if refusal:
+        raise ServiceError("SERVICE_UNAVAILABLE", refusal)
     raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
 
 
@@ -532,8 +538,9 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
         if endpoint is None:
             # A connection failure is not stop evidence: only both lifetime locks
             # proving the owner absent may report the service as stopped.
-            if not _owner_absent(directory):
-                raise ServiceError("SERVICE_UNAVAILABLE", owner_held_message())
+            refusal = _owner_refusal(directory)
+            if refusal:
+                raise ServiceError("SERVICE_UNAVAILABLE", refusal)
             return {"status": "stopped", "alreadyStopped": True, "stopped": True}
     else:
         endpoint = _ensure_service(directory, resource=resource)

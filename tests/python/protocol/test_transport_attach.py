@@ -235,6 +235,29 @@ class EndpointlessObservationTests(unittest.TestCase):
                 finally:
                     os.close(holder)
 
+    def test_a_busy_start_fence_reports_a_start_in_progress_instead_of_stopped(self):
+        # A held start fence means a start is in progress right now. Even with
+        # both lifetime locks free beside it, that is neither stop evidence nor
+        # a held lifetime lock, so neither the stopped answer nor the owner
+        # message may appear.
+        (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
+        self.idle_locks()
+        holder = self.hold("control-start.lock")
+        try:
+            before = snapshot(self.directory)
+            with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                for method in ("stop", "restart"):
+                    with self.assertRaises(ServiceError) as refused:
+                        transport.call_service(method, {"drainSeconds": 0}, self.directory)
+                    self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                    self.assertIn("A board service start is in progress", refused.exception.message)
+                    self.assertNotIn("lifetime locks", refused.exception.message)
+            recorder.assert_no_mutation()
+            self.assertEqual(before, snapshot(self.directory), "observation must not change the state directory")
+            self.assertTrue((self.directory / "control.json").exists(), "an endpoint is never deleted by observation")
+        finally:
+            os.close(holder)
+
     def test_free_lifetime_locks_report_the_service_as_stopped_without_mutation(self):
         (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         self.idle_locks()
@@ -262,6 +285,29 @@ class EndpointlessObservationTests(unittest.TestCase):
                     transport.ensure_service(self.directory, resource="wait")
                 messages.append(refused.exception.message)
             self.assertTrue(all("lifetime locks" in message for message in messages), messages)
+            recorder.assert_no_mutation()
+        finally:
+            os.close(holder)
+
+    def test_wait_and_read_only_paths_report_a_start_in_progress_behind_a_busy_fence(self):
+        self.idle_locks()
+        holder = self.hold("control-start.lock")
+        try:
+            messages = []
+            with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                with self.assertRaises(ServiceError) as refused:
+                    transport._call_board_read_only("ping", None, self.directory)
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    with transport._event_waiter(self.directory):
+                        pass
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    transport.ensure_service(self.directory, resource="wait")
+                messages.append(refused.exception.message)
+            self.assertEqual(len(set(messages)), 1, "one observation must give every entry the same refusal")
+            self.assertIn("A board service start is in progress", messages[0])
+            self.assertNotIn("lifetime locks", messages[0])
             recorder.assert_no_mutation()
         finally:
             os.close(holder)
