@@ -26,7 +26,7 @@ from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 
-ADAPTER = "claude"
+HARNESS = "claude"
 #: The exact name of the built-in tool the CLI's ``--json-schema`` contributes
 #: by itself. An MCP server's tool never bears this bare name: the CLI spells
 #: mounted tools ``mcp__<server>__<tool>``, so the exact match is one native
@@ -316,7 +316,7 @@ class ReadOnlyToolEvidence:
         if name is not None:
             fact["toolName"] = name
         try:
-            event = normalize_tool_event(ADAPTER, fact)
+            event = normalize_tool_event(HARNESS, fact)
         except BoardError:
             # A fact no event can be built from makes its call incomplete: the
             # shared exclusion guard refuses such a call, so a delivery
@@ -330,7 +330,7 @@ class ReadOnlyToolEvidence:
                 candidate = self._delivery_candidates.get(shared_key)
                 if candidate is not None:
                     candidate["incomplete"] = True
-            self._evidence.observe_incomplete(ADAPTER, fact)
+            self._evidence.observe_incomplete(HARNESS, fact)
             return
         if event is None:
             return

@@ -8,15 +8,15 @@ def tool_receipt(binding, tool_calls=0, *, native_identity=None, stream_complete
     collector = ToolEventEvidence(binding)
     for number in range(tool_calls):
         for phase in ("start", "end"):
-            collector.observe(normalize_tool_event(binding["adapter"], {
+            collector.observe(normalize_tool_event(binding["harness"], {
                 "nativeIdentity": identity, "callId": f"fixture-call-{number}",
-                "toolName": tool_name or names[binding["adapter"]], "phase": phase,
+                "toolName": tool_name or names[binding["harness"]], "phase": phase,
             }))
     return {"nativeIdentity": identity, "toolEvidence": collector.finish([identity], stream_complete)}
 
 
 def claim_tool_receipt(claim, tool_calls=0, **options):
-    return tool_receipt({"adapter": claim["decisionInput"]["buddy"]["adapter"],
+    return tool_receipt({"harness": claim["decisionInput"]["buddy"]["harness"],
                          "taskId": claim["task"]["taskId"],
                          "attemptId": claim["attempt"]["attemptId"],
                          "generation": claim["attempt"]["generation"]}, tool_calls, **options)

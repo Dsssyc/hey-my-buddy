@@ -41,7 +41,7 @@ class RouterDispatchTestCase(BoardTestCase):
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, model=None, available=1, enabled=1):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, "dsh", "fixture", model or buddy_id, "max", available, enabled,
@@ -291,7 +291,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                     (f"busy-{index}", f"busy-{index}", "host", "{}", "{}", T0, T0))
                 db.execute(
                     "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                    " adapter,model_adapter,model_provider,model_model,started_at,created_at,updated_at)"
+                    " adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
                     " VALUES(?,?,1,'nonce',?,'executing','dsh','dsh','other',?,?,?,?)",
                     (f"att-busy-{index}", f"busy-{index}", f"claim-b{index}", f"model-{index}", T0, T0, T0))
         blocked = self.claim("cap")
@@ -317,7 +317,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 (T0, T0))
             db.execute(
                 "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                " adapter,model_adapter,model_provider,model_model,started_at,created_at,updated_at)"
+                " adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
                 " VALUES('att-retry','retry-1',1,'nonce','claim-r','executing','dsh','dsh','fixture','alpha',?,?,?)",
                 (T0, T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="retry-1", attempt_id="att-retry",
@@ -371,7 +371,7 @@ class ClaimTests(RouterDispatchTestCase):
         document = committed["claim"]["decisionInput"]
         self.assertEqual(document["routerBuddyId"], A)
         self.assertEqual(document["routerIndex"], 0)
-        self.assertEqual(document["buddy"], {"adapter": "dsh", "provider": "fixture",
+        self.assertEqual(document["buddy"], {"harness": "dsh", "provider": "fixture",
                                                "model": "alpha", "effort": "max"})
         # The claim froze the tool policy for this attempt.
         self.assertEqual(self.tool_policy(attempt["attemptId"]), {"systemSandbox": False})
@@ -495,8 +495,8 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def catalog_read(self, *, changed=False):
         return self.board_.evaluation.record_catalog({
             'source': 'routing-reread-fixture',
-            'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
-            'providers': [{'adapter': 'dsh', 'provider': 'fixture', 'models': [
+            'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+            'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': [
                 {'id': model, 'efforts': ['max'], 'description': 'changed' if changed else ''}
                 for model in ('alpha', 'bravo')]}]})
 
@@ -551,7 +551,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
     def test_unhealthy_router_records_preflight_failure_without_an_attempt(self):
         first = self.request()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
         response = self.claim("changed")
         self.assertIsNone(response["claim"])
         self.assertEqual(self.decision_row(first["decisionId"])["status"], "needs-host")

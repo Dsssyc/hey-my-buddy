@@ -21,7 +21,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='private-readonly-probe-')
         self.addCleanup(self.temp.cleanup)
-        self.args = SimpleNamespace(adapter='codex', provider='openai', model='gpt-6.1-sol',
+        self.args = SimpleNamespace(harness='codex', provider='openai', model='gpt-6.1-sol',
                                     effort='high', output_root=Path(self.temp.name) / 'probe', execute=False)
 
     def prepared(self):
@@ -110,36 +110,36 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
         self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False)['status'], 'failed')
 
     def test_all_harness_packets_freeze_policy_without_selecting_a_native_adapter(self):
-        for adapter in probe.ADAPTERS:
-            with self.subTest(adapter=adapter), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')), \
+        for harness in probe.HARNESSES:
+            with self.subTest(harness=harness), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')), \
                  patch('subprocess.Popen', side_effect=AssertionError('no process')):
-                self.args.adapter = adapter
-                self.args.output_root = Path(self.temp.name) / adapter
+                self.args.harness = harness
+                self.args.output_root = Path(self.temp.name) / harness
                 packet = self.prepared()
-                self.assertIs(packet['systemSandbox'], probe.system_sandbox(adapter))
+                self.assertIs(packet['systemSandbox'], probe.system_sandbox(harness))
 
     def test_native_command_reading_requires_the_frozen_system_sandbox_class(self):
-        for adapter in ('codex', 'dsh'):
-            with self.subTest(adapter=adapter):
-                self.args.adapter = adapter
-                self.args.output_root = Path(self.temp.name) / adapter
-                if adapter == 'dsh':
-                    self.args.adapter = 'codex'
+        for harness in ('codex', 'dsh'):
+            with self.subTest(harness=harness):
+                self.args.harness = harness
+                self.args.output_root = Path(self.temp.name) / harness
+                if harness == 'dsh':
+                    self.args.harness = 'codex'
                 packet = self.prepared()
-                packet['buddy']['adapter'] = adapter
-                packet['systemSandbox'] = probe.system_sandbox(adapter)
+                packet['buddy']['harness'] = harness
+                packet['systemSandbox'] = probe.system_sandbox(harness)
                 outcome = self.outcome(packet)
                 for event in outcome.result['toolEvidence']['events']:
                     event.update(toolName='exec_command', category='execute')
                 report = probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)
-                self.assertEqual(report['status'], 'passed' if probe.system_sandbox(adapter) else 'failed')
+                self.assertEqual(report['status'], 'passed' if probe.system_sandbox(harness) else 'failed')
                 packet['systemSandbox'] = not packet['systemSandbox']
                 self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'failed')
 
     def test_removed_harnesses_cannot_prepare_or_execute_native_review_probes(self):
-        for adapter in ('dsh', 'zcode'):
-            with self.subTest(adapter=adapter), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
-                self.args.adapter = adapter
+        for harness in ('dsh', 'zcode'):
+            with self.subTest(harness=harness), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
+                self.args.harness = harness
                 for execute in (False, True):
                     self.args.execute = execute
                     with self.assertRaises(ValueError):

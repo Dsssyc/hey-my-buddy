@@ -15,23 +15,23 @@ def _time(value):
         return None
 
 
-def latest_quota(connection, adapter):
+def latest_quota(connection, harness):
     """The latest normalized observation reported by this harness."""
-    row = connection.execute('SELECT quota_json FROM harness_quota_observations WHERE adapter=?', (adapter,)).fetchone()
+    row = connection.execute('SELECT quota_json FROM harness_quota_observations WHERE harness=?', (harness,)).fetchone()
     return json.loads(row[0]) if row else None
 
 
-def record_quota(connection, adapter, quota, *, now=None):
+def record_quota(connection, harness, quota, *, now=None):
     from ..routing.quota_routing import record
     if not isinstance(quota, dict) or _time(quota.get('observedAt')) is None:
         return
-    record(connection, adapter, quota, now=now)
-    previous = latest_quota(connection, adapter)
+    record(connection, harness, quota, now=now)
+    previous = latest_quota(connection, harness)
     if previous is not None and _time(previous['observedAt']) >= _time(quota['observedAt']):
         return
-    connection.execute('INSERT INTO harness_quota_observations(adapter,quota_json) '
-                       'VALUES(?,?) ON CONFLICT(adapter) DO UPDATE SET quota_json=excluded.quota_json',
-                       (adapter, canonical_json(quota)))
+    connection.execute('INSERT INTO harness_quota_observations(harness,quota_json) '
+                       'VALUES(?,?) ON CONFLICT(harness) DO UPDATE SET quota_json=excluded.quota_json',
+                       (harness, canonical_json(quota)))
 
 
 def persist(connection, attempt, result):
@@ -48,13 +48,13 @@ def persist(connection, attempt, result):
         quota = normalize_quota({"source": failure["source"], "observedAt": failure.get("observedAt"),
                                  "reachedType": failure["nativeCode"], "ordinaryUsageAllowed": False,
                                  'resetsAt': failure.get('resetsAt'), "windows": []})
-    adapter = attempt['model_adapter'] or attempt['adapter']
+    harness = attempt['model_harness'] or attempt['adapter']
     from ...protocol.harness_names import HARNESS_NAMES
-    if quota is None or adapter not in HARNESS_NAMES:
+    if quota is None or harness not in HARNESS_NAMES:
         return
     # Attribute to the frozen execution; a later model selection cannot relabel it.
     observed = {**quota, "attemptId": attempt["attempt_id"], "provider": (quota.get("scope") or {}).get("provider") or attempt["model_provider"]}
-    record_quota(connection, adapter, observed)
+    record_quota(connection, harness, observed)
 
 
 def quota_view(value, *, now=None):
@@ -77,25 +77,25 @@ def exhausted(connection, buddy, *, now=None):
 
 def warnings(connection, buddy, *, now=None):
     from ...protocol.harness_names import HARNESS_NAMES
-    if not buddy or buddy.get("adapter") not in HARNESS_NAMES:
+    if not buddy or buddy.get("harness") not in HARNESS_NAMES:
         return []
-    quota = quota_view(latest_quota(connection, buddy["adapter"]), now=now)
+    quota = quota_view(latest_quota(connection, buddy["harness"]), now=now)
     explicit = exhausted(connection, buddy, now=now)
     if explicit is not None:
-        return [{**explicit, "adapter": buddy["adapter"], "provider": buddy["provider"],
+        return [{**explicit, "harness": buddy["harness"], "provider": buddy["provider"],
                  "message": "A recent native observation reports this selected buddy has exhausted its quota."}]
     if not quota or quota["stale"] or quota.get("provider") not in (None, buddy.get("provider")):
         return []
     from ...protocol.usage import classify_quota_code
     if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
-        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "adapter": buddy["adapter"],
+        return [{"code": "HARNESS_RATE_LIMIT_REPORTED", "harness": buddy["harness"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a temporary rate limit."}]
     if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
-        return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "adapter": buddy["adapter"],
+        return [{"code": "HARNESS_QUOTA_LIMIT_REPORTED", "harness": buddy["harness"],
                  "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
                  "reachedType": quota.get("reachedType"), "message": "A recent native observation reported a quota limit; its current reset state may be unknown."}]
-    return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "adapter": buddy["adapter"],
+    return [{"code": "HARNESS_QUOTA_NEAR_LIMIT", "harness": buddy["harness"],
              "provider": quota.get("provider"), "source": quota.get("source"),
              "observedAt": quota.get("observedAt"), "window": window,
              "message": "Recent native quota observation is near its limit; review before continuing."}
@@ -103,7 +103,7 @@ def warnings(connection, buddy, *, now=None):
             and isinstance(window.get("usedPercent"), (int, float)) and window["usedPercent"] >= 90]
 
 
-def failure_view(result, *, adapter=None):
+def failure_view(result, *, harness=None):
     """Only structured native quota failures affect the visible classification."""
     if not isinstance(result, dict):
         return None
@@ -112,5 +112,5 @@ def failure_view(result, *, adapter=None):
     if failure is not None:
         return failure
     if result.get("code") == "quota-rejected":
-        return {"code": "quota-exceeded", "nativeCode": "quota-rejected", "source": (adapter or "harness") + "/native-quota"}
+        return {"code": "quota-exceeded", "nativeCode": "quota-rejected", "source": (harness or "harness") + "/native-quota"}
     return None

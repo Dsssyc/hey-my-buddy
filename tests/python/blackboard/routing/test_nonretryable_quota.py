@@ -13,14 +13,14 @@ from buddy.harnesses.test_quota_failures import PROVIDER_RATE_LIMIT_FAILURE
 PROVIDER = "fixture-api"
 BUDDY_IDS = [f"zcode:{PROVIDER}:{model}:low" for model in ("alpha", "beta")]
 OTHER_PROVIDER_ID = "zcode:other-api:gamma:low"
-CONFIG = {"adapter": "zcode", "provider": PROVIDER, "model": "alpha", "effort": "low"}
+CONFIG = {"harness": "zcode", "provider": PROVIDER, "model": "alpha", "effort": "low"}
 
 
 class NonretryableQuotaRoutingTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         catalog = deepcopy(FIXTURE_CATALOG)
-        catalog["providers"] = [{"provider": provider, "adapter": "zcode", "efforts": ["low"],
+        catalog["providers"] = [{"provider": provider, "harness": "zcode", "efforts": ["low"],
                                 "models": [{"id": model, "name": model} for model in models]}
                                for provider, models in ((PROVIDER, ("alpha", "beta")), ("other-api", ("gamma",)))]
         self.catalog_fixture(catalog)
@@ -37,7 +37,7 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
     def record_failure(self, raw=None):
         failure = quota_failure(PROVIDER_RATE_LIMIT_FAILURE if raw is None else raw)
         with self.board_.store.db.write() as db:
-            persist(db, {"attempt_id": "native-denial", "adapter": "zcode", "model_adapter": "zcode",
+            persist(db, {"attempt_id": "native-denial", "adapter": "zcode", "model_harness": "zcode",
                          "model_provider": PROVIDER},
                     {"quotaFailure": {**failure, "source": "zcode/session-turn-failed", "observedAt": self.clock()}})
 
@@ -83,7 +83,7 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
 
     def test_redetect_opens_one_early_retry_and_preserves_exhaustion(self):
         self.record_failure()
-        reply = self.board_.call("quota_redetect", {"requestId": "redetect", "adapter": "zcode", "provider": PROVIDER})
+        reply = self.board_.call("quota_redetect", {"requestId": "redetect", "harness": "zcode", "provider": PROVIDER})
         self.assertEqual(reply["quota"]["opened"], [None])
         self.assertEqual(self.candidates("manual-retry"), ([*BUDDY_IDS, OTHER_PROVIDER_ID], BUDDY_IDS))
         self.assertEqual(self.candidates("next-retry"), ([OTHER_PROVIDER_ID], []))

@@ -463,7 +463,7 @@ class FastSeamTests(NativeRunCase):
                          observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertEqual(result.end.reason_code, "harness-unavailable")
         self.assertIsNone(result.model_started)
         self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
@@ -519,7 +519,7 @@ class FastSeamTests(NativeRunCase):
                          observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertEqual(result.end.reason_code, "harness-unavailable")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown",
                          "the wrapper's own finalize evidence rules, not the session count")
@@ -1127,7 +1127,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                     mock.patch.object(discovery, "discover", return_value=detected_result) as scan:
                 with self.assertRaises(BoardError) as caught:
                     native_run.check_preparation({}, {})
-                self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+                self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
             self.assertEqual(scan.call_count, 1 if selected is None else 0,
                              "a bound record decides without a discovery scan")
 
@@ -1190,7 +1190,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                          {"eventCount": None, "disabledRows": None, "streamEof": None})
 
     def test_turn_provenance_accepts_only_the_verified_order(self):
-        provenance = {"version": 1, "adapter": "dsh", "tool": "buddy_finish_turn",
+        provenance = {"version": 1, "harness": "dsh", "tool": "buddy_finish_turn",
                       "turnEnd": "completed", "stopReason": "end_turn", "rootSessionMatched": True,
                       "receiptVerified": True, "sessionClose": "acknowledged",
                       "nativeSessionId": "session-1", "toolCallId": "call_finish_1",
@@ -1390,11 +1390,11 @@ class DiscoveryTests(NativeRunCase):
         catalog = native_run.run_discovery(
             cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
             native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
-        self.assertEqual(catalog["adapter"], "dsh")
+        self.assertEqual(catalog["harness"], "dsh")
         self.assertEqual(catalog["source"], "dsh-acp-session-config")
         self.assertEqual(catalog["harnessVersion"], "0.0.1")
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "dsh", "status": "complete", "accountStatus": "not-applicable"}])
+                         [{"harness": "dsh", "status": "complete", "accountStatus": "not-applicable"}])
         self.assertTrue(any("account status is not applicable" in warning for warning in catalog["warnings"]),
                         catalog["warnings"])
         provider = next(entry for entry in catalog["providers"] if entry["provider"] == "fake")

@@ -15,7 +15,7 @@ import { CHECKED_AT, harness } from "./harness.fixtures";
 
 describe("the harness wire contract", () => {
   const codexRow: HarnessHealth = {
-    adapter: "codex", status: "ready", available: true, revision: 4, manualPath: null,
+    harness: "codex", status: "ready", available: true, revision: 4, manualPath: null,
     command: ["/opt/bin/codex"], executable: "/opt/bin/codex", version: "0.157.0", source: "PATH",
     candidates: [], checkedAt: CHECKED_AT,
   };
@@ -33,11 +33,11 @@ describe("the harness wire contract", () => {
     expect(fetcher).toHaveBeenCalledWith("/private/api/command", expect.objectContaining({
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-Buddy-CSRF": "csrf" },
-      body: JSON.stringify({ operation: "capabilities", params: { refresh: true, adapter: "codex" } }),
+      body: JSON.stringify({ operation: "capabilities", params: { refresh: true, harness: "codex" } }),
     }));
   });
 
-  it("omits the adapter when every harness is checked", async () => {
+  it("omits the harness when every harness is checked", async () => {
     const { api, fetcher } = commandApi({ harnesses: [codexRow] });
     await api.harnessRefresh("csrf");
     expect(body(fetcher)).toEqual({ operation: "capabilities", params: { refresh: true } });
@@ -54,12 +54,12 @@ describe("the harness wire contract", () => {
     const saved = commandApi({ harness: codexRow });
     await expect(saved.api.harnessSet("codex", "/opt/bin/codex", "csrf")).resolves.toEqual(codexRow);
     expect(body(saved.fetcher)).toEqual({
-      operation: "harness_set", params: { adapter: "codex", path: "/opt/bin/codex" },
+      operation: "harness_set", params: { harness: "codex", path: "/opt/bin/codex" },
     });
     const cleared = commandApi({ harness: codexRow });
     await cleared.api.harnessSet("codex", null, "csrf");
-    expect(body(cleared.fetcher).params).toEqual({ adapter: "codex", path: null });
-    await expect(commandApi({ harness: { ...codexRow, adapter: "claude" } }).api.harnessSet("codex", "/opt/bin/codex", "csrf"))
+    expect(body(cleared.fetcher).params).toEqual({ harness: "codex", path: null });
+    await expect(commandApi({ harness: { ...codexRow, harness: "claude" } }).api.harnessSet("codex", "/opt/bin/codex", "csrf"))
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
     await expect(commandApi({}).api.harnessSet("codex", "/opt/bin/codex", "csrf"))
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
@@ -90,13 +90,13 @@ describe("the harness wire contract", () => {
   });
 
   it("reads the snapshot's harness rows in the fixed order and treats an absent field as none", () => {
-    const dsh = { ...codexRow, adapter: "dsh", executable: "/usr/local/bin/dsh" };
+    const dsh = { ...codexRow, harness: "dsh", executable: "/usr/local/bin/dsh" };
     const rows = snapshotHarnesses({ harnesses: [codexRow, dsh] } as unknown as Snapshot);
-    expect(rows.map(row => row.adapter)).toEqual(["dsh", "codex"]);
+    expect(rows.map(row => row.harness)).toEqual(["dsh", "codex"]);
     expect(snapshotHarnesses({} as unknown as Snapshot)).toEqual([]);
     // A malformed row is dropped instead of presented as health.
-    expect(snapshotHarnesses({ harnesses: [codexRow, { adapter: "zcode" }] } as unknown as Snapshot)
-      .map(row => row.adapter)).toEqual(["codex"]);
+    expect(snapshotHarnesses({ harnesses: [codexRow, { harness: "zcode" }] } as unknown as Snapshot)
+      .map(row => row.harness)).toEqual(["codex"]);
   });
 
   it("drops a row whose state this console does not know instead of presenting it", () => {
@@ -107,18 +107,18 @@ describe("the harness wire contract", () => {
 describe("a quota observation on the wire", () => {
   it("drops a malformed observation as unknown instead of failing the row", () => {
     const rows = snapshotHarnesses({
-      harnesses: [harness({ adapter: "dsh", status: "ready",
+      harnesses: [harness({ harness: "dsh", status: "ready",
         quota: { observedAt: CHECKED_AT, source: "dsh-native", windows: "near-limit" } as unknown as HarnessHealth["quota"] })],
     } as unknown as Snapshot);
     expect(rows).toHaveLength(1);
     expect(rows[0].quota ?? null).toBeNull();
-    expect(snapshotHarnesses({ harnesses: [harness({ adapter: "dsh", status: "ready", quota: null })] } as unknown as Snapshot)[0].quota ?? null).toBeNull();
+    expect(snapshotHarnesses({ harnesses: [harness({ harness: "dsh", status: "ready", quota: null })] } as unknown as Snapshot)[0].quota ?? null).toBeNull();
   });
 
   it("drops malformed exhaustion records as a whole instead of presenting part of them", () => {
     const record = { provider: "deepseek-official", limitId: null, code: "HARNESS_BALANCE_ZERO", source: "dsh-native",
       observedAt: CHECKED_AT, resetsAt: null, blocked: true, retry: null };
-    const parse = (quotaRouting: unknown) => snapshotHarnesses({ harnesses: [harness({ adapter: "dsh", status: "ready", quotaRouting: quotaRouting as never })] } as unknown as Snapshot)[0].quotaRouting;
+    const parse = (quotaRouting: unknown) => snapshotHarnesses({ harnesses: [harness({ harness: "dsh", status: "ready", quotaRouting: quotaRouting as never })] } as unknown as Snapshot)[0].quotaRouting;
     expect(parse([record])).toEqual([record]);
     const available = { ...record, blocked: false, code: null };
     expect(parse([record, available])).toEqual([record, available]);
@@ -131,7 +131,7 @@ describe("a quota observation on the wire", () => {
 });
 
 describe("native login facts on the wire", () => {
-  const facts: HarnessAccount = { adapter: "codex", status: "logged-out", accountType: null,
+  const facts: HarnessAccount = { harness: "codex", status: "logged-out", accountType: null,
     checkedAt: null, reasonCode: null, guidance: null };
 
   it("accepts only the named login facts of the requested harness", () => {

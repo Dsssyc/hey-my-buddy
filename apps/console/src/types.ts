@@ -14,7 +14,7 @@ export type HarnessCandidate = {
  * means automatic detection) and `revision` records its current generation.
  */
 export type HarnessHealth = {
-  adapter: string;
+  harness: string;
   status: HarnessStatus;
   available: boolean;
   revision: number;
@@ -127,7 +127,7 @@ export type Buddy = {
   quotaRetry?: QuotaRetryWindow;
   buddyId: string;
   label: string;
-  adapter: string;
+  harness: string;
   provider: string;
   model: string;
   effort: string;
@@ -139,7 +139,7 @@ export type Buddy = {
   source: string;
   unavailableReason?: string;
   /**
-   * Model-identity (adapter/provider/model) catalog state, shared by every
+   * Model-identity (harness/provider/model) catalog state, shared by every
    * effort of the model service; absent on boards and fixtures from before ADR-027.
    */
   catalogStatus?: CatalogStatus;
@@ -175,7 +175,7 @@ export type Delegation = {
   parentRunId: string | null;
   rootRunId: string | null;
   project: { id: string; path: string | null; label: string };
-  buddy: { adapter: string; provider: string; model: string; effort: string } | null;
+  buddy: { harness: string; provider: string; model: string; effort: string } | null;
 };
 export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
 export type TaskQuery = {
@@ -278,10 +278,10 @@ export type Shutdown = {
   truncated: boolean;
 };
 /**
- * Identity of one model service: the exact adapter, provider and model tuple.
+ * Identity of one model service: the exact harness, provider and model tuple.
  * Effort variants share one model service and never enter the key.
  */
-export type ModelService = { adapter: string; provider: string; model: string };
+export type ModelService = { harness: string; provider: string; model: string };
 /** The user-owned per-model-service concurrent-task limit (integer 1–32, default 2). */
 export type ModelServiceConcurrencySetting = ModelService & { limit: number };
 /**
@@ -307,7 +307,7 @@ export type Configuration = {
   routingBudgetLimits?: RoutingBudgetLimits;
 };
 /** The complete published four-part identity of one listed buddy. */
-export type RouterHealthIdentity = { adapter: string; provider: string; model: string; effort: string };
+export type RouterHealthIdentity = { harness: string; provider: string; model: string; effort: string };
 /**
  * One listed buddy's health facts (ADR-021 §20): resolution eligibility with its
  * machine reason code, skip window and retry facts, the all-time and windowed

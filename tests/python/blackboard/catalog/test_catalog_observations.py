@@ -6,9 +6,9 @@ from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog as catalog_rules, catalog_store
 
 
-def catalog(adapter='dsh', models=('alpha',), status='complete', account_status=None):
+def catalog(harness='dsh', models=('alpha',), status='complete', account_status=None):
     trusted = account_status if account_status is not None else ('unknown' if status == 'unknown' else 'confirmed')
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': adapter, 'status': status, 'accountStatus': trusted, 'reason': 'fixture failure' if status == 'unknown' else None}], 'providers': ([{'adapter': adapter, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
+    return {'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted, 'reason': 'fixture failure' if status == 'unknown' else None}], 'providers': ([{'harness': harness, 'provider': 'fixture', 'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}] if models else [])}
 
 
 class CatalogObservationTests(BoardTestCase):
@@ -27,8 +27,8 @@ class CatalogObservationTests(BoardTestCase):
                     [tuple(row) for row in db.execute('SELECT * FROM buddies ORDER BY buddy_id')])
 
     def test_begin_freezes_harnesses_in_the_observation_on_first_request(self):
-        first = catalog_store.begin(self.e, 'same-request', harnesses=[{'adapter': 'dsh', 'revision': 1}])
-        repeated = catalog_store.begin(self.e, 'same-request', harnesses=[{'adapter': 'dsh', 'revision': 2}])
+        first = catalog_store.begin(self.e, 'same-request', harnesses=[{'harness': 'dsh', 'revision': 1}])
+        repeated = catalog_store.begin(self.e, 'same-request', harnesses=[{'harness': 'dsh', 'revision': 2}])
         self.assertEqual(first, repeated)
         with self.e.db.read() as db:
             row = db.execute('SELECT harnesses_json FROM catalog_observations WHERE observation_id=?',
@@ -49,7 +49,7 @@ class CatalogObservationTests(BoardTestCase):
         notify.assert_not_called()
         with self.e.db.read() as db:
             self.assertEqual(tuple(db.execute('SELECT * FROM buddies').fetchone()), buddy)
-            current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE adapter='dsh'").fetchone()
+            current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE harness='dsh'").fetchone()
             self.assertEqual((current['read_at'], current['account_status'], current['updated_at']),
                              (self.clock.value, 'confirmed', self.clock.value))
             self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
@@ -117,7 +117,7 @@ class CatalogObservationTests(BoardTestCase):
     def test_unknown_reading_keeps_buddies_unless_it_restores_retained_availability(self):
         self.record(catalog())
         with self.e.db.read() as db:
-            read_at = db.execute("SELECT read_at FROM catalog_current WHERE adapter='dsh'").fetchone()[0]
+            read_at = db.execute("SELECT read_at FROM catalog_current WHERE harness='dsh'").fetchone()[0]
         facts = self.table_facts()
         self.record(catalog(models=('untrusted',), account_status='unknown'))
         self.assertEqual(self.table_facts(), facts)
@@ -127,7 +127,7 @@ class CatalogObservationTests(BoardTestCase):
         self.assertGreater(self.table_facts()[0], facts[0])
         with self.e.db.read() as db:
             row = db.execute('SELECT available FROM buddies').fetchone()
-            current = db.execute("SELECT read_at,account_status FROM catalog_current WHERE adapter='dsh'").fetchone()
+            current = db.execute("SELECT read_at,account_status FROM catalog_current WHERE harness='dsh'").fetchone()
         self.assertEqual(row['available'], 1)
         self.assertEqual((current['read_at'], current['account_status']), (read_at, 'confirmed'))
 
@@ -166,7 +166,7 @@ class CatalogObservationTests(BoardTestCase):
     def test_claude_first_party_reread_preserves_existing_buddy(self):
         from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 
-        existing = catalog(adapter='claude', models=('claude-fixture',))
+        existing = catalog(harness='claude', models=('claude-fixture',))
         existing['providers'][0]['provider'] = 'anthropic'
         self.record(existing)
         buddy_id = 'claude:anthropic:claude-fixture:max'
@@ -184,13 +184,13 @@ class CatalogObservationTests(BoardTestCase):
             self.record(native)
             with self.e.db.read() as db:
                 rows = db.execute("SELECT buddy_id,provider,enabled,available "
-                                  "FROM buddies WHERE adapter='claude'").fetchall()
+                                  "FROM buddies WHERE harness='claude'").fetchall()
                 self.assertEqual([tuple(row) for row in rows],
                                  [(buddy_id, 'anthropic', 1, 1)])
                 self.assertEqual(tuple(db.execute('SELECT * FROM evaluation_preferences WHERE buddy_id=?',
                                                   (buddy_id,)).fetchone()),
                                  (buddy_id, 'prefer', 'keep this buddy'))
-                self.assertEqual(db.execute("SELECT COUNT(*) FROM catalog_pending WHERE adapter='claude'").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM catalog_pending WHERE harness='claude'").fetchone()[0], 0)
 
     def test_a_ba_restores_identity_and_preserves_human_intent(self):
         first = self.record(catalog())
@@ -220,20 +220,20 @@ class CatalogObservationTests(BoardTestCase):
         self.assertNotIn('pendingSince', current['buddies'][0])
         self.assertTrue(current['buddies'][0]['enabled'])
         self.assertEqual(current['modelServiceNotes'][0]['text'], 'human text')
-        self.assertEqual({key: current['modelServiceNotes'][0][key] for key in ('adapter', 'provider', 'model')},
-                         {'adapter': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
+        self.assertEqual({key: current['modelServiceNotes'][0][key] for key in ('harness', 'provider', 'model')},
+                         {'harness': 'dsh', 'provider': 'fixture', 'model': 'alpha'})
         with self.e.db.read() as db:
             self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'alpha'))
 
     def test_partial_failure_preserves_last_known_without_affecting_other_harness(self):
         self.record(catalog())
-        self.record(catalog(adapter='zcode', models=('beta',)))
+        self.record(catalog(harness='zcode', models=('beta',)))
         self.record(catalog(models=(), status='unknown'))
         with self.e.db.read() as db:
             view = catalog_store.current(db)
             self.assertIsNotNone(view.lookup('dsh', 'fixture', 'alpha'))
             self.assertIsNotNone(view.lookup('zcode', 'fixture', 'beta'))
-            self.assertEqual(db.execute("SELECT status FROM catalog_current WHERE adapter='dsh'").fetchone()[0], 'unknown')
+            self.assertEqual(db.execute("SELECT status FROM catalog_current WHERE harness='dsh'").fetchone()[0], 'unknown')
         self.record(catalog(models=()))
         with self.e.db.read() as db:
             view = catalog_store.current(db)
@@ -245,7 +245,7 @@ class CatalogObservationTests(BoardTestCase):
         fast = catalog_store.begin(self.e, 'fast')['observationId']
         self.record(catalog(models=('new',)), fast)
         result = self.record(catalog(models=('old',)), slow)
-        self.assertEqual(result['staleAdapters'], ['dsh'])
+        self.assertEqual(result['staleHarnesses'], ['dsh'])
         with self.e.db.read() as db:
             self.assertIsNotNone(catalog_store.current(db).lookup('dsh', 'fixture', 'new'))
             self.assertIsNone(catalog_store.current(db).lookup('dsh', 'fixture', 'old'))
@@ -268,7 +268,7 @@ class CatalogObservationTests(BoardTestCase):
         self.record(catalog(models=()))
         self.clock.advance(3601)
         self.record(catalog(models=()))
-        page = catalog_store.buddies(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'adapter': 'dsh'})
+        page = catalog_store.buddies(self.e, {'limit': 1, 'includeUnavailable': True, 'query': 'fixture c', 'harness': 'dsh'})
         self.assertEqual([p['model'] for p in page['buddies']], ['c'])
         self.assertIsNone(page['nextCursor'])
         self.assertEqual(catalog_store.buddies(self.e, {'includeUnavailable': True, 'query': '%'})['buddies'], [])

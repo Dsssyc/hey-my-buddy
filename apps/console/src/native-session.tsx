@@ -2,12 +2,12 @@ import type { Task } from "./types";
 
 /**
  * Bounded native-session evidence read from the frozen attempt receipt:
- * `selectedAttempt.result.result.nativeSession`, which every adapter records
+ * `selectedAttempt.result.result.nativeSession`, which every harness records
  * (DSH, ZCode and Codex alike). Anything at another level, or any missing
  * field, stays unknown.
  */
 export type NativeSessionEvidence = {
-  adapter: string | null;
+  harness: string | null;
   sessionId: string | null;
   storageScope: string | null;
   storageOwner: string | null;
@@ -46,7 +46,7 @@ export function nativeSessionEvidence(task: Task): NativeSessionEvidence | null 
   const native = record(result.nativeSession);
   if (!native) return null;
   return {
-    adapter: text(native.adapter),
+    harness: text(native.harness),
     sessionId: text(native.sessionId),
     storageScope: text(native.storageScope),
     storageOwner: text(native.storageOwner),
@@ -108,7 +108,7 @@ export function NativeSessionView({ task, turnSessionId }: { task: Task; turnSes
     <h3>原生会话证据</h3>
     {evidence ? <dl className="facts">
       {task.selectedAttempt?.attemptId && <><dt>收据尝试</dt><dd className="mono wrap">{task.selectedAttempt.attemptId}</dd></>}
-      {evidence.adapter && <><dt>Harness</dt><dd>{evidence.adapter}</dd></>}
+      {evidence.harness && <><dt>Harness</dt><dd>{evidence.harness}</dd></>}
       <dt>会话 ID</dt><dd className="mono wrap">{sessionId || "未记录"}</dd>
       <dt>会话存储</dt><dd className="wrap">{storageText(evidence)}</dd>
       <dt>原生 App 可见性</dt><dd className="wrap">{visibilityText(evidence)}</dd>

@@ -51,9 +51,9 @@ BACKGROUND_TASK_TERMINAL_STATUSES = ("completed", "succeeded", "failed", "cancel
 
 #: Quota exhaustion is temporary infrastructure unavailability, never a model
 #: capability result. The existing evaluation-store exclusion matches error text
-#: containing ``ADAPTER_UNAVAILABLE``, so this honest constant keeps quota
+#: containing ``HARNESS_UNAVAILABLE``, so this honest constant keeps quota
 #: failures out of capability statistics without core evaluation edits.
-QUOTA_REJECTED_ERROR = "ADAPTER_UNAVAILABLE: Claude provider quota rejected"
+QUOTA_REJECTED_ERROR = "HARNESS_UNAVAILABLE: Claude provider quota rejected"
 
 
 class ClaudeProtocolError(Exception):

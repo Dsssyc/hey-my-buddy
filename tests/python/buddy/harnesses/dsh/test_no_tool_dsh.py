@@ -55,7 +55,7 @@ class DshNoToolTests(unittest.TestCase):
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith("BUDDY_")
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(Path(__file__).parents[5] / "src") + os.pathsep + \
-            str(Path(__file__).parents[4] / "tests" / "python") + os.pathsep + os.environ.get("PYTHONPATH", "")
+            str(Path(__file__).parents[3]) + os.pathsep + os.environ.get("PYTHONPATH", "")
         # A run inherits HOME by contract; the role-controller subprocess chain
         # must carry this test's private one, like the in-process cases pin it,
         # so the agent's forced-private-home tripwire holds off the invoking shell.

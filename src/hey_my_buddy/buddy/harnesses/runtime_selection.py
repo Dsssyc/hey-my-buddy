@@ -18,7 +18,7 @@ def environment_for(environment=None):
 
 @contextmanager
 def bound(records, *, environment=None):
-    token = _records.set({record['adapter']: record for record in records})
+    token = _records.set({record['harness']: record for record in records})
     env_token = _environment.set(environment)
     try:
         yield
@@ -27,7 +27,7 @@ def bound(records, *, environment=None):
         _records.reset(token)
 
 
-def selected(adapter, environment=None):
+def selected(harness, environment=None):
     env = os.environ if environment is None else environment
     records = _records.get()
     if records is None and env.get(RECORD_FILE):
@@ -35,25 +35,25 @@ def selected(adapter, environment=None):
             records = json.loads(Path(env[RECORD_FILE]).read_text())
         except (OSError, ValueError):
             raise BoardError('HARNESS_RECORD_INVALID', 'The attempt has no readable selected harness record') from None
-    return records.get(adapter) if records is not None else None
+    return records.get(harness) if records is not None else None
 
 
-def command_for(adapter, environment=None):
+def command_for(harness, environment=None):
     env = os.environ if environment is None else environment
-    record = selected(adapter, env)
+    record = selected(harness, env)
     if record is None:
         from .discovery import discover
-        record = discover(adapter, environment=env)
+        record = discover(harness, environment=env)
     if record.get('status') != 'ready' or not record.get('command'):
         raise BoardError(record.get('reasonCode') or 'HARNESS_UNAVAILABLE',
-                         record.get('remedy') or 'Run buddy adapters with refresh:true', adapter=adapter)
+                         record.get('remedy') or 'Run buddy harnesses with refresh:true', harness=harness)
     return list(record['command'])
 
 
-def native_environment(environment, *, adapter):
+def native_environment(environment, *, harness):
     from .discovery import native_environment as clean
     environment = environment_for(environment)
-    return clean(environment, command=command_for(adapter, environment))
+    return clean(environment, command=command_for(harness, environment))
 
 
 def controller_environment(directory, environment=None, *, read_only=False):

@@ -44,7 +44,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 BASELINE_SHA = "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc"
-BUDDY = {"adapter": "dsh", "provider": "deepseek-official",
+BUDDY = {"harness": "dsh", "provider": "deepseek-official",
                  "model": "deepseek-flash", "effort": "off"}
 BUDDY_ID = ":".join(BUDDY.values())
 NONCE = "synthetic-nonce-1"

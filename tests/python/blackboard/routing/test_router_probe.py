@@ -162,7 +162,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
             effort=CheckedValue(value=context.spec["effort"]))),
         native_identity=NativeIdentity(session_id="mock-session", turn_id="mock-turn"),
         value=value,
-        tool_evidence=tool_receipt({"adapter": harness, "taskId": context.task_id,
+        tool_evidence=tool_receipt({"harness": harness, "taskId": context.task_id,
                                     "attemptId": context.attempt_id, "generation": context.generation},
                                    tool_calls, native_identity={"sessionId": "mock-session"})["toolEvidence"],
         stop_evidence=StopEvidence(native=StopLayer(group_state="gone" if shutdown else "unknown")),
@@ -215,14 +215,14 @@ class RouterProbeTests(unittest.TestCase):
                 directory.chmod(0o700)
         self.temporary.cleanup()
 
-    def args(self, adapter="codex", execute=False, preset="brief"):
+    def args(self, harness="codex", execute=False, preset="brief"):
         return probe.parser().parse_args([
-            "--adapter", adapter, "--provider", "openai" if adapter == "codex" else "anthropic",
+            "--harness", harness, "--provider", "openai" if harness == "codex" else "anthropic",
             "--model", "mock-native-model", "--effort", "medium", "--preset", preset,
             "--output-root", str(self.root), *(["--execute"] if execute else []),
         ])
 
-    def mock_execute(self, *, adapter="codex", mutation=None, timeout=False, stopped=True,
+    def mock_execute(self, *, harness="codex", mutation=None, timeout=False, stopped=True,
                      shutdown=True, tool_calls=5, correction_count=0, checked_model=None,
                      answer=None, start_error=None, native_receipt=None, elapsed_ms=100):
         """旧 payload 形参逐项映射：rawAnswer→answer，usage.toolCalls→tool_calls，
@@ -249,23 +249,23 @@ class RouterProbeTests(unittest.TestCase):
              patch.object(probe, "start_network_control", return_value=(Mock(), {
                  'url': 'http://127.0.0.1:54321/', 'hostStatus': 200,
              })):
-            report = probe.run(self.args(adapter, execute=True))
+            report = probe.run(self.args(harness, execute=True))
         return report, native, self.executed
 
-    def start_guard(self, native, adapter):
+    def start_guard(self, native, harness):
         return patch.object(probe, "start_review")
 
     def test_prepare_all_harnesses_never_start_any_process_or_network(self):
-        for adapter in probe.ADAPTERS:
-            with self.subTest(adapter=adapter):
-                self.root = Path(self.temporary.name) / adapter
+        for harness in probe.HARNESSES:
+            with self.subTest(harness=harness):
+                self.root = Path(self.temporary.name) / harness
                 # 使用真实 adapter class，但禁止所有启动入口/目录发现。
-                native = probe.adapter_for(adapter)
-                with self.start_guard(native, adapter) as start, \
+                native = probe.adapter_for(harness)
+                with self.start_guard(native, harness) as start, \
                      patch.object(native, "available") as available, \
                      patch.object(native, "discover_models") as discover, \
                      patch.object(probe, "adapter_for", return_value=native):
-                    report = probe.run(self.args(adapter))
+                    report = probe.run(self.args(harness))
                 start.assert_not_called()
                 available.assert_not_called()
                 discover.assert_not_called()
@@ -286,20 +286,20 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o777, 0o600)  # native policy, not file modes, must deny writes
 
     def test_explicit_execute_refuses_unimplemented_entry_without_start(self):
-        for adapter in ("dsh", "zcode"):
-            self.root = Path(self.temporary.name) / adapter
-            native = probe.adapter_for(adapter)
+        for harness in ("dsh", "zcode"):
+            self.root = Path(self.temporary.name) / harness
+            native = probe.adapter_for(harness)
             with patch.object(native, "read_only_structured", False), \
-                 self.start_guard(native, adapter) as start, \
+                 self.start_guard(native, harness) as start, \
                  patch.object(probe, "adapter_for", return_value=native):
-                report = probe.run(self.args(adapter, execute=True))
+                report = probe.run(self.args(harness, execute=True))
             self.assertEqual(report["status"], "refused")
             start.assert_not_called()
 
     def test_mock_execute_uses_native_entry_once_and_never_auto_passes(self):
-        for adapter in ("codex", "claude"):
-            self.root = Path(self.temporary.name) / adapter
-            report, native, handle = self.mock_execute(adapter=adapter)
+        for harness in ("codex", "claude"):
+            self.root = Path(self.temporary.name) / harness
+            report, native, handle = self.mock_execute(harness=harness)
             native.registered_start.assert_called_once()
             handle.wait.assert_called_once_with(70)
             handle.terminate.assert_not_called()
@@ -310,7 +310,7 @@ class RouterProbeTests(unittest.TestCase):
             for name in ("internalRead", "inputUnchanged", "sentinelUnchanged", "shutdownConfirmed"):
                 self.assertEqual(report["checks"][name]["status"], "passed")
             self.assertIsNone(report["checks"]["budgetConsistent"]["evidence"]["bytesRead"])
-            self.assertEqual(report["cost"]["maxNativeTurns"], 2 if adapter == "codex" else 1)
+            self.assertEqual(report["cost"]["maxNativeTurns"], 2 if harness == "codex" else 1)
             _harness, context, request = native.registered_start.call_args.args
             self.assertIsNone(context.turn)
             self.assertIsNone(context.agent_credential)
@@ -430,7 +430,7 @@ class RouterProbeTests(unittest.TestCase):
 
     def test_execute_and_prepare_only_are_mutually_exclusive(self):
         with self.assertRaises(SystemExit) as error:
-            probe.main(["--adapter", "codex", "--provider", "openai", "--model", "mock", "--effort", "medium",
+            probe.main(["--harness", "codex", "--provider", "openai", "--model", "mock", "--effort", "medium",
                         "--output-root", str(self.root), "--execute", "--prepare-only"])
         self.assertEqual(error.exception.code, 2)
         self.assertFalse(self.root.exists())

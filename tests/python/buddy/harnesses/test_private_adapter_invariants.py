@@ -57,7 +57,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
     def start(self):
         self.index += 1
         context = ExecutionContext("task", f"attempt-{self.index}", self.index,
-            {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
+            {"adapter": "codex", "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
              "cwd": str(self.cwd), "timeoutSeconds": 3},
             self.root / "state" / "attempts" / "task" / f"attempt-{self.index}", {},
             {"BUDDY_STATE_DIR": str(self.root / "state"), "BUDDY_RUNTIME_ROOT": str(self.root / "runtime"),
@@ -227,9 +227,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.assertEqual(report["rejected"]["count"], 0, report)
 
     def test_governed_mock_codex_zcode_claude_and_native_continuation(self):
-        for kind, adapter in ((codex_tests.CodexAdapterTests, "codex"), (zcode_tests.ZcodeFixtureCase, "zcode"),
+        for kind, harness in ((codex_tests.CodexAdapterTests, "codex"), (zcode_tests.ZcodeFixtureCase, "zcode"),
                               (claude_tests.ClaudeAdapterTests, "claude")):
-            with self.subTest(adapter=adapter):
+            with self.subTest(harness=harness):
                 fixture = self.fixture(kind)
                 context = fixture.context()
                 state = Path(context.environment["BUDDY_STATE_DIR"])
@@ -239,16 +239,16 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 outcome = execution[1] if isinstance(execution, tuple) else execution
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 self.assertTrue(outcome.shutdown_confirmed)
-                private = context_root(context, adapter)
+                private = context_root(context, harness)
                 self.assertTrue((private / "agent-credential.json").is_file())
-                cleanup_attempt_credentials(state, adapter, context.task_id, context.attempt_id)
+                cleanup_attempt_credentials(state, harness, context.task_id, context.attempt_id)
                 self.assertFalse((private / "agent-credential.json").exists())
-                if adapter == "zcode":
+                if harness == "zcode":
                     self.assertFalse((private / "personal-provider.json").exists())
                     self.assertFalse((private / "finish-bridge.json").exists())
                     self.assertFalse((private / "inquiry.json").exists())
-                if adapter in {"codex", "zcode"}:
-                    self.assertTrue(any(native_root(state, adapter, context.task_id).glob("*.json")))
+                if harness in {"codex", "zcode"}:
+                    self.assertTrue(any(native_root(state, harness, context.task_id).glob("*.json")))
                 self.assert_partition(context)
 
     def test_mock_dsh_fast_router_and_command_leave_only_evidence(self):
@@ -256,7 +256,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         state = Path(fixture.environment["BUDDY_STATE_DIR"])
         evidence = state / "attempts/task/attempt-1"
         context = ExecutionContext("task", "attempt-1", 1,
-            {"adapter": "dsh", **dsh_tests.SPEC,
+            {"adapter": "dsh", "harness": "dsh", **dsh_tests.SPEC,
              "cwd": str(fixture.cwd), "timeoutSeconds": 3}, evidence, {}, fixture.environment)
         request = NoToolStructuredRequest(str(fixture.cwd), "Choose a buddy", dsh_tests.SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("dsh",  request, context, fixture.cwd))
@@ -298,7 +298,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
                 evidence = Path(environment["BUDDY_STATE_DIR"]) / "attempts/task/attempt"
                 context = ExecutionContext("task", "attempt", 1,
-                    {"adapter": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
+                    {"adapter": adapter.name, "harness": adapter.name, **spec, "cwd": str(fixture.cwd), "timeoutSeconds": 3},
                     evidence, {}, environment)
                 native = adapter()
                 request = NoToolStructuredRequest(str(fixture.cwd), "Pick a buddy", codex_fast_tests.SCHEMA, 3)
@@ -366,7 +366,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": "decision", "cwd": str(fixture.cwd), "timeoutSeconds": 60},
                     Path(env["BUDDY_STATE_DIR"]) / "attempts/task/attempt", {}, env,
-                    decision_input={"buddy": {"adapter": name, **spec},
+                    decision_input={"buddy": {"harness": name, **spec},
                         "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})

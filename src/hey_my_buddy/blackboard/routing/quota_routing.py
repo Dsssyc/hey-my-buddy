@@ -59,28 +59,28 @@ def evidence(quota, *, now=None):
 
 
 def _item(row):
-    return {'adapter': row['adapter'], 'provider': row['provider'], 'limitId': row['limit_id'] or None,
+    return {'harness': row['harness'], 'provider': row['provider'], 'limitId': row['limit_id'] or None,
             'blocked': bool(row['blocked']), 'available': not bool(row['blocked']),
             'code': row['code'], 'source': row['source'], 'observedAt': row['observed_at'],
             'lastObservedAt': row['last_observed_at'], 'resetsAt': row['resets_at'],
             'nativeAccountId': row['native_account_id']}
 
 
-def _marker(connection, adapter, provider, limit_id):
+def _marker(connection, harness, provider, limit_id):
     row = connection.execute('SELECT retry_manual_at,retry_consumed_at,retry_consumed_by '
-                             'FROM quota_current WHERE adapter=? AND provider=? AND limit_id=?',
-                             (adapter, provider, limit_id or '')).fetchone()
+                             'FROM quota_current WHERE harness=? AND provider=? AND limit_id=?',
+                             (harness, provider, limit_id or '')).fetchone()
     if row is None:
         return None
     return {'manualAt': row['retry_manual_at'],
             'consumedAt': row['retry_consumed_at'], 'consumedBy': row['retry_consumed_by']}
 
 
-def _write_marker(connection, adapter, provider, limit_id, marker):
+def _write_marker(connection, harness, provider, limit_id, marker):
     connection.execute('UPDATE quota_current SET retry_manual_at=?,retry_consumed_at=?,'
-                       'retry_consumed_by=? WHERE adapter=? AND provider=? AND limit_id=?',
+                       'retry_consumed_by=? WHERE harness=? AND provider=? AND limit_id=?',
                        (marker['manualAt'], marker['consumedAt'], marker['consumedBy'],
-                        adapter, provider, limit_id or ''))
+                        harness, provider, limit_id or ''))
 
 
 def retry_facts(connection, item, *, now=None):
@@ -96,8 +96,8 @@ def retry_facts(connection, item, *, now=None):
     present, observed = _time(now or utc_now()), _time(item.get('observedAt'))
     if present is None or observed is None:
         return None
-    adapter, provider, limit_id = item.get('adapter'), item.get('provider'), item.get('limitId')
-    marker = _marker(connection, adapter, provider, limit_id)
+    harness, provider, limit_id = item.get('harness'), item.get('provider'), item.get('limitId')
+    marker = _marker(connection, harness, provider, limit_id)
     manual = consumed = consumed_by = None
     if marker:
         manual, consumed = _time(marker.get('manualAt')), _time(marker.get('consumedAt'))
@@ -119,21 +119,21 @@ def _iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
-def record(connection, adapter, quota, *, now=None):
+def record(connection, harness, quota, *, now=None):
     from ..evaluation.native_observations import _time
     if quota.get('ambiguousLimits') is True and quota.get('allLimitsAvailable') is True:
         for limit in [None, *quota.get('coveredLimits', [])]:
-            record(connection, adapter, {**quota, 'ambiguousLimits': False, 'windows': [],
+            record(connection, harness, {**quota, 'ambiguousLimits': False, 'windows': [],
                 'scope': {**quota.get('scope', {}), 'limitId': limit}, 'ordinaryUsageAllowed': True,
                 'balanceZero': False, 'reachedType': None}, now=now)
         return
     item = evidence(quota, now=now)
     if item is None:
         return
-    if item['limitId'] in ('codex' if adapter == 'codex' else item['provider'], item['provider']):
+    if item['limitId'] in ('codex' if harness == 'codex' else item['provider'], item['provider']):
         item['limitId'] = None
-    binding = (adapter, item['provider'], item['limitId'] or '')
-    row = connection.execute('SELECT * FROM quota_current WHERE adapter=? AND provider=? AND limit_id=?',
+    binding = (harness, item['provider'], item['limitId'] or '')
+    row = connection.execute('SELECT * FROM quota_current WHERE harness=? AND provider=? AND limit_id=?',
                              binding).fetchone()
     if row and _time(row['last_observed_at']) >= _time(item['observedAt']):
         return
@@ -141,12 +141,12 @@ def record(connection, adapter, quota, *, now=None):
     if not item['blocked'] and not item['available']:
         if row:
             connection.execute('UPDATE quota_current SET last_observed_at=? '
-                               'WHERE adapter=? AND provider=? AND limit_id=?',
+                               'WHERE harness=? AND provider=? AND limit_id=?',
                                (item['observedAt'], *binding))
         return
-    connection.execute('INSERT INTO quota_current(adapter,provider,limit_id,blocked,code,source,'
+    connection.execute('INSERT INTO quota_current(harness,provider,limit_id,blocked,code,source,'
                        'observed_at,last_observed_at,resets_at,native_account_id) VALUES(?,?,?,?,?,?,?,?,?,?) '
-                       'ON CONFLICT(adapter,provider,limit_id) DO UPDATE SET blocked=excluded.blocked,'
+                       'ON CONFLICT(harness,provider,limit_id) DO UPDATE SET blocked=excluded.blocked,'
                        'code=excluded.code,source=excluded.source,'
                        'observed_at=excluded.observed_at,last_observed_at=excluded.last_observed_at,'
                        'resets_at=excluded.resets_at,native_account_id=excluded.native_account_id,'
@@ -159,14 +159,14 @@ def blocking_records(connection, buddy, *, now=None):
     """Current native exhaustions blocking this harness/provider/model."""
     from ..evaluation.native_observations import _time
     buddy = dict(buddy) if buddy is not None else {}
-    if not buddy or not buddy.get('adapter') or not buddy.get('provider'):
+    if not buddy or not buddy.get('harness') or not buddy.get('provider'):
         return []
-    adapter, provider, model = (buddy.get(key) for key in ('adapter', 'provider', 'model'))
-    allowed_limits = {None, model, provider, 'codex' if adapter == 'codex' else None}
+    harness, provider, model = (buddy.get(key) for key in ('harness', 'provider', 'model'))
+    allowed_limits = {None, model, provider, 'codex' if harness == 'codex' else None}
     present = _time(now or utc_now())
     records = []
-    for row in connection.execute('SELECT * FROM quota_current WHERE adapter=? AND provider=? '
-                                  'AND blocked=1 ORDER BY observed_at DESC,limit_id', (adapter, provider)):
+    for row in connection.execute('SELECT * FROM quota_current WHERE harness=? AND provider=? '
+                                  'AND blocked=1 ORDER BY observed_at DESC,limit_id', (harness, provider)):
         item = _item(row)
         reset = _time(item['resetsAt'])
         if item['limitId'] in allowed_limits and present and (reset is None or reset > present):
@@ -217,19 +217,19 @@ def claim(connection, buddy, *, decision_id, consume=True, now=None):
         if not consume or not facts['open'] or facts['consumedBy'] == decision_id:
             claimed.append({**facts, 'claimed': False})
             continue
-        marker = {'adapter': item['adapter'], 'provider': item['provider'], 'limitId': item.get('limitId'),
+        marker = {'harness': item['harness'], 'provider': item['provider'], 'limitId': item.get('limitId'),
                   'manualAt': None,
                   'consumedAt': now or utc_now(), 'consumedBy': decision_id}
-        _write_marker(connection, item['adapter'], item['provider'], item.get('limitId'), marker)
+        _write_marker(connection, item['harness'], item['provider'], item.get('limitId'), marker)
         claimed.append({**facts, 'claimed': True, 'consumedAt': marker['consumedAt'], 'consumedBy': decision_id})
     return claimed
 
 
-def redetect(connection, adapter, provider, *, now=None):
+def redetect(connection, harness, provider, *, now=None):
     """Open each recorded no-reset exhaustion's single retry window."""
     records, opened, already = [], [], []
-    for row in connection.execute('SELECT * FROM quota_current WHERE adapter=? AND provider=? '
-                                  'ORDER BY limit_id', (adapter, provider)):
+    for row in connection.execute('SELECT * FROM quota_current WHERE harness=? AND provider=? '
+                                  'ORDER BY limit_id', (harness, provider)):
         item = _item(row)
         view = {key: item.get(key) for key in ('provider', 'limitId', 'code', 'source', 'observedAt', 'resetsAt')}
         facts = retry_facts(connection, item, now=now)
@@ -241,17 +241,17 @@ def redetect(connection, adapter, provider, *, now=None):
         else:
             marker = {'manualAt': now or utc_now(),
                       'consumedAt': None, 'consumedBy': None}
-            _write_marker(connection, adapter, provider, item['limitId'], marker)
+            _write_marker(connection, harness, provider, item['limitId'], marker)
             opened.append(item['limitId'])
             view['retry'] = retry_facts(connection, item, now=now)
         records.append(view)
-    return {'adapter': adapter, 'provider': provider, 'records': records,
+    return {'harness': harness, 'provider': provider, 'records': records,
             'opened': opened, 'alreadyOpen': already}
 
 
-def routing_facts(connection, adapter, *, now=None):
+def routing_facts(connection, harness, *, now=None):
     views = []
-    for row in connection.execute('SELECT * FROM quota_current WHERE adapter=? ORDER BY provider,limit_id', (adapter,)):
+    for row in connection.execute('SELECT * FROM quota_current WHERE harness=? ORDER BY provider,limit_id', (harness,)):
         item = _item(row)
         views.append({**{key: item[key] for key in ('provider', 'limitId', 'code', 'source', 'observedAt',
                                                    'lastObservedAt', 'resetsAt', 'blocked', 'available', 'nativeAccountId')},

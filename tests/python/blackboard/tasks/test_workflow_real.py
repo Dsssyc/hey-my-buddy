@@ -31,7 +31,7 @@ from hey_my_buddy.private_dirs import attempt_root
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 
-BUDDY = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "Buddy Test",
@@ -262,7 +262,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
     board task's; the board submission only supplies the real run identity.
     """
 
-    FIXTURE_BUDDY = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
+    FIXTURE_BUDDY = {"harness": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
 
     def _agent_record(self, index: int, *extra: str) -> Path:
         """A selected-harness record pointing at the offline fake ACP agent."""
@@ -380,7 +380,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         # (protocol.fixtures.native_turn), not real native verification.
         service_hash = sha256_text(canonical_json(context.turn_input))
         complete = native_turn.governed_record(
-            adapter="dsh", task_id=context.task_id, attempt_id=context.attempt_id,
+            harness="dsh", task_id=context.task_id, attempt_id=context.attempt_id,
             generation=context.generation, turn_id="turn-1", resume_mode="initial",
             previous_session_id=None, input_sha256=service_hash,
             outcome={"disposition": "completed", "summary": "done", "remaining": [],

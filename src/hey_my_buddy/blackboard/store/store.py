@@ -495,7 +495,7 @@ class BoardStore:
         if attempt is not None:
             from ..evaluation.native_observations import failure_view
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
-            view["quotaFailure"] = failure_view(recorded.get("result"), adapter=attempt["adapter"])
+            view["quotaFailure"] = failure_view(recorded.get("result"), harness=attempt["adapter"])
             view["selectedAttempt"] = self._attempt_view(attempt)
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
@@ -550,7 +550,7 @@ class BoardStore:
     #: The queued-task model service as one SQL expression. It mirrors
     #: :func:`scheduling.model_service` over the task's effective specification: a
     #: governed run's resolved buddy wins over the immutable
-    #: original request, and tasks without a complete adapter/provider/model triple
+    #: original request, and tasks without a complete harness/provider/model triple
     #: have no model service.
     _QUEUED_MODEL_SERVICE_PROVIDER = (
         "COALESCE(json_extract(r.buddy_json,'$.provider'),"
@@ -574,20 +574,20 @@ class BoardStore:
         like its machine-wide slot.
         """
         rows = connection.execute(
-            f"SELECT model_adapter, model_provider, model_model, COUNT(*) AS active FROM attempts"
+            f"SELECT model_harness, model_provider, model_model, COUNT(*) AS active FROM attempts"
             f" WHERE ({self.UNRESOLVED_SQL}) AND model_model IS NOT NULL"
-            " GROUP BY model_adapter, model_provider, model_model"
+            " GROUP BY model_harness, model_provider, model_model"
         ).fetchall()
         return {
-            (row["model_adapter"], row["model_provider"], row["model_model"]): int(row["active"])
+            (row["model_harness"], row["model_provider"], row["model_model"]): int(row["active"])
             for row in rows
         }
 
     def model_limits(self, connection: sqlite3.Connection) -> dict[tuple[str, str, str], int]:
         """Explicit per-model-service limits from the user-owned ``model_service_concurrency`` table."""
-        rows = connection.execute("SELECT adapter, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
+        rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
         return {
-            (row["adapter"], row["provider"], row["model"]): scheduling.clamp_model_limit(row["concurrency_limit"])
+            (row["harness"], row["provider"], row["model"]): scheduling.clamp_model_limit(row["concurrency_limit"])
             for row in rows
         }
 
@@ -601,7 +601,7 @@ class BoardStore:
     def model_capacity_rows(
         self, connection: sqlite3.Connection, model_services: Iterable[tuple[str, str, str]] | None = None
     ) -> list[dict]:
-        """Observation rows ``{adapter, provider, model, limit, active}`` for capacity views.
+        """Observation rows ``{harness, provider, model, limit, active}`` for capacity views.
 
         ``model services`` restricts the rows to the model services represented in one response
         (a console snapshot page or a model-buddy page). Without it, the rows cover
@@ -614,10 +614,10 @@ class BoardStore:
             model_services = set(limits) | set(active) | set(self._queued_model_services(connection))
         rows = []
         for model_service in sorted(set(model_services)):
-            adapter, provider, model = model_service
+            harness, provider, model = model_service
             rows.append(
                 {
-                    "adapter": adapter,
+                    "harness": harness,
                     "provider": provider,
                     "model": model,
                     "limit": limits.get(model_service, scheduling.MODEL_LIMIT_DEFAULT),
@@ -628,19 +628,19 @@ class BoardStore:
 
     def _queued_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
         rows = connection.execute(
-            "SELECT DISTINCT t.adapter AS adapter,"
+            "SELECT DISTINCT t.adapter AS harness,"
             f" {self._QUEUED_MODEL_SERVICE_PROVIDER} AS provider, {self._QUEUED_MODEL_SERVICE_MODEL} AS model"
             " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id = t.task_id WHERE t.state='queued'"
         ).fetchall()
         model_services = {
-            (row["adapter"], row["provider"], row["model"])
+            (row["harness"], row["provider"], row["model"])
             for row in rows
-            if row["provider"] and row["model"] and row["adapter"] in schemas.CODING_ADAPTERS
+            if row["provider"] and row["model"] and row["harness"] in schemas.CODING_HARNESSES
         }
         for row in connection.execute("SELECT r.input_json FROM decision_requests r JOIN tasks t ON t.task_id=r.task_id WHERE t.state='queued'"):
             buddy = (json.loads(row["input_json"]) if row["input_json"] else {}).get("buddy") or {}
-            if all(buddy.get(key) for key in ("adapter", "provider", "model")):
-                model_services.add(tuple(buddy[key] for key in ("adapter", "provider", "model")))
+            if all(buddy.get(key) for key in ("harness", "provider", "model")):
+                model_services.add(tuple(buddy[key] for key in ("harness", "provider", "model")))
         return model_services
 
     def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:
@@ -756,7 +756,7 @@ class BoardStore:
         full = self._full_model_services(connection)
         model_service_clauses = []
         model_service_values: list[object] = []
-        for adapter, provider, model in sorted(full):
+        for harness, provider, model in sorted(full):
             # Null-safe on purpose: a task without a complete model service triple
             # (command/external work, an unresolved run, a routing task) is never
             # excluded — SQL's NOT over a NULL conjunction would otherwise drop it.
@@ -764,7 +764,7 @@ class BoardStore:
                 f"({self._QUEUED_MODEL_SERVICE_PROVIDER} IS NULL OR {self._QUEUED_MODEL_SERVICE_MODEL} IS NULL"
                 f" OR NOT (t.adapter=? AND {self._QUEUED_MODEL_SERVICE_PROVIDER}=? AND {self._QUEUED_MODEL_SERVICE_MODEL}=?))"
             )
-            model_service_values.extend((adapter, provider, model))
+            model_service_values.extend((harness, provider, model))
         rows: list[sqlite3.Row] = []
         for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
             rows.extend(
@@ -857,7 +857,7 @@ class BoardStore:
         governed task can never exist without its governance record.
         """
         spec = governed["spec"] if governed is not None else schemas.normalize_spec(params)
-        if governed is None and spec["adapter"] in schemas.CODING_ADAPTERS:
+        if governed is None and spec["adapter"] in schemas.CODING_HARNESSES:
             raise BoardError("GOVERNED_REQUIRED", "Coding work requires submit (workflow_submit) so routing, ownership and turn evidence remain governed")
         request_id = schemas.required_string(params, "requestId", max_length=schemas.MAX_REQUEST_ID)
         owner = schemas.optional_string(params, "owner") or "cli"
@@ -908,7 +908,7 @@ class BoardStore:
                         canonical_json(spec),
                         fingerprint,
                         schemas.FINGERPRINT_VERSION_CURRENT,
-                        spec.get("adapter") or "unresolved",
+                        spec.get("harness") or spec.get("adapter") or "unresolved",
                         canonical_json(spec.get("requiredCapabilities", [])),
                         spec["cwd"],
                         canonical_json(spec.get("exclusiveResources", [])),
@@ -927,7 +927,7 @@ class BoardStore:
                     revision=1,
                     payload={
                         "requestId": request_id,
-                        "adapter": spec.get("adapter"),
+                        "adapter": spec.get("harness") or spec.get("adapter"),
                         "cwd": spec["cwd"],
                         "queueReason": blocker or "awaiting-worker",
                         "inputFingerprint": fingerprint,
@@ -1755,7 +1755,7 @@ class BoardStore:
             connection.execute(
                 "INSERT INTO attempts(attempt_id, task_id, generation, worker_id, worker_identity, worker_instance,"
                 " capability_version, nonce_verifier, claim_request_id, lease_expires_at, lease_seconds,"
-                " execution_state, ownership, adapter, model_adapter, model_provider, model_model,"
+                " execution_state, ownership, adapter, model_harness, model_provider, model_model,"
                 " started_at, created_at, updated_at, revision)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                 (

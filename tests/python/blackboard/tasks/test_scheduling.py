@@ -1,7 +1,7 @@
 """Scheduling constants: model services, shared limits and pool identity.
 
 ADR-011 removed the separate business/decision lanes. These unit tests pin the
-model service rule (exact adapter/provider/model tuple, no effort dimension), the shared
+model service rule (exact harness/provider/model tuple, no effort dimension), the shared
 limit bounds and the stable managed-pool IDs that the daemon records.
 """
 from __future__ import annotations
@@ -14,15 +14,15 @@ from hey_my_buddy.blackboard.tasks import scheduling
 
 
 class ModelServiceTests(unittest.TestCase):
-    def test_model_service_is_the_exact_adapter_provider_model_tuple(self):
-        spec = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
+    def test_model_service_is_the_exact_harness_provider_model_tuple(self):
+        spec = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
         self.assertEqual(
             scheduling.model_service(spec),
             ("dsh", "deepseek-official", "deepseek-flash"),
         )
 
     def test_effort_never_widens_or_narrows_the_model_service(self):
-        base = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
+        base = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash"}
         model_services = {scheduling.model_service({**base, "effort": effort}) for effort in ("off", "low", "high", "max")}
         self.assertEqual(model_services, {("dsh", "deepseek-official", "deepseek-flash")})
 
@@ -33,8 +33,8 @@ class ModelServiceTests(unittest.TestCase):
             {"adapter": "command", "provider": "p", "model": "incidental-metadata"},
             {"adapter": "external", "provider": "p", "model": "incidental-metadata"},
             {"adapter": "decision", "provider": "p", "model": "not-the-frozen-selector"},
-            {"adapter": "dsh", "provider": "deepseek-official"},  # no model
-            {"adapter": "dsh", "model": "deepseek-flash"},  # no provider
+            {"harness": "dsh", "provider": "deepseek-official"},  # no model
+            {"harness": "dsh", "model": "deepseek-flash"},  # no provider
             {"adapter": "unresolved", "cwd": "/tmp"},
             {"cwd": "/tmp"},
             None,
@@ -43,8 +43,8 @@ class ModelServiceTests(unittest.TestCase):
             self.assertIsNone(scheduling.model_service(spec), spec)
 
     def test_non_string_model_service_fields_are_not_a_model_service(self):
-        self.assertIsNone(scheduling.model_service({"adapter": "dsh", "provider": 1, "model": "m"}))
-        self.assertIsNone(scheduling.model_service({"adapter": "dsh", "provider": "p", "model": ""}))
+        self.assertIsNone(scheduling.model_service({"harness": "dsh", "provider": 1, "model": "m"}))
+        self.assertIsNone(scheduling.model_service({"harness": "dsh", "provider": "p", "model": ""}))
 
 
 class LimitBoundsTests(unittest.TestCase):

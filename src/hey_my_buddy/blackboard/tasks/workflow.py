@@ -728,7 +728,8 @@ class WorkflowCoordinator:
             "task": task if len(task) <= limit else task[:limit],
             "taskTruncated": len(task) > limit,
             "taskBytes": len(task.encode("utf-8")),
-            "adapter": goal.get("adapter"),
+            **({"adapter": goal["adapter"]} if goal.get("adapter") in ("command", "external")
+               else {"harness": goal.get("harness")}),
             "cwd": goal.get("cwd"),
             "fingerprint": fingerprint,
         }
@@ -1212,7 +1213,7 @@ class WorkflowCoordinator:
         spec = json.loads(task["spec_json"])
         run = self._run_optional(connection, task["task_id"])
         if run is not None:
-            spec = {**spec, **(self._buddy(run) or {}), "cwd": task["cwd"]}
+            spec = {**spec, **(self._buddy(run) or {}), "adapter": task["adapter"], "cwd": task["cwd"]}
         return spec
 
     def _routing_boundary(self, connection, decision, run, *, post_transition: bool = False, now=None):
@@ -1348,7 +1349,7 @@ class WorkflowCoordinator:
             constraints = (schemas.buddy_constraints(json.loads(run["goal_json"]))
                            if run["buddy_locked"] or not run["continuation_count"] else {})
             if (len(buddy) == len(schemas.BUDDY_FIELDS)
-                    and buddy.get("adapter") in schemas.CODING_ADAPTERS
+                    and buddy.get("harness") in schemas.CODING_HARNESSES
                     and all(buddy.get(key) == value for key, value in constraints.items())):
                 connection.execute("UPDATE workflow_routes SET state='resolved',reason=?,updated_at=? WHERE decision_id=?",
                                    (decision["reason"], now, decision_id))
@@ -1358,7 +1359,7 @@ class WorkflowCoordinator:
                     (canonical_json(buddy), now, run["run_id"]),
                 )
                 connection.execute("UPDATE tasks SET adapter=?,queue_reason='awaiting-buddy-validation' WHERE task_id=?",
-                                   (buddy["adapter"], run["run_id"]))
+                                   (buddy["harness"], run["run_id"]))
                 self.board._append_event(connection, "workflow.routing_resolved", task_id=run["run_id"],
                                          payload={"decisionId": decision_id, "buddy": buddy,
                                                   "buddyId": decision["buddy_id"],
@@ -1377,7 +1378,7 @@ class WorkflowCoordinator:
         payload = {"source": "routing", "decisionId": run["current_routing_id"], "summary": reason,
                    "neededWork": ["读取路由边界的冻结候选和事实，指定完整合法 buddy 继续同一委派，或在列明的时间后显式 reroute=true；仅更改共享 Router 设置需要用户。"],
                    "attempted": "Bounded model routing and native buddy validation",
-                   "acceptance": "A legal adapter/provider/model/effort tuple is ready for execution"}
+                   "acceptance": "A legal harness/provider/model/effort tuple is ready for execution"}
         if run["current_routing_id"]:
             decision = self.board.decisions._row(connection, run["current_routing_id"])
             current = self.board.decisions._view(connection, decision, include_audit=False)
@@ -1428,7 +1429,7 @@ class WorkflowCoordinator:
             ).fetchall()
         for run in runs:
             buddy = self._buddy(run)
-            if buddy.get("adapter") not in schemas.CODING_ADAPTERS:
+            if buddy.get("harness") not in schemas.CODING_HARNESSES:
                 continue
             try:
                 self._require_permission(buddy, json.loads(run["execution_workspace_json"])["access"])
@@ -1622,7 +1623,7 @@ class WorkflowCoordinator:
                 store_params = {
                     "requestId": request_id,
                     "owner": normalized["owner"] or f"host:{host_id}",
-                    **{key: spec[key] for key in schemas.SUBMIT_FIELDS if key in spec},
+                    **{key: spec[key] for key in schemas.SUBMIT_FIELDS | {"harness"} if key in spec},
                 }
                 task_id = str(uuid.uuid4())
                 try:
@@ -2558,7 +2559,7 @@ class WorkflowCoordinator:
                 canonical_json(spec),
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
-                spec.get("adapter") or "unresolved",
+                spec.get("harness") or spec.get("adapter") or "unresolved",
                 canonical_json(spec.get("requiredCapabilities", [])),
                 effective_cwd,
                 canonical_json(spec.get("exclusiveResources", [])),
@@ -2655,12 +2656,12 @@ class WorkflowCoordinator:
         if buddy is None:
             return
         row = connection.execute(
-            "SELECT enabled,available FROM buddies WHERE adapter=? AND provider=? AND model=? AND effort=?",
+            "SELECT enabled,available FROM buddies WHERE harness=? AND provider=? AND model=? AND effort=?",
             tuple(buddy[key] for key in schemas.BUDDY_FIELDS),
         ).fetchone()
         from ..catalog.catalog import CATALOG_REMEDY, CATALOG_UNAVAILABLE_REASON, catalog_read_at
 
-        read_at = catalog_read_at(connection, buddy["adapter"])
+        read_at = catalog_read_at(connection, buddy["harness"])
         if row is not None and not row["available"]:
             details = {"buddy": buddy, "reason": CATALOG_UNAVAILABLE_REASON, "remedy": CATALOG_REMEDY}
             if read_at:
@@ -2672,12 +2673,12 @@ class WorkflowCoordinator:
             "buddy": buddy,
             "enabled": False,
             "reason": "not-enabled",
-            "remedy": f"Enable this model buddy for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
+            "remedy": f"Enable this buddy for the Host override; {CATALOG_REMEDY} only re-reads the catalog and never enables a buddy",
         }
         if read_at:
             details["catalogReadAt"] = read_at
         raise BoardError("BUDDY_UNAVAILABLE",
-                         "A Host override must name a model buddy the user enabled; the catalog route itself is admitted",
+                         "A Host override must name a buddy the user enabled; the catalog route itself is admitted",
                          **details)
 
     def continue_run(self, params: dict, *, console_authority: dict | None = None) -> dict:
@@ -2874,7 +2875,7 @@ class WorkflowCoordinator:
                                    "buddy_revision=buddy_revision+1,"
                                    "validated_buddy_revision=buddy_revision+1 WHERE run_id=?",
                                    (canonical_json(buddy), run_id))
-                connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (buddy["adapter"], run_id))
+                connection.execute("UPDATE tasks SET adapter=? WHERE task_id=?", (buddy["harness"], run_id))
                 updated_run = self._run_row(connection, run_id)
                 self.board._append_event(
                     connection, "workflow.buddy_overridden", task_id=run_id,
@@ -5561,7 +5562,7 @@ class WorkflowCoordinator:
             buddy = self._buddy(run_row)
             if buddy is None:
                 return "awaiting-model-selection"
-            if buddy.get("adapter") in schemas.CODING_ADAPTERS and run_row["validated_buddy_revision"] != run_row["buddy_revision"]:
+            if buddy.get("harness") in schemas.CODING_HARNESSES and run_row["validated_buddy_revision"] != run_row["buddy_revision"]:
                 return "awaiting-buddy-validation"
             if any(not self._stop_proven(connection, task) for task in self._routing_tasks(connection, run_row["run_id"])):
                 return "awaiting-routing-shutdown"
@@ -5773,18 +5774,18 @@ class WorkflowCoordinator:
         if previous is not None and native_completed and previous_session and buddy:
             previous_input = json.loads(previous["input_json"])
             if previous_input.get("context", {}).get("buddy") == buddy:
-                executor = self._execution_adapter(buddy["adapter"])
+                executor = self._execution_adapter(buddy["harness"])
                 from ..service.harness_health import read_health
-                health = read_health(connection, buddy['adapter'])
+                health = read_health(connection, buddy['harness'])
                 prior = connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (previous['attempt_id'],)).fetchone()
                 result = json.loads(prior['result_json'] or '{}') if prior else {}
                 history = result.get('harnessAttempts') or result.get('result', {}).get('harnessAttempts') or []
                 old_version = history[-1].get('harness', {}).get('version') if history else None
                 harness_changed = bool(old_version and health.get('version') and old_version != health['version'])
                 native_session = (result.get('result') or result).get('nativeSession') or {}
-                native_home_changed = (buddy['adapter'] == 'codex'
+                native_home_changed = (buddy['harness'] == 'codex'
                                        and native_session.get('storageOwner') != 'harness-user-store'
-                                       or buddy['adapter'] == 'dsh'
+                                       or buddy['harness'] == 'dsh'
                                        and native_session.get('storageOwner') != 'buddy-goal')
                 permission_reconstruction = (executor.native_resume
                                              and previous["access"] != execution_workspace["access"]
@@ -5814,7 +5815,7 @@ class WorkflowCoordinator:
         if harness_changed:
             context['resumeReason'] = 'harness-version-changed'
         elif native_home_changed:
-            context['resumeReason'] = ('native-storage-changed' if buddy['adapter'] == 'codex'
+            context['resumeReason'] = ('native-storage-changed' if buddy['harness'] == 'codex'
                                        else 'private-native-home-required')
         elif permission_reconstruction:
             context['resumeReason'] = 'permission-level-changed'

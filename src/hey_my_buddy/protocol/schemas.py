@@ -37,9 +37,9 @@ MAX_ARG_BYTES = 32 * 1024
 MAX_RESOURCES = 32
 MAX_CAPABILITIES = 32
 
-CODING_ADAPTERS = ("dsh", "zcode", "codex", "claude")
-BUDDY_FIELDS = ("adapter", "provider", "model", "effort")
-ADAPTERS = (*CODING_ADAPTERS, "command", "external")
+CODING_HARNESSES = ("dsh", "zcode", "codex", "claude")
+BUDDY_FIELDS = ("harness", "provider", "model", "effort")
+ADAPTERS = (*CODING_HARNESSES, "command", "external")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -54,7 +54,7 @@ MAX_CONTROL_TOKEN = 256
 
 #: ADR-021 decision 5: the three ways a Host may express the Worker choice.
 PARTIAL_BUDDY_HINT = (
-    "supply the complete adapter/provider/model/effort quadruple to delegate directly, "
+    "supply the complete harness/provider/model/effort quadruple to delegate directly, "
     "or omit every buddy field and leave the choice to the Router, writing the "
     "task's needs into the task description"
 )
@@ -101,8 +101,8 @@ TERMINAL_TASK_STATES = frozenset({"completed", "failed", "cancelled"})
 #: every field one explicit helper specification accepts. The nested ``spec``
 #: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
 #: (ADR-021 decisions 5 and 17).
-WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked"}
-WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"executionWorkspace", "integrator", "role"}
+WORKFLOW_SUBMIT_FIELDS = SUBMIT_FIELDS | {"harness", "hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked"}
+WORKFLOW_HELPER_FIELDS = SUBMIT_FIELDS | {"harness", "executionWorkspace", "integrator", "role"}
 #: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
 #: naming one is an explicit rejection, never a silent ignore.
 RETIRED_SPEC_KEYS = ("spec", "routingPreferences", "routingMode", "allowRoutingFallback", "inheritRoutingPreferences")
@@ -462,7 +462,7 @@ def _spec_fields(params: dict) -> dict:
             field="spec",
         )
     spec_params: dict = {}
-    for key in SUBMIT_FIELDS:
+    for key in SUBMIT_FIELDS | {"harness"}:
         if key in params:
             spec_params[key] = params[key]
     return spec_params
@@ -575,7 +575,7 @@ def normalize_workflow_spec(params: dict) -> dict:
     """Normalize a goal whose Worker choice is complete or absent, never partial.
 
     Ordinary internal task submission retains its execution defaults. A governed
-    goal preserves exactly the adapter/provider/model/effort constraints the
+    goal preserves exactly the harness/provider/model/effort constraints the
     caller supplied, and ADR-021 decision 5 allows only the two complete
     expressions: the whole quadruple (delegated directly, no Router) or none of
     it (the Router chooses). The ``command`` and ``external`` infrastructure
@@ -588,28 +588,40 @@ def normalize_workflow_spec(params: dict) -> dict:
     if adapter in ("command", "external"):
         # Minimal special case: this infrastructure names no buddy, so naming
         # provider/model/effort alongside it is a partial tuple in disguise.
-        inapplicable = [key for key in ("provider", "model", "effort") if params.get(key) is not None]
+        inapplicable = [key for key in BUDDY_FIELDS if params.get(key) is not None]
         if inapplicable:
             raise BoardError(
                 "INVALID_ARGUMENT",
                 f"the {adapter} adapter names no buddy; {inapplicable[0]} does not apply to it; " + PARTIAL_BUDDY_HINT,
                 field=inapplicable[0],
             )
+    elif adapter is not None:
+        raise BoardError("INVALID_ARGUMENT", "A coding buddy names its harness", field="adapter")
     elif supplied and len(supplied) != len(BUDDY_FIELDS):
         missing = [key for key in BUDDY_FIELDS if key not in supplied]
         raise BoardError(
             "INVALID_ARGUMENT",
             "buddy fields are all-or-nothing: a coding buddy is the complete "
-            f"adapter/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_BUDDY_HINT,
+            f"harness/provider/model/effort quadruple (missing {', '.join(missing)}); " + PARTIAL_BUDDY_HINT,
             field=missing[0],
         )
-    spec = normalize_spec(params)
-    if params.get("adapter") is None:
+    native_params = {key: value for key, value in params.items() if key != "harness"}
+    if params.get("harness") is not None:
+        harness = optional_string(params, "harness")
+        if harness not in CODING_HARNESSES:
+            raise BoardError("UNSUPPORTED_HARNESS", "Expected dsh, zcode, codex or claude", harness=harness)
+        native_params["adapter"] = harness
+    spec = normalize_spec(native_params)
+    if params.get("harness") is not None:
+        spec["harness"] = spec.pop("adapter")
+    elif params.get("adapter") is None:
         spec.pop("adapter", None)
     return spec
 
 
 def buddy_constraints(spec: dict) -> dict:
+    if spec.get("adapter") in ("command", "external"):
+        return {"adapter": spec["adapter"]}
     return {key: spec[key] for key in BUDDY_FIELDS if key in spec}
 
 
@@ -617,8 +629,8 @@ def normalize_buddy(value: Any) -> dict:
     value = require_object(value, "buddy")
     reject_unknown(value, set(BUDDY_FIELDS), "buddy")
     result = {key: required_string(value, key, max_length=256) for key in BUDDY_FIELDS}
-    if result["adapter"] not in CODING_ADAPTERS:
-        raise BoardError("INVALID_ARGUMENT", "buddy requires a coding adapter: dsh, zcode or codex")
+    if result["harness"] not in CODING_HARNESSES:
+        raise BoardError("INVALID_ARGUMENT", "buddy requires a coding harness: dsh, zcode or codex")
     return result
 
 

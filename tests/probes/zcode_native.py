@@ -176,7 +176,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         self.assertEqual(model["efforts"], ["low", "high", "max"])
         self.assertIn("text", model["inputModalities"])
         self.assertTrue(model["available"])
-        self.assertEqual(provider["adapter"], "zcode")
+        self.assertEqual(provider["harness"], "zcode")
         self.assertEqual(provider["packageVersion"], discovered["harnessVersion"])
         self.assertEqual(self.requests, [])
 
@@ -188,7 +188,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
             discovered = self.description.discover_models()
         self.assertEqual(discovered["providers"], [])
         self.assertEqual(discovered["discoveries"],
-                         [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
+                         [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
         self.assertTrue(any("empty" in warning for warning in discovered["warnings"]))
         self.assertEqual(self.requests, [], "discovery must never call the model")
 

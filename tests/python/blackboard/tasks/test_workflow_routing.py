@@ -76,12 +76,12 @@ class TestWorkflowRouting(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM decision_requests").fetchone()[0], 0)
-        for adapter in (None, "dsh", "zcode"):
-            with self.subTest(adapter=adapter):
+        for harness in (None, "dsh", "zcode"):
+            with self.subTest(harness=harness):
                 with self.assertRaises(BoardError) as raised:
-                    board.call("task_submit", {"requestId": f"bypass-{adapter}", "task": "code",
+                    board.call("task_submit", {"requestId": f"bypass-{harness}", "task": "code",
                                                "cwd": str(self.workdir("bypass")),
-                                               **({"adapter": adapter} if adapter else {})})
+                                               **({"adapter": harness} if harness else {})})
                 self.assertEqual(raised.exception.code, "GOVERNED_REQUIRED")
         self.register(board)
         claim = self.claim(board)
@@ -352,7 +352,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_native_resume_requires_same_buddy_and_exact_previous_session(self):
         board = self.board()
         submitted = self.routed(board)
-        configured = self.continue_run(board, submitted, buddy={**BUDDY, "adapter": "zcode"}, reason="Host selected ZCode for native session continuity")
+        configured = self.continue_run(board, submitted, buddy={**BUDDY, "harness": "zcode"}, reason="Host selected ZCode for native session continuity")
         board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode", "dsh"]})
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="native-123")
@@ -363,13 +363,13 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(resumed["claim"]["turn"]["input"]["previousSessionId"], "native-123")
         self.finish_turn(board, resumed, disposition="attention", session_id="native-123")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
-        self.continue_run(board, view, command_id="change-config", buddy=BUDDY, reason="Host changed adapter after the prior turn")
+        self.continue_run(board, view, command_id="change-config", buddy=BUDDY, reason="Host changed harness after the prior turn")
         changed = self.claim(board, claim_request_id="new-harness")
         self.assertEqual(changed["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
 
     def test_native_provenance_hook_cannot_bypass_common_identity_and_session_checks(self):
         board = self.board()
-        parent = self.submit(board, adapter="zcode")
+        parent = self.submit(board, harness="zcode")
         board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode"]})
         first = self.claim(board)
         self.finish_turn(board, first, disposition="attention", session_id="fixed-session")
@@ -389,7 +389,7 @@ class TestWorkflowRouting(WorkflowTestCase):
     def test_native_session_reconstructs_after_a_recorded_harness_version_change(self):
         board = self.board()
         submitted = self.routed(board)
-        self.continue_run(board, submitted, buddy={**BUDDY, 'adapter': 'zcode'}, reason='Host native-session test')
+        self.continue_run(board, submitted, buddy={**BUDDY, 'harness': 'zcode'}, reason='Host native-session test')
         board.call('worker_register', {'workerId': 'w1', 'adapter': 'zcode', 'capabilities': ['zcode']})
         first = self.claim(board)
         self.finish_turn(board, first, disposition='attention', session_id='old-native')
@@ -398,7 +398,7 @@ class TestWorkflowRouting(WorkflowTestCase):
             result = json.loads(db.execute('SELECT result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()[0])
             result['harnessAttempts'] = [{'harness': {'version': '1.0'}}]
             db.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(result), attempt_id))
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='zcode'", (json.dumps({'version': '2.0'}),))
+            db.execute("UPDATE harness_health SET record_json=? WHERE harness='zcode'", (json.dumps({'version': '2.0'}),))
         view = board.call('workflow_get', {'runId': submitted['runId']})
         self.continue_run(board, view, command_id='new-harness-version')
         resumed = self.claim(board, claim_request_id='version-changed-turn')
@@ -407,7 +407,7 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_adapter_specific_provenance_can_refuse_an_otherwise_valid_turn(self):
         board = self.board()
-        self.submit(board, adapter="zcode")
+        self.submit(board, harness="zcode")
         board.call("worker_register", {"workerId": "w1", "adapter": "zcode", "capabilities": ["zcode"]})
         claim = self.claim(board)
         self.executors["zcode"].validate_turn_provenance = lambda record: "native turn evidence is incomplete"

@@ -35,7 +35,7 @@ from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, norma
 from .. import session_receipts
 from ..session_receipts import refusal_shaped
 
-ADAPTER = "dsh"
+HARNESS = "dsh"
 
 #: The ``session/update`` kinds the protocol's public schema names. Any other
 #: kind is legal-shaped but unclassified: it is retained as an unknown-event
@@ -202,7 +202,7 @@ class DshToolFacts:
                     return
                 self._names.setdefault(key, name)
             try:
-                event = normalize_tool_event(ADAPTER, {
+                event = normalize_tool_event(HARNESS, {
                     "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})
             except BoardError:
                 self._incomplete(identity, call_id, name, phase)
@@ -214,7 +214,7 @@ class DshToolFacts:
 
     def _incomplete(self, identity: dict, call_id: str | None, name: str | None,
                     phase: str | None) -> None:
-        self.evidence.observe_incomplete(ADAPTER, {
+        self.evidence.observe_incomplete(HARNESS, {
             "nativeIdentity": dict(identity), "callId": call_id, "toolName": name, "phase": phase})
 
     @property
@@ -419,7 +419,7 @@ class RootTurnEvidence:
                               "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
             "version": 1,
-            "adapter": ADAPTER, "tool": "buddy_finish_turn", "nativeTool": self.tool_name,
+            "harness": HARNESS, "tool": "buddy_finish_turn", "nativeTool": self.tool_name,
             "turnEnd": "completed", "stopReason": self.stop_reason, "rootSessionMatched": True,
             "nativeSessionId": self.session_id, "toolCallId": self.call_id,
             "receiptId": self.receipt["receiptId"], "receiptVerified": True,
@@ -542,7 +542,7 @@ def _content_text(update: dict) -> str | None:
 
 
 __all__ = [
-    "ADAPTER", "MODEL_ACTIVITY_KINDS", "UPDATE_KINDS", "DshActivity", "DshToolFacts",
+    "HARNESS", "MODEL_ACTIVITY_KINDS", "UPDATE_KINDS", "DshActivity", "DshToolFacts",
     "NativeError", "RootTurnEvidence", "refusal_shaped", "text_blocks",
     "verify_finish_receipt", "verify_inquiry_receipt", "verify_tool_refusal",
 ]

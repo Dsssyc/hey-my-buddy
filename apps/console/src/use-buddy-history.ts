@@ -83,8 +83,8 @@ export function mergePage(previous: BuddyPage | null, next: BuddyPage): BuddyPag
 export type BuddyHistoryFilters = {
   /** Local search text; it is bounded before it becomes a server query. */
   query: string;
-  /** Harness (adapter) filter, applied by the server before pagination. */
-  adapter: string;
+  /** Harness (harness) filter, applied by the server before pagination. */
+  harness: string;
   /** False keeps a hidden view from fetching in the background. */
   enabled: boolean;
   /** A restored browser preference requests the same bounded history. */
@@ -98,7 +98,7 @@ export function historySourceKey(snapshot: Snapshot): string {
     buddies: snapshot.buddies.map(({ buddyId, available, enabled }) => [buddyId, available, enabled]),
     preferences: snapshot.preferences,
     modelServiceNotes: snapshot.modelServiceNotes,
-    modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ adapter, provider, model, limit }) => [adapter, provider, model, limit]),
+    modelServiceConcurrency: snapshot.modelServiceConcurrency.map(({ harness, provider, model, limit }) => [harness, provider, model, limit]),
     configuration: snapshot.configuration,
     unavailableBuddyCount: snapshot.unavailableBuddyCount,
   });
@@ -123,8 +123,8 @@ export function useBuddyHistory(
   filters: BuddyHistoryFilters,
 ) {
   const query = boundBuddyQuery(filters.query);
-  const adapter = filters.adapter.trim();
-  const filterKey = `${query}\u0000${adapter}`;
+  const harness = filters.harness.trim();
+  const filterKey = `${query}\u0000${harness}`;
   const [stored, setStored] = useState<StoredPage>({
     sourceKey,
     key: filterKey,
@@ -139,8 +139,8 @@ export function useBuddyHistory(
   const sequence = useRef(0);
   /** Filter generation whose first page was already requested; no retry loop. */
   const requestedKey = useRef<string | null>(null);
-  const params = useRef({ query, adapter, sourceKey, key: filterKey });
-  params.current = { query, adapter, sourceKey, key: filterKey };
+  const params = useRef({ query, harness, sourceKey, key: filterKey });
+  params.current = { query, harness, sourceKey, key: filterKey };
   useEffect(() => {
     alive.current = true;
     return () => { alive.current = false; };
@@ -148,7 +148,7 @@ export function useBuddyHistory(
 
   const fetchPage = useCallback(async (after: string | undefined, replace: boolean) => {
     const request = ++sequence.current;
-    const { query: search, adapter: harness, sourceKey: source, key } = params.current;
+    const { query: search, harness: harness, sourceKey: source, key } = params.current;
     setLoading(true);
     setError("");
     try {
@@ -156,7 +156,7 @@ export function useBuddyHistory(
         includeUnavailable: true,
         limit: BUDDY_PAGE_SIZE,
         ...(search ? { query: search } : {}),
-        ...(harness ? { adapter: harness } : {}),
+        ...(harness ? { harness: harness } : {}),
         ...(after ? { after } : {}),
       }, csrf.current);
       const next = parseBuddyPage(value);

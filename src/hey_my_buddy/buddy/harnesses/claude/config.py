@@ -181,7 +181,7 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
 def native_environment(environment: dict) -> dict:
     """Use the shared service allowlist; Claude reads its own configuration files."""
     from ..discovery import native_environment as clean
-    result = clean(environment, command=cli_command(environment), adapter='claude')
+    result = clean(environment, command=cli_command(environment))
     if os.environ.get("BUDDY_DEV_SOURCE") == "1":
         for key in ("BUDDY_CLAUDE_FIXTURE_CASE", "BUDDY_CLAUDE_FIXTURE_STATE"):
             if key in environment:

@@ -17,11 +17,11 @@ function catalog(): Buddy[] {
   const enabled = new Set(["dsh:deepseek-flash:off", "dsh:deepseek-flash:max", "zcode:GLM-5.3:high", "zcode:GLM-5.3-Flash:max"]);
   return [
     ...["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
-      .flatMap(model => ["off", "low", "high", "max"].map(effort => ({ adapter: "dsh", provider: "deepseek-official", model, effort }))),
+      .flatMap(model => ["off", "low", "high", "max"].map(effort => ({ harness: "dsh", provider: "deepseek-official", model, effort }))),
     ...["GLM-5.3", "GLM-5.3-Flash"].flatMap(model => ["low", "high", "max"]
-      .map(effort => ({ adapter: "zcode", provider: "bigmodel-api", model, effort }))),
-  ].map(p => ({ ...p, buddyId: [p.adapter, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
-    available: true, enabled: enabled.has([p.adapter, p.model, p.effort].join(":")), capabilities: [],
+      .map(effort => ({ harness: "zcode", provider: "bigmodel-api", model, effort }))),
+  ].map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"), label: `${p.model} · ${p.effort}`,
+    available: true, enabled: enabled.has([p.harness, p.model, p.effort].join(":")), capabilities: [],
     contextWindow: null, source: "catalog:fixture", description: "" }));
 }
 function goal(runId: string, sourceHostId = "codex-source", projectId = "source-project"): Task {
@@ -30,7 +30,7 @@ function goal(runId: string, sourceHostId = "codex-source", projectId = "source-
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     delegation: { kind: "goal", sourceHostId, currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: projectId, label: projectId, path: `/source/${projectId}` },
-      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
+      buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } } };
 }
 function workflow(task: Task): Workflow {
   return { governed: true, runId: task.runId, hostId: "current-host", ownerGeneration: 2, revision: 1,

@@ -4,7 +4,7 @@ import unittest
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 
-CANDIDATE = {"buddyId": "dsh:fixture:model:max", "adapter": "dsh", "provider": "fixture",
+CANDIDATE = {"buddyId": "dsh:fixture:model:max", "harness": "dsh", "provider": "fixture",
              "model": "model", "effort": "max", "contextWindow": 64000}
 RETRY = "2026-01-01T00:10:00.000Z"
 
@@ -31,7 +31,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(params["runId"], "run-1")
         self.assertEqual(params["expectedRevision"], 7)
         self.assertEqual(params["controlFile"], "<saved-control-file>")
-        self.assertEqual(params["buddy"], {key: CANDIDATE[key] for key in ("adapter", "provider", "model", "effort")})
+        self.assertEqual(params["buddy"], {key: CANDIDATE[key] for key in ("harness", "provider", "model", "effort")})
         self.assertTrue(params["input"])
         self.assertTrue(params["reason"])
         reroute = result["commands"]["reroute"]
@@ -127,7 +127,7 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(candidates[0], CANDIDATE)
 
     def test_incomplete_candidate_or_non_boolean_stop_evidence_cannot_make_a_template(self):
-        for changes in ({"candidates": [{"buddyId": "partial", "adapter": "dsh"}]},
+        for changes in ({"candidates": [{"buddyId": "partial", "harness": "dsh"}]},
                         {"shutdown_confirmed": 1}, {"revision": True}, {"kind": "failure"}):
             with self.subTest(changes=changes), self.assertRaises(BoardError):
                 self.build(**changes)

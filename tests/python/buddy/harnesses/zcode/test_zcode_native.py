@@ -16,7 +16,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
             "properties": {"inputFormat": {"supportsText": True}}}]}}}
         receipt = native_run.catalog(snapshot, {"fixture-api": "api-key"}, "fixture")
         self.assertEqual(receipt["discoveries"],
-                         [{"adapter": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
+                         [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])
         self.assertTrue(any("account status is not applicable" in warning for warning in receipt["warnings"]),
                         receipt["warnings"])
         models = receipt["providers"][0]["models"]

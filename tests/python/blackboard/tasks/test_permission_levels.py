@@ -21,7 +21,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         self.executors['claude'] = SimpleNamespace(native_resume=False, native_resume_permission_change=False, validate_turn_provenance=lambda record: None)
 
     def claude_run(self, board, **extra):
-        return self.submit(board, adapter='claude', provider='fixture', model='fixture', effort='high', **extra)
+        return self.submit(board, harness='claude', provider='fixture', model='fixture', effort='high', **extra)
 
     def register_claude(self, board):
         return board.call('worker_register', {'workerId': 'w1', 'capabilities': ['claude']})
@@ -60,14 +60,28 @@ class PermissionLevelsTests(WorkflowTestCase):
         board = self.board()
         for harness in ('codex', 'dsh', 'zcode', 'claude'):
             with self.subTest(harness=harness):
-                view = self.submit(board, request_id='read-' + harness, adapter=harness,
+                view = self.submit(board, request_id='read-' + harness, harness=harness,
                                    provider='fixture', model='fixture', effort='high', access='read',
                                    cwd=str(self.workdir('read-' + harness)))
                 self.assertEqual(view['access'], 'read')
-                self.assertEqual(view['buddy']['adapter'], harness)
+                self.assertEqual(view['buddy']['harness'], harness)
                 self.assertEqual(governed_brief(view)['access'], 'read')
                 self.assertNotIn('enforcement', view)
                 self.assertNotIn('enforcement', governed_brief(view))
+
+    def test_command_and_external_keep_their_permission_gate_before_admission(self):
+        board = self.board()
+        for adapter in ('command', 'external'):
+            with self.subTest(adapter=adapter):
+                fields = {'argv': ['true']} if adapter == 'command' else {}
+                with self.assertRaises(BoardError) as rejected:
+                    self.submit(board, request_id='full-' + adapter, adapter=adapter, **fields,
+                                executionWorkspace={'kind': 'existing', 'access': 'full',
+                                                    'accessReason': 'Exercise the existing connector permission gate'})
+                self.assertEqual(rejected.exception.code, 'UNSUPPORTED_CAPABILITY')
+                self.assertEqual(rejected.exception.details['requiredCapability'], 'permission:full')
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
 
     def test_turns_freeze_access_and_full_reason_then_inherit(self):
         board = self.board()

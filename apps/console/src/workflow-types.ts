@@ -2,7 +2,7 @@ import type { Shutdown, Task, TokenUsage } from "./types";
 import type { RoutingMode } from "./types";
 
 export type BuddyIdentity = {
-  adapter: string;
+  harness: string;
   provider: string;
   model: string;
   effort: string;

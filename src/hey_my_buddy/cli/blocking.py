@@ -305,7 +305,7 @@ def _governed_result_view(full: dict, run_id: str) -> dict | None:
     return {
         "status": result.get("status"),
         "tokenUsage": full.get("tokenUsage"),
-        "quotaFailure": failure_view(result, adapter=full.get("adapter")),
+        "quotaFailure": failure_view(result, harness=full.get("adapter")),
         "turn": None
         if turn is None
         else {
@@ -411,7 +411,7 @@ def _host_boundary(
         target_params = {"targetRunId": target} if target and target != run_id else {}
         for mode, choice in (
             ("reroute", {"reroute": True}),
-            ("buddy", {"buddy": {key: f"<{key}>" for key in ("adapter", "provider", "model", "effort")}}),
+            ("buddy", {"buddy": {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")}}),
         ):
             commands.append(_boundary_command("continue", {
                 "runId": run_id, "commandId": f"{run_id}:{mode}:{revision}",

@@ -42,10 +42,10 @@ def zcode_access(access: object, observed_at: str) -> dict:
                 "zcode/provider-access", observed_at)
 
 
-def for_provider(connection, adapter: str, provider: str) -> dict:
+def for_provider(connection, harness: str, provider: str) -> dict:
     """Only native metadata for this exact buddy may establish a label."""
     from ..blackboard.service.harness_health import read_health
-    health = read_health(connection, adapter)
+    health = read_health(connection, harness)
     row = health.get("billingByProvider") or {}
     if isinstance(row, dict) and isinstance(row.get(provider), dict):
         return row[provider]

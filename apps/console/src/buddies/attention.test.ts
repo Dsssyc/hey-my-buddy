@@ -6,8 +6,8 @@ const reviewer = "claude:anthropic:claude-sonnet-5:medium";
 const worker = "codex:openai:gpt-6-sol:medium";
 
 function buddy(buddyId: string, capabilities: string[], enabled = true): Buddy {
-  const [adapter, provider, model, effort] = buddyId.split(":");
-  return { buddyId, label: buddyId, adapter, provider, model, effort, available: true, enabled, capabilities,
+  const [harness, provider, model, effort] = buddyId.split(":");
+  return { buddyId, label: buddyId, harness, provider, model, effort, available: true, enabled, capabilities,
     contextWindow: null, description: "", source: "catalog:fixture" };
 }
 
@@ -22,8 +22,8 @@ function attention(options: { routers?: string[]; mode?: "fast" | "review"; heal
       defaultRoutingMode: options.mode ?? "review", routingBudget: "standard" };
   const buddies = [buddy(reviewer, ["execution:claude", "routing:fast", "decision"]), buddy(worker, ["execution:codex"])];
   const harnesses = [
-    { adapter: "claude", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
-    { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
+    { harness: "claude", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] },
+    { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [],
       quota: { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", provider: "deepseek-official", stale: false,
         windows: [{ name: "5h", usedPercent: options.quota ?? 40, resetsAt: null }] } },
   ];

@@ -1,7 +1,7 @@
 """Unified Router tool-event evidence: pure normalization, collection and judgment.
 
 Per [ADR-021](docs/decisions/021-router-buddy-planes-and-routing-evidence.md) §4
-and [ADR-023](docs/decisions/023-harness-integration-principles.md) §3, adapters
+and [ADR-023](docs/decisions/023-harness-integration-principles.md) §3, harnesses
 only project their harness's native tool events into the shared Agent Client
 Protocol vocabulary; the blackboard is the single authority that decides whether
 an answer may publish. This module holds both sides of that seam as pure data
@@ -19,7 +19,7 @@ from typing import Any
 from ..blackboard.store.db import canonical_json
 from ..errors import BoardError
 
-#: The Agent Client Protocol tool-call categories. The fixed per-adapter maps
+#: The Agent Client Protocol tool-call categories. The fixed per-harness maps
 #: only ever produce read, search, execute, edit, fetch and other; the remaining
 #: names exist so a package carrying one is judged, never silently accepted.
 ACP_CATEGORIES = ("read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other")
@@ -44,10 +44,10 @@ PACKAGE_FIELDS = frozenset({
     "version", "binding", "nativeIdentity", "streamComplete", "events",
     "toolCalls", "unsettledToolCalls", "truncated",
 })
-BINDING_FIELDS = frozenset({"adapter", "taskId", "attemptId", "generation"})
+BINDING_FIELDS = frozenset({"harness", "taskId", "attemptId", "generation"})
 EVENT_FIELDS = frozenset({"nativeIdentity", "callId", "toolName", "category", "phase"})
 
-#: The fixed native tool name/type classification per adapter. A name a harness
+#: The fixed native tool name/type classification per harness. A name a harness
 #: did not register — an MCP server, a subagent, a dynamic tool or any
 #: unrecognized name, including one that merely resembles an ACP category —
 #: stays ``other``; it is never promoted to a legal category.
@@ -92,11 +92,11 @@ def _identity(value: Any, label: str = "nativeIdentity") -> dict:
 def _binding(value: Any) -> dict:
     if (not isinstance(value, dict) or set(value) != BINDING_FIELDS
             or any(not isinstance(value.get(key), str) or not value[key]
-                   for key in ("adapter", "taskId", "attemptId"))
+                   for key in ("harness", "taskId", "attemptId"))
             or type(value.get("generation")) is not int or value["generation"] < 0):
         raise BoardError(
             "INVALID_ARGUMENT",
-            "binding must be exactly adapter, taskId, attemptId and generation from the Python control file",
+            "binding must be exactly harness, taskId, attemptId and generation from the Python control file",
         )
     return dict(value)
 
@@ -137,7 +137,7 @@ def _classify(table: dict[str, str], name: Any, native_type: Any) -> str | None:
     return first if first == second else "other"
 
 
-def normalize_tool_event(adapter: Any, native_event: Any) -> dict | None:
+def normalize_tool_event(harness: Any, native_event: Any) -> dict | None:
     """Classify one controller-extracted native tool fact into the ACP vocabulary.
 
     ``native_event`` carries only the facts the native controller extracted —
@@ -147,9 +147,9 @@ def normalize_tool_event(adapter: Any, native_event: Any) -> dict | None:
     Returns ``None`` when the fact is model reasoning text rather than a tool
     call, and raises :class:`BoardError` for input no event can be built from.
     """
-    table = NATIVE_TOOL_CATEGORIES.get(adapter) if isinstance(adapter, str) else None
+    table = NATIVE_TOOL_CATEGORIES.get(harness) if isinstance(harness, str) else None
     if table is None:
-        raise BoardError("UNSUPPORTED_ADAPTER", f"No fixed tool classification for adapter {adapter!r}")
+        raise BoardError("UNSUPPORTED_HARNESS", f"No fixed tool classification for harness {harness!r}")
     if not isinstance(native_event, dict):
         raise BoardError("INVALID_ARGUMENT", "native_event must be an object")
     # A named call is still a call, even if its name is "reasoning". Only
@@ -211,7 +211,7 @@ class ToolEventEvidence:
         return sum(1 for call in self._calls.values()
                    if any(phase == "start" for _fact, phase in call["pairs"]))
 
-    def observe_incomplete(self, adapter: str, native_event: dict) -> None:
+    def observe_incomplete(self, harness: str, native_event: dict) -> None:
         """Keep a broken native tool fact without inventing its missing IDs.
 
         Controllers call this after normalization cannot form a complete event.
@@ -229,7 +229,7 @@ class ToolEventEvidence:
                     if key in NATIVE_ID_FIELDS and bounded(value)} if isinstance(identity, dict) else {}
         name, native_type = bounded(native_event.get("toolName")), bounded(native_event.get("type"))
         try:
-            category = _classify(NATIVE_TOOL_CATEGORIES.get(adapter, {}), name, native_type)
+            category = _classify(NATIVE_TOOL_CATEGORIES.get(harness, {}), name, native_type)
         except BoardError:
             category = "other"
         self._retain({"nativeIdentity": identity, "callId": bounded(native_event.get("callId")),
@@ -319,7 +319,7 @@ class ToolEventEvidence:
         if call is None or call.get("incomplete"):
             return False
         facts = {fact for fact, _phase in call["pairs"]}
-        return _consistent_call_facts(self.binding["adapter"], facts)
+        return _consistent_call_facts(self.binding["harness"], facts)
 
     def _package(self) -> dict:
         excluded = {key for key in self._calls if self._excludable(key)}
@@ -371,12 +371,12 @@ def _structural_problem(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
     return None
 
 
-def _consistent_call_facts(adapter: str, facts: set) -> bool:
+def _consistent_call_facts(harness: str, facts: set) -> bool:
     if len(facts) == 1:
         return True
     # Codex exposes the same call through a typed commandExecution item and
     # its raw native tool name. Keep both facts and join only by the real ID.
-    if adapter != "codex" or len(facts) != 2 or ("commandExecution", "execute") not in facts:
+    if harness != "codex" or len(facts) != 2 or ("commandExecution", "execute") not in facts:
         return False
     return all(category == "execute" and NATIVE_TOOL_CATEGORIES["codex"].get(name) == category
                for name, category in facts)
@@ -419,7 +419,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
             return TOOLS_FORBIDDEN
     else:
         for call in calls.values():
-            if (_consistent_call_facts(evidence["binding"]["adapter"], call["facts"])
+            if (_consistent_call_facts(evidence["binding"]["harness"], call["facts"])
                     and next(iter(call["facts"]))[1] not in allowed):
                 return TOOLS_FORBIDDEN
     if evidence["truncated"] or not evidence["streamComplete"] or end_before_start:
@@ -431,7 +431,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
             return TOOL_EVIDENCE_UNVERIFIED
     started = unsettled = 0
     for call in calls.values():
-        if not _consistent_call_facts(evidence["binding"]["adapter"], call["facts"]):
+        if not _consistent_call_facts(evidence["binding"]["harness"], call["facts"]):
             return TOOL_EVIDENCE_UNVERIFIED
         has_start, has_end = "start" in call["phases"], "end" in call["phases"]
         if has_end and not has_start:

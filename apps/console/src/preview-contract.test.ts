@@ -126,7 +126,7 @@ async function parseEntry(entry: ManifestEntry): Promise<Outcome> {
         // full execution records stay on the paginated tasks read.
         pendingCount: snapshot.tasks.pendingCount,
         harnesses: harnesses.map(row => ({
-          adapter: row.adapter,
+          harness: row.harness,
           status: row.status,
           // The display view drops the raw metered balance fact the Python
           // regression checks; keep it on the report row.
@@ -235,8 +235,8 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     // dropped as unknown: it never surfaces as a recorded 0% or near-limit flag.
     const downgraded = incompatible.find(outcome => entryFor(outcome).expected === "accepted")!;
     expect(downgraded.accepted).toBe(true);
-    const downgradedRows = downgraded.facts.harnesses as { adapter: string; quota: { windows: { usedText: string }[] } | null }[];
-    expect(downgradedRows[0].adapter).toBe("dsh");
+    const downgradedRows = downgraded.facts.harnesses as { harness: string; quota: { windows: { usedText: string }[] } | null }[];
+    expect(downgradedRows[0].harness).toBe("dsh");
     expect(downgradedRows[0].quota).toBeNull();
     expect(downgradedRows.slice(1).some(row => row.quota !== null)).toBe(true);
     expect(downgradedRows.every(row => row.quota === null
@@ -266,14 +266,14 @@ describe("synthetic preview fixtures through the real console parsers", () => {
 
     // DSH is metered: a zero balance is recorded without invented percentage windows.
     const normalSnapshot = await apiFor(manifest.files.find(entry => entry.scenario === "normal" && entry.kind === "console-snapshot")!).snapshot();
-    expect(snapshotHarnesses(normalSnapshot).find(row => row.adapter === "dsh")).toMatchObject({
+    expect(snapshotHarnesses(normalSnapshot).find(row => row.harness === "dsh")).toMatchObject({
       billingByProvider: { "deepseek-official": { kind: "metered" } },
       quota: { balanceZero: true, windows: [] },
     });
     // Recorded quota: the near-limit, normal, stale-and-unknown and absent
     // observations stay four distinct states; only claude alerts.
-    const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];
-    expect(quotaFacts.filter(row => row.quota?.alert).map(row => row.adapter)).toEqual(["claude"]);
+    const quotaFacts = snapshotFacts.harnesses as { harness: string; quota: ReturnType<typeof quotaView> }[];
+    expect(quotaFacts.filter(row => row.quota?.alert).map(row => row.harness)).toEqual(["claude"]);
     expect(quotaFacts.some(row => row.quota === null)).toBe(true);
     expect(quotaFacts.some(row => row.quota?.stale && row.quota.windows.some(window => window.usedPercent === null))).toBe(true);
 

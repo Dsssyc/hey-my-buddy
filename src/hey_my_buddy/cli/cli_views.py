@@ -421,7 +421,7 @@ def task_brief(view: dict) -> dict:
     if isinstance(delegation, dict):
         buddy = delegation.get("buddy")
         if isinstance(buddy, dict):
-            brief["buddy"] = _pick(buddy, ("adapter", "provider", "model", "effort"))
+            brief["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort"))
         brief.update(_pick(delegation, ("kind", "parentRunId")))
     workflow = view.get("workflow")
     if isinstance(workflow, dict):

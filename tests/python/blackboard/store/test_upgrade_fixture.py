@@ -123,14 +123,14 @@ class UpgradeFixtureTests(unittest.TestCase):
         board.initialize()
         evaluation = EvaluationStore(board)
         with board.db.read() as connection:
-            for buddy_id, _adapter in absent:
+            for buddy_id, _harness in absent:
                 self.assertIsNone(connection.execute(
                     'SELECT unavailable_reason FROM buddies WHERE buddy_id=?',
                     (buddy_id,)).fetchone()[0])
-        for adapter in sorted({adapter for _buddy_id, adapter in absent}):
-            evaluation.record_catalog(reading(adapter=adapter, models=()))
+        for harness in sorted({harness for _buddy_id, harness in absent}):
+            evaluation.record_catalog(reading(harness=harness, models=()))
         with board.db.read() as connection:
-            for buddy_id, _adapter in absent:
+            for buddy_id, _harness in absent:
                 self.assertEqual(tuple(connection.execute(
                     'SELECT available,unavailable_reason FROM buddies WHERE buddy_id=?',
                     (buddy_id,)).fetchone()), (0, CONFIRMED_ABSENCE_REASON))
@@ -158,6 +158,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                                 original_secret)
             self.assertEqual(router.configuration(upgraded), settings["router"])
             self.assertEqual(upgraded.execute("SELECT COUNT(*) FROM harness_health WHERE scan_after IS NOT NULL").fetchone()[0], 0)
+            for row in upgraded.execute("SELECT harness,record_json FROM harness_health"):
+                record = json.loads(row['record_json'])
+                self.assertNotIn('adapter', record)
+                self.assertEqual(record['harness'], row['harness'])
             self.assertEqual(router.configuration(upgraded), router.configuration(baseline))
             names = {row[0] for row in upgraded.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertEqual(names, {row[0] for row in baseline.execute(

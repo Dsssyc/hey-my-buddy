@@ -22,9 +22,9 @@ def service(daemon):
             command = [executable or 'fixture-' + name]
             if executable and Path(executable).suffix == '.py':
                 command.insert(0, sys.executable)
-            record = {'adapter': name, 'status': 'ready', 'available': True, 'command': command,
+            record = {'harness': name, 'status': 'ready', 'available': True, 'command': command,
                       'executable': executable, 'version': 'fixture', 'source': 'fixture'}
-            db.execute("INSERT OR REPLACE INTO harness_health(adapter,status,record_json) VALUES(?,'ready',?)", (name, json.dumps(record)))
+            db.execute("INSERT OR REPLACE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)", (name, json.dumps(record)))
     result.harnesses.refresh = lambda name, **kwargs: result.harnesses.get(name)
     # The file-catalog branch disables automatic discovery. Bind availability
     # reads to the same synthetic records, including the capabilities operation,

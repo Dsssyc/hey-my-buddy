@@ -96,7 +96,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
 
     def test_retired_routing_inputs_are_rejected_with_the_three_expressions(self):
         retired = {
-            "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "prefer this route"}],
+            "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "prefer this route"}],
             "routingMode": "fast",
             "allowRoutingFallback": False,
         }
@@ -123,7 +123,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
             self.assertIn("inheritRoutingPreferences", raised.exception.message)
 
     def test_partial_quadruples_are_rejected_at_both_entries(self):
-        partials = ({"adapter": "zcode"}, {"model": "candidate"}, {"adapter": "dsh", "effort": "off"},
+        partials = ({"harness": "zcode"}, {"model": "candidate"}, {"harness": "dsh", "effort": "off"},
                     {"provider": "deepseek-official", "model": "deepseek-flash"})
         with tempfile.TemporaryDirectory() as root:
             for partial in partials:
@@ -199,7 +199,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
             budget = router.budget("brief")
-            document = {"buddy": {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
+            document = {"buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
                         "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
@@ -233,7 +233,7 @@ class DecisionCapabilityTests(unittest.TestCase):
     def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
         context = ExecutionContext(task_id="goal", attempt_id="attempt", generation=1,
                                    spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                   decision_input={"buddy": {"adapter": "codex"}})
+                                   decision_input={"buddy": {"harness": "codex"}})
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
             "hey_my_buddy.buddy.roles.router_input.prepare"
         ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={'eligible': False}), \
@@ -340,7 +340,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         self.assertNotIn("routingPreferences", document)
         self.assertNotIn("taskPreference", document["policyFacts"])
         note = document["annotations"][0]
-        self.assertEqual({key: note[key] for key in ("adapter", "provider", "model", "text")},
+        self.assertEqual({key: note[key] for key in ("harness", "provider", "model", "text")},
                          {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
         board.call("worker_result", {
             "workerId": "router", "attemptId": owned["claim"]["attempt"]["attemptId"],

@@ -35,13 +35,13 @@ class CurrentRouterTestCase(BoardTestCase):
             'systemSandbox': False, 'sameAttemptContinuation': True}))
 
     # -- fixtures ------------------------------------------------------------
-    def add_buddy(self, buddy_id, *, adapter="dsh", provider="fixture", available=1, enabled=1, model=None):
+    def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1, model=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
-                       (buddy_id, buddy_id, adapter, provider, model or buddy_id, "max",
-                        available, enabled, canonical_json(permission_capabilities(adapter))))
+                       (buddy_id, buddy_id, harness, provider, model or buddy_id, "max",
+                        available, enabled, canonical_json(permission_capabilities(harness))))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""
@@ -144,8 +144,8 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts, {
             "routerBuddyIds": [A, B],
-            "routerIdentities": [{"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
-                                 {"adapter": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}],
+            "routerIdentities": [{"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
+                                 {"harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}],
             "routingMode": "fast", "routingBudget": "deep", "routerRetryIntervalSeconds": 45,
             "budget": {"timeoutSeconds": 60},
         })
@@ -165,7 +165,7 @@ class ResolutionTests(CurrentRouterTestCase):
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
         self.add_buddy(A, enabled=0)
-        self.add_buddy(B, adapter="claude")
+        self.add_buddy(B, harness="claude")
         self.add_buddy(C)
         self.set_settings(ids=[A, B, C])
         with self.board_.store.db.read() as db:
@@ -190,7 +190,7 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["code"], "router-quota-exhausted")
 
     def test_review_mode_requires_the_local_review_mechanism(self):
-        self.add_buddy(A, adapter="zcode")
+        self.add_buddy(A, harness="zcode")
         self.add_buddy(B)
         self.set_settings(ids=[A, B], mode="review")
         with self.board_.store.db.read() as db:
@@ -277,7 +277,7 @@ class ResolutionTests(CurrentRouterTestCase):
 
     def test_all_unavailable_reports_one_summary_problem(self):
         self.add_buddy(A, enabled=0)
-        self.add_buddy(B, adapter="claude")
+        self.add_buddy(B, harness="claude")
         self.set_settings(ids=[A, B])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)

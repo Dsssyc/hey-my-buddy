@@ -26,7 +26,7 @@ class HarnessStartupTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.client = Mock(state_dir=self.directory / 'state')
-        self.record = {'adapter': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
+        self.record = {'harness': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
         self.client.call.return_value = {'harness': self.record}
         self.worker = Worker('fixture', self.directory / 'state', client=self.client)
         self.assertEqual(self.client.state_dir, self.worker.state_dir,
@@ -37,7 +37,7 @@ class HarnessStartupTests(BoardTestCase):
         self.directory.joinpath('attempt').mkdir()
 
     def execute(self, holder):
-        return self.worker._execute_guarded(self.claim, {}, {'adapter': 'codex'}, self.attempt, self.directory / 'attempt', holder)
+        return self.worker._execute_guarded(self.claim, {}, {'adapter': 'codex', 'harness': 'codex'}, self.attempt, self.directory / 'attempt', holder)
 
     def test_pre_model_failure_rechecks_once_and_retains_both_choices(self):
         holder = {}

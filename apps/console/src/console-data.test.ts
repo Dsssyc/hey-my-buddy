@@ -10,16 +10,16 @@ import {
 } from "./console-data";
 import type { Preference, Buddy, Task } from "./types";
 
-const buddy = (buddyId: string, adapter: string, provider: string, effort: string): Buddy => ({
-  buddyId, adapter, provider, model: "shared-model", effort, label: "Shared model", available: true,
+const buddy = (buddyId: string, harness: string, provider: string, effort: string): Buddy => ({
+  buddyId, harness, provider, model: "shared-model", effort, label: "Shared model", available: true,
   enabled: true, capabilities: [], contextWindow: null, source: "fixture", description: "",
 });
 
 describe("console grouping and recorded attribution", () => {
   it("orders extended thinking levels by intensity in model service labels and variant tabs", () => {
-    for (const adapter of ["claude", "codex"]) {
+    for (const harness of ["claude", "codex"]) {
       const levels = ["ultra", "max", "high", "medium", "xhigh", "low"];
-      const buddies = levels.map(effort => buddy(`${adapter}-${effort}`, adapter, "provider", effort));
+      const buddies = levels.map(effort => buddy(`${harness}-${effort}`, harness, "provider", effort));
       expect(modelServices(buddies)[0].buddies.map(item => item.effort))
         .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
       expect(buddies.map(item => item.effort)).toEqual(levels);
@@ -87,15 +87,15 @@ describe("shared model concurrency", () => {
     }
   });
 
-  it("finds a model service entry by the exact adapter/provider/model tuple, ignoring effort", () => {
+  it("finds a model service entry by the exact harness/provider/model tuple, ignoring effort", () => {
     const entries = [
-      { adapter: "dsh", provider: "p", model: "m", limit: 2, active: 1 },
-      { adapter: "dsh", provider: "p", model: "other", limit: 3, active: 0 },
+      { harness: "dsh", provider: "p", model: "m", limit: 2, active: 1 },
+      { harness: "dsh", provider: "p", model: "other", limit: 3, active: 0 },
     ];
-    const withEffort = { adapter: "dsh", provider: "p", model: "m", effort: "high" };
+    const withEffort = { harness: "dsh", provider: "p", model: "m", effort: "high" };
     expect(concurrencyEntryFor(entries, withEffort)).toBe(entries[0]);
-    expect(concurrencyEntryFor(entries, { adapter: "zcode", provider: "p", model: "m" })).toBeNull();
-    expect(concurrencyEntryFor(entries, { adapter: "dsh", provider: "q", model: "m" })).toBeNull();
+    expect(concurrencyEntryFor(entries, { harness: "zcode", provider: "p", model: "m" })).toBeNull();
+    expect(concurrencyEntryFor(entries, { harness: "dsh", provider: "q", model: "m" })).toBeNull();
     expect(concurrencyEntryFor(undefined, withEffort)).toBeNull();
   });
 });

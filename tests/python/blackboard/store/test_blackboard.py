@@ -283,11 +283,11 @@ class TestCrashWindows(BoardTestCase):
     def _isolated_worker_claim(self, adapter: str):
         task_id = f"stop-proof-{adapter}"
         attempt_id = f"attempt-{adapter}"
-        native_adapter = "codex" if adapter == "decision" else adapter
+        native_harness = "codex" if adapter == "decision" else adapter
         client = SimpleNamespace(
             progress=lambda *_args, **_kwargs: None,
             call=lambda *_args, **_kwargs: {
-                "harness": {"adapter": native_adapter, "available": True, "revision": 1, "command": ["mock"]}
+                "harness": {"harness": native_harness, "available": True, "revision": 1, "command": ["mock"]}
             },
         )
         worker = Worker(f"w-{adapter}", self.directory, client=client, log=lambda _message: None)
@@ -297,7 +297,7 @@ class TestCrashWindows(BoardTestCase):
                 "adapter": adapter, "task": "inspect stop evidence", "cwd": str(self.workdir()), "timeoutSeconds": 60,
             }},
             "attempt": {"attemptId": attempt_id, "taskId": task_id, "generation": 1},
-            "decisionInput": {"routingMode": "fast", "buddy": {"adapter": "codex"}}
+            "decisionInput": {"routingMode": "fast", "buddy": {"harness": "codex"}}
             if adapter == "decision" else None,
         }
         return worker, claim
@@ -601,9 +601,9 @@ class TestCrashWindows(BoardTestCase):
         for adapter in ("codex", "zcode", "claude", "dsh", "decision"):
             with self.subTest(adapter=adapter):
                 worker, claim = self._isolated_worker_claim(adapter)
-                private_adapter = "codex" if adapter == "decision" else adapter
+                private_harness = "codex" if adapter == "decision" else adapter
                 private_root = ensure_private_dir(attempt_root(
-                    self.directory, private_adapter, claim["task"]["taskId"], claim["attempt"]["attemptId"]
+                    self.directory, private_harness, claim["task"]["taskId"], claim["attempt"]["attemptId"]
                 ))
                 credential = private_root / "agent-credential.json"
                 credential.write_text('{"token":"private-test-sentinel"}')
@@ -830,7 +830,7 @@ class TestCrashWindows(BoardTestCase):
             nonlocal prepared
             prepared += 1
             if prepared == 2:
-                raise BoardError("ADAPTER_UNAVAILABLE", "injected retry validation failure")
+                raise BoardError("HARNESS_UNAVAILABLE", "injected retry validation failure")
 
         def start(_context):
             nonlocal started

@@ -49,8 +49,8 @@ class EvaluationStore:
                 self._buddy_view(row, pending=pending)
                 for row in connection.execute(
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p "
-                    "LEFT JOIN harness_health h ON h.adapter=p.adapter "
-                    "LEFT JOIN catalog_current c ON c.adapter=p.adapter "
+                    "LEFT JOIN harness_health h ON h.harness=p.harness "
+                    "LEFT JOIN catalog_current c ON c.harness=p.harness "
                     f"WHERE (p.available=1 AND h.status='ready') OR p.buddy_id IN ({configured_marks}) ORDER BY p.rowid LIMIT 202",
                     configured_ids
                 )
@@ -58,7 +58,7 @@ class EvaluationStore:
             from ...protocol.billing import for_provider
             from ..routing.quota_routing import buddy_retry
             for buddy in buddies:
-                buddy["billing"] = for_provider(connection, buddy["adapter"], buddy["provider"])
+                buddy["billing"] = for_provider(connection, buddy["harness"], buddy["provider"])
                 from .native_observations import exhausted
                 buddy['quotaExhausted'] = exhausted(connection, buddy, now=now) is not None
                 if buddy['quotaExhausted']:
@@ -75,13 +75,13 @@ class EvaluationStore:
                 )
             ]
             unavailable_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM buddies p LEFT JOIN harness_health h ON h.adapter=p.adapter WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
+                "SELECT COUNT(*) AS count FROM buddies p LEFT JOIN harness_health h ON h.harness=p.harness WHERE p.available=0 OR h.status IS NULL OR h.status!='ready'"
             ).fetchone()["count"]
             # One row per model service represented in this response, with the
             # effective limit (explicit setting or default) and the unresolved
             # attempt count. Effort variants collapse into their shared model service.
             model_services = {
-                (buddy["adapter"], buddy["provider"], buddy["model"])
+                (buddy["harness"], buddy["provider"], buddy["model"])
                 for buddy in buddies
             }
             model_service_concurrency = self.board.model_capacity_rows(connection, model_services)
@@ -135,7 +135,7 @@ class EvaluationStore:
     @staticmethod
     def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None) -> dict:
         from ...buddy.harnesses.registry import adapters
-        native = adapters().get(row["adapter"])
+        native = adapters().get(row["harness"])
         capabilities = json.loads(row["capabilities_json"])
         if not (native and native.local_read_only_check()["eligible"]):
             capabilities = [item for item in capabilities if item != "decision"]
@@ -147,7 +147,7 @@ class EvaluationStore:
         view = {
             "buddyId": row["buddy_id"],
             "label": row["label"],
-            "adapter": row["adapter"],
+            "harness": row["harness"],
             "provider": row["provider"],
             "model": row["model"],
             "effort": row["effort"],
@@ -167,7 +167,7 @@ class EvaluationStore:
             # ADR-027 rule 6: the model-level catalog judgment, separate from the
             # harness-level reading state above. Pending is per model identity.
             from ..catalog.catalog import CONFIRMED_ABSENCE_REASON
-            model_service = (row["adapter"], row["provider"], row["model"])
+            model_service = (row["harness"], row["provider"], row["model"])
             since = (pending or {}).get(model_service)
             if since:
                 view["catalogStatus"] = "pending"

@@ -189,7 +189,7 @@ class FailoverTests(RouterDispatchTestCase):
     def test_cached_router_health_loss_does_not_veto_valid_other_candidate(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
+            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
         result = self.report(first, self.answer(first, buddy_id=B))
         self.assertEqual(result["decision"]["status"], "completed")
         self.assertEqual(self.outcomes()[0][0], "router.answered")
@@ -449,7 +449,7 @@ class FailoverTests(RouterDispatchTestCase):
                    "fingerprint_version,adapter,cwd,timeout_seconds,state,revision,created_at,updated_at)"
                    " VALUES(?,?,'host','{}','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                   "adapter,model_adapter,model_provider,model_model,started_at,created_at,updated_at)"
+                   "adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
                    " VALUES(?,?,1,'verifier',?,'executing','dsh','dsh',?,?,?,?,?)",
                    (attempt_id, task_id, f"busy-claim-{number}", provider, model, T0, T0, T0))
         if buddy_id:

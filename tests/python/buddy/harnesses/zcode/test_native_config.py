@@ -126,12 +126,12 @@ class NativeConfigTests(NativeConfigCase):
              mock.patch.object(native_run, "owned_popen") as spawn:
             with self.assertRaises(BoardError) as caught:
                 native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
-            self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+            self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
             result = native_run.run(self.fast_request("no input will be sent"),
                 observer=worker_observer, services=None, cancelled=lambda: False)
         version.assert_not_called()
         spawn.assert_not_called()
-        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertEqual(result.end.reason_code, "harness-unavailable")
         self.assertIsNone(result.model_started)
 
     def test_unreadable_builtin_billing_content_does_not_refuse_preparation(self):

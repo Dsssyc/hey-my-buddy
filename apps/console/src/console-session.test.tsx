@@ -18,11 +18,11 @@ const saveRefusal = /登录已失效/;
 /** Two model services and three execution buddies, all available. */
 function catalog(): Buddy[] {
   const entries = [
-    { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off", enabled: true },
-    { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", enabled: true },
-    { adapter: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
+    { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off", enabled: true },
+    { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", enabled: true },
+    { harness: "zcode", provider: "bigmodel-api", model: "GLM-5.3", effort: "high", enabled: false },
   ];
-  return entries.map(p => ({ ...p, buddyId: [p.adapter, p.provider, p.model, p.effort].join(":"),
+  return entries.map(p => ({ ...p, buddyId: [p.harness, p.provider, p.model, p.effort].join(":"),
     label: `${p.model} · ${p.effort}`, available: true, capabilities: [], contextWindow: null,
     source: "catalog:fixture", description: "" }));
 }
@@ -35,7 +35,7 @@ function goal(runId: string, task: string, extra: Partial<Task> = {}): Task {
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     delegation: { kind: "goal", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
-      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
+      buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" } },
     ...extra };
 }
 
@@ -76,9 +76,9 @@ function fixture(options: {
     buddies,
     unavailableBuddyCount: 1,
 
-    modelServiceNotes: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
+    modelServiceNotes: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", text: "原人工意见", updatedAt: null }],
     preferences: [], decisions: [],
-    modelServiceConcurrency: [{ adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
+    modelServiceConcurrency: [{ harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1 }],
     tasks: { pendingCount: 0 },
     capabilities: { selection: true },
   };
@@ -528,7 +528,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   it("keeps browsing, task details and routing records readable for any logged-in session", async () => {
     const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
-      buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
+      buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
       buddyRevision: 2,
       routing: { status: "selected", decisionId: "decision-1", reason: "记录的路由原因" },
     })]]);

@@ -140,25 +140,25 @@ class PreparationBoardErrorTests(unittest.TestCase):
             raise self.error
 
     def test_a_harness_history_reraises_the_original_board_error_object(self):
-        error = BoardError("ADAPTER_UNAVAILABLE", "the native binary is missing")
+        error = BoardError("HARNESS_UNAVAILABLE", "the native binary is missing")
         executor = self.FailingExecutor(error)
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor):
             worker = self.worker()
             claim = self.claim()
             directory = self.state / "attempts" / claim["attempt"]["taskId"] / claim["attempt"]["attemptId"]
             directory.mkdir(mode=0o700, parents=True)
-            holder = {"harnessHistory": [{"retry": False, "harness": {"adapter": "dsh", "revision": 3}}]}
+            holder = {"harnessHistory": [{"retry": False, "harness": {"harness": "dsh", "revision": 3}}]}
             with self.assertRaises(BoardError) as caught:
                 worker._execute_selected(claim, claim["task"], claim["task"]["spec"],
                                          claim["attempt"], directory, holder)
         # The very exception object the adapter raised reaches the guarded retry:
         # same identity and code, never a bare-raise RuntimeError.
         self.assertIs(caught.exception, error)
-        self.assertEqual(caught.exception.code, "ADAPTER_UNAVAILABLE")
+        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         self.assertEqual(executor.prepared, 1)
 
     def test_without_a_harness_history_the_refusal_becomes_its_exact_receipt(self):
-        error = BoardError("ADAPTER_UNAVAILABLE", "the native binary is missing")
+        error = BoardError("HARNESS_UNAVAILABLE", "the native binary is missing")
         executor = self.FailingExecutor(error)
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=executor):
             worker = self.worker()
@@ -169,13 +169,13 @@ class PreparationBoardErrorTests(unittest.TestCase):
                                                claim["attempt"], directory, {})
         report = receipt["report"]
         self.assertEqual(report["status"], "failed")
-        self.assertEqual(report["error"], "ADAPTER_UNAVAILABLE: the native binary is missing")
+        self.assertEqual(report["error"], "HARNESS_UNAVAILABLE: the native binary is missing")
         self.assertEqual(report["terminationReason"], TERMINATION_HARNESS_ERROR)
 
     def test_the_guarded_retry_reruns_a_flaky_prepare_and_recovers(self):
         from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 
-        record = {"adapter": "dsh", "available": True, "revision": 7, "status": "ready"}
+        record = {"harness": "dsh", "available": True, "revision": 7, "status": "ready"}
 
         class StubClient:
             def __init__(self):
@@ -214,7 +214,7 @@ class PreparationBoardErrorTests(unittest.TestCase):
             def prepare(self, context):
                 self.prepares += 1
                 if self.prepares == 1:
-                    raise BoardError("ADAPTER_UNAVAILABLE", "first attempt fails")
+                    raise BoardError("HARNESS_UNAVAILABLE", "first attempt fails")
                 return None
 
             def start(self, context):

@@ -649,8 +649,8 @@ def _run_spans(connection, row) -> list[dict]:
                                attempt_id=attempt["attempt_id"]))
         state, confirmed, uncertain = _attempt_state(attempt)
         buddy = _turn_buddy(attempt["input_json"]) or (
-            {"adapter": attempt["model_adapter"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
-            if attempt["model_adapter"] else {"adapter": attempt["adapter"]}
+            {"harness": attempt["model_harness"], "provider": attempt["model_provider"], "model": attempt["model_model"]}
+            if attempt["model_harness"] else {"adapter": attempt["adapter"]}
         )
         spans.append(_span(
             "execution", f"execution:{attempt['attempt_id']}", run_id,

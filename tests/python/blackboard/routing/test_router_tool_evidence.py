@@ -140,7 +140,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
 
     def package_for(self, claim, result, events, roots=None, stream_complete=True):
         evidence = tool_evidence.ToolEventEvidence({
-            "adapter": "dsh", "taskId": result["runId"],
+            "harness": "dsh", "taskId": result["runId"],
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
         })
         for event in events:
@@ -220,7 +220,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
         package = self.package_for(claim, result, settled("read", "call-1", tool="read"))
         good = {"nativeIdentity": ROOT, "toolEvidence": package}
         self.assertIsNone(self.problem(board, result["decisionId"], good))
-        for replace in ({"adapter": "zcode"}, {"taskId": "task-foreign"}, {"attemptId": "attempt-foreign"},
+        for replace in ({"harness": "zcode"}, {"taskId": "task-foreign"}, {"attemptId": "attempt-foreign"},
                         {"generation": package["binding"]["generation"] + 1}):
             with self.subTest(replace=replace):
                 broken = {**good, "toolEvidence": {**package, "binding": {**package["binding"], **replace}}}
@@ -309,7 +309,7 @@ class RouterToolEvidenceTests(DecisionTestCase):
 def collect_empty(row, result):
     """A well-formed zero-call package bound to the row's own frozen identity."""
     return tool_evidence.ToolEventEvidence({
-        "adapter": "dsh", "taskId": result["runId"],
+        "harness": "dsh", "taskId": result["runId"],
         "attemptId": row["decision_attempt_id"] or "attempt-unbound",
         "generation": row["decision_generation"] if row["decision_generation"] is not None else 0,
     }).finish([ROOT], True)

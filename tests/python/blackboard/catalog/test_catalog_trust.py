@@ -14,10 +14,10 @@ from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
 
 
-def reading(adapter='dsh', models=('alpha',), status='complete', account_status=None, efforts=('max',)):
+def reading(harness='dsh', models=('alpha',), status='complete', account_status=None, efforts=('max',)):
     trusted = account_status if account_status is not None else ('unknown' if status == 'unknown' else 'confirmed')
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': adapter, 'status': status, 'accountStatus': trusted}],
-            'providers': [{'adapter': adapter, 'provider': 'fixture',
+    return {'source': 'fixture-native', 'discoveries': [{'harness': harness, 'status': status, 'accountStatus': trusted}],
+            'providers': [{'harness': harness, 'provider': 'fixture',
                            'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]}
 
 
@@ -36,12 +36,12 @@ class CatalogTrustTests(BoardTestCase):
             rows = db.execute("SELECT kind, payload_json FROM events WHERE kind LIKE ? ORDER BY seq", (kind_prefix + '%',)).fetchall()
         return [(row['kind'], json.loads(row['payload_json'])) for row in rows]
 
-    def state(self, adapter='dsh'):
+    def state(self, harness='dsh'):
         with self.board.store.db.read() as db:
-            row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE adapter=?', (adapter,)).fetchone()
+            row = db.execute('SELECT status, reason, discovery_id FROM catalog_current WHERE harness=?', (harness,)).fetchone()
             pending = catalog.pending_model_services(db)
-            read_at = catalog.catalog_read_at(db, adapter)
-            buddies = db.execute('SELECT buddy_id, available, unavailable_reason FROM buddies WHERE adapter=?', (adapter,)).fetchall()
+            read_at = catalog.catalog_read_at(db, harness)
+            buddies = db.execute('SELECT buddy_id, available, unavailable_reason FROM buddies WHERE harness=?', (harness,)).fetchall()
         return row, pending, read_at, buddies
 
     def test_unknown_discovery_retains_catalog_without_confirming_model_absence(self):
@@ -71,14 +71,14 @@ class CatalogTrustTests(BoardTestCase):
         self.record(reading(efforts=('high', 'max')))
         self.record(reading(models=()))
         with self.board.store.db.read() as db:
-            first = tuple(db.execute('SELECT adapter,provider,model,since,efforts_json FROM catalog_pending').fetchone())
+            first = tuple(db.execute('SELECT harness,provider,model,since,efforts_json FROM catalog_pending').fetchone())
             self.assertEqual(first[:3], ('dsh', 'fixture', 'alpha'))
             self.assertEqual(json.loads(first[4]), ['high', 'max'])
             self.assertIsNone(db.execute("SELECT key FROM meta WHERE key LIKE 'catalog-pending:%'").fetchone())
         self.clock.advance(60)
         self.record(reading(models=()))
         with self.board.store.db.read() as db:
-            self.assertEqual(tuple(db.execute('SELECT adapter,provider,model,since,efforts_json FROM catalog_pending').fetchone()), first)
+            self.assertEqual(tuple(db.execute('SELECT harness,provider,model,since,efforts_json FROM catalog_pending').fetchone()), first)
         self.record(reading(efforts=('high', 'max')))
         with self.board.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM catalog_pending').fetchone()[0], 0)
@@ -86,11 +86,11 @@ class CatalogTrustTests(BoardTestCase):
     def test_pending_identity_and_current_directory_foreign_key_are_enforced(self):
         self.record(reading())
         self.record(reading(models=()))
-        for adapter in ('dsh', 'missing'):
-            with self.subTest(adapter=adapter), self.assertRaises(sqlite3.IntegrityError):
+        for harness in ('dsh', 'missing'):
+            with self.subTest(harness=harness), self.assertRaises(sqlite3.IntegrityError):
                 with self.board.store.db.write() as db:
-                    db.execute("INSERT INTO catalog_pending(adapter,provider,model,since,efforts_json)"
-                               " VALUES(?,'fixture','alpha','other','[]')", (adapter,))
+                    db.execute("INSERT INTO catalog_pending(harness,provider,model,since,efforts_json)"
+                               " VALUES(?,'fixture','alpha','other','[]')", (harness,))
         self.assertEqual(len(self.state()[1]), 1)
 
     def test_pending_replacement_rolls_back_with_the_publisher_transaction(self):
@@ -162,7 +162,7 @@ class CatalogTrustTests(BoardTestCase):
 
     def test_c01_cold_start_never_trusts_a_reading_without_the_account_fact(self):
         result = self.record(reading(account_status='unknown'))
-        self.assertEqual(result['appliedAdapters'], ['dsh'])
+        self.assertEqual(result['appliedHarnesses'], ['dsh'])
         row, pending, read_at, buddies = self.state()
         self.assertEqual(row['status'], 'unknown')
         self.assertIsNone(row['discovery_id'])
@@ -266,14 +266,14 @@ class CatalogTrustTests(BoardTestCase):
         fast = catalog_store.begin(self.evaluation, 'fast')['observationId']
         self.record(reading(models=()), fast)
         result = self.record(reading(models=('alpha',)), slow)
-        self.assertEqual(result['staleAdapters'], ['dsh'])
+        self.assertEqual(result['staleHarnesses'], ['dsh'])
         _, pending, _, _ = self.state()
         self.assertEqual(list(pending), [('dsh', 'fixture', 'alpha')], 'The late observation changed nothing')
 
 
     def test_empty_confirmed_catalog_for_one_harness_leaves_others_alone(self):
         self.record(reading())
-        self.record(reading(adapter='zcode', models=('beta',)))
+        self.record(reading(harness='zcode', models=('beta',)))
         empty = reading(models=())
         empty['providers'] = []
         self.record(empty)

@@ -762,7 +762,7 @@ class BuddyTests(unittest.TestCase):
         result = catalog(snapshot, {"api": "api-key", "oauth": "zhipu-account"}, "native-test-version")
         self.assertEqual(len(result["providers"]), 2)
         provider = result["providers"][0]
-        self.assertEqual(provider["adapter"], "zcode")
+        self.assertEqual(provider["harness"], "zcode")
         self.assertEqual(provider["packageVersion"], "native-test-version")
         models = {entry["id"]: entry for entry in provider["models"]}
         self.assertEqual(set(models), {"vision", "fast"})

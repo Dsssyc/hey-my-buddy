@@ -34,7 +34,7 @@ export type ModelRow = {
 
 /** The rows of one harness, which fold into a single row. */
 export type HarnessBlock = {
-  adapter: string;
+  harness: string;
   name: string;
   /** Set only when the harness makes its buddies unavailable: its recorded state, or `unavailable`. */
   state: string | null;
@@ -78,7 +78,7 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
   folded: Record<string, boolean>; fresh: ReadonlySet<string>;
 }): HarnessBlock[] {
   const blocks = harnessGroups(listed, data.buddies).map((group): HarnessBlock => {
-    const health = harnesses.find(row => row.adapter === group.adapter);
+    const health = harnesses.find(row => row.harness === group.harness);
     const models = group.modelServices.map((modelService): ModelRow => {
       const pending = modelServicePending(modelService.buddies);
       const limit = concurrencyEntryFor(data.modelServiceConcurrency, modelService.buddies[0])?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT;
@@ -111,11 +111,11 @@ export function harnessBlocks({ listed, data, recorded, harnesses, folded, fresh
     const enabled = buddies.filter(chip => chip.buddy.enabled).length;
     const state = !group.unavailable ? null : health && health.status !== "ready" ? health.status : "unavailable";
     return {
-      adapter: group.adapter,
+      harness: group.harness,
       name: group.name,
       state,
       reasons: group.reasons,
-      folded: folded[group.adapter] ?? (enabled === 0 || state !== null),
+      folded: folded[group.harness] ?? (enabled === 0 || state !== null),
       models,
       providers: [...new Set(models.map(model => model.modelService.provider))],
       enabled,
@@ -154,6 +154,6 @@ export function reasonTexts(reasons: string[], t: TFunction<"buddies">, harnessS
 }
 
 /** The four parts of a buddy's identity without the last: `harness / provider / model`. */
-export function modelIdentity(modelService: { adapter: string; provider: string; buddies: Buddy[] }): string {
-  return `${modelService.adapter} / ${modelService.provider} / ${modelService.buddies[0].model}`;
+export function modelIdentity(modelService: { harness: string; provider: string; buddies: Buddy[] }): string {
+  return `${modelService.harness} / ${modelService.provider} / ${modelService.buddies[0].model}`;
 }

@@ -27,7 +27,7 @@ class PermissionResumeTests(WorkflowTestCase):
         board = self.board()
         board.call("worker_register", {"workerId": "w1", "capabilities": [harness]})
         submitted = self.submit(
-            board, adapter=harness, provider="fixture", model="fixture", effort="high", access=levels[0])
+            board, harness=harness, provider="fixture", model="fixture", effort="high", access=levels[0])
         first = self.claim(board)
         self.assertEqual(first["claim"]["turn"]["resumeMode"], "initial")
         session = "original-session"

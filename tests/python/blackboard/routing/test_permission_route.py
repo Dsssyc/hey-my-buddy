@@ -43,21 +43,21 @@ class PermissionCandidateTests(BoardTestCase):
         zcode_id = 'zcode:fixture:full:high'
         with board.store.db.write() as connection:
             connection.execute(
-                'INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,'
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
                  canonical_json(permission_capabilities('codex'))),
             )
-            connection.execute("UPDATE harness_health SET status='ready' WHERE adapter='codex'")
+            connection.execute("UPDATE harness_health SET status='ready' WHERE harness='codex'")
             connection.execute(
-                'INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,'
+                'INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,'
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
                  canonical_json(permission_capabilities('zcode'))),
             )
-            connection.execute("UPDATE harness_health SET status='ready' WHERE adapter='zcode'")
+            connection.execute("UPDATE harness_health SET status='ready' WHERE harness='zcode'")
         with board.store.db.read() as connection:
             write, _ = DecisionCoordinator._scan_candidates(connection, ['permission:write'], coding_only=True)
             self.assertTrue(write)

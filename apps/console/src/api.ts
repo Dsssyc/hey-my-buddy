@@ -122,7 +122,7 @@ function validRouterHealthEntry(entry: unknown): entry is NonNullable<RoutingHea
   }
   if (!(item.identity === undefined || item.identity === null
     || (!!item.identity && typeof item.identity === "object" && !Array.isArray(item.identity)
-      && ["adapter", "provider", "model", "effort"].every(key => typeof (item.identity as Record<string, unknown>)[key] === "string")))) return false;
+      && ["harness", "provider", "model", "effort"].every(key => typeof (item.identity as Record<string, unknown>)[key] === "string")))) return false;
   const lastError = item.lastError;
   if (!(lastError === undefined || lastError === null
     || (!!lastError && typeof lastError === "object"
@@ -286,7 +286,7 @@ import type { HarnessHealth, QuotaRetryWindow, QuotaRoutingRecord } from "./type
 import { parseQuota } from "./host-workflow";
 
 /** The supported harnesses, in the Buddy 配置 page's fixed display order. */
-export const HARNESS_ADAPTERS = ["dsh", "zcode", "codex", "claude"] as const;
+export const HARNESS_ORDER = ["dsh", "zcode", "codex", "claude"] as const;
 
 /** Strict parse of one retry window (ADR-019): every fact is named or the value is null. */
 function parseQuotaRetry(value: unknown): QuotaRetryWindow | null {
@@ -349,7 +349,7 @@ export function parseReadOnlyStructured(value: unknown): NonNullable<HarnessHeal
 function harnessRow(value: unknown): HarnessHealth | null {
   const row = value as HarnessHealth | null;
   if (!row || typeof row !== "object" || Array.isArray(row)) return null;
-  if (typeof row.adapter !== "string" || !row.adapter.trim()) return null;
+  if (typeof row.harness !== "string" || !row.harness.trim()) return null;
   if (!["unknown", "ready", "missing", "login-required", "unhealthy"].includes(row.status)) return null;
   if ((row.status === "ready") !== row.available) return null;
   if (typeof row.available !== "boolean" || !Number.isInteger(row.revision) || row.revision < 0) return null;
@@ -369,7 +369,7 @@ function harnessRow(value: unknown): HarnessHealth | null {
   const quota = parseQuota(rawQuota);
   const quotaRouting = parseQuotaRouting(rawRouting);
   const readOnlyStructured = parseReadOnlyStructured(rawReadOnly);
-  return { ...rest, adapter: row.adapter.trim(), manualPath: row.manualPath ?? null,
+  return { ...rest, harness: row.harness.trim(), manualPath: row.manualPath ?? null,
     ...(quota ? { quota } : {}), ...(quotaRouting ? { quotaRouting } : {}),
     ...(readOnlyStructured ? { readOnlyStructured } : {}),
     ...(typeof rawSandbox === "boolean" ? { systemSandbox: rawSandbox } : {}) };
@@ -378,13 +378,13 @@ function harnessRow(value: unknown): HarnessHealth | null {
 /** Known harnesses first in their fixed order; anything else keeps its own order. */
 function harnessRows(value: unknown): HarnessHealth[] {
   if (!Array.isArray(value)) return [];
-  const rank = (adapter: string) => {
-    const index = (HARNESS_ADAPTERS as readonly string[]).indexOf(adapter.trim().toLowerCase());
-    return index === -1 ? HARNESS_ADAPTERS.length : index;
+  const rank = (harness: string) => {
+    const index = (HARNESS_ORDER as readonly string[]).indexOf(harness.trim().toLowerCase());
+    return index === -1 ? HARNESS_ORDER.length : index;
   };
   return value.map(harnessRow)
     .filter((row): row is HarnessHealth => row !== null)
-    .sort((a, b) => rank(a.adapter) - rank(b.adapter));
+    .sort((a, b) => rank(a.harness) - rank(b.harness));
 }
 
 /** The snapshot's `harnesses` rows; a missing field reads as no recorded health. */
@@ -770,15 +770,15 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     },
     /**
      * `capabilities` with `refresh: true` (ADR-017 §15): one explicit, bounded
-     * harness re-check, optionally for a single adapter. It performs no model
+     * harness re-check, optionally for a single harness. It performs no model
      * call, and the reply is the capabilities object carrying the refreshed
      * `harnesses` rows. Nothing is cached here: the caller reloads the snapshot
      * so the page shows the recorded health rather than a local guess.
      */
-    async harnessRefresh(csrfToken: string, adapter?: string): Promise<HarnessHealth[]> {
+    async harnessRefresh(csrfToken: string, harness?: string): Promise<HarnessHealth[]> {
       const reply = await command<unknown>(
         "capabilities",
-        adapter ? { refresh: true, adapter } : { refresh: true },
+        harness ? { refresh: true, harness } : { refresh: true },
         csrfToken,
       );
       const rows = commandHarnesses(reply);
@@ -792,17 +792,17 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
      * to restore automatic detection.
      */
     async harnessSet(
-      adapter: string,
+      harness: string,
       path: string | null,
       csrfToken: string,
     ): Promise<HarnessHealth> {
       const reply = await command<unknown>(
         "harness_set",
-        { adapter, path },
+        { harness, path },
         csrfToken,
       );
       const row = harnessRow((reply as { harness?: unknown } | null)?.harness);
-      if (!row || row.adapter.toLowerCase() !== adapter.trim().toLowerCase()) {
+      if (!row || row.harness.toLowerCase() !== harness.trim().toLowerCase()) {
         throw new ApiError("INVALID_RESPONSE", "路径保存结果未知；请检查服务版本。");
       }
       return row;

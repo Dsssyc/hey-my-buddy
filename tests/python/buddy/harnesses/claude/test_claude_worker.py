@@ -15,7 +15,7 @@ from support import wait_for
 from blackboard.tasks.test_workflow_worker import GovernedWorkerTestCase
 
 
-BUDDY = {"adapter": "claude", "provider": "anthropic",
+BUDDY = {"harness": "claude", "provider": "anthropic",
                  "model": "claude-opus-5-5[1m]", "effort": "high"}
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -31,7 +31,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
-            "adapter": "claude", "provider": "anthropic", "displayName": "Anthropic",
+            "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
             "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
@@ -69,7 +69,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
         return view, receipt
 
     def test_governed_worker_seals_only_a_proven_claude_result(self):
-        self.assertIn("claude", schemas.CODING_ADAPTERS)
+        self.assertIn("claude", schemas.CODING_HARNESSES)
         implementation = adapter("claude")
         self.assertFalse(implementation.native_resume)
         self.assertNotIn("inquiry", implementation.capabilities)
@@ -80,7 +80,7 @@ class ClaudeWorkerTests(GovernedWorkerTestCase):
             native = receipt["result"]["nativeSession"]
             self.assertFalse(native["resumable"])
             self.assertEqual(native["storageScope"], "none")
-            self.assertEqual(receipt["result"]["turn"]["provenance"]["adapter"], "claude")
+            self.assertEqual(receipt["result"]["turn"]["provenance"]["harness"], "claude")
             self.assertEqual((self.repo / "tracked.txt").read_text(), "base\n")
 
     def test_quota_failure_is_persisted_as_harness_error_without_retry(self):

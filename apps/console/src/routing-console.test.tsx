@@ -10,7 +10,7 @@ import type { RoutingHistory, Workflow } from "./workflow-types";
 
 const worker: Buddy = {
   buddyId: "dsh:deepseek-official:deepseek-flash:max",
-  label: "历史工作模型 · max", adapter: "dsh", provider: "deepseek-official",
+  label: "历史工作模型 · max", harness: "dsh", provider: "deepseek-official",
   model: "deepseek-flash", effort: "max", available: true, enabled: true,
   capabilities: ["execution:dsh"], contextWindow: 1000000, source: "fixture", description: "",
 };
@@ -36,7 +36,7 @@ function decision(id: string, overrides: Partial<Decision> = {}) {
     reason: `${id} 的持久选择依据`, evidence: [{ kind: "card" as const, ref: "evidence-at-selection" }],
     createdAt: "2026-09-24T08:00:00Z", runId: `calculation-${id}`,
     decisionModel: { requested: { provider: selector.provider, model: selector.model, reasoningEffort: "off" }, resolved: null, observed: null },
-    requested: { constraints: { adapter: "dsh" } },
+    requested: { constraints: { harness: "dsh" } },
     input: {
       operation: "select", buddy: selector, buddies: [{ ...worker }],
  preferences: [{ buddyId: worker.buddyId, mode: "prefer", reason: "当时偏好有边界的测试工作" }],
@@ -90,11 +90,11 @@ describe("sole candidate routing basis", () => {
   ] };
   it("shows frozen bounds, exclusions and program policy without inventing a Router call", async () => {
     const audit = { ...decision("sole"), input: null, runId: null,
-      constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"],
+      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"],
       routerCalled: false, routingBasis, reason: "唯一合法候选，未调用 Router",
       routingMode: "fast",
       output: { programSelection: { preferences: [{ buddyId: worker.buddyId, mode: "pin", reason: "当时固定此配置" }] } },
-      policyCheck: { hardConstraints: { adapter: "dsh" }, userPreference: "none" },
+      policyCheck: { hardConstraints: { harness: "dsh" }, userPreference: "none" },
     };
     const command = vi.fn(async () => ({ decision: audit }));
     render(<DecisionDetails decisionId="sole" api={apiFor(snapshot(), command)} csrfToken="csrf" />);
@@ -111,7 +111,7 @@ describe("sole candidate routing basis", () => {
   it("keeps constraints and exclusions beside the current buddy", async () => {
     const value = workflow();
     value.routing = { status: "completed", source: "single-candidate", decisionId: null,
-      constraints: { adapter: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis,
+      constraints: { harness: "dsh" }, requiredCapabilities: ["execution:dsh"], routingBasis,
       reason: "唯一合法候选，未调用 Router", routingMode: "fast" };
     const command = vi.fn(async () => ({ ...value, routingHistory: { entries: [], total: 0, nextCursor: null } }));
     render(<RoutingDetails value={value} api={apiFor(snapshot(), command)} csrfToken="csrf" active />);

@@ -36,7 +36,7 @@ class CatalogTests(unittest.TestCase):
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
-        self.assertEqual(result["discoveries"], [{"adapter": "missing", "status": "unknown", "accountStatus": "unknown",
+        self.assertEqual(result["discoveries"], [{"harness": "missing", "status": "unknown", "accountStatus": "unknown",
                                                   "reason": "fixture executable missing"}])
 
     def test_discovery_preserves_each_harness_status_and_reason(self):
@@ -48,18 +48,18 @@ class CatalogTests(unittest.TestCase):
         }
         instances = {}
         for name, fact in observations.items():
-            payload = {"source": name + "-fixture", "providers": [{"adapter": name, "provider": "fixture",
+            payload = {"source": name + "-fixture", "providers": [{"harness": name, "provider": "fixture",
                        "models": [{"id": "alpha", "efforts": ["high"]}]}],
-                       "discoveries": [{"adapter": name, **fact}], "warnings": [name + " warning"],
+                       "discoveries": [{"harness": name, **fact}], "warnings": [name + " warning"],
                        "harnessVersion": "fixture-1"}
             instances[name] = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
                                               discover_models=lambda payload=payload: payload)
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value=instances), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
-        self.assertEqual(result["discoveries"], [{"adapter": name, **fact, "reason": fact.get("reason")}
+        self.assertEqual(result["discoveries"], [{"harness": name, **fact, "reason": fact.get("reason")}
                                                  for name, fact in observations.items()])
-        self.assertEqual([entry["adapter"] for entry in result["providers"]], list(observations))
+        self.assertEqual([entry["harness"] for entry in result["providers"]], list(observations))
         self.assertEqual(result["warnings"], [name + " warning" for name in observations])
         self.assertEqual(result["source"], "; ".join(name + "-fixture" for name in observations))
         self.assertEqual(result["harnessVersion"], "; ".join(name + ":fixture-1" for name in observations))
@@ -71,27 +71,27 @@ class CatalogTests(unittest.TestCase):
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"dsh": instance}), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory)
-        self.assertEqual(result["discoveries"], [{"adapter": "dsh", "status": "complete",
+        self.assertEqual(result["discoveries"], [{"harness": "dsh", "status": "complete",
                                                  "accountStatus": "unknown", "reason": None}])
 
     def test_explicit_discovery_refreshes_cached_unavailable_authentication(self):
         from hey_my_buddy.buddy.harnesses.claude import adapter as claude
-        native = {"source": "claude-fixture", "providers": [{"adapter": "claude", "provider": "anthropic",
+        native = {"source": "claude-fixture", "providers": [{"harness": "claude", "provider": "anthropic",
                   "models": [{"id": "fixture-opus", "efforts": ["high"]}]}],
-                  "discoveries": [{"adapter": "claude", "status": "complete", "accountStatus": "not-applicable"}]}
+                  "discoveries": [{"harness": "claude", "status": "complete", "accountStatus": "not-applicable"}]}
         instance = claude.ClaudeAdapter()
         claude._reset_metadata_cache()
         self.addCleanup(claude._reset_metadata_cache)
         with patch.object(claude, "cli_command", return_value=["/fixture/claude"]), \
              patch.object(claude, "_probe_native_metadata", side_effect=[
-                 BoardError("ADAPTER_UNAVAILABLE", "fixture not logged in"), {"catalog": native}]) as probe, \
+                 BoardError("HARNESS_UNAVAILABLE", "fixture not logged in"), {"catalog": native}]) as probe, \
              patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"claude": instance}), \
              patch.object(catalog, "_override", return_value=None):
             self.assertFalse(instance.available()[0])
             self.assertFalse(instance.available()[0])
             self.assertEqual(probe.call_count, 1)
             refreshed = catalog.discover(directory=self.directory)
-            self.assertEqual(refreshed["discoveries"], [{"adapter": "claude", "status": "complete",
+            self.assertEqual(refreshed["discoveries"], [{"harness": "claude", "status": "complete",
                                                          "accountStatus": "not-applicable", "reason": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
             self.assertTrue(instance.available()[0])
@@ -102,7 +102,7 @@ class CatalogTests(unittest.TestCase):
     def payload(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
         payload["providers"].append({
-            "adapter": "zcode", "provider": "deepseek-official", "displayName": "Separate harness",
+            "harness": "zcode", "provider": "deepseek-official", "displayName": "Separate harness",
             "apiKey": "private-provider-secret",
             "models": [
                 {"id": "deepseek-flash", "name": "Same model id", "efforts": ["low", "high"], "contextWindow": 1000},
@@ -118,7 +118,7 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "deepseek-flash"), ["low", "high"])
         self.assertIsNone(view.lookup("command", "deepseek-official", "deepseek-flash"))
         proposals = view.proposed_buddies()
-        zcode = [item for item in proposals if item["adapter"] == "zcode"]
+        zcode = [item for item in proposals if item["harness"] == "zcode"]
         self.assertEqual({item["effort"] for item in zcode if item["model"] == "deepseek-flash"}, {"low", "high"})
         self.assertTrue(all(item["buddyId"].startswith("zcode:") for item in zcode))
         self.assertTrue(all(not item["enabled"] for item in proposals))
@@ -137,11 +137,11 @@ class CatalogTests(unittest.TestCase):
 
     def test_buddy_permissions_follow_worker_adapter_declarations(self):
         payload = {"source": "permission-fixture", "providers": [
-            {"adapter": name, "provider": "fixture", "models": [{"id": "model", "efforts": ["off"]}]}
+            {"harness": name, "provider": "fixture", "models": [{"id": "model", "efforts": ["off"]}]}
             for name in ("claude", "codex", "dsh", "zcode")
         ]}
         buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
-        permissions = {buddy["adapter"]: {cap for cap in buddy["capabilities"]
+        permissions = {buddy["harness"]: {cap for cap in buddy["capabilities"]
                                             if cap.startswith("permission:")} for buddy in buddies}
         self.assertEqual(permissions, {
             "claude": {"permission:read", "permission:write", "permission:full"},
@@ -153,27 +153,27 @@ class CatalogTests(unittest.TestCase):
                 level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
             restricted = catalog.CatalogView.from_payload(payload).proposed_buddies()
-        claude = next(buddy for buddy in restricted if buddy["adapter"] == "claude")
+        claude = next(buddy for buddy in restricted if buddy["harness"] == "claude")
         self.assertNotIn("permission:full", claude["capabilities"])
 
-    def test_explicit_permission_gate_uses_adapter_declaration(self):
+    def test_explicit_permission_gate_uses_harness_declaration(self):
         require_permission(None, "full")
-        require_permission({"adapter": "claude"}, "read")
-        require_permission({"adapter": "codex"}, "read")
-        require_permission({"adapter": "dsh"}, "read")
-        require_permission({"adapter": "zcode"}, "read")
-        require_permission({"adapter": "codex"}, "write")
-        require_permission({"adapter": "codex"}, "full")
-        require_permission({"adapter": "claude"}, "full")
-        require_permission({"adapter": "dsh"}, "full")
-        require_permission({"adapter": "zcode"}, "full")
+        require_permission({"harness": "claude"}, "read")
+        require_permission({"harness": "codex"}, "read")
+        require_permission({"harness": "dsh"}, "read")
+        require_permission({"harness": "zcode"}, "read")
+        require_permission({"harness": "codex"}, "write")
+        require_permission({"harness": "codex"}, "full")
+        require_permission({"harness": "claude"}, "full")
+        require_permission({"harness": "dsh"}, "full")
+        require_permission({"harness": "zcode"}, "full")
         require_permission({"adapter": "external"}, "read")
         require_permission({"adapter": "command"}, "write")
         with patch.dict(_WORKER_PERMISSIONS, {"claude": {
                 level: declaration for level, declaration in _WORKER_PERMISSIONS["claude"].items()
                 if level != "full"}}):
             with self.assertRaises(BoardError) as caught:
-                require_permission({"adapter": "claude"}, "full")
+                require_permission({"harness": "claude"}, "full")
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
             self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
         with self.assertRaises(BoardError) as caught:
@@ -183,7 +183,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_native_ids_with_context_suffixes_keep_legal_distinct_buddy_ids(self):
         payload = {"source": "claude-native-fixture", "providers": [{
-            "adapter": "claude", "provider": "anthropic", "models": [
+            "harness": "claude", "provider": "anthropic", "models": [
                 {"id": "claude-opus-5-5[1m]", "efforts": ["high"]},
                 {"id": "claude-opus-5-5-1m-", "efforts": ["high"]},
                 {"id": "claude-haiku-4-5-20251001", "efforts": ["default"]},
@@ -212,9 +212,9 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(BoardError, "at most"):
             catalog.canonical_payload(payload)
 
-    def test_adapter_identity_is_required_without_dsh_default(self):
+    def test_harness_identity_is_required_without_dsh_default(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
-        del payload["providers"][0]["adapter"]
+        del payload["providers"][0]["harness"]
         with self.assertRaises(BoardError):
             catalog.canonical_payload(payload)
 
@@ -226,7 +226,7 @@ class CatalogTests(unittest.TestCase):
             file = directory / "catalog.json"
             file.write_text(json.dumps(self.payload()))
             with patch.dict(os.environ, {catalog.CATALOG_FILE_ENV: str(file)}), patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Harness()):
-                identity = dict(adapter="zcode", provider="deepseek-official", model="deepseek-flash", effort="high")
+                identity = dict(harness="zcode", provider="deepseek-official", model="deepseek-flash", effort="high")
                 self.assertEqual(catalog.validate_buddy(identity, directory=directory), identity)
                 for replacement in ({"effort": "max"}, {"provider": "missing"}, {"model": "basic", "effort": "off"}):
                     with self.subTest(replacement=replacement), self.assertRaises(BoardError):

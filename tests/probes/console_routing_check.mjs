@@ -10,12 +10,12 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const errors = [];
 const basis = { candidateCount: 1, excludedCount: 1, excludedBuddies: [{
-  buddyId: 'dsh:deepseek-official:deepseek-flash:off', adapter: 'dsh', provider: 'deepseek-official',
+  buddyId: 'dsh:deepseek-official:deepseek-flash:off', harness: 'dsh', provider: 'deepseek-official',
   model: 'deepseek-flash', effort: 'off', reason: '合成：提交时被用户排除', source: 'override',
 }] };
-const selected = { buddyId: 'dsh:deepseek-official:deepseek-flash:max', adapter: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
+const selected = { buddyId: 'dsh:deepseek-official:deepseek-flash:max', harness: 'dsh', provider: 'deepseek-official', model: 'deepseek-flash', effort: 'max' };
 const fields = { selectedBuddy: selected, routingPreferences: [],
-  policyCheck: { hardConstraints: { adapter: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' }, routingBasis: basis, constraints: { adapter: 'dsh' }, requiredCapabilities: ['execution:dsh'],
+  policyCheck: { hardConstraints: { harness: 'dsh' }, taskPreference: { ruleIndex: null, outcome: 'none' }, userPreference: 'none' }, routingBasis: basis, constraints: { harness: 'dsh' }, requiredCapabilities: ['execution:dsh'],
   fallback: null, routingMode: 'fast', requestedRoutingMode: 'fast',
   reason: '唯一合法候选，未调用 Router', source: 'single-candidate', status: 'completed',
   taskId: null, attemptId: null, generation: null };

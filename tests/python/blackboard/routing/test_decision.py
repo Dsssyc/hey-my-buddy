@@ -28,7 +28,7 @@ BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 CATALOG_BUDDY = {
     "buddyId": BUDDY_ID,
     "label": "DeepSeek-V41-Flash · off",
-    "adapter": "dsh",
+    "harness": "dsh",
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "effort": "off",
@@ -357,7 +357,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertTrue(decision["reason"].startswith("Router 不可用："))
         self.assertEqual(board.call("task_list", {"limit": 10})["runs"], [])
 
-    def test_native_fixture_absence_is_an_honest_adapter_unavailable_outcome(self):
+    def test_native_fixture_absence_is_an_honest_harness_unavailable_outcome(self):
         board = self.board()
         self.seed(board)
         self.use_helper(path=self.directory / "missing-readonly")
@@ -502,10 +502,10 @@ class DecisionFailureTests(DecisionTestCase):
         with self.assertRaises(BoardError) as raised:
             board.call("selection_request", {
                 "requestId": "pick-preferences", "task": "work on the DSH harness source files",
-                "routingPreferences": [{"match": {"adapter": "dsh"}, "reason": "Use the installed DSH harness"}],
+                "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "Use the installed DSH harness"}],
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("complete adapter/provider/model/effort quadruple", raised.exception.message)
+        self.assertIn("complete harness/provider/model/effort quadruple", raised.exception.message)
         self.assertIn("leave the choice to the Router", raised.exception.message)
 
     def test_policy_facts_carry_no_task_preference_slot(self):
@@ -840,7 +840,7 @@ class DecisionSurfaceTests(DecisionTestCase):
         self.assertEqual(compact["selectedBuddy"]["buddyId"], SECOND_BUDDY_ID)
         self.assertEqual(compact["selectedBuddy"]["model"], SECOND_BUDDY["model"])
         self.assertEqual(compact["selectedBuddy"]["effort"], SECOND_BUDDY["effort"])
-        self.assertEqual(compact["selectedBuddy"]["adapter"], "dsh")
+        self.assertEqual(compact["selectedBuddy"]["harness"], "dsh")
         self.assertEqual(compact["decisionModel"]["requested"]["model"], CATALOG_BUDDY["model"])
         # The ordered list and each dispatch's compact trial add explicit facts;
         # the summary still omits the frozen model packet and raw tool stream.

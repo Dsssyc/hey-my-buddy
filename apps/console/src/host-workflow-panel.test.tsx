@@ -35,15 +35,15 @@ function workflow(overrides: Partial<Workflow> = {}): Workflow {
       artifactId: "art-partial", integrationId: null, actor: "host-a",
       createdAt: "2026-09-29T09:00:00.000Z", ownerGeneration: 2, runRevision: 7,
     },
-    buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" },
+    buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" },
     buddyRevision: 2,
     shutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
     workspace: { path: "/repo", kind: "existing", access: "write", inputCommit: "input-commit", manifestSha256: "manifest-a" },
     currentTurn: { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", resumeMode: "initial", summary: "额度耗尽", tokenUsage: null },
     turns: [
-      { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", buddy: { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "high" }, tokenUsage: {
+      { turnId: "turn-2", turnIndex: 2, attemptId: "attempt-2", buddy: { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "high" }, tokenUsage: {
         inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" } },
-      { turnId: "turn-1", turnIndex: 1, attemptId: "attempt-1", buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" }, tokenUsage: null },
+      { turnId: "turn-1", turnIndex: 1, attemptId: "attempt-1", buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max" }, tokenUsage: null },
     ],
     activeRequest: null,
     children: [], finalArtifactId: null, finalAttemptId: null,

@@ -110,10 +110,10 @@ PROJECTS = {
     "beta": {"id": "synthetic-preview-beta", "path": "/synthetic-preview/dsh-harness",
              "label": "dsh-harness"},
 }
-CFG_FLASH = {"adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
-CFG_CODEX = {"adapter": "codex", "provider": "openai", "model": "gpt-5-codex", "effort": "high"}
-CFG_GLM = {"adapter": "zcode", "provider": "zai", "model": "glm-5", "effort": "high"}
-CFG_CLAUDE = {"adapter": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
+CFG_FLASH = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
+CFG_CODEX = {"harness": "codex", "provider": "openai", "model": "gpt-5-codex", "effort": "high"}
+CFG_GLM = {"harness": "zcode", "provider": "zai", "model": "glm-5", "effort": "high"}
+CFG_CLAUDE = {"harness": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
 CONFIGS = (CFG_FLASH, CFG_CODEX, CFG_GLM, CFG_CLAUDE)
 #: The synthetic model catalogue: every model with its reasoning-effort levels,
 #: and the levels that are enabled. The four buddies above, which the runs use,
@@ -370,12 +370,12 @@ ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed"
                                "reason": "合成预览：审阅 Router 不可用"},
                      elapsed_ms=60000, tool_calls=0, bytes_read=0)
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
-                     "合成预览：候选超出路由边界，等待 Host 选择配置。", {"adapter": "claude"})
+                     "合成预览：候选超出路由边界，等待 Host 选择配置。", {"harness": "claude"})
 ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "cancelled", None,
-                     "合成预览：Host 取消路由并显式指定执行配置。", {"adapter": "claude"})
+                     "合成预览：Host 取消路由并显式指定执行配置。", {"harness": "claude"})
 ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a2-router-abstention",
                                "abstention", None, "合成预览：证据不足，主动放弃选择并等待 Host。",
-                               {"adapter": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
+                               {"harness": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384)
 
 
 def run(run_id: str, *, project: str, title: str, title_source: str, task_text: str, created: str,
@@ -772,7 +772,7 @@ def build_runs() -> dict[str, dict]:
             "rootRunId": root,
             "project": {"id": project["id"], "path": project["path"], "label": project["label"]},
             "buddy": entry["buddy"] or (
-                {"adapter": "decision", "provider": "decision", "model": "decision", "effort": "default"}
+                {"harness": "decision", "provider": "decision", "model": "decision", "effort": "default"}
                 if entry["adapter"] == "decision" else None),
         }
         for item in entry["artifacts"]:
@@ -843,7 +843,7 @@ def attempt_view(entry: dict, item: dict) -> dict:
     return {
         "attemptId": item["attemptId"], "taskId": entry["runId"], "generation": item["generation"],
         "workerId": "synthetic-worker-1", "workerIdentity": "synthetic preview worker (fixture)",
-        "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or buddy["adapter"],
+        "workerInstance": "synthetic-instance-1", "adapter": entry["adapter"] or buddy["harness"],
         "executionState": item["state"], "ownership": "owned",
         "runtimeIdentity": None, "leaseExpiresAt": None, "leaseSeconds": 900, "logPaths": {},
         "resultAvailable": item["result"] is not None, "shutdownConfirmed": item["shutdownConfirmed"],
@@ -859,7 +859,7 @@ def attempt_view(entry: dict, item: dict) -> dict:
 def task_view(entry: dict) -> dict:
     selected = entry["attempts"][-1] if entry["attempts"] else None
     receipt = selected["result"] if selected is not None and entry["resultAvailable"] else None
-    adapter = entry["adapter"] or (entry["buddy"] or {}).get("adapter", "dsh")
+    adapter = entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh")
     spec: dict[str, Any] = {"task": entry["task"], "adapter": adapter, "cwd": entry["cwd"],
                             "workspace": True, "timeoutSeconds": entry["timeoutSeconds"]}
     if entry["group"]:
@@ -978,7 +978,7 @@ def workflow_view(entry: dict) -> dict:
         "buddyLocked": entry["buddyLocked"],
         "hostConclusion": entry["hostConclusion"],
         "goal": {"task": entry["task"], "taskTruncated": False,
-                 "adapter": entry["adapter"] or (entry["buddy"] or {}).get("adapter", "dsh"),
+                 "adapter": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-goal")},
         "buddy": entry["buddy"],
         "buddyRevision": 2 if entry["buddy"] else None,
@@ -1023,7 +1023,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
         "kind": entry["kind"],
-        "buddy": ({key: buddy.get(key) for key in ("adapter", "provider", "model", "effort")}
+        "buddy": ({key: buddy.get(key) for key in ("harness", "provider", "model", "effort")}
                           if buddy else None),
         "acceptedAt": entry["acceptedAt"], "acceptanceVerdict": entry["acceptanceVerdict"],
     }
@@ -1123,7 +1123,7 @@ def matches(entry: dict, applied: dict) -> bool:
         buddy = entry["buddy"] or {}
         haystack = " ".join((entry["runId"], entry["title"], PROJECTS[entry["project"]]["path"],
                              entry["sourceHostId"], entry["currentHostId"],
-                             buddy.get("adapter", ""), buddy.get("model", ""))).casefold()
+                             buddy.get("harness", ""), buddy.get("model", ""))).casefold()
         if applied["query"].casefold() not in haystack:
             return False
     name = applied.get("filter", "all")
@@ -1218,7 +1218,7 @@ def task_page(params: dict) -> dict:
         entries = [entry for entry in entries if entry["status"] == params["state"]]
     if params.get("adapter"):
         entries = [entry for entry in entries
-                   if (entry["adapter"] or (entry["buddy"] or {}).get("adapter")) == params["adapter"]]
+                   if (entry["adapter"] or (entry["buddy"] or {}).get("harness")) == params["adapter"]]
     if (params.get("rootsOnly") or "false").lower() in ("true", "1"):
         entries = [entry for entry in entries if entry["parentRunId"] is None]
     entries.sort(key=lambda entry: (entry["createdAt"], entry["runId"]), reverse=True)
@@ -1231,19 +1231,19 @@ def buddy_views() -> list[dict]:
     # All buddy claims here are synthetic, including decision support. They
     # provide UI choices without asserting native verification of real models.
     views = []
-    for adapter, provider, model, efforts, enabled in CATALOG:
+    for harness, provider, model, efforts, enabled in CATALOG:
         for effort in efforts:
-            available = adapter != LOGGED_OUT_HARNESS
-            pending = (adapter, provider, model) == PENDING_MODEL
-            view = {"buddyId": f"{adapter}:{provider}:{model}:{effort}",
+            available = harness != LOGGED_OUT_HARNESS
+            pending = (harness, provider, model) == PENDING_MODEL
+            view = {"buddyId": f"{harness}:{provider}:{model}:{effort}",
                     "label": f"{model} · {effort} (synthetic preview)",
-                    "adapter": adapter, "provider": provider, "model": model,
+                    "harness": harness, "provider": provider, "model": model,
                     "effort": effort, "available": available, "enabled": effort in enabled,
-                    "capabilities": [f"execution:{adapter}", "routing:fast"],
+                    "capabilities": [f"execution:{harness}", "routing:fast"],
                     "contextWindow": 200000, "description": "synthetic preview buddy",
                     "source": "synthetic-preview", "catalogState": "ready", "catalogReason": None,
                     "catalogStatus": "pending" if pending else "available",
-                    "billing": {'kind': 'subscription' if adapter in ('codex', 'claude') else 'metered',
+                    "billing": {'kind': 'subscription' if harness in ('codex', 'claude') else 'metered',
                                 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}, 'quotaExhausted': False}
             if not available:
                 view["unavailableReason"] = "HARNESS_UNHEALTHY"
@@ -1251,17 +1251,17 @@ def buddy_views() -> list[dict]:
                 view["pendingSince"] = "2026-09-26T03:00:00Z"
             views.append(view)
     # The four buddies the runs use come first, as the snapshot always listed them.
-    used = [f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}" for cfg in CONFIGS]
+    used = [f"{cfg['harness']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}" for cfg in CONFIGS]
     return sorted(views, key=lambda view: used.index(view["buddyId"]) if view["buddyId"] in used else len(used))
 
 
 def policy_views() -> dict:
     """Synthetic user policy: three buddy preferences and one model note."""
     def model_service(cfg: dict) -> dict:
-        return {key: cfg[key] for key in ("adapter", "provider", "model")}
+        return {key: cfg[key] for key in ("harness", "provider", "model")}
 
     def buddy_id(cfg: dict) -> str:
-        return f"{cfg['adapter']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
+        return f"{cfg['harness']}:{cfg['provider']}:{cfg['model']}:{cfg['effort']}"
 
     preferences = [{"buddyId": buddy_id(CFG_FLASH), "mode": "prefer", "reason": "synthetic preview choice"},
                    {"buddyId": buddy_id(CFG_CLAUDE), "mode": "exclude", "reason": "synthetic preview exclusion"},
@@ -1274,21 +1274,21 @@ def policy_views() -> dict:
 
 
 def concurrency_rows() -> list[dict]:
-    return [{"adapter": adapter, "provider": provider, "model": model,
+    return [{"harness": harness, "provider": provider, "model": model,
              "limit": 1 if model == "deepseek-v4-pro" else 2,
-             "active": 1 if (adapter, model) in (("claude", CFG_CLAUDE["model"]), ("codex", CFG_CODEX["model"])) else 0}
-            for adapter, provider, model, _efforts, _enabled in CATALOG]
+             "active": 1 if (harness, model) in (("claude", CFG_CLAUDE["model"]), ("codex", CFG_CODEX["model"])) else 0}
+            for harness, provider, model, _efforts, _enabled in CATALOG]
 
 
-def harness_account(adapter: str, status: str, *, account_type: str | None = None,
+def harness_account(harness: str, status: str, *, account_type: str | None = None,
                     reason: str | None = None, guidance: str | None = None) -> dict:
     """The native login facts displayed by the console."""
-    return {"adapter": adapter, "status": status, "accountType": account_type, "checkedAt": instant(9, 55),
+    return {"harness": harness, "status": status, "accountType": account_type, "checkedAt": instant(9, 55),
             "reasonCode": reason, "guidance": guidance}
 
 
 def harness_rows() -> list[dict]:
-    """The four ADR-018 console harness rows, in adapter order, with account and quota.
+    """The four ADR-018 console harness rows, in harness order, with account and quota.
 
     The accounts cover native login observations, a known account type,
     and a login that is missing. One provider carries the exhaustion
@@ -1299,7 +1299,7 @@ def harness_rows() -> list[dict]:
     ``usedPercent: null`` — never 0.
     """
     return [
-        {"adapter": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
+        {"harness": "dsh", "status": "ready", "available": True, "revision": 3, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
          "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
@@ -1308,7 +1308,7 @@ def harness_rows() -> list[dict]:
          "quota": {"observedAt": instant(9, 50), "source": "dsh-native",
                    "provider": "deepseek-official", "stale": False, "balanceZero": True,
                    "windows": []}},
-        {"adapter": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+        {"harness": "zcode", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/zcode/zcode", "version": "synthetic-preview-0.4",
          "account": harness_account("zcode", "ready"),
          "quotaRouting": [{"provider": "zai", "limitId": None, "code": "HARNESS_QUOTA_EXHAUSTED",
@@ -1320,14 +1320,14 @@ def harness_rows() -> list[dict]:
                    "stale": True,
                    "windows": [{"name": "5h", "usedPercent": None, "resetsAt": None},
                                {"name": "weekly", "usedPercent": 12, "resetsAt": instant(77, 0)}]}},
-        {"adapter": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
+        {"harness": "codex", "status": "ready", "available": True, "revision": 1, "manualPath": None,
          'executable': '/synthetic-preview/codex', 'version': '0.159.0',
          "account": harness_account("codex", "ready", account_type="chatgpt"),
          'billingByProvider': {'openai': {'kind': 'subscription', 'source': 'synthetic-preview', 'observedAt': OBSERVED_AT}},
          'systemSandbox': True,
          'readOnlyStructured': {'eligible': True, 'reasonCode': None, 'reason': None, 'systemSandbox': True, 'sameAttemptContinuation': True},
          "source": "synthetic-preview", "checkedAt": instant(9, 55), "quota": None},
-        {"adapter": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
+        {"harness": "claude", "status": "login-required", "available": False, "revision": 1, "manualPath": None,
          "executable": "/synthetic-preview/harnesses/claude/claude", "version": "synthetic-preview-2.1",
          "account": harness_account("claude", "logged-out", reason="ACCOUNT_LOGIN_REQUIRED",
                                     guidance="在 Harness 中登录后检测。"),
@@ -1378,7 +1378,7 @@ def router_records(buddies: list[dict]) -> list[dict]:
     def record(buddy_id: str, index: int, **facts) -> dict:
         buddy = next(item for item in buddies if item["buddyId"] == buddy_id)
         return {"buddyId": buddy_id, "index": index,
-                "identity": {key: buddy[key] for key in ("adapter", "provider", "model", "effort")},
+                "identity": {key: buddy[key] for key in ("harness", "provider", "model", "effort")},
                 "eligible": True, "code": None, "inSkipWindow": False, "skipUntil": None, "retryAt": None,
                 "retryInProgress": False, "answeredCount": 0, "noAnswerCount": 0, "consecutiveNoAnswers": 0,
                 "lastAnsweredAt": None, "lastNoAnswerAt": None, "lastError": None, **facts}
@@ -1407,7 +1407,7 @@ def console_snapshot(scenario: str, assets_ready: bool) -> dict:
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
-        "buddyError": None,
+        "configurationError": None,
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(),
@@ -1527,7 +1527,7 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
     # A check of the harnesses changes nothing here: it answers the same synthetic rows, and nothing is probed.
     checking = operation == "capabilities" and scenario != "readonly"
     if checking:
-        unknown = sorted(set(params) - {"refresh", "adapter"})
+        unknown = sorted(set(params) - {"refresh", "harness"})
         if unknown:
             raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
     if operation not in READ_OPERATIONS and not checking:
@@ -1545,9 +1545,9 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
                      if item["kind"] == "decision"]
         result = {"decisions": decisions, "nextCursor": None, "total": len(decisions)}
     elif operation == "capabilities":
-        rows = [row for row in harness_rows() if params.get("adapter") in (None, row["adapter"])]
+        rows = [row for row in harness_rows() if params.get("harness") in (None, row["harness"])]
         if not rows:
-            raise PreviewError("INVALID_ARGUMENT", "adapter names no harness of the preview")
+            raise PreviewError("INVALID_ARGUMENT", "harness names no harness of the preview")
         result = {"harnesses": rows}
     elif operation == "buddy_list":
         buddies = buddy_views()
@@ -2108,26 +2108,26 @@ def validate_fixtures() -> list[str]:
 
     # -- console snapshot harness rows -------------------------------------- #
     harnesses = console_snapshot("normal", False).get("harnesses")
-    if not isinstance(harnesses, list) or [row.get("adapter") for row in harnesses] != ["dsh", "zcode",
+    if not isinstance(harnesses, list) or [row.get("harness") for row in harnesses] != ["dsh", "zcode",
                                                                                         "codex", "claude"]:
         problems.append("harnesses must list dsh, zcode, codex and claude in that order")
         harnesses = []
     stale_unknown = False
     for row in harnesses:
         if (row.get("available") is True) != (row.get("status") == "ready"):
-            problems.append(f"harness {row.get('adapter')}: available must mirror status")
+            problems.append(f"harness {row.get('harness')}: available must mirror status")
         if row.get("manualPath", "absent") is not None:
-            problems.append(f"harness {row.get('adapter')}: manualPath must be null")
+            problems.append(f"harness {row.get('harness')}: manualPath must be null")
         if type(row.get("revision")) is not int or row["revision"] < 0:
-            problems.append(f"harness {row.get('adapter')}: revision must be a nonnegative integer")
+            problems.append(f"harness {row.get('harness')}: revision must be a nonnegative integer")
         quota = row.get("quota")
         if quota is None:
             continue
         if not isinstance(quota, dict) or not isinstance(quota.get("observedAt"), str) \
                 or not isinstance(quota.get("source"), str) or not isinstance(quota.get("windows"), list):
-            problems.append(f"harness {row.get('adapter')}: malformed quota observation")
+            problems.append(f"harness {row.get('harness')}: malformed quota observation")
             continue
-        if row["adapter"] == "dsh" and (row["billingByProvider"]["deepseek-official"]["kind"] != "metered"
+        if row["harness"] == "dsh" and (row["billingByProvider"]["deepseek-official"]["kind"] != "metered"
                                          or quota.get("balanceZero") is not True or quota["windows"]):
             problems.append("DSH must be metered with a zero balance and no quota windows")
         if quota.get("stale") is True and any(window.get("usedPercent") is None
@@ -2138,7 +2138,7 @@ def validate_fixtures() -> list[str]:
             if used is None:
                 continue
             if type(used) is not int or not 0 <= used <= 100:
-                problems.append(f"harness {row.get('adapter')}: window usage must be 0..100 or null")
+                problems.append(f"harness {row.get('harness')}: window usage must be 0..100 or null")
     if not stale_unknown:
         problems.append("one harness quota observation must be stale with an unknown window")
     if not any(row.get("quota") is None for row in harnesses):

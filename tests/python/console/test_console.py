@@ -23,7 +23,7 @@ BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 BUDDY = {
     "buddyId": BUDDY_ID,
     "label": "Flash off",
-    "adapter": "dsh",
+    "harness": "dsh",
     "provider": "deepseek-official",
     "model": "deepseek-flash",
     "effort": "off",
@@ -311,7 +311,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         csrf = browser.bootstrap()["csrfToken"]
         board.call("model_catalog_refresh", {"requestId": "cat"})
         buddy = next(p for p in board.call("console_snapshot", {})["buddies"] if p["buddyId"] == BUDDY_ID)
-        model_service = {key: buddy[key] for key in ("adapter", "provider", "model")}
+        model_service = {key: buddy[key] for key in ("harness", "provider", "model")}
         status, _h, data = browser.command("task_cancel", {"runId": run_id, "reason": "console operator"}, csrf=csrf)
         self.assertEqual(status, 404, data)
         self.assertEqual(board.call("task_get", {"runId": run_id})["task"]["status"], "queued")
@@ -559,7 +559,7 @@ class ConsoleTaskHistoryTests(ConsoleTestCase, WorkflowTestCase):
             ("query=", "query"),
             ("filter=everything", "filter"),
             ("state=not-a-state", "state"),
-            ("adapter=unknown", "adapter"),
+            ("harness=unknown", "harness"),
         ):
             with self.subTest(query=query):
                 status, _headers, body = browser.get(f"/api/tasks?{query}")
@@ -684,12 +684,12 @@ class ConsoleDaemonTests(ConsoleTestCase):
         decoy.chmod(0o700)
         # Discovery ignores HOME when resolving system account homes. Intercept
         # its entry before it can inspect any installed CLI or account metadata.
-        # The decoy still executes and records the adapter that tried discovery.
+        # The decoy still executes and records the harness that tried discovery.
         (guard / "sitecustomize.py").write_text(
             "import subprocess, sys\n"
             "from hey_my_buddy.buddy.harnesses import discovery\n"
-            "def reject(adapter, **kwargs):\n"
-            f"    subprocess.run([sys.executable, {str(decoy)!r}, adapter], check=False)\n"
+            "def reject(harness, **kwargs):\n"
+            f"    subprocess.run([sys.executable, {str(decoy)!r}, harness], check=False)\n"
             "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
             "discovery.candidate_snapshot = reject\n"
         )

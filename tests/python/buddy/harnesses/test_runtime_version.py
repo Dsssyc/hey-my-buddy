@@ -441,7 +441,7 @@ class RuntimeVersionTests(unittest.TestCase):
                             if operation == self.execute and stopped:
                                 result = operation("claude", case, module)
                                 self.assertEqual((result.end.status, result.end.reason_code),
-                                                 ("error", "adapter-unavailable"))
+                                                 ("error", "harness-unavailable"))
                                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
                                 self.assertFalse(result.model_started)
                             else:

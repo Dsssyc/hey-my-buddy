@@ -116,7 +116,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 frozen = self.decision(board, request['decisionId'])
                 if unavailable == 'health':
                     with board.store.db.write() as connection:
-                        connection.execute("UPDATE harness_health SET status='unhealthy' WHERE adapter='dsh'")
+                        connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
                     self.assert_unclaimed(board, request, 'router-unavailable', frozen)
                 else:
                     with patch('hey_my_buddy.blackboard.evaluation.native_observations.exhausted', return_value={'nativeCode': 'quota'}), \
@@ -138,8 +138,8 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
-                               (CATALOG_BUDDY['adapter'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+                               (CATALOG_BUDDY['harness'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')
         claim = self.claim_route(board, first)['claim']
@@ -153,7 +153,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertIsNone(blocked['claim'])
         self.assertEqual(blocked['reason'], 'model-capacity')
         with board.store.db.read() as connection:
-            model_service = connection.execute('SELECT model_adapter,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
+            model_service = connection.execute('SELECT model_harness,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
             self.assertEqual(tuple(model_service), ('dsh', 'deepseek-official', 'deepseek-flash', 0))
             self.assertEqual(board.store._model_active_counts(connection), {('dsh', 'deepseek-official', 'deepseek-flash'): 1})
         self.assertIsNone(self.decision(board, first['decisionId'])['selectedBuddy'])
@@ -162,7 +162,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         board = self.board(max_concurrent=3)
         self.seed(board)
         with board.store.db.write() as connection:
-            connection.execute("INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at) VALUES(?,?,?,1,'fixture','fixture')",
                                ('dsh', 'deepseek-official', 'deepseek-flash'))
         first = self.request(board, request_id='one')
         second = self.request(board, request_id='two')

@@ -34,7 +34,7 @@ from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 from hey_my_buddy.protocol.tool_evidence import (
     MAX_TOOL_EVENTS, TOOL_EVIDENCE_UNVERIFIED, TOOLS_FORBIDDEN, judge_tool_evidence)
 
-BINDING = {"adapter": "dsh", "taskId": "task", "attemptId": "attempt", "generation": 1}
+BINDING = {"harness": "dsh", "taskId": "task", "attemptId": "attempt", "generation": 1}
 
 
 def update(session_id="session-1", call_id="call-1", name="read", kind="tool_call", **extra):

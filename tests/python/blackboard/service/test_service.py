@@ -7,12 +7,12 @@ from hey_my_buddy.blackboard.catalog import catalog, catalog_store
 
 
 def native_payload(account_status, *, status="complete", reason=None, models=("alpha",)):
-    discoveries = [{"adapter": "dsh", "status": status}]
+    discoveries = [{"harness": "dsh", "status": status}]
     if account_status is not None:
         discoveries[0]["accountStatus"] = account_status
     if reason is not None:
         discoveries[0]["reason"] = reason
-    return {"source": "fixture-native", "providers": [{"adapter": "dsh", "provider": "fixture",
+    return {"source": "fixture-native", "providers": [{"harness": "dsh", "provider": "fixture",
             "models": [{"id": model, "efforts": ["max"], "available": True} for model in models]}],
             "discoveries": discoveries}
 
@@ -33,8 +33,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
 
     def catalog_state(self):
         with self.board.store.db.read() as db:
-            row = db.execute("SELECT status, reason FROM catalog_current WHERE adapter='dsh'").fetchone()
-            buddies = db.execute("SELECT buddy_id FROM buddies WHERE adapter='dsh'").fetchall()
+            row = db.execute("SELECT status, reason FROM catalog_current WHERE harness='dsh'").fetchone()
+            buddies = db.execute("SELECT buddy_id FROM buddies WHERE harness='dsh'").fetchall()
             read_at = catalog.catalog_read_at(db, "dsh")
         return row, buddies, read_at
 
@@ -46,7 +46,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
             with self.subTest(status=status, accountStatus=account_status, reason=reason):
                 with patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
                     self.refresh_catalog(account_status, status=status, reason=reason)
-                observation = {"adapter": "dsh", "status": status, "accountStatus": account_status}
+                observation = {"harness": "dsh", "status": status, "accountStatus": account_status}
                 if reason is not None:
                     observation["reason"] = reason
                 self.assertEqual(record.call_args.args[1]["discoveries"], [observation])
@@ -58,8 +58,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.refresh_catalog("confirmed", models=("alpha", "beta"))
         _, _, confirmed_at = self.catalog_state()
         with self.board.store.db.read() as db:
-            confirmed_discovery = db.execute("SELECT discovery_id FROM catalog_current WHERE adapter='dsh'").fetchone()[0]
-            confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE adapter='dsh'")]
+            confirmed_discovery = db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0]
+            confirmed_buddies = [tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")]
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
             self.refresh_catalog("confirmed", status="unknown", reason="native model shape unreadable",
@@ -69,9 +69,9 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertEqual(row["reason"], "native model shape unreadable")
             self.assertEqual(read_at, confirmed_at)
             with self.board.store.db.read() as db:
-                self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE adapter='dsh'").fetchone()[0],
+                self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE harness='dsh'").fetchone()[0],
                                  confirmed_discovery)
-                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM buddies WHERE adapter='dsh'")],
+                self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM buddies WHERE harness='dsh'")],
                                  confirmed_buddies)
                 self.assertEqual(catalog.pending_model_services(db), {})
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind LIKE 'catalog.model_%'").fetchone()[0], 0)
@@ -109,7 +109,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
 
     def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
         payload = native_payload("confirmed")
-        payload["discoveries"] = [{"adapter": "codex", "status": "unknown", "accountStatus": "confirmed",
+        payload["discoveries"] = [{"harness": "codex", "status": "unknown", "accountStatus": "confirmed",
                                    "reason": "another harness reading"}]
         stub = SimpleNamespace(discover_models=lambda: payload,
                                local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
@@ -117,7 +117,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
              patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
             self.service._refresh_harness_catalog("dsh", self.record)
         self.assertEqual(record.call_args.args[1]["discoveries"],
-                         [{"adapter": "dsh", "status": "complete", "accountStatus": "unknown"}])
+                         [{"harness": "dsh", "status": "complete", "accountStatus": "unknown"}])
         row, buddies, read_at = self.catalog_state()
         self.assertEqual(row["status"], "unknown")
         self.assertEqual(row["reason"], "ACCOUNT_STATUS_UNKNOWN")

@@ -33,7 +33,7 @@ class NativeDiscoveryFixture:
         self.addCleanup(self.service.harnesses.close)
         self.record = self.service.harnesses.get('codex')
         self.payload = {'source': 'fixture-native', 'providers': [], 'warnings': [],
-                        'discoveries': [{'adapter': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+                        'discoveries': [{'harness': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
 
 class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
@@ -47,11 +47,11 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
              patch.object(catalog, '_override', return_value=None), bound([self.record]):
             return catalog.discover(directory=self.board.directory)
 
-    def test_foreign_adapter_return_after_stop_is_rejected(self):
-        payload = {**self.payload, 'providers': [{'adapter': 'zcode', 'provider': 'fixture',
+    def test_foreign_harness_return_after_stop_is_rejected(self):
+        payload = {**self.payload, 'providers': [{'harness': 'zcode', 'provider': 'fixture',
                                                 'displayName': 'Fixture', 'models': []}],
-                   'discoveries': [{'adapter': 'zcode', 'status': 'complete', 'accountStatus': 'confirmed'}]}
-        self.assertEqual(catalog.canonical_payload(payload)['providers'][0]['adapter'], 'zcode')
+                   'discoveries': [{'harness': 'zcode', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        self.assertEqual(catalog.canonical_payload(payload)['providers'][0]['harness'], 'zcode')
         result = self.invoke(payload)
         self.assertEqual(result['discoveries'][0].get('reason'), 'CATALOG_INVALID')
 
@@ -157,7 +157,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                               'processState': {'shutdownConfirmed': False}}).encode()
         with controller_log_close_failure(log=None, receipt=receipt, exit_after_receipt=True) as state:
             result = self.controller_discovery()
-            self.assertEqual(result['discoveries'][0].get('reason'), 'ADAPTER_UNAVAILABLE')
+            self.assertEqual(result['discoveries'][0].get('reason'), 'HARNESS_UNAVAILABLE')
             self.assertEqual(result['discoveries'][0]['status'], 'unknown')
             self.assertEqual(state['process'].poll(), 0)
 
@@ -216,9 +216,9 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         self.assertEqual(receipts, [{'created': True, 'shutdown': True, 'exit_code': 7}])
         self.assertEqual(result['source'], 'codex-native-app-server')
         self.assertEqual(result['harnessVersion'], 'codex:unknown')
-        self.assertEqual(result['discoveries'], [{'adapter': 'codex', 'status': 'complete',
+        self.assertEqual(result['discoveries'], [{'harness': 'codex', 'status': 'complete',
                                                   'accountStatus': 'confirmed', 'reason': None}])
-        self.assertEqual(result['providers'][0]['adapter'], 'codex')
+        self.assertEqual(result['providers'][0]['harness'], 'codex')
         self.assertEqual(result['providers'][0]['provider'], 'openai')
         self.assertEqual([model['id'] for model in result['providers'][0]['models']], ['fixture-model'])
 

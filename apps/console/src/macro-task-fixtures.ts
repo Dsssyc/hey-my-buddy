@@ -14,10 +14,10 @@ import type {
   TimelineSpan,
 } from "./macro-task-types";
 
-export const OPUS: TimelineBuddy = { adapter: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-export const CODEX: TimelineBuddy = { adapter: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
-export const GLM: TimelineBuddy = { adapter: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
-export const SONNET: TimelineBuddy = { adapter: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
+export const OPUS: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+export const CODEX: TimelineBuddy = { harness: "codex", provider: "openai", model: "gpt-5-codex", effort: "max" };
+export const GLM: TimelineBuddy = { harness: "zcode", provider: "bigmodel-api", model: "glm-5", effort: "high" };
+export const SONNET: TimelineBuddy = { harness: "claude", provider: "anthropic", model: "claude-sonnet-5", effort: "low" };
 
 export const OBSERVED_AT = "2026-09-26T08:12:00Z";
 

@@ -20,7 +20,7 @@ def _completed_codex_turn(result: dict, row) -> dict | None:
             or turn.get('attemptId') != row['attempt_id']):
         return None
     provenance = turn.get('provenance')
-    if (not isinstance(provenance, dict) or provenance.get('adapter') != 'codex'
+    if (not isinstance(provenance, dict) or provenance.get('harness') != 'codex'
             or provenance.get('nativeThreadId') != turn.get('sessionId')
             or provenance.get('nativeTurnStarted') is not True
             or provenance.get('nativeTurnCompleted') is not True
@@ -45,10 +45,10 @@ def _inventory(store) -> list[dict]:
             native = result.get('nativeSession') if isinstance(result, dict) else None
             completed_turn = _completed_codex_turn(result, row) if isinstance(result, dict) else None
             if not isinstance(native, dict) and completed_turn is not None:
-                native = {'adapter': 'codex', 'sessionId': completed_turn.get('sessionId'),
+                native = {'harness': 'codex', 'sessionId': completed_turn.get('sessionId'),
                           'captured': True, 'storageOwner': 'harness-user-store',
                           'resumeMode': completed_turn.get('resumeMode'), 'nativeAppVisibility': 'unknown'}
-            if not isinstance(native, dict) or native.get('adapter') != 'codex':
+            if not isinstance(native, dict) or native.get('harness') != 'codex':
                 continue
             session_id = native.get('sessionId')
             if not isinstance(session_id, str) or not session_id or not native.get('captured'):
@@ -69,7 +69,7 @@ def _inventory(store) -> list[dict]:
             mode = native.get('resumeMode')
             if mode not in {'initial', 'reconstructed-new-session', 'native-session'}:
                 continue
-            rows.append({'adapter': 'codex', 'taskId': row['task_id'], 'attemptId': row['attempt_id'],
+            rows.append({'harness': 'codex', 'taskId': row['task_id'], 'attemptId': row['attempt_id'],
                          'sessionId': session_id, 'shutdownConfirmed': bool(row['shutdown_confirmed']),
                          'executionState': row['execution_state'], 'resumeMode': mode,
                          'storageOwner': native['storageOwner'],
@@ -90,13 +90,13 @@ def _inventory(store) -> list[dict]:
 
 
 def handle(store, params: dict) -> dict:
-    reject_unknown(params, {'action', 'adapter'}, 'worker.sessions')
+    reject_unknown(params, {'action', 'harness'}, 'worker.sessions')
     action = optional_string(params, 'action', max_length=16) or 'list'
-    adapter = optional_string(params, 'adapter', max_length=16) or 'codex'
+    harness = optional_string(params, 'harness', max_length=16) or 'codex'
     if action != 'list':
         raise BoardError('INVALID_ARGUMENT', 'action must be list; DSH grouped-session archiving was removed with the grouping feature (ADR-021)')
-    if adapter != 'codex':
+    if harness != 'codex':
         raise BoardError('UNSUPPORTED', 'Only Codex history is listed here; DSH sessions are execution-private and its grouped listing and archiving were removed (ADR-021)')
     rows = _inventory(store)
-    return {'adapter': adapter, 'sessions': rows, 'count': len(rows),
+    return {'harness': harness, 'sessions': rows, 'count': len(rows),
             'nativeAccess': False, 'codexAction': 'confirm native archive/delete separately'}

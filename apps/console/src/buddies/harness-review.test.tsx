@@ -20,7 +20,7 @@ const sandbox = "具有原生系统沙盒；实际策略由每次运行核对。
 const noSandbox = "无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。";
 
 function codex(extra: Partial<HarnessHealth> = {}): HarnessHealth {
-  return harness({ adapter: "codex", version: "0.159.0", status: "ready", revision: 3, readOnlyStructured: eligibility, ...extra });
+  return harness({ harness: "codex", version: "0.159.0", status: "ready", revision: 3, readOnlyStructured: eligibility, ...extra });
 }
 const review = () => fieldValue(paneBlock("位置"), "审阅");
 const word = () => within(review()).getByText(/^(可用|不可用|未知)$/);
@@ -99,8 +99,8 @@ describe("local review eligibility", () => {
     expect(word().getAttribute("aria-description")).toBe(note);
   });
 
-  it.each(["dsh", "zcode"])("states %s's remaining boundary without a system sandbox", async adapter => {
-    await openHarness(fixture({ harnesses: [codex({ adapter, readOnlyStructured: { ...eligibility, systemSandbox: false } })] }));
+  it.each(["dsh", "zcode"])("states %s's remaining boundary without a system sandbox", async harness => {
+    await openHarness(fixture({ harnesses: [codex({ harness, readOnlyStructured: { ...eligibility, systemSandbox: false } })] }));
     expect(word().getAttribute("aria-description")).toBe(`${note} ${noSandbox}`);
     expectNoVerificationControls();
   });

@@ -823,7 +823,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     second.spans = [
       {
         ...second.spans[0], spanId: "s-r1-x", kind: "execution" as const, startAt: "2026-09-26T01:12:00Z", endAt: "2026-09-26T01:13:00Z",
-        buddy: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-v4-flash", effort: "high" },
+        buddy: { harness: "dsh", provider: "deepseek-official", model: "deepseek-v4-flash", effort: "high" },
       },
       ...second.spans,
     ];
@@ -836,7 +836,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     // Beyond six buddies the execution bar itself gains the stripe; a
     // fresh mount starts a new per-macroTask assignment cache.
     const many = macroTaskTimelineFixture();
-    const configs = ["a", "b", "c", "d", "e", "f", "g"].map(model => ({ adapter: "zcode", provider: "bigmodel-api", model, effort: "high" }));
+    const configs = ["a", "b", "c", "d", "e", "f", "g"].map(model => ({ harness: "zcode", provider: "bigmodel-api", model, effort: "high" }));
     many.rows = [many.rows[0]];
     many.spans = configs.map((buddy, index) => ({
       ...many.spans[0], spanId: `s-c${index}`, kind: "execution" as const, buddy,

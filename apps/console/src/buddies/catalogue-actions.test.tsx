@@ -156,7 +156,7 @@ describe("opening a harness by its address", () => {
   });
 
   it("opens the addressed harness with its recorded quota", async () => {
-    const rows = [harness({ adapter: "dsh", status: "ready", quota: {
+    const rows = [harness({ harness: "dsh", status: "ready", quota: {
       source: "dsh-native", observedAt: CHECKED_AT, windows: [{ name: "5h", usedPercent: 93, resetsAt: null }],
     } })];
     await openHarness(fixture({ harnesses: rows }), "#buddies/catalog/harness/dsh");
@@ -181,8 +181,8 @@ describe("checking", () => {
     const reads = f.snapshotMock.mock.calls.length;
     await user.click(within(paneBlock("位置")).getByRole("button", { name: "检测" }));
     await screen.findByText("已检测 Codex：已找到");
-    // No model call and no new path: one named adapter through /api/command.
-    expect(f.calls).toEqual([{ operation: "capabilities", params: { refresh: true, adapter: "codex" } }]);
+    // No model call and no new path: one named harness through /api/command.
+    expect(f.calls).toEqual([{ operation: "capabilities", params: { refresh: true, harness: "codex" } }]);
     await waitFor(() => expect(f.snapshotMock.mock.calls.length).toBeGreaterThan(reads));
     await waitFor(() => expect(fieldValue(paneBlock("位置"), "路径").textContent).toBe("/opt/bin/codex"));
     expect(within(paneBlock("位置", "Codex")).getByText("9.9.9")).toBeTruthy();
@@ -226,7 +226,7 @@ describe("checking", () => {
     await toolbarAlert();
     await user.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("已检测 ZCode：已找到");
-    expect(f.calls.map(call => call.params)).toEqual([{ refresh: true, adapter: "zcode" }, { refresh: true, adapter: "zcode" }]);
+    expect(f.calls.map(call => call.params)).toEqual([{ refresh: true, harness: "zcode" }, { refresh: true, harness: "zcode" }]);
   });
 
   it("lets no second action start while one is under way", async () => {
@@ -292,7 +292,7 @@ describe("the path dialog", () => {
     await screen.findByText("已保存路径 /opt/tools/zcode；ZCode 已找到");
     expect(f.calls).toEqual([{
       operation: "harness_set",
-      params: { adapter: "zcode", path: "/opt/tools/zcode" },
+      params: { harness: "zcode", path: "/opt/tools/zcode" },
     }]);
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(fieldValue(paneBlock("位置"), "路径").textContent).toBe("/opt/tools/zcode"));
@@ -309,7 +309,7 @@ describe("the path dialog", () => {
     await screen.findByText("已恢复自动检测；Claude Code 未找到");
     expect(f.calls).toEqual([{
       operation: "harness_set",
-      params: { adapter: "claude", path: null },
+      params: { harness: "claude", path: null },
     }]);
     // Automatic detection still fails here; the row says so, not a stale path.
     await waitFor(() => expect(within(paneBlock("位置", "Claude Code")).getByText("未找到")).toBeTruthy());
@@ -338,8 +338,8 @@ describe("the path dialog", () => {
     await user.click(screen.getByRole("button", { name: "重试" }));
     await screen.findByText("已保存路径 /opt/tools/zcode；ZCode 已找到");
     expect(f.calls).toEqual([
-      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode" } },
-      { operation: "harness_set", params: { adapter: "zcode", path: "/opt/tools/zcode" } },
+      { operation: "harness_set", params: { harness: "zcode", path: "/opt/tools/zcode" } },
+      { operation: "harness_set", params: { harness: "zcode", path: "/opt/tools/zcode" } },
     ]);
   });
 });
@@ -402,8 +402,8 @@ describe("entering the view", () => {
 
   it("draws an account and a model's drawer only while the view is in front, and brings them back with it", async () => {
     const user = userEvent.setup();
-    const f = fixture({ harnesses: [harness({ adapter: "claude", status: "ready" })] });
-    const state = snapshot([harness({ adapter: "claude", status: "ready" })]);
+    const f = fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] });
+    const state = snapshot([harness({ harness: "claude", status: "ready" })]);
     function View({ active }: { active: boolean }) {
       const editor = useEditor(f.api, state, async () => null, true, "");
       return <TooltipProvider><CatalogView snapshot={state} editor={editor} api={f.api} refresh={async () => null} active={active}
@@ -423,19 +423,19 @@ describe("entering the view", () => {
   });
 
   it("writes that a harness was never checked as not recorded, in its location block", async () => {
-    await openHarness(fixture({ harnesses: [harness({ adapter: "claude", status: "unknown" })] }));
+    await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "unknown" })] }));
     expect(fieldValue(paneBlock("位置"), "检测").textContent).toBe("未记录");
   });
 });
 
 describe("the account block", () => {
-  const account = { adapter: "dsh", status: "ready", accountType: "chatgpt",
+  const account = { harness: "dsh", status: "ready", accountType: "chatgpt",
     checkedAt: "2026-09-29T09:00:00.000Z", reasonCode: null, guidance: null };
   const billing = { openai: { kind: "subscription", source: "native", observedAt: CHECKED_AT } };
   const withAccount = (extra: object = {}) => [
-    harness({ adapter: "dsh", status: "ready", executable: "/usr/local/bin/dsh", version: "0.4.2", checkedAt: CHECKED_AT,
+    harness({ harness: "dsh", status: "ready", executable: "/usr/local/bin/dsh", version: "0.4.2", checkedAt: CHECKED_AT,
       account: { ...account, ...extra } as never, billingByProvider: billing as never }),
-    harness({ adapter: "zcode", status: "ready", executable: "/opt/bin/zcode", version: "0.4.1", checkedAt: CHECKED_AT }),
+    harness({ harness: "zcode", status: "ready", executable: "/opt/bin/zcode", version: "0.4.1", checkedAt: CHECKED_AT }),
   ];
 
   it("writes its status, the billing of each provider and the guidance", async () => {

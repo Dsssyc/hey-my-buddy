@@ -175,12 +175,12 @@ def _catalog(initialize: dict | None, version: str) -> dict:
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
                        "inputModalities": ["text"], "available": True})
-    catalog = {"source": "claude-code-initialize", "adapter": "claude", "harnessVersion": version,
+    catalog = {"source": "claude-code-initialize", "harness": "claude", "harnessVersion": version,
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
-               "providers": [{"adapter": "claude", "provider": provider,
+               "providers": [{"harness": "claude", "provider": provider,
                               "displayName": provider, "packageName": "claude-code",
                               "packageVersion": version, "models": models}],
-               "discoveries": [{"adapter": "claude", "status": status,
+               "discoveries": [{"harness": "claude", "status": status,
                                 "accountStatus": account_status}],
                "warnings": list(dict.fromkeys(warnings))}
     return catalog
@@ -328,7 +328,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
                     owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                                  "exit_code": evidence.exit_code}]
                 if isinstance(error, OSError):
-                    raise ClaudeProtocolError("adapter-unavailable",
+                    raise ClaudeProtocolError("harness-unavailable",
                                               "The selected Claude executable could not start") from None
                 raise
             handle = ProcessHandle(process, own_group=True, log_paths={})
@@ -407,7 +407,7 @@ class _TurnCollector:
                  native_schema_delivery: bool = False, expected_permission_mode: str | None = None):
         self._publisher = publisher
         self._observer = observer
-        self.tools = ReadOnlyToolEvidence({"adapter": "claude", "taskId": request.identity.task_id,
+        self.tools = ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
                                            "attemptId": request.identity.attempt_id,
                                            "generation": request.identity.generation},
                                           native_schema_delivery=native_schema_delivery)
@@ -724,7 +724,7 @@ def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str)
     """
     evidence = collector.evidence
     native_result = evidence.result
-    facts: dict[str, Any] = {"adapter": "claude", "nativeSessionId": session_id,
+    facts: dict[str, Any] = {"harness": "claude", "nativeSessionId": session_id,
                              "resultSubtype": subtype if isinstance(subtype, str) and 0 < len(subtype) <= 64 else None,
                              # The terminal criteria already required is_error to be
                              # exactly false; that observed native fact travels with
@@ -1141,13 +1141,13 @@ def check_preparation(spec: dict, environment: dict) -> None:
     try:
         cli_command(environment)
     except ClaudeUnavailable as error:
-        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="claude") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="claude") from None
 
 
 def session_facts(native_root: Path, session_id: str | None) -> dict:
     """The invocation disables native session persistence and never resumes."""
     return {
-        "adapter": "claude", "sessionId": session_id, "captured": session_id is not None,
+        "harness": "claude", "sessionId": session_id, "captured": session_id is not None,
         "storageScope": "none", "nativeAppVisibility": "none",
         "note": "Each attempt allocates a fresh session with --no-session-persistence and never resumes it.",
     }
@@ -1156,7 +1156,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
 def validate_turn_provenance(record: dict) -> str | None:
     """The native-source validation of one imported claude turn, unchanged."""
     p = record.get("provenance")
-    expected = {"adapter": "claude", "turnEnd": "completed", "resultIsError": False,
+    expected = {"harness": "claude", "turnEnd": "completed", "resultIsError": False,
                 "resultSubtype": "success", "structuredOutputSource": "json-schema",
                 "initObserved": True, "backgroundSettled": True}
     if not isinstance(p, dict) or any(type(p.get(key)) is not type(value) or p.get(key) != value

@@ -41,7 +41,7 @@ function fixture() {
   const snapshot = {
     csrfToken: "fixture-csrf", eventCursor: 0,
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
-    buddies: [{ buddyId: "flash-max", label: "Flash 工作", enabled: true, available: true, adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
+    buddies: [{ buddyId: "flash-max", label: "Flash 工作", enabled: true, available: true, harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "max", capabilities: ["execution:dsh", "effort:max"] }],
   } as Snapshot;
   const command = vi.fn(async (op: string) => {
     if (op !== "workflow_get") throw new Error(`Unexpected mutation: ${op}`);
@@ -97,7 +97,7 @@ describe("governed workflow console (0.15.1 read-only)", () => {
           status: "ok", shutdownConfirmed: true,
           result: {
             nativeSession: {
-              adapter: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
+              harness: "zcode", sessionId: "sess-z", captured: true, storageScope: "task-private",
               storageOwner: "buddy-attempt", nativeAppVisibility: "not-listed-in-native-app",
               resumeMode: "native-session", bindingPresent: true, resumable: true,
             },

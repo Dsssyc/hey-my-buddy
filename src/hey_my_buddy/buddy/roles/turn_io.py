@@ -266,7 +266,7 @@ def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: in
         return None, "the turn record carries no session identity"
     if validate_provenance is None:
         from ..harnesses.registry import adapter
-        validate_provenance = adapter(context.spec["adapter"]).validate_turn_provenance
+        validate_provenance = adapter(context.spec["harness"]).validate_turn_provenance
     error = validate_provenance(record)
     return (None, error) if error else (record, None)
 

@@ -18,7 +18,7 @@ class FastRouterProbeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='fast-router-probe-test-')
         self.addCleanup(self.temp.cleanup)
-        self.args = SimpleNamespace(adapter='dsh', provider='deepseek-official', model='deepseek-flash',
+        self.args = SimpleNamespace(harness='dsh', provider='deepseek-official', model='deepseek-flash',
                                     effort='off', output_root=Path(self.temp.name) / 'probe', execute=False)
 
     def test_prepare_is_model_free_and_contains_no_repository_payload(self):

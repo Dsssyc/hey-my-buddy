@@ -80,7 +80,7 @@ describe("snapshot upgrade boundary and routing health", () => {
   });
   it("parses per-buddy health entries and drops only malformed health", async () => {
     const routers = [{
-      buddyId: "head", index: 0, identity: { adapter: "dsh", provider: "p", model: "m", effort: "max" },
+      buddyId: "head", index: 0, identity: { harness: "dsh", provider: "p", model: "m", effort: "max" },
       eligible: true, code: null, inSkipWindow: false, skipUntil: null, retryAt: null, retryInProgress: false,
       answeredCount: 2, noAnswerCount: 4, lastAnsweredAt: "2026-10-02T00:00:00Z", lastNoAnswerAt: "2026-10-02T01:00:00Z",
       consecutiveNoAnswers: 4, windowSize: 20, windowEntries: 6, windowAnsweredCount: 2, windowFailureCount: 4,

@@ -69,15 +69,15 @@ class RetiredVerifierServiceTests(BoardTestCase):
         board = self.board()
         with mock.patch("subprocess.Popen", side_effect=AssertionError("native process")), \
              mock.patch("subprocess.run", side_effect=AssertionError("native process")):
-            for params in ({"adapter": "codex"},
-                           {"adapter": "codex", "buddyId": "codex:openai:fixture-model:low"},
-                           {"adapter": "codex", "buddyId": "codex:openai:fixture-model:low",
+            for params in ({"harness": "codex"},
+                           {"harness": "codex", "buddyId": "codex:openai:fixture-model:low"},
+                           {"harness": "codex", "buddyId": "codex:openai:fixture-model:low",
                             "requestId": "review-1", "execute": True}):
                 with self.subTest(params=params), self.assertRaises(BoardError) as refused:
                     board.call("harness_verify", params)
                 self.assertEqual(refused.exception.code, "METHOD_NOT_FOUND")
             with self.assertRaises(BoardError) as refused:
-                board.console.command("harness_verify", {"adapter": "codex", "execute": True})
+                board.console.command("harness_verify", {"harness": "codex", "execute": True})
             self.assertEqual(refused.exception.code, "METHOD_NOT_FOUND")
             self.assertNotIn("harness_verify", CONSOLE_OPERATIONS)
             with board.store.db.read() as db:

@@ -71,7 +71,7 @@ class DecisionAdapter(Adapter):
         for native in adapters().values():
             if (getattr(native, "no_tool_structured", False) or native.local_read_only_check()["eligible"]) and native.available()[0]:
                 return True, None
-        return False, "No native adapter has an eligible structured Router entrypoint"
+        return False, "No native harness has an eligible structured Router entrypoint"
 
     def start(self, context: ExecutionContext) -> ProcessHandle:
         from ..harnesses.registry import adapter
@@ -79,7 +79,7 @@ class DecisionAdapter(Adapter):
         if not isinstance(document, dict):
             raise BoardError("INVALID_ARGUMENT", "The Router has no frozen input")
         buddy = document.get("buddy") or {}
-        native = adapter(buddy.get("adapter"))
+        native = adapter(buddy.get("harness"))
         fast = document.get("routingMode") == "fast"
         context.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if fast:

@@ -6,7 +6,7 @@ import { FILTER_DEBOUNCE_MS, MAX_QUERY_CHARS, MAX_QUERY_TERMS, boundBuddyQuery, 
 import type { Buddy, BuddyPage, Snapshot } from "./types";
 
 function buddy(buddyId: string): Buddy {
-  return { buddyId, label: buddyId, adapter: "dsh", provider: "deepseek-official", model: buddyId,
+  return { buddyId, label: buddyId, harness: "dsh", provider: "deepseek-official", model: buddyId,
     effort: "off", available: true, enabled: true, capabilities: [], contextWindow: null,
     description: "", source: "fixture" };
 }
@@ -41,18 +41,18 @@ describe("bounded retained model history", () => {
   it("does not read until opened and sends bounded search and cursor", async () => {
     const { api, command } = fakeApi(params => params.after ? page(["second"]) : page(["first"], "first"));
     const { result } = renderHook(() => useBuddyHistory(api, "csrf", "content-a",
-      { query: "  first  ", adapter: "dsh", enabled: true }));
+      { query: "  first  ", harness: "dsh", enabled: true }));
     await sleep(FILTER_DEBOUNCE_MS + 50);
     expect(command).not.toHaveBeenCalled();
     act(() => result.current.open());
     await waitFor(() => expect(result.current.page?.buddies.map(row => row.buddyId)).toEqual(["first"]));
     expect(command).toHaveBeenCalledWith("buddy_list", {
-      includeUnavailable: true, limit: 100, query: "first", adapter: "dsh",
+      includeUnavailable: true, limit: 100, query: "first", harness: "dsh",
     }, "csrf");
     act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.page?.buddies.map(row => row.buddyId)).toEqual(["first", "second"]));
     expect(command).toHaveBeenLastCalledWith("buddy_list", {
-      includeUnavailable: true, limit: 100, query: "first", adapter: "dsh", after: "first",
+      includeUnavailable: true, limit: 100, query: "first", harness: "dsh", after: "first",
     }, "csrf");
   });
 
@@ -62,7 +62,7 @@ describe("bounded retained model history", () => {
     let reads = 0;
     const { api, command } = fakeApi(() => ++reads === 1 ? oldReply : page(["fresh"]));
     const { result, rerender } = renderHook(({ sourceKey }) => useBuddyHistory(api, "csrf", sourceKey,
-      { query: "", adapter: "", enabled: true }), { initialProps: { sourceKey: "content-a" } });
+      { query: "", harness: "", enabled: true }), { initialProps: { sourceKey: "content-a" } });
     act(() => result.current.open());
     await waitFor(() => expect(command).toHaveBeenCalledTimes(1));
     rerender({ sourceKey: "content-b" });
@@ -73,13 +73,13 @@ describe("bounded retained model history", () => {
   });
 
   it("rereads a retained-only model service note when the board event cursor moves", async () => {
-    const modelService = { adapter: "dsh", provider: "deepseek-official", model: "retired" };
+    const modelService = { harness: "dsh", provider: "deepseek-official", model: "retired" };
     let note = "older note";
     const { api, command } = fakeApi(() => ({ ...page(["retired"]),
       modelServiceNotes: [{ ...modelService, text: note, updatedAt: null }] }));
     const visible = { eventCursor: 8, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], configuration: null } as unknown as Snapshot;
     const { result, rerender } = renderHook(({ snapshot }) => useBuddyHistory(api, "csrf", historySourceKey(snapshot),
-      { query: "", adapter: "", enabled: true }), { initialProps: { snapshot: visible } });
+      { query: "", harness: "", enabled: true }), { initialProps: { snapshot: visible } });
     act(() => result.current.open());
     await waitFor(() => expect(result.current.page?.modelServiceNotes?.[0].text).toBe("older note"));
     note = "newer note";
@@ -105,7 +105,7 @@ describe("bounded retained model history", () => {
   it("reads one first page for a stable content/filter generation", async () => {
     const { api, command } = fakeApi(() => page(["retired"]));
     const { result, rerender } = renderHook(({ enabled }) => useBuddyHistory(api, "csrf", "stable",
-      { query: "", adapter: "", enabled, autoOpen: true }), { initialProps: { enabled: false } });
+      { query: "", harness: "", enabled, autoOpen: true }), { initialProps: { enabled: false } });
     await sleep(FILTER_DEBOUNCE_MS + 50);
     expect(command).not.toHaveBeenCalled();
     rerender({ enabled: true });
@@ -118,7 +118,7 @@ describe("bounded retained model history", () => {
   it("does not loop on a failed restored-history read", async () => {
     const { api, command } = fakeApi(() => { throw new Error("unavailable"); });
     const { result, rerender } = renderHook(({ enabled }) => useBuddyHistory(api, "csrf", "stable",
-      { query: "", adapter: "", enabled, autoOpen: true }), { initialProps: { enabled: false } });
+      { query: "", harness: "", enabled, autoOpen: true }), { initialProps: { enabled: false } });
     rerender({ enabled: true });
     await waitFor(() => expect(result.current.error).toBe("unavailable"));
     rerender({ enabled: false }); rerender({ enabled: true });
@@ -129,7 +129,7 @@ describe("bounded retained model history", () => {
   it("restarts at the first page when the filter changes", async () => {
     const { api, command } = fakeApi(params => page([String(params.query)]));
     const { result, rerender } = renderHook(({ query }) => useBuddyHistory(api, "csrf", "stable",
-      { query, adapter: "", enabled: true }), { initialProps: { query: "first" } });
+      { query, harness: "", enabled: true }), { initialProps: { query: "first" } });
     act(() => result.current.open());
     await waitFor(() => expect(result.current.page?.buddies[0].buddyId).toBe("first"));
     rerender({ query: "second" });
@@ -146,7 +146,7 @@ describe("bounded retained model history", () => {
       return page(Array.from({ length: 100 }, (_, n) => `retained-${index * 100 + n}`), `cursor-${index + 1}`);
     });
     const { result } = renderHook(() => useBuddyHistory(api, "csrf", "stable",
-      { query: "", adapter: "", enabled: true }));
+      { query: "", harness: "", enabled: true }));
     act(() => result.current.open());
     await waitFor(() => expect(result.current.page?.buddies).toHaveLength(100));
     for (let n = 2; n <= 6; n += 1) {

@@ -9,9 +9,9 @@ import { openQuotaRetry } from "./harness-retry";
 
 /** One explicit action; kept so that a failed attempt can be retried as it was. */
 type Action =
-  | { kind: "check"; adapter?: string }
-  | { kind: "set"; adapter: string; path: string | null }
-  | { kind: "retry"; adapter: string; provider: string };
+  | { kind: "check"; harness?: string }
+  | { kind: "set"; harness: string; path: string | null }
+  | { kind: "retry"; harness: string; provider: string };
 
 /** Explicit directory operations, preserving recorded replies. */
 export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, sessionWritable }: {
@@ -28,7 +28,7 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
   const [retry, setRetry] = useState<Action | null>(null);
   const [refused, setRefused] = useState(false);
 
-  const rows = recorded.map(row => replies[row.adapter] ?? row);
+  const rows = recorded.map(row => replies[row.harness] ?? row);
   const refusal = !sessionWritable ? t("loginExpired") : !mutationsAvailable ? t("harness.refused") : "";
   /** The reload is the point of the action: the snapshot stays the recorded truth. */
   async function reloadSnapshot() {
@@ -43,18 +43,18 @@ export function useHarnessActions({ snapshot, api, refresh, mutationsAvailable, 
     setBusy(true); setError(""); setNote(""); setRetry(null); setRefused(false);
     try {
       if (action.kind === "check") {
-        const checked = await api.harnessRefresh(snapshot.csrfToken, action.adapter);
-        setReplies(previous => ({ ...previous, ...Object.fromEntries(checked.map(row => [row.adapter, row])) }));
-        setNote(action.adapter
-          ? t("harness.done.checked", { name: harnessName(action.adapter), status: statusText(checked.find(row => row.adapter === action.adapter)?.status ?? "unknown", t) })
+        const checked = await api.harnessRefresh(snapshot.csrfToken, action.harness);
+        setReplies(previous => ({ ...previous, ...Object.fromEntries(checked.map(row => [row.harness, row])) }));
+        setNote(action.harness
+          ? t("harness.done.checked", { name: harnessName(action.harness), status: statusText(checked.find(row => row.harness === action.harness)?.status ?? "unknown", t) })
           : t("harness.done.checkedAll", { ready: checked.filter(row => row.status === "ready").length, n: checked.length }));
       } else if (action.kind === "set") {
-        const updated = await api.harnessSet(action.adapter, action.path, snapshot.csrfToken);
-        setReplies(previous => ({ ...previous, [updated.adapter]: updated }));
-        const status = { name: harnessName(updated.adapter), status: statusText(updated.status, t) };
+        const updated = await api.harnessSet(action.harness, action.path, snapshot.csrfToken);
+        setReplies(previous => ({ ...previous, [updated.harness]: updated }));
+        const status = { name: harnessName(updated.harness), status: statusText(updated.status, t) };
         setNote(action.path ? t("harness.done.saved", { path: harnessPath(updated) ?? action.path, ...status }) : t("harness.done.restored", status));
       } else {
-        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.adapter, action.provider, t);
+        const outcome = await openQuotaRetry(api, snapshot.csrfToken, action.harness, action.provider, t);
         setNote(t(`harness.quota.done.${outcome}`, { provider: action.provider }));
       }
       await reloadSnapshot();

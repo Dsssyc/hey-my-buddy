@@ -17,7 +17,7 @@ from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
 CLAIM_EVENT = "router.claimed"
-_IDENTITY_FIELDS = ("adapter", "provider", "model", "effort")
+_IDENTITY_FIELDS = ("harness", "provider", "model", "effort")
 
 
 def _bounded_id(value: object, name: str) -> str:

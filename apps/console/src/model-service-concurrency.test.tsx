@@ -15,7 +15,7 @@ const RETIRED = "dsh / deepseek-official / retired-model";
 
 function catalog(): Buddy[] {
   const base = {
-    adapter: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
+    harness: "dsh", provider: "deepseek-official", capabilities: ["execution:dsh", "decision"],
     contextWindow: null, source: "catalog:fixture", description: "",
   };
   return [
@@ -29,13 +29,13 @@ function catalog(): Buddy[] {
 }
 
 const flashEntry: ModelServiceConcurrencyEntry = {
-  adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1,
+  harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 2, active: 1,
 };
 const retiredEntry: ModelServiceConcurrencyEntry = {
-  adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 3, active: 0,
+  harness: "dsh", provider: "deepseek-official", model: "retired-model", limit: 3, active: 0,
 };
 
-type LimitPatch = { adapter: string; provider: string; model: string; limit: number };
+type LimitPatch = { harness: string; provider: string; model: string; limit: number };
 
 function fixture(options: { discoveryLimit?: number } = {}) {
   const buddies = catalog();
@@ -52,7 +52,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
   };
 
   const applyLimits = (patches: LimitPatch[]) => state.modelServiceConcurrency.map((entry) => {
-    const patch = patches.find((candidate) => candidate.adapter === entry.adapter
+    const patch = patches.find((candidate) => candidate.harness === entry.harness
       && candidate.provider === entry.provider && candidate.model === entry.model);
     return patch ? { ...entry, limit: patch.limit } : entry;
   });
@@ -77,7 +77,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
       // carry another writer's concurrency limit for the flash model service.
       state = { ...state,
         ...(options.discoveryLimit !== undefined
-          ? { modelServiceConcurrency: applyLimits([{ adapter: "dsh", provider: "deepseek-official",
+          ? { modelServiceConcurrency: applyLimits([{ harness: "dsh", provider: "deepseek-official",
               model: "deepseek-flash", limit: options.discoveryLimit }]) }
           : {}) };
       return {};
@@ -154,7 +154,7 @@ describe("a model's concurrency", () => {
     await screen.findByText("设置已保存");
     expect(f.published).toHaveLength(1);
     expect(f.published[0].modelServiceConcurrency).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
+      { harness: "dsh", provider: "deepseek-official", model: "deepseek-flash", limit: 6 },
     ]);
     const wire = JSON.stringify(f.published[0]);
     expect(wire).not.toContain("active");
@@ -221,7 +221,7 @@ describe("a model's concurrency", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
     expect(f.published[0].modelServiceConcurrency).toEqual([
-      { adapter: "dsh", provider: "deepseek-official", model: "retired-model", limit: 4 },
+      { harness: "dsh", provider: "deepseek-official", model: "retired-model", limit: 4 },
     ]);
   });
 
@@ -237,7 +237,7 @@ describe("a model's concurrency", () => {
     expect(concurrencyInput()).toHaveProperty("value", "6");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("设置已保存");
-    expect(f.published[0].modelServiceConcurrency).toEqual([{ adapter: "dsh", provider: "deepseek-official",
+    expect(f.published[0].modelServiceConcurrency).toEqual([{ harness: "dsh", provider: "deepseek-official",
       model: "deepseek-flash", limit: 6 }]);
   });
 });

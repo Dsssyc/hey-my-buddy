@@ -40,7 +40,7 @@ METHODS = [
     "ping",
     "health",
     "capabilities",
-    "adapters",
+    "harnesses",
     "accounts",
     "harness-set",
     "quota-redetect",
@@ -126,7 +126,7 @@ examples:
       access read|write|full (default write; full requires accessReason), base {kind:commit|working-tree,ref?}, includeUntracked,
       writeScope and targetRef; the source cwd and the integrator are derived from
       the top-level cwd and the submitting Host.
-      Routing: a complete explicit adapter/provider/model/effort quadruple is validated
+      Routing: a complete explicit harness/provider/model/effort quadruple is validated
       and delegated directly without a Router call; a partial quadruple is rejected —
       omit every buddy field and let the Router choose, writing the task's
       needs into the task description, or supply the complete quadruple.
@@ -204,7 +204,7 @@ examples:
       Read the bounded evaluation snapshot, or explicitly discover the installed
       harness model catalog. Neither runs a model; discovery never exposes credentials.
 
-  buddy buddy-list '{"includeUnavailable":true,"limit":100,"query":"GLM","adapter":"zcode"}'
+  buddy buddy-list '{"includeUnavailable":true,"limit":100,"query":"GLM","harness":"zcode"}'
       Search retained buddy identities before pagination; query has at most
       200 characters and 8 whitespace-separated terms. Read nextCursor for more.
 
@@ -642,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
     if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
         argv[:2] = ["storage-" + argv[1]]
     if len(argv) == 4 and argv[:2] == ['harness', 'set']:
-        argv = ['harness-set', json.dumps({'adapter': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
+        argv = ['harness-set', json.dumps({'harness': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
     if argv and not argv[0].startswith("-") and argv[0] not in METHODS:
         # An unknown method is always a structured CLI error with its closest
         # candidates; it is never forwarded to a service with a guessed operation.

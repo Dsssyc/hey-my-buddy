@@ -246,7 +246,7 @@ class ParameterDocumentTests(PrivateCliTestCase):
         self.assertEqual(captured[-1], {})
         code, _, _ = self.run_cli("harness", "set", "codex", "--auto")
         self.assertEqual(code, 0)
-        self.assertEqual(captured[-1], {"adapter": "codex", "path": None})
+        self.assertEqual(captured[-1], {"harness": "codex", "path": None})
 
     def test_a_missing_file_names_the_exact_path(self):
         self.use_board_transport(self.board())
@@ -269,7 +269,7 @@ class GovernedParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
             "hostId": "host-1",
             "task": "do the thing",
             "cwd": str(self.workdir()),
-            "adapter": "dsh",
+            "harness": "dsh",
             "provider": "deepseek-official",
             "model": "deepseek-flash",
             "effort": "off",
@@ -480,7 +480,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
     def test_continue_reports_every_required_buddy_string(self):
         buddy = self.parameter("continue", "buddy")
         self.assertEqual(buddy.kind, "object")
-        for field in ("adapter", "provider", "model", "effort"):
+        for field in ("harness", "provider", "model", "effort"):
             with self.subTest(field=field):
                 parameter = self.parameter("continue", f"buddy.{field}")
                 self.assertEqual(parameter.kind, "string")

@@ -109,7 +109,7 @@ def _probe_native_metadata() -> dict:
     (``roles.run_execution.discover_models``), which owns its private
     directory, its launch and the two-layer stop confirmation around this
     module's own operation; this description adds only the TTL cache around
-    it. Bounded native metadata failures arrive on that layer's ``ADAPTER_UNAVAILABLE`` refusal and are what
+    it. Bounded native metadata failures arrive on that layer's ``HARNESS_UNAVAILABLE`` refusal and are what
     availability reports.
     """
     from ...roles.run_execution import discover_models

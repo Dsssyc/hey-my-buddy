@@ -569,17 +569,17 @@ class WorkerRunExecutor:
         format = worker_format(self.name)
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
                for key in ("provider", "model", "effort")):
-            raise BoardError("INVALID_ARGUMENT", "Coding requires a complete provider, model and effort after routing", adapter=self.name)
+            raise BoardError("INVALID_ARGUMENT", "Coding requires a complete provider, model and effort after routing", harness=self.name)
         self.module.check_preparation(context.spec, context.environment)
         if context.turn_input is None or not context.turn_id:
-            raise BoardError("INVALID_ARGUMENT", "Coding requires a governed turn input", adapter=self.name)
+            raise BoardError("INVALID_ARGUMENT", "Coding requires a governed turn input", harness=self.name)
         if context.turn_input.get("resumeMode") not in ("initial", "native-session", "reconstructed-new-session"):
-            raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", adapter=self.name)
+            raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", harness=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
-            raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", adapter=self.name)
+            raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", harness=self.name)
         state = context.environment["BUDDY_STATE_DIR"]
         if context.turn_output_file().exists():
-            raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", adapter=self.name)
+            raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", harness=self.name)
         turn_io.prepare_turn(context)
         root = ensure_private_dir(native_root(Path(state), self.name, context.task_id)
                                   if self.description.native_resume else
@@ -717,7 +717,7 @@ def discover_models(name: str) -> dict:
         try:
             module = run_seam(name)
             if module is None or not callable(getattr(module, "run_discovery", None)):
-                raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", adapter=name)
+                raise BoardError("CATALOG_UNAVAILABLE", "The harness has no registered discovery operation", harness=name)
             directory = Path(tempfile.mkdtemp(prefix="buddy-" + name + "-catalog-"))
             control = directory / _CONTROL
             private_json(control, {"operation": "discover", "harness": name,
@@ -748,7 +748,7 @@ def discover_models(name: str) -> dict:
                 message = (collection.payload or {}).get("error")
                 if not isinstance(message, str) or not message or len(message) > 512:
                     message = "Native model discovery did not settle successfully"
-                raise BoardError("ADAPTER_UNAVAILABLE", message, adapter=name)
+                raise BoardError("HARNESS_UNAVAILABLE", message, harness=name)
             return collection.payload["catalog"]
         finally:
             if stopped and directory is not None:

@@ -139,7 +139,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
         super().setUp()
         from support import FIXTURE_CATALOG
         self.catalog_fixture({**FIXTURE_CATALOG, "providers": [*FIXTURE_CATALOG["providers"], {
-            "adapter": "codex", "provider": "openai", "displayName": "Offline Codex",
+            "harness": "codex", "provider": "openai", "displayName": "Offline Codex",
             "packageName": "fixture", "packageVersion": "fixture", "efforts": ["low", "high"],
             "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
         }]})
@@ -154,7 +154,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):
-            submitted = self.call("submit", {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
+            submitted = self.call("submit", {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
                 "requestId": "cross-harness", "hostId": "host-1", "task": "Only exercise the offline quota fixture",
                 "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
             self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}), env=self.env(), timeout=110)

@@ -94,20 +94,20 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         request = board.store.decisions._create(
             "sole-bounds",
             {"kind": "select", "task": "bounded selection",
-             "constraints": {"adapter": "dsh", "effort": "off"},
+             "constraints": {"harness": "dsh", "effort": "off"},
              "requiredCapabilities": ["execution:dsh"],
              "timeoutSeconds": 60},
         )
         self.assertEqual(request["status"], "completed")
         decision = self.decision(board, request["decisionId"])
-        self.assertEqual(decision["requested"]["constraints"], {"adapter": "dsh", "effort": "off"})
+        self.assertEqual(decision["requested"]["constraints"], {"harness": "dsh", "effort": "off"})
         self.assertEqual(decision["requested"]["requiredCapabilities"], ["execution:dsh"])
         compact = board.call("selection_get", {"decisionId": request["decisionId"]})["decision"]
-        self.assertEqual(compact["constraints"], {"adapter": "dsh", "effort": "off"})
+        self.assertEqual(compact["constraints"], {"harness": "dsh", "effort": "off"})
         self.assertEqual(compact["requiredCapabilities"], ["execution:dsh"])
         self.assertNotIn("requested", compact)
         check = decision["policyCheck"]
-        self.assertEqual(check["hardConstraints"], {"adapter": "dsh", "effort": "off"})
+        self.assertEqual(check["hardConstraints"], {"harness": "dsh", "effort": "off"})
         # The program's preference check keeps the user's published prefer entries;
         # task-local routing preferences are retired and no longer contribute.
         self.assertEqual(check["userPreference"], "matched")
@@ -136,7 +136,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
             {"buddyId": SECOND_BUDDY_ID, "mode": "exclude", "reason": "excluded for this test"}])
         request = board.store.decisions._create(
             "basis-freeze",
-            {"kind": "select", "task": "bounded selection", "constraints": {"adapter": "dsh"},
+            {"kind": "select", "task": "bounded selection", "constraints": {"harness": "dsh"},
              "requiredCapabilities": [], "timeoutSeconds": 60},
         )
         self.assertEqual(request["status"], "completed")

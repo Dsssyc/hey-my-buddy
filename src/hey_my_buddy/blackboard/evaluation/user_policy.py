@@ -6,12 +6,12 @@ from ...errors import BoardError
 
 PATCH_FIELDS = frozenset({'buddySettings', 'preferenceChanges', 'modelServiceNoteChanges',
                           'configuration', 'modelServiceConcurrency'})
-MODEL_SERVICE_FIELDS = ('adapter', 'provider', 'model')
+MODEL_SERVICE_FIELDS = ('harness', 'provider', 'model')
 
 #: The per-model-service limit a user may set, and the fields one patch entry accepts.
 #: ``active`` and every other derived field are rejected: occupancy is observation,
 #: never input. There is no effort dimension — effort variants share one model service.
-MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'adapter', 'provider', 'model', 'limit'})
+MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'harness', 'provider', 'model', 'limit'})
 
 
 def _model_service_concurrency_changes(params: dict) -> list[dict]:
@@ -26,7 +26,7 @@ def _model_service_concurrency_changes(params: dict) -> list[dict]:
         schemas.reject_unknown(value, MODEL_SERVICE_CONCURRENCY_FIELDS, 'modelServiceConcurrency')
         model_service = tuple(
             schemas.required_string(value, name, max_length=256)
-            for name in ('adapter', 'provider', 'model')
+            for name in ('harness', 'provider', 'model')
         )
         if model_service in seen:
             raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency repeats a model service')
@@ -45,7 +45,7 @@ def require_console() -> None:
 
 
 def _model_service_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
-    """Validate a model-service-keyed patch: one entry per ``(adapter, provider, model)``."""
+    """Validate a model-service-keyed patch: one entry per ``(harness, provider, model)``."""
     values = params.get(field, [])
     if not isinstance(values, list) or len(values) > 200:
         raise BoardError('INVALID_ARGUMENT', f'{field} must contain at most 200 patches')
@@ -89,12 +89,12 @@ def preferences(connection, buddy_ids: list[str]) -> list[dict]:
 
 def model_service_notes(connection, buddy_ids: list[str]) -> list[dict]:
     marks = ','.join('?' for _ in buddy_ids) or 'NULL'
-    return [{'adapter': row['adapter'], 'provider': row['provider'], 'model': row['model'], 'text': row['text'],
+    return [{'harness': row['harness'], 'provider': row['provider'], 'model': row['model'], 'text': row['text'],
              'updatedAt': row['updated_at']}
             for row in connection.execute(
                 'SELECT * FROM model_service_notes f WHERE EXISTS(SELECT 1 FROM buddies p'
-                ' WHERE p.adapter=f.adapter AND p.provider=f.provider AND p.model=f.model'
-                f' AND p.buddy_id IN ({marks})) ORDER BY f.adapter, f.provider, f.model', buddy_ids)]
+                ' WHERE p.harness=f.harness AND p.provider=f.provider AND p.model=f.model'
+                f' AND p.buddy_id IN ({marks})) ORDER BY f.harness, f.provider, f.model', buddy_ids)]
 
 
 def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
@@ -132,11 +132,11 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             if row is None:
                 raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
             buddies[buddy_id] = dict(row)
-            buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['adapter'])['available']
+            buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['available']
     touched_model_services = {tuple(buddies[entry["buddyId"]][name] for name in MODEL_SERVICE_FIELDS) for entry in settings}
     initially_enabled = {
         model_service: connection.execute(
-            "SELECT 1 FROM buddies WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            "SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
             model_service,
         ).fetchone() is not None
         for model_service in touched_model_services
@@ -153,13 +153,13 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     # effort within one model must not make a transient disable trigger a fetch.
     for model_service in sorted(touched_model_services):
         if not initially_enabled[model_service] and connection.execute(
-            "SELECT 1 FROM buddies WHERE adapter=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
+            "SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
             model_service,
         ).fetchone() is not None:
             enabled_model_services.append(model_service)
     for entry in annotations:
         model_service = _model_service(entry)
-        if connection.execute('SELECT 1 FROM buddies WHERE adapter=? AND provider=? AND model=? LIMIT 1',
+        if connection.execute('SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
                               model_service).fetchone() is None:
             raise BoardError('NOT_FOUND', 'Unknown model service')
     for entry in preferences:
@@ -178,13 +178,13 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         if not isinstance(text, str) or len(text) > 4000:
             raise BoardError('INVALID_ARGUMENT', 'text must be a string of at most 4000 characters')
         if not text:
-            connection.execute('DELETE FROM model_service_notes WHERE adapter=? AND provider=? AND model=?', _model_service(entry))
+            connection.execute('DELETE FROM model_service_notes WHERE harness=? AND provider=? AND model=?', _model_service(entry))
         else:
-            connection.execute('INSERT INTO model_service_notes(adapter,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(adapter,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_model_service(entry), text, now))
+            connection.execute('INSERT INTO model_service_notes(harness,provider,model,text,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(harness,provider,model) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at', (*_model_service(entry), text, now))
     for entry in model_limits:
         if connection.execute(
-            'SELECT 1 FROM buddies WHERE adapter=? AND provider=? AND model=? LIMIT 1',
-            (entry['adapter'], entry['provider'], entry['model']),
+            'SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
+            (entry['harness'], entry['provider'], entry['model']),
         ).fetchone() is None:
             raise BoardError('NOT_FOUND', 'Unknown model service')
         # A model service setting is independent of buddy availability: it survives
@@ -192,12 +192,12 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         # returns. Only the named model services are touched; unrelated settings and
         # fields keep their stored values.
         connection.execute(
-            'INSERT INTO model_service_concurrency(adapter,provider,model,concurrency_limit,created_at,updated_at)'
+            'INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)'
             ' VALUES(?,?,?,?,?,?)'
-            ' ON CONFLICT(adapter,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
+            ' ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=excluded.concurrency_limit,'
             ' updated_at=excluded.updated_at',
             (
-                entry['adapter'],
+                entry['harness'],
                 entry['provider'],
                 entry['model'],
                 entry['limit'],
@@ -221,7 +221,7 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
                                          (buddy_id,)).fetchone()
                 if row is None:
                     raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
-                if any(not row[key] for key in ('adapter', 'provider', 'model', 'effort')):
+                if any(not row[key] for key in ('harness', 'provider', 'model', 'effort')):
                     raise BoardError('INVALID_ARGUMENT',
                                      'routerBuddyIds entries must reference published buddies with complete '
                                      'harness/provider/model/effort identities', buddyId=buddy_id)

@@ -22,12 +22,12 @@ const clock = (iso: string) => {
 };
 
 function row(entry: Partial<HarnessHealth> = {}): HarnessHealth {
-  return { adapter: "dsh", status: "ready", available: true, revision: 1, manualPath: null, ...entry };
+  return { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, ...entry };
 }
 function quota(entry: Partial<HarnessQuota> = {}): HarnessQuota {
   return { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", windows: [], ...entry };
 }
-const account: HarnessAccount = { adapter: "dsh", status: "ready",
+const account: HarnessAccount = { harness: "dsh", status: "ready",
   accountType: null, checkedAt: null, reasonCode: null, guidance: null };
 
 describe("times and words", () => {

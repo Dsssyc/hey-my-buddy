@@ -56,7 +56,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         environment.update(HOME=str(self.root), PATH=str(self.root / 'empty-path'), BUDDY_DEV_SOURCE='1',
                            BUDDY_STATE_DIR=str(self.root / 'state'), BUDDY_RUNTIME_ROOT=str(self.root / 'runtime'),
                            TMPDIR=str(self.root))
-        record = {'adapter': 'codex', 'status': 'unavailable', 'command': [],
+        record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
                   'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
         with patch.dict(os.environ, environment, clear=True), \
              patch.object(run_execution.tempfile, 'tempdir', str(self.root)), \
@@ -210,12 +210,12 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             environment.update(HOME=str(root), PATH=str(empty_path), BUDDY_DEV_SOURCE='1',
                                BUDDY_STATE_DIR=str(root / 'state'), BUDDY_RUNTIME_ROOT=str(root / 'runtime'),
                                TMPDIR=str(root))
-            record = {'adapter': 'codex', 'status': 'unavailable', 'command': [],
+            record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
                       'reasonCode': 'HARNESS_UNAVAILABLE', 'remedy': 'fixture PATH has no harness'}
             with patch.dict(os.environ, environment, clear=True), bound([record], environment=environment):
                 with self.assertRaises(BoardError) as caught:
                     run_execution.discover_models('codex')
-            self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+            self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
             self.assertEqual(caught.exception.message, record['remedy'])
             self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
             self.assertEqual(list(root.glob('buddy-codex-catalog-*')), [])

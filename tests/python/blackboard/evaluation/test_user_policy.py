@@ -4,7 +4,7 @@ from support import BoardTestCase
 from hey_my_buddy.errors import BoardError
 
 #: ``live`` and ``retired`` are each their own model service in this fixture.
-LIVE_MODEL_SERVICE = {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live'}
+LIVE_MODEL_SERVICE = {'harness': 'dsh', 'provider': 'fixture', 'model': 'live'}
 
 
 class UserPolicyTests(BoardTestCase):
@@ -15,7 +15,7 @@ class UserPolicyTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id, available in [('live', 1), ('retired', 0)]:
-                db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (buddy_id, buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
+                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,?,?,?)", (buddy_id, buddy_id, 'dsh', 'fixture', buddy_id, 'max', available, 1, '["decision"]'))
             db.execute("INSERT INTO router_buddies(position,buddy_id) VALUES(0,'retired')")
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
@@ -76,7 +76,7 @@ class UserPolicyTests(BoardTestCase):
 
     def test_model_service_concurrency_is_a_console_only_human_patch(self):
         grant = self.publication_params()
-        patch = [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3}]
+        patch = [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3}]
         # The authenticated console writer may set model service limits...
         result = self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))
         self.assertEqual(result['counts']['modelServiceConcurrency'], 1)
@@ -88,12 +88,12 @@ class UserPolicyTests(BoardTestCase):
     def test_model_service_concurrency_rejects_derived_fields_and_bad_limits(self):
         grant = self.publication_params()
         for patch in (
-            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3, 'active': 1}],
-            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 0}],
-            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 33}],
-            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'effort': 'max', 'limit': 3}],
-            [{'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3},
-             {'adapter': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 4}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3, 'active': 1}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 0}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 33}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'effort': 'max', 'limit': 3}],
+            [{'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 3},
+             {'harness': 'dsh', 'provider': 'fixture', 'model': 'live', 'limit': 4}],
         ):
             with self.assertRaises(BoardError) as caught:
                 self.user('user_policy_publish', self.payload(grant, modelServiceConcurrency=patch))

@@ -55,18 +55,18 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   const [refused, setRefused] = useState(false);
   const sourceKey = historySourceKey(snapshot);
   const history = useBuddyHistory(api, snapshot.csrfToken, sourceKey,
-    { query, adapter: "", enabled: active && showUnavailable, autoOpen: showUnavailable });
+    { query, harness: "", enabled: active && showUnavailable, autoOpen: showUnavailable });
   const data = editor.view;
   const recorded = historyView(snapshot, history.page);
   const listed = listedModels(data.buddies, { query, enabledOnly, showUnavailable });
   const listedKeys = new Set(listed.map(modelService => modelService.key));
   const blocks = harnessBlocks({ listed: modelServices(data.buddies), data, recorded, harnesses: actions.rows, folded, fresh })
     .map(block => ({ ...block, modelCount: block.models.length, models: block.models.filter(row => listedKeys.has(row.key)) }));
-  const healthBlocks = actions.rows.filter(health => !data.buddies.some(buddy => buddy.adapter === health.adapter))
-    .map(health => ({ adapter: health.adapter, name: harnessName(health.adapter), state: health.status === "ready" ? null : health.status,
-      reasons: [], folded: folded[health.adapter] ?? true, models: [], modelCount: 0, providers: Object.keys(health.billingByProvider ?? {}), enabled: 0, total: 0 }));
+  const healthBlocks = actions.rows.filter(health => !data.buddies.some(buddy => buddy.harness === health.harness))
+    .map(health => ({ harness: health.harness, name: harnessName(health.harness), state: health.status === "ready" ? null : health.status,
+      reasons: [], folded: folded[health.harness] ?? true, models: [], modelCount: 0, providers: Object.keys(health.billingByProvider ?? {}), enabled: 0, total: 0 }));
   const sections = [...blocks, ...healthBlocks].map(block => {
-    const health = actions.rows.find(row => row.adapter === block.adapter);
+    const health = actions.rows.find(row => row.harness === block.harness);
     const state = health && health.status !== "ready" ? health.status : health?.quotaRouting?.some(record => record.blocked) ? "unavailable" : block.state;
     return { ...block, state };
   }).sort((a, b) => Number(!!a.state) - Number(!!b.state));
@@ -95,7 +95,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
   useEffect(() => {
     if (!active || !location.target || handledLocation.current === buddyHash(location)) return;
     if (location.targetKind === "harness") {
-      if (!actions.rows.some(row => row.adapter === location.target)) return;
+      if (!actions.rows.some(row => row.harness === location.target)) return;
       setAccounts(previous => ({ ...previous, [location.target!]: true }));
       setFocusRequest(previous => ({ id: `account-summary-${location.target}`, n: (previous?.n ?? 0) + 1 }));
       setQuery(""); setEnabledOnlyForView(false);
@@ -108,7 +108,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       setSelected(modelServiceKey(target)); setChosen(previous => ({ ...previous, [modelServiceKey(target)]: buddyId }));
       setQuery(""); setEnabledOnlyForView(false);
       if (!target.available) setShowUnavailableForView(true);
-      setFolded(previous => ({ ...previous, [target.adapter]: false }));
+      setFolded(previous => ({ ...previous, [target.harness]: false }));
       setFocusRequest(previous => ({ id: buddyRowId(buddyId), n: (previous?.n ?? 0) + 1 }));
     }
     handledLocation.current = buddyHash(location);
@@ -124,7 +124,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     setSelected(opening ? row.key : null);
     if (opening) {
       // Opening a model pins its harness open: switching its last buddy off must not fold it away.
-      setFolded(previous => ({ ...previous, [row.modelService.adapter]: false }));
+      setFolded(previous => ({ ...previous, [row.modelService.harness]: false }));
       const first = row.chips.find(chip => chip.buddy.enabled) ?? row.chips[0];
       setChosen(previous => ({ ...previous, [row.key]: first.buddy.buddyId }));
     }
@@ -138,10 +138,10 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
-  function toggleAccount(adapter: string) {
-    const opening = !accounts[adapter];
-    setAccounts(previous => ({ ...previous, [adapter]: opening }));
-    const next: BuddyLocation = opening ? { view: "models", targetKind: "harness", target: adapter } : { view: "models" };
+  function toggleAccount(harness: string) {
+    const opening = !accounts[harness];
+    setAccounts(previous => ({ ...previous, [harness]: opening }));
+    const next: BuddyLocation = opening ? { view: "models", targetKind: "harness", target: harness } : { view: "models" };
     handledLocation.current = buddyHash(next);
     onNavigate(next);
   }
@@ -219,19 +219,19 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 p-3 sm:p-6">
           {sections.map(block => {
-            const health = actions.rows.find(row => row.adapter === block.adapter);
-            return <Collapsible asChild key={block.adapter} open={!block.folded}
-              onOpenChange={open => setFolded(previous => ({ ...previous, [block.adapter]: !open }))}>
+            const health = actions.rows.find(row => row.harness === block.harness);
+            return <Collapsible asChild key={block.harness} open={!block.folded}
+              onOpenChange={open => setFolded(previous => ({ ...previous, [block.harness]: !open }))}>
               <section aria-label={block.name} data-slot="harness-section" className="border bg-card">
-                <HarnessHeader block={block} health={health} state={block.state} accountOpen={!!accounts[block.adapter]}
-                  onToggleAccount={() => toggleAccount(block.adapter)} />
-                <Collapsible open={!!health && !!accounts[block.adapter]}>
+                <HarnessHeader block={block} health={health} state={block.state} accountOpen={!!accounts[block.harness]}
+                  onToggleAccount={() => toggleAccount(block.harness)} />
+                <Collapsible open={!!health && !!accounts[block.harness]}>
                   <CollapsibleContent>
                     {health && active && <HarnessDetails row={health} name={block.name}
                       canWrite={!actions.refusal} refusal={actions.refusal} busy={actions.busy}
-                      onCheck={() => void actions.run({ kind: "check", adapter: block.adapter })}
-                      onSavePath={path => void actions.run({ kind: "set", adapter: block.adapter, path })}
-                      onRetry={provider => void actions.run({ kind: "retry", adapter: block.adapter, provider })} />}
+                      onCheck={() => void actions.run({ kind: "check", harness: block.harness })}
+                      onSavePath={path => void actions.run({ kind: "set", harness: block.harness, path })}
+                      onRetry={provider => void actions.run({ kind: "retry", harness: block.harness, provider })} />}
                   </CollapsibleContent>
                 </Collapsible>
                 <CollapsibleContent>

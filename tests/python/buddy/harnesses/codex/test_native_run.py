@@ -512,7 +512,7 @@ class FastSeamTests(SeamCase):
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "adapter-unavailable")
+        self.assertEqual(result.end.reason_code, "harness-unavailable")
         self.assertIn("could not start", result.end.message)
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
@@ -1417,7 +1417,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         context = mock.patch.dict(os.environ, environment, clear=True)
         context.start()
         self.addCleanup(context.stop)
-        self.record = {'adapter': 'codex', 'status': 'ready', 'command': [sys.executable, str(self.command)]}
+        self.record = {'harness': 'codex', 'status': 'ready', 'command': [sys.executable, str(self.command)]}
 
     def discover(self):
         with bound([self.record], environment=self.environment):
@@ -1446,7 +1446,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
              mock.patch.object(native_run, 'owned_popen') as create:
             with self.assertRaises(BoardError) as caught:
                 self.discover()
-        self.assertEqual(caught.exception.code, 'ADAPTER_UNAVAILABLE')
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
         probe.assert_not_called()
         create.assert_not_called()
@@ -1497,7 +1497,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             with self.assertRaises(CodexProtocolError) as caught:
                 self.discover()
         connection.assert_not_called()
-        self.assertEqual(caught.exception.code, 'adapter-unavailable')
+        self.assertEqual(caught.exception.code, 'harness-unavailable')
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def windows_ownership_failure(self, *, stopped):
@@ -1522,7 +1522,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
                 with self.assertRaises(CodexProtocolError) as caught:
                     self.discover()
                 self.assertEqual(process.kills, 1)
-                self.assertEqual(caught.exception.code, 'adapter-unavailable')
+                self.assertEqual(caught.exception.code, 'harness-unavailable')
             else:
                 with mock.patch.object(process, 'kill', side_effect=OSError('fixture native kill refused')):
                     with self.assertRaises(RuntimeError) as caught:
@@ -1609,7 +1609,7 @@ class DiscoverySeamTests(SeamCase):
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
                                 timeout_seconds=10, cancelled=lambda: False)
-        self.assertEqual(catalog["adapter"], "codex")
+        self.assertEqual(catalog["harness"], "codex")
         self.assertEqual(catalog["harnessVersion"], "codex-cli fixture")
         models = catalog["providers"][0]["models"]
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
@@ -1679,7 +1679,7 @@ class CatalogTrustTests(CodexSeamCase):
                                 native_root=self.base / "discovery-native",
                                 timeout_seconds=10, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}])
+                         [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual(catalog["warnings"], [])
 
     def test_discovery_reports_models_with_an_unknown_account_fact(self):
@@ -1693,7 +1693,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                          ["fixture-model"])
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "codex", "status": "complete", "accountStatus": "unknown"}])
+                         [{"harness": "codex", "status": "complete", "accountStatus": "unknown"}])
         self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
                         catalog["warnings"])
 
@@ -1711,7 +1711,7 @@ class CatalogTrustTests(CodexSeamCase):
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["fixture-model"])
                 self.assertEqual(catalog["discoveries"],
-                                 [{"adapter": "codex", "status": "complete",
+                                 [{"harness": "codex", "status": "complete",
                                    "accountStatus": "unknown"}])
                 self.assertTrue(any("account" in warning for warning in catalog["warnings"]),
                                 catalog["warnings"])
@@ -1741,7 +1741,7 @@ class CatalogTrustTests(CodexSeamCase):
         # The absence is this run's own public fact, with the selected
         # identity kept beside it.
         self.assertEqual(self._model_check_ref(result),
-                         {"adapter": "codex", "selectedModelListed": False,
+                         {"harness": "codex", "selectedModelListed": False,
                           "selected": {"provider": "openai", "model": "fixture-model", "effort": "low"}})
         evidence = native_run.native_evidence(result)
         self.assertEqual(evidence["selectedModelListed"], False)
@@ -1821,7 +1821,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.assertTrue(any("omitted" in warning for warning in catalog["warnings"]),
                         catalog["warnings"])
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "codex", "status": "complete", "accountStatus": "confirmed"}])
+                         [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}])
 
 
 if __name__ == "__main__":

@@ -121,7 +121,7 @@ class ModelFactsTestCase(EvaluationTestCase):
 
     def row(self, board, model_service: tuple[str, str, str]) -> dict | None:
         with board.store.db.read() as db:
-            row = db.execute("SELECT * FROM model_facts WHERE adapter=? AND provider=? AND model=?", model_service).fetchone()
+            row = db.execute("SELECT * FROM model_facts WHERE harness=? AND provider=? AND model=?", model_service).fetchone()
         return dict(row) if row is not None else None
 
     def count_refresh_calls(self):

@@ -327,7 +327,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         self.register(board)
         queued_only = self.stash("queued only")
         submitted = board.call("workflow_submit", {
-            "adapter": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off",
+            "harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off",
             "requestId": "req-real-stash", "hostId": "host-1", "task": "real shared stash facts",
             "cwd": str(self.repo), "submissionToken": "t" * 32,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},

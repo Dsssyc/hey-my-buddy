@@ -28,7 +28,7 @@ class RouterListConfigurationTests(BoardTestCase):
         self.board_.service.register_console_authority(self.session)
         with self.board_.store.db.write() as db:
             for buddy_id in (A, B):
-                db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                            "available,enabled,capabilities_json)"
                            " VALUES(?,?,?,?,?,?,1,1,?)",
                            (buddy_id, buddy_id, "dsh", "fixture", buddy_id, "max",
@@ -128,7 +128,7 @@ class RouterListConfigurationTests(BoardTestCase):
             self.publish({"routerBuddyIds": [UNKNOWN]})
         self.assertEqual(caught.exception.code, "NOT_FOUND")
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?)",
                        (canonical_json(permission_capabilities("dsh")),))
@@ -138,18 +138,18 @@ class RouterListConfigurationTests(BoardTestCase):
         # Disabled, catalog-unavailable and mode-ineligible buddies may all be saved;
         # the resolver explains them per item later.
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,1,?)",
                        ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
                         canonical_json(permission_capabilities("dsh"))))
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='disabled'")
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
                         canonical_json(permission_capabilities("dsh"))))
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,1,1,?)",
                        ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
@@ -160,7 +160,7 @@ class RouterListConfigurationTests(BoardTestCase):
 
     def test_interval_and_budget_patches_do_not_require_availability(self):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO buddies(buddy_id,label,adapter,provider,model,effort,"
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",

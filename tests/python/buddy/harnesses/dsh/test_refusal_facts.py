@@ -263,7 +263,7 @@ class RefusalFactsTests(NativeRunCase):
                                            invocation_root=self.base / "discovery",
                                            native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
-                         [{"adapter": "dsh", "status": "unknown", "accountStatus": "not-applicable",
+                         [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
                            "reason": native_run.UNREAD_CATALOG_REASON}])
         self.assertEqual(catalog["providers"], [])
         self.assertTrue(any("configuration options had an unrecognized shape" in warning

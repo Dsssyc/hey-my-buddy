@@ -51,7 +51,7 @@ describe("a harness section's head", () => {
 
   it("opens the account from anywhere in the row but the chevron, and folds the models from the chevron alone", async () => {
     const user = userEvent.setup();
-    await openHarness(fixture({ harnesses: [harness({ adapter: "claude", status: "ready" })] }), "#buddies", false);
+    await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] }), "#buddies", false);
     const fold = foldHandle("Claude Code"), account = harnessButton("Claude Code");
     expect([fold.getAttribute("aria-expanded"), account.getAttribute("aria-expanded")]).toEqual(["true", "false"]);
     // The name, the provider and the quota summary are all part of the row's button.
@@ -89,7 +89,7 @@ describe("a harness section's head", () => {
 
   it("has a row to click even for a harness whose models are folded away and whose account says nothing", async () => {
     const user = userEvent.setup();
-    await openHarness(fixture({ harnesses: [harness({ adapter: "zcode", status: "missing" })] }), "#buddies", false);
+    await openHarness(fixture({ harnesses: [harness({ harness: "zcode", status: "missing" })] }), "#buddies", false);
     expect(foldHandle("ZCode").getAttribute("aria-expanded")).toBe("false");
     await user.click(harnessButton("ZCode"));
     expect(harnessButton("ZCode").getAttribute("aria-expanded")).toBe("true");
@@ -100,7 +100,7 @@ describe("a harness section's head", () => {
 describe("what opens and closes", () => {
   it("is a Collapsible each: the models of a section, its account and a model's drawer", async () => {
     const user = userEvent.setup();
-    await openHarness(fixture({ harnesses: [harness({ adapter: "claude", status: "ready" })] }), "#buddies", false);
+    await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] }), "#buddies", false);
     const contents = (scope: HTMLElement) => [...scope.querySelectorAll<HTMLElement>("[data-slot=collapsible-content]")];
     const section = harnessSection("Claude Code");
     expect(section.getAttribute("data-state")).toBe("open");
@@ -129,7 +129,7 @@ describe("what opens and closes", () => {
 
   it("opens a model's drawer from its row, keeps one open at a time and keeps the effort chosen on each", async () => {
     const user = userEvent.setup();
-    await openHarness(fixture({ harnesses: [harness({ adapter: "claude", status: "ready" })] }), "#buddies", false);
+    await openHarness(fixture({ harnesses: [harness({ harness: "claude", status: "ready" })] }), "#buddies", false);
     const identity = "claude / anthropic / claude-sonnet-5";
     await selectModel(user, identity, "Claude Code");
     await user.click(effortCell("medium"));

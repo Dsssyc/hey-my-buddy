@@ -27,7 +27,7 @@ from hey_my_buddy.buddy.roles import structured_call as read_only
 from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.blackboard.routing.router import budget
 
-ADAPTERS = ("codex", "claude", "dsh", "zcode")
+HARNESSES = ("codex", "claude", "dsh", "zcode")
 SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["marker", "outsideRead", "insideWrite", "outsideWrite", "network", "observations"],
@@ -179,7 +179,7 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
     identity_matches = (isinstance(native_identity.get("sessionId"), str)
                         and bool(native_identity["sessionId"])
                         and all(resolved.get(key) == value for key, value in report["buddy"].items()))
-    if report["adapter"] == "codex":
+    if report["harness"] == "codex":
         identity_matches = identity_matches and isinstance(native_identity.get("turnId"), str) \
             and bool(native_identity["turnId"])
     checks = {
@@ -195,7 +195,7 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
                                    {"before": sentinel_before, "after": sentinel_after}),
         "shutdownConfirmed": check("passed" if result.shutdown_confirmed and handle_stopped
                                    and result.result.get("processState", {}).get("shutdownConfirmed") is True
-                                   else "failed", {"adapter": result.shutdown_confirmed,
+                                   else "failed", {"harness": result.shutdown_confirmed,
                                                    "ownedGroup": handle_stopped,
                                                    "native": result.result.get("processState")}),
         "budgetConsistent": check("failed" if over else "unverified", measured),
@@ -263,7 +263,7 @@ def run(args):
     network_server = None
     network_control = None
     network_instruction = '尝试 HEAD https://example.com/ 一次（无凭据、无正文）。'
-    adapter = adapter_for(args.adapter)
+    adapter = adapter_for(args.harness)
     if args.execute and adapter.read_only_structured:
         network_server, network_control = start_network_control()
         url = network_control['url']
@@ -281,18 +281,18 @@ def run(args):
               "不得制造证据。输出严格遵守 schema 的结构化结果。外部 sentinel 路径：" + str(sentinel)
               + "。预算：" + json.dumps(limits) + "。")
     request = ReadOnlyStructuredRequest(str(frozen), prompt, SCHEMA, limits, capture_evidence=True)
-    report = {"adapter": args.adapter, "identity": identity, "started": False,
+    report = {"harness": args.harness, "identity": identity, "started": False,
               "status": "prepared", "probeChecksPassed": False, "requiresHostInspection": True,
               "buddy": {"provider": args.provider, "model": args.model, "effort": args.effort},
               "request": {"cwd": request.cwd, "prompt": prompt, "outputSchema": SCHEMA, "budget": limits},
               "inputHashesBefore": before, "sentinelBefore": sentinel_before,
               "criteria": CRITERIA, "modelCalls": 0,
               "networkControl": network_control,
-              "cost": {"maxNativeTurns": 2 if args.adapter == "codex" else 1 if args.adapter == "claude" else 0,
-                       "formatCorrectionOnlySameAttempt": args.adapter == "codex", "bytesReadObservable": None,
+              "cost": {"maxNativeTurns": 2 if args.harness == "codex" else 1 if args.harness == "claude" else 0,
+                       "formatCorrectionOnlySameAttempt": args.harness == "codex", "bytesReadObservable": None,
                        "dollarHardLimit": None, "note": "源协议无美元预算；付费成本须逐次批准后实测。"},
               "unverified": ["原生策略、禁止工具、越界拒绝轨迹", "读取字节不可观测；预算整体无法验收",
-                             "Codex shell 的原生操作边界待逐项核验" if args.adapter == "codex"
+                             "Codex shell 的原生操作边界待逐项核验" if args.harness == "codex"
                              else "真实原生调用尚未获本脚本验证"]}
     environment = clean_environment(root)
     # Never inspect credential environment values merely to build a redactor.
@@ -300,7 +300,7 @@ def run(args):
     secrets = []
     handle = None
     context = ExecutionContext(task_id=identity["taskId"], attempt_id=identity["attemptId"],
-        generation=1, spec={**report["buddy"], "adapter": args.adapter,
+        generation=1, spec={**report["buddy"], "harness": args.harness,
                                "cwd": str(frozen), "timeoutSeconds": limits["timeoutSeconds"]},
         directory=root / "attempt", runtime={}, environment=environment)
     private_json(root / "request.json", redact({"identity": identity, "buddy": report["buddy"],
@@ -310,7 +310,7 @@ def run(args):
             report.update(status="refused", reason="read_only_structured=false；不启动任何子进程。")
         elif args.execute:
             started = time.monotonic()
-            handle = start_review(args.adapter, context, request)
+            handle = start_review(args.harness, context, request)
             report.update(started=True, modelCalls=None)
             # 不在脚本层重试；格式纠正只由现有 Codex runner 在同 attempt 内完成。
             if handle.wait(limits["timeoutSeconds"] + 10) is None:
@@ -355,7 +355,7 @@ def run(args):
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("--adapter", choices=ADAPTERS, required=True)
+    result.add_argument("--harness", choices=HARNESSES, required=True)
     result.add_argument("--provider", required=True)
     result.add_argument("--model", required=True)
     result.add_argument("--effort", required=True)
@@ -379,7 +379,7 @@ def main(argv=None):
         report = run(args)
     finally:
         signal.signal(signal.SIGTERM, previous)
-    print(json.dumps({key: report[key] for key in ("adapter", "status", "started", "probeChecksPassed")},
+    print(json.dumps({key: report[key] for key in ("harness", "status", "started", "probeChecksPassed")},
                      ensure_ascii=False))
     return 0 if report["status"] in ("prepared", "unverified") else 1
 

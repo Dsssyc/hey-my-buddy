@@ -7,7 +7,7 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
 
 
-BINDING = {"adapter": "zcode", "taskId": "projection", "attemptId": "attempt", "generation": 1}
+BINDING = {"harness": "zcode", "taskId": "projection", "attemptId": "attempt", "generation": 1}
 ROOT = {"sessionId": "session", "turnId": "turn"}
 
 

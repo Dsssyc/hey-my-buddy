@@ -422,7 +422,7 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     try:
         command = cli_command(incoming)
     except CodexUnavailable as error:
-        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
     environment = native_environment(incoming)
     if mode in ("review", "fast"):
         policy = (tomllib.loads(read_only_config(request.cwd)) if mode == "review"
@@ -461,7 +461,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                 owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                              "exit_code": evidence.exit_code}]
                 if isinstance(error, OSError):
-                    raise CodexProtocolError("adapter-unavailable",
+                    raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
                 raise
             handle = ProcessHandle(process, own_group=True, log_paths={})
@@ -527,13 +527,13 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
         models.append({"id": model_id, "name": item.get("displayName") or model_id,
                        "description": item.get("description") or "", "efforts": efforts,
                        "inputModalities": item.get("inputModalities") or ["text"], "available": True})
-    catalog = {"source": "codex-native-app-server", "adapter": "codex", "harnessVersion": version or "unknown",
+    catalog = {"source": "codex-native-app-server", "harness": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
-               "providers": [{"adapter": "codex", "provider": provider, "displayName": provider,
+               "providers": [{"harness": "codex", "provider": provider, "displayName": provider,
                               "packageName": "codex", "packageVersion": version or "unknown", "models": models}]
                             if provider is not None else [],
                "warnings": list(dict.fromkeys(warnings)),
-               "discoveries": [{"adapter": "codex", "status": read_status,
+               "discoveries": [{"harness": "codex", "status": read_status,
                                 **({"reason": read_reason} if read_reason else {})}]}
     return catalog, listed_ids
 
@@ -1037,7 +1037,7 @@ def _run(request: RunRequest, services: RunServices, mode: str,
     # Every carrier projects its real native tool facts on the one collector;
     # the governed turn's own frames are evidence like the structured calls',
     # without adopting any read-only policy here.
-    projector = CodexToolEventProjector({"adapter": "codex", "taskId": request.identity.task_id,
+    projector = CodexToolEventProjector({"harness": "codex", "taskId": request.identity.task_id,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
@@ -1192,7 +1192,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     # record carried it; the role's completion policy adds its own verdict keys
     # on top and decides over these facts.
     state.native_turn_facts = {
-        "adapter": "codex", "nativeThreadId": thread_id, "nativeTurnId": turn_id,
+        "harness": "codex", "nativeThreadId": thread_id, "nativeTurnId": turn_id,
         "finalItemId": item.get("id") if isinstance(item, dict) else None,
         "finalMessageCompleted": isinstance(item, dict), "nativeTurnStarted": evidence.started,
         "nativeTurnCompleted": True, "eventSeq": evidence.event_seq}
@@ -1588,7 +1588,7 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         # identity kept beside it: this run's own public fact (ADR-027 rule 5),
         # never a refusal verdict and never a substitute for the native answer.
         retain("model-check", invocation_root / "model-check.json",
-               {"adapter": "codex", "selectedModelListed": False,
+               {"harness": "codex", "selectedModelListed": False,
                 "selected": {"provider": request.buddy.provider,
                              "model": request.buddy.model,
                              "effort": request.buddy.effort}})
@@ -1714,7 +1714,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         try:
             command = cli_command(incoming)
         except CodexUnavailable as error:
-            raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
+            raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
         environment = native_environment(incoming)
         try:
             version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
@@ -1782,7 +1782,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
     try:
         cli_command(environment)
     except CodexUnavailable as error:
-        raise BoardError("ADAPTER_UNAVAILABLE", str(error), adapter="codex") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
 
 
 def prepare_run_services(*, tool_scope: str = "write") -> RunServices:
@@ -1798,13 +1798,13 @@ def validate_turn_provenance(record: dict) -> str | None:
     business outcome decision stays with the role's completion policy.
     """
     p = record.get("provenance")
-    expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
+    expected = {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": True,
                 "finalMessageCompleted": True, "nativeTurnStarted": True, "nativeTurnCompleted": True}
     if not isinstance(p, dict):
         return "the Codex turn lacks native provenance"
     controller_attention = p.get("controllerAttention") is True
     if controller_attention:
-        expected = {"adapter": "codex", "turnEnd": "completed", "outputSchemaValidated": False,
+        expected = {"harness": "codex", "turnEnd": "completed", "outputSchemaValidated": False,
                     "nativeTurnStarted": True, "nativeTurnCompleted": True, "controllerAttention": True}
         outcome = record.get("outcome")
         if (not isinstance(outcome, dict) or outcome.get("disposition") != "attention"
@@ -1838,7 +1838,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
     """The native thread's storage and visibility facts; the role decides reuse."""
     captured = isinstance(session_id, str) and bool(session_id)
     return {
-        "adapter": "codex",
+        "harness": "codex",
         "sessionId": session_id if captured else None,
         "captured": captured,
         "storageScope": "harness-user-store",

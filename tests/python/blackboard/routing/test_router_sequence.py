@@ -22,8 +22,8 @@ T1 = "2026-01-01T00:01:00.000Z"
 FACTS = {
     "routerBuddyIds": ["dsh:fixture:alpha:max", "dsh:fixture:bravo:max"],
     "routerIdentities": [
-        {"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
-        {"adapter": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"},
+        {"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"},
+        {"harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"},
     ],
     "routingMode": "fast",
     "routingBudget": "standard",
@@ -42,9 +42,9 @@ BASE_INPUT = {
     "budget": {"timeoutSeconds": 60},
     "routingMode": "fast",
 }
-ALPHA = {"buddyId": "dsh:fixture:alpha:max", "adapter": "dsh", "provider": "fixture",
+ALPHA = {"buddyId": "dsh:fixture:alpha:max", "harness": "dsh", "provider": "fixture",
          "model": "alpha", "effort": "max"}
-BRAVO = {"buddyId": "dsh:fixture:bravo:max", "adapter": "dsh", "provider": "fixture",
+BRAVO = {"buddyId": "dsh:fixture:bravo:max", "harness": "dsh", "provider": "fixture",
          "model": "bravo", "effort": "max"}
 INSPECTIONS = [{"index": 0, "buddyId": ALPHA["buddyId"], "eligible": True, "code": None,
                 "reason": None, "selected": True}]
@@ -55,13 +55,13 @@ def snapshot_dict() -> dict:
 
 
 def alpha_document() -> dict:
-    identity = {key: ALPHA[key] for key in ("adapter", "provider", "model", "effort")}
+    identity = {key: ALPHA[key] for key in ("harness", "provider", "model", "effort")}
     return {**BASE_INPUT, "buddy": identity, "routerBuddyId": ALPHA["buddyId"],
             "routerBuddy": identity, "routerIndex": 0}
 
 
 def bravo_document() -> dict:
-    identity = {key: BRAVO[key] for key in ("adapter", "provider", "model", "effort")}
+    identity = {key: BRAVO[key] for key in ("harness", "provider", "model", "effort")}
     return {**BASE_INPUT, "buddy": identity, "routerBuddyId": BRAVO["buddyId"],
             "routerBuddy": identity, "routerIndex": 1}
 
@@ -222,7 +222,7 @@ class ReserveDispatchTests(RouterSequenceTestCase):
         self.assertEqual(stored["taskId"], "task-alpha")
         self.assertEqual(stored["routerIndex"], 0)
         self.assertEqual(stored["buddyId"], ALPHA["buddyId"])
-        self.assertEqual(stored["buddy"], {key: ALPHA[key] for key in ("adapter", "provider", "model", "effort")})
+        self.assertEqual(stored["buddy"], {key: ALPHA[key] for key in ("harness", "provider", "model", "effort")})
         self.assertEqual(stored["document"]["routerBuddyId"], ALPHA["buddyId"])
         self.assertEqual(stored["createdAt"], T0)
         self.assertEqual(stored["inputSha256"], sha256_text(canonical_json(alpha_document())))

@@ -59,9 +59,9 @@ def _state(connection, buddy_id, facts, now):
     return router_history.router_state(connection, buddy_id=buddy_id, interval_seconds=interval, now=now)
 
 
-def _cached_available(connection, adapter):
+def _cached_available(connection, harness):
     """Cached native health; no native probe during routing observation."""
-    health = connection.execute('SELECT status FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+    health = connection.execute('SELECT status FROM harness_health WHERE harness=?', (harness,)).fetchone()
     return health is not None and health['status'] == 'ready'
 
 
@@ -336,7 +336,7 @@ def _candidate_problem(connection, candidate, request, run, now):
     pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone()
     if preference and preference[0] == "exclude" or pins and (not preference or preference[0] != "pin"):
         return "The frozen buddy no longer satisfies the published pins and exclusions"
-    if not _cached_available(connection, candidate["adapter"]):
+    if not _cached_available(connection, candidate["harness"]):
         return "Cached harness health does not permit this buddy"
     from ..evaluation.native_observations import exhausted
     if exhausted(connection, published, now=now) is not None:
@@ -355,7 +355,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
         buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
         if buddy is None or identity is None or any(buddy[key] != identity[key] for key in schemas.BUDDY_FIELDS) or not buddy["enabled"] or not buddy["available"]:
             continue
-        if not _cached_available(connection, buddy["adapter"]):
+        if not _cached_available(connection, buddy["harness"]):
             continue
         quota_blocked, quota_at = _quota_recovery(connection, buddy, now)
         if quota_blocked and quota_at is None:

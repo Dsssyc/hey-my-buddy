@@ -29,7 +29,7 @@ from hey_my_buddy.json_codec import canonical_json
 SCHEMA = {"type": "object", "properties": {"choice": {"type": "string", "enum": ["a"]}},
           "required": ["choice"], "additionalProperties": False}
 
-BINDING = {"adapter": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 3}
+BINDING = {"harness": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 3}
 ROOT = {"sessionId": "s-1", "turnId": "t-1"}
 
 FAKE = '''#!/usr/bin/env python3
@@ -554,7 +554,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
         self.assertEqual(package["version"], 1)
-        self.assertEqual(package["binding"], {"adapter": "zcode", "taskId": "task",
+        self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
         self.assertEqual(package["events"], [])
