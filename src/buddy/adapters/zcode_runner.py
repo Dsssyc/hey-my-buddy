@@ -22,9 +22,9 @@ from ..errors import BoardError
 from .base import ProcessHandle
 from .turn_io import ASSISTANCE_HINTS, canonical_json, input_hash, private_json
 from .zcode_config import SUPPORTED_ACCESS, cli_command, snapshot_provider_files
-from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
-                             MAX_QUESTION_BYTES, ActivityProjection, NativeConnection, NativeError,
-                             RootTurnEvidence, decode_json)
+from .zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES,
+                             MAX_INQUIRY_ID_BYTES, MAX_QUESTION_BYTES, ActivityProjection, NativeConnection,
+                             NativeError, RootTurnEvidence, decode_json)
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_BRIDGE_FRAME_BYTES = 16 * 1024
@@ -84,6 +84,7 @@ class InquiryBridge:
         self.attention: list[dict] = []
         self.started_at = _now()
         self.error: str | None = None
+        self._torn_line = False
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
@@ -160,6 +161,21 @@ class InquiryBridge:
             self.bridge_started_at = _now()
 
     # -- journal -------------------------------------------------------------
+    def _bound_record(self, record: object) -> bool:
+        """A record replays only with this journal version and this attempt.
+
+        Journal replay is strictly attempt-bound: the current record version and
+        an exact ``taskId``/``attemptId``/``generation``/``turnId`` binding are
+        required, so a malformed, foreign or unbound line — including one from a
+        different attempt that happens to share the file — is ignored instead of
+        merged. There is no old-format fallback.
+        """
+        if not isinstance(record, dict) or record.get("version") != INQUIRY_JOURNAL_VERSION:
+            return False
+        identity = self.identity
+        return all(key in record and record[key] == identity.get(key)
+                   for key in ("taskId", "attemptId", "generation", "turnId"))
+
     def _load_journal(self) -> None:
         try:
             if self.journal_path.stat().st_size > MAX_JOURNAL_BYTES:
@@ -175,7 +191,7 @@ class InquiryBridge:
                 record = json.loads(line)
             except ValueError:
                 continue  # a torn line is ignored, never fatal
-            if isinstance(record, dict) and isinstance(record.get("inquiryId"), str):
+            if isinstance(record, dict) and isinstance(record.get("inquiryId"), str) and self._bound_record(record):
                 # Merge instead of replace: the committed question hash and
                 # delivery survive a later state record and a controller restart.
                 self.entries[record["inquiryId"]] = {**self.entries.get(record["inquiryId"], {}), **record}
@@ -185,29 +201,52 @@ class InquiryBridge:
                 "generation": self.identity.get("generation"), "turnId": self.identity.get("turnId"),
                 "sessionId": self.session_id}
 
-    def _journal(self, record: dict) -> None:
-        """Append one transport record and merge it over the committed entry.
+    def _journal(self, record: dict) -> bool:
+        """Durably append one transport record, then commit it in memory.
 
-        Only the delta is appended (so the journal stays a linear transport log)
-        while the in-memory entry keeps every committed field. This is what makes
-        a replayed question recognizable: ``questionSha256``, ``question`` and
-        ``delivery`` are never dropped by a later state record.
+        The append (every byte written, then fsynced) happens before the merged
+        entry is committed to ``self.entries``; a refused or failed append
+        leaves the in-memory state untouched, so an ``ask`` can never report a
+        question as queued that the MCP tools cannot read, and a delivery or
+        answer is never fabricated on a failed write. A partial write is driven
+        to completion or failed, and the remains of a failed append are
+        isolated by a leading newline so at most that one line is lost. The
+        caller learns the outcome from the return value and surfaces a bounded
+        ``journal-unavailable`` error instead of inventing success.
         """
         inquiry_id = record["inquiryId"]
-        self.entries[inquiry_id] = {**self.entries.get(inquiry_id, {}), **record}
-        raw = (canonical_json({"version": BRIDGE_PROTOCOL_VERSION, **record}) + "\n").encode()
+        merged = {**self.entries.get(inquiry_id, {}), **record}
+        raw = (canonical_json({"version": INQUIRY_JOURNAL_VERSION, **record}) + "\n").encode()
+        written_any = False
         try:
             if self.journal_path.exists() and self.journal_path.stat().st_size + len(raw) > MAX_JOURNAL_BYTES:
                 self.truncated = True
-                return
+                raise OSError("the inquiry journal reached its byte cap")
             fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
             try:
-                os.write(fd, raw)
+                if getattr(self, "_torn_line", False):
+                    # Isolate the remains of a previously failed append so only
+                    # that one unreadable line is ever lost.
+                    os.write(fd, b"\n")
+                view = memoryview(raw)
+                written_any = False
+                while view:
+                    count = os.write(fd, view)
+                    if count <= 0:
+                        raise OSError("the inquiry journal accepted a short write")
+                    written_any = True
+                    view = view[count:]
                 os.fsync(fd)
             finally:
                 os.close(fd)
         except OSError:
-            self.error = self.error or "the inquiry journal could not be written"
+            if written_any:
+                self._torn_line = True
+            self.error = self.error or "journal-unavailable: the inquiry record could not be appended durably"
+            return False
+        self._torn_line = False
+        self.entries[inquiry_id] = merged
+        return True
 
     def describe_answer(self, inquiry_id: str) -> dict:
         """The live view of one inquiry, including its correlated answer."""
@@ -231,6 +270,9 @@ class InquiryBridge:
         id or a changed hash is forgery and fails the turn. Entries that left the
         answerable window while the call was in flight (answered, withdrawn or
         made unavailable) keep their terminal state instead of failing the turn.
+        A delivery whose journal append cannot be made durable is not fabricated:
+        the entry stays queued, the bounded journal-unavailable error becomes
+        visible, and the root can checkpoint again.
         """
         with self.lock:
             for item in receipt["inquiries"]:
@@ -248,9 +290,14 @@ class InquiryBridge:
 
         The receipt's signature, attempt identity, inquiry id, question hash and
         exact answer text bind the answer. The first verified answer is terminal;
-        a byte-identical replay is an idempotent no-op, and anything else under
-        the same inquiry id is a conflict that fails the turn rather than
-        silently replacing a recorded answer.
+        a byte-identical replay is an idempotent no-op, and a different answer
+        under an already-answered inquiry is a conflict that fails the turn
+        rather than silently replacing it. A valid answer that arrives after the
+        Host withdrew the question or the turn closed is a normal race, not
+        forgery: the terminal ``discarded``/``unavailable`` state is preserved,
+        the late answer is ignored and the coding work may finish. A journal
+        append failure never fabricates the answered state; the entry stays
+        answerable so the root can legitimately retry.
         """
         inquiry_id = receipt["inquiryId"]
         answer = receipt["answer"]
@@ -265,9 +312,10 @@ class InquiryBridge:
                     return  # an identical binding replay changes nothing
                 raise NativeError("conflicting-inquiry-answer",
                                   "a different answer was already recorded for this inquiry")
-            if entry.get("state") not in ANSWERABLE_STATES:
-                raise NativeError("invalid-inquiry-evidence",
-                                  "the inquiry left its answerable window before this answer arrived")
+            if entry.get("state") in ("discarded", "unavailable"):
+                # A valid root answer racing a Host withdrawal or settlement is
+                # expected: keep the terminal state and drop the late answer.
+                return
             self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "answered",
                            "answeredAt": _now(),
                            "answer": {"text": answer, "bytes": len(answer.encode()), "truncated": False,
@@ -475,9 +523,12 @@ class InquiryBridge:
                 return response(False, error="too-many")
             delivery = {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
                         "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
-            self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
-                           "question": question, "questionSha256": digest, "askedAt": _now(),
-                           "delivery": delivery, "limitation": COOPERATIVE_INQUIRY_NOTE})
+            if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
+                                  "question": question, "questionSha256": digest, "askedAt": _now(),
+                                  "delivery": delivery, "limitation": COOPERATIVE_INQUIRY_NOTE}):
+                # Never report a queued question the journal did not durably
+                # record: the MCP tools could not read it back.
+                return response(False, error="journal-unavailable")
             return response(True, value=self._question_value(inquiry_id, self.entries[inquiry_id], duplicate=False))
 
     def _discard(self, frame: dict, response) -> dict:
@@ -491,9 +542,10 @@ class InquiryBridge:
                 return response(False, error="not-ready")
             if entry.get("state") not in ANSWERABLE_STATES:
                 return response(False, error="conflict")
-            self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "discarded",
-                           "discardedAt": _now(),
-                           "reason": "withdrawn by the asking side; it no longer blocks turn completion"})
+            if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "discarded",
+                                  "discardedAt": _now(),
+                                  "reason": "withdrawn by the asking side; it no longer blocks turn completion"}):
+                return response(False, error="journal-unavailable")
             return response(True, value={"inquiryId": inquiry_id, "state": "discarded",
                                          "questionSha256": entry.get("questionSha256")})
 

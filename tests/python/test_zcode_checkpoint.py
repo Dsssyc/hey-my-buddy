@@ -167,6 +167,36 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         records = self.records(credentials, "q-1")
         self.assertEqual([record["state"] for record in records], ["queued", "discarded"])
 
+    def test_a_valid_answer_racing_a_host_discard_finishes_completed(self):
+        # The root's answer receipt is minted while the question is answerable;
+        # the Host withdraws it before the native result event arrives. The
+        # controller must keep the discarded state, drop the late valid answer
+        # instead of failing the turn as forged, and the coding work still
+        # finishes completed.
+        context = self.context("inquiry-discard-race", timeout=40)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        credentials, _ = self.ask(context, "q-1", "Withdraw me mid-answer.")
+        self.release(context)
+        receipt_text = self.wait_file(context, "answer-receipt.json", timeout=30)
+        self.assertIsNotNone(receipt_text, "the fixture never minted the racing answer receipt")
+        self.assertTrue(receipt_text.lstrip().startswith("{"), receipt_text)
+        discarded = inquiry_module.bridge_request(credentials, "discard", {"inquiryId": "q-1"})
+        self.assertTrue(discarded["ok"], discarded)
+        (context.directory / "native-logs" / "discard-done").touch()
+        self.assertIsNotNone(handle.wait(40), "controller did not exit")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["disposition"], "completed")
+        self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
+        records = self.records(credentials, "q-1")
+        self.assertEqual([record["state"] for record in records], ["queued", "delivered", "discarded"], records)
+        self.assertNotIn("late but valid", json.dumps(records), "a late answer after discard must not be recorded")
+        self.assertEqual(outcome.result["inquiry"]["discarded"], 1)
+        self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
+
     def test_a_question_after_the_final_receipt_becomes_honest_unavailable(self):
         context = self.context("inquiry-late", timeout=40)
         handle = self.adapter.start(context)

@@ -243,6 +243,22 @@ def inquiry_turn():
         native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
         settle_turn()
         return
+    if case == "inquiry-discard-race":
+        # The answer receipt is minted while the question is still answerable;
+        # the Host withdraws it before the native result event arrives, so the
+        # controller sees a valid root answer racing a discard and must keep the
+        # discarded state, drop the late answer and still finish normally.
+        native_tool_call("buddy_checkpoint", {}, call_id="call-checkpoint-root")
+        answer_name = "mcp__" + mcp[0]["name"] + "__buddy_answer_inquiry"
+        event("tool.updated", {"kind": "scheduled", "toolName": answer_name, "toolCallId": "call-answer-race"})
+        receipt, error = mcp_call("buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "late but valid"})
+        (log_dir / "answer-receipt.json").write_text(receipt or error or "")
+        wait_file("discard-done")
+        event("tool.updated", {"kind": "result", "toolCallId": "call-answer-race",
+                               "result": {"success": True, "truncated": False, "content": receipt}})
+        native_tool_call("buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        settle_turn()
+        return
     if case == "inquiry-forged":
         # A native result claims checkpoint success for a receipt whose binding
         # was changed after the bridge signed it; the controller must fail the

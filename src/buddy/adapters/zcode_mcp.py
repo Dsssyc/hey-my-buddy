@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from .turn_io import MAX_OUTCOME_BYTES, canonical_json, validate_outcome
-from .zcode_protocol import (MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
+from .zcode_protocol import (INQUIRY_JOURNAL_VERSION, MAX_ANSWER_BYTES, MAX_INQUIRIES, MAX_INQUIRY_ID_BYTES,
                              decode_json, sign_receipt)
 
 MAX_ATTENTION_BYTES = 64 * 1024
@@ -111,8 +111,11 @@ def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:
 
     The controller is the only writer; this merge replays its linear records so
     a committed question hash, delivery or answer survives every later record.
-    Only entries bound to this configuration's identity are returned, so a
-    stale journal from another attempt or turn can never surface here.
+    Replay is strictly attempt-bound: a record replays only with the current
+    journal version and an exact ``taskId``/``attemptId``/``generation``/
+    ``turnId`` binding to this configuration's identity, so malformed, foreign
+    and unbound lines — including a stale journal from another attempt — are
+    ignored rather than exposed to the session tools.
     """
     journal = configuration.get("inquiryJournalPath")
     identity = configuration.get("identity")
@@ -136,7 +139,10 @@ def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:
             continue  # a torn line is ignored, never fatal
         if not isinstance(record, dict) or not isinstance(record.get("inquiryId"), str):
             continue
-        if any(record.get(key) not in (None, identity.get(key)) for key in ("taskId", "attemptId", "generation", "turnId")):
+        if record.get("version") != INQUIRY_JOURNAL_VERSION:
+            continue
+        if any(key not in record or record[key] != identity.get(key)
+               for key in ("taskId", "attemptId", "generation", "turnId")):
             continue
         entries[record["inquiryId"]] = {**entries.get(record["inquiryId"], {}), **record}
     return entries

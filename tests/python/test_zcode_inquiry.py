@@ -24,7 +24,7 @@ from buddy.adapters import turn_io
 from buddy.adapters.zcode_mcp import attention_requests, pending_inquiries, respond
 from buddy.adapters.zcode_protocol import (COOPERATIVE_INQUIRY_NOTE, MAX_ANSWER_BYTES, MAX_INQUIRIES,
                                             NativeError, verify_inquiry_receipt, verify_receipt)
-from buddy.adapters.zcode_runner import InquiryBridge
+from buddy.adapters.zcode_runner import MAX_JOURNAL_BYTES, InquiryBridge
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -218,6 +218,67 @@ class BridgeQueueTests(unittest.TestCase):
             self.harness.bridge.record_answer(unknown, "root-answer-call-4")
         self.assertEqual(entry["answer"]["text"], "do this")
 
+    def test_a_late_valid_answer_racing_discard_or_closure_is_ignored(self):
+        # A validly signed root answer that arrives after the Host withdrew the
+        # question, or after the turn closed, is a normal race: the terminal
+        # state is preserved, the late answer is dropped and the turn may finish
+        # normally instead of failing as forged evidence.
+        config = self._config()
+        self.ask("q-discarded", "first?")
+        self.ask("q-closed", "second?")
+        self.harness.request("discard", inquiryId="q-discarded")
+        sha = self.harness.bridge.entries["q-discarded"]["questionSha256"]
+        late = verify_inquiry_receipt(answer_receipt("q-discarded", "late but valid", config, sha=sha),
+                                      config, "inquiry-answer")
+        self.harness.bridge.record_answer(late, "root-answer-late")
+        self.assertEqual(self.harness.bridge.entries["q-discarded"]["state"], "discarded")
+        self.assertNotIn("answer", self.harness.bridge.entries["q-discarded"])
+        self.harness.close()
+        closed_sha = next(record["questionSha256"] for record in self.harness.records()
+                          if record.get("inquiryId") == "q-closed" and record.get("questionSha256"))
+        after_close = verify_inquiry_receipt(answer_receipt("q-closed", "too late", config, sha=closed_sha),
+                                             config, "inquiry-answer")
+        self.harness.bridge.record_answer(after_close, "root-answer-late")
+        self.assertEqual(self.harness.bridge.entries["q-closed"]["state"], "unavailable")
+        self.assertNotIn("answer", self.harness.bridge.entries["q-closed"])
+
+    def test_journal_replay_requires_the_current_version_and_this_attempt(self):
+        import hashlib
+
+        question = "status?"
+        digest = hashlib.sha256(question.encode()).hexdigest()
+        records = [
+            {"version": 1, "inquiryId": "q-mine", "state": "answered", "question": question,
+             "questionSha256": digest, "askedAt": "t", **IDENTITY,
+             "answer": {"text": "mine", "bytes": 4, "truncated": False,
+                        "via": "tool:buddy_answer_inquiry", "toolCallId": "c", "at": "t"}},
+            {"version": 1, "inquiryId": "q-foreign", "state": "answered", "question": question,
+             "questionSha256": digest, "askedAt": "t", **OTHER_IDENTITY,
+             "answer": {"text": "foreign", "bytes": 7, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
+            {"version": 1, "inquiryId": "q-unbound", "state": "queued", "question": question,
+             "questionSha256": digest, "askedAt": "t"},
+            {"inquiryId": "q-legacy", "state": "answered", "question": question,
+             "questionSha256": digest, "askedAt": "t", **IDENTITY,
+             "answer": {"text": "legacy", "bytes": 6, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
+        ]
+        Path(self.harness.credentials["resultsPath"]).write_text(
+            "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records))
+        restarted = InquiryBridge(self.harness.credentials, identity=IDENTITY,
+                                  journal_path=self.harness.credentials["resultsPath"])
+        restarted._load_journal()
+        self.assertEqual(set(restarted.entries), {"q-mine"})
+        self.assertEqual(restarted.entries["q-mine"]["state"], "answered")
+        # A foreign or legacy "answered" record never answers a fresh question.
+        for inquiry_id in ("q-foreign", "q-legacy"):
+            with self.subTest(inquiryId=inquiry_id):
+                restarted.entries.clear()
+                restarted._load_journal()
+                restarted.activate("sess-1")
+                self.assertTrue(restarted._journal({**restarted._identity_fields(), "inquiryId": inquiry_id,
+                                                    "state": "queued", "question": question,
+                                                    "questionSha256": digest, "askedAt": "t"}))
+                self.assertEqual(restarted.entries[inquiry_id]["state"], "queued")
+
     def test_close_marks_unanswered_entries_unavailable_without_waking_anything(self):
         self.ask("q-queued", "first?")
         self.ask("q-answered", "second?")
@@ -273,6 +334,104 @@ class BridgeQueueTests(unittest.TestCase):
         normalized = inquiry_module.normalize_journal_answer({"answer": answered["value"]["answer"]})
         self.assertEqual(normalized["text"], "all good")
         self.assertEqual(normalized["toolCallId"], "root-answer-call")
+
+    def test_a_failed_journal_append_refuses_the_ask_without_fabricating_state(self):
+        from unittest import mock
+
+        import os as os_module
+
+        bridge = self.harness.bridge
+        real_write = os_module.write
+
+        def flaky_write(fd, data):
+            state = flaky_write.state
+            state["count"] += 1
+            if state["count"] == 1:
+                return max(1, real_write(fd, bytes(data[:5])))
+            raise OSError("disk gone mid-record")
+
+        for failure in ("raise", "partial-then-raise", "byte-cap"):
+            with self.subTest(failure=failure):
+                bridge.entries.clear()
+                bridge.error = None
+                bridge._torn_line = False
+                flaky_write.state = {"count": 0}
+                if failure == "byte-cap":
+                    Path(self.harness.credentials["resultsPath"]).write_bytes(b"x" * MAX_JOURNAL_BYTES)
+                    asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
+                    raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
+                                                      "token": self.harness.credentials["token"],
+                                                      "method": "ask", "inquiryId": f"q-{failure}-probe",
+                                                      "question": "durable?"})
+                elif failure == "raise":
+                    with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+                        asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
+                        raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
+                                                          "token": self.harness.credentials["token"],
+                                                          "method": "ask", "inquiryId": f"q-{failure}-probe",
+                                                          "question": "durable?"})
+                else:
+                    with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=flaky_write):
+                        asked = self.harness.request("ask", inquiryId=f"q-{failure}", question="durable?")
+                        raw = self.harness.bridge.handle({"version": 1, "id": "code-probe",
+                                                          "token": self.harness.credentials["token"],
+                                                          "method": "ask", "inquiryId": f"q-{failure}-probe",
+                                                          "question": "durable?"})
+                self.assertFalse(asked["ok"], asked)
+                # The bridge refuses with the explicit journal-unavailable code;
+                # the board client normalizes unknown codes to "internal" until
+                # the Host adds this one to its refusal vocabulary.
+                self.assertEqual(asked["reason"], "bridge-refused")
+                self.assertFalse(raw["ok"])
+                self.assertEqual(raw["error"], "journal-unavailable")
+                self.assertNotIn(f"q-{failure}", bridge.entries, "a refused ask must not commit in-memory state")
+                self.assertTrue(str(bridge.error).startswith("journal-unavailable"), bridge.error)
+                observed = self.harness.request("observe")
+                self.assertTrue(observed["ok"])
+                self.assertIn("journal-unavailable", observed["value"]["error"])
+                self.assertEqual(observed["value"]["inbox"]["pending"], 0)
+        # After the fault clears, the identical ask commits durably and the MCP
+        # tools can read the question back from the journal.
+        Path(self.harness.credentials["resultsPath"]).unlink(missing_ok=True)
+        bridge.error = None
+        bridge._torn_line = False
+        asked = self.harness.request("ask", inquiryId="q-recovered", question="durable?")
+        self.assertTrue(asked["ok"], asked)
+        self.assertEqual(asked["value"]["state"], "queued")
+        self.assertTrue(any(json.loads(line).get("inquiryId") == "q-recovered"
+                            for line in Path(self.harness.credentials["resultsPath"]).read_text().splitlines()))
+
+    def test_controller_transitions_never_fabricate_state_on_a_failed_append(self):
+        from unittest import mock
+
+        config = self._config()
+        self.ask("q-flaky", "delivered anyway?")
+        sha = self.harness.bridge.entries["q-flaky"]["questionSha256"]
+        bridge = self.harness.bridge
+        delivery = verify_inquiry_receipt(checkpoint_receipt(
+            [{"inquiryId": "q-flaky", "question": "delivered anyway?", "questionSha256": sha,
+              "state": "queued", "askedAt": "t"}], config), config, "inquiry-checkpoint")
+        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+            bridge.deliver_inquiries(delivery, "root-ckpt")
+        self.assertEqual(bridge.entries["q-flaky"]["state"], "queued", "a failed append must not fabricate delivery")
+        self.assertTrue(str(bridge.error).startswith("journal-unavailable"))
+        # The root can legitimately checkpoint again once the fault clears.
+        bridge.deliver_inquiries(delivery, "root-ckpt-2")
+        self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered")
+        answer = verify_inquiry_receipt(answer_receipt("q-flaky", "still fine", config, sha=sha), config, "inquiry-answer")
+        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+            bridge.record_answer(answer, "root-answer")
+        self.assertEqual(bridge.entries["q-flaky"]["state"], "delivered", "a failed append must not fabricate the answer")
+        bridge.record_answer(answer, "root-answer-2")
+        self.assertEqual(bridge.entries["q-flaky"]["state"], "answered")
+        self.assertEqual(bridge.entries["q-flaky"]["answer"]["toolCallId"], "root-answer-2")
+        # A discard that cannot be recorded refuses explicitly instead.
+        self.ask("q-flaky-2", "another?")
+        with mock.patch("buddy.adapters.zcode_runner.os.write", side_effect=OSError("disk gone")):
+            discarded = self.harness.request("discard", inquiryId="q-flaky-2")
+        self.assertFalse(discarded["ok"])
+        self.assertEqual(discarded["reason"], "bridge-refused")
+        self.assertEqual(bridge.entries["q-flaky-2"]["state"], "queued")
 
     def test_the_bridge_has_no_native_injection_path_at_all(self):
         # The proof that delivery stays cooperative is structural: this class
@@ -361,7 +520,7 @@ class FinishToolTests(unittest.TestCase):
 
         self.journal.parent.mkdir(parents=True, exist_ok=True)
         with self.journal.open("a") as stream:
-            stream.write(json.dumps({"inquiryId": inquiry_id, "state": "queued", "question": question,
+            stream.write(json.dumps({"version": 1, "inquiryId": inquiry_id, "state": "queued", "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "askedAt": "2026-01-01T00:00:00Z",
                                      "taskId": identity["taskId"], "attemptId": identity["attemptId"],
@@ -424,7 +583,7 @@ class FinishToolTests(unittest.TestCase):
         import hashlib
 
         question = "what is the deployment word?"
-        answered = {"inquiryId": "q-1", "state": "answered", "question": question,
+        answered = {"version": 1, "inquiryId": "q-1", "state": "answered", "question": question,
                     "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                     "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
                                "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
@@ -452,7 +611,7 @@ class FinishToolTests(unittest.TestCase):
 
         question = "what is the deployment word?"
         with self.journal.open("a") as stream:
-            stream.write(json.dumps({"inquiryId": "q-1", "state": "answered", "question": question,
+            stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered", "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
                                                 "via": "tool:buddy_answer_inquiry", "toolCallId": "root-call",
@@ -460,6 +619,48 @@ class FinishToolTests(unittest.TestCase):
         settled = self.call("buddy_finish_turn", self.outcome("completed"))
         self.assertFalse(settled.get("isError"), settled)
         verify_receipt(settled["content"][0]["text"], self.config)
+
+    def test_foreign_or_unversioned_journal_records_are_never_exposed(self):
+        import hashlib
+
+        question = "what is the deployment word?"
+        records = [
+            # Current format, this attempt: replays.
+            {"version": 1, "inquiryId": "q-mine", "state": "queued", "question": question,
+             "questionSha256": hashlib.sha256(question.encode()).hexdigest(), "askedAt": "t", **IDENTITY},
+            # Foreign attempt identity: ignored even with the current version.
+            {"version": 1, "inquiryId": "q-foreign", "state": "answered", "question": "other",
+             "questionSha256": "a" * 64, "askedAt": "t", **OTHER_IDENTITY,
+             "answer": {"text": "foreign", "bytes": 7, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
+            # Missing identity fields: unbound, ignored.
+            {"version": 1, "inquiryId": "q-unbound", "state": "queued", "question": "no identity",
+             "questionSha256": "b" * 64, "askedAt": "t"},
+            # Old/unversioned record shape: no fallback, ignored.
+            {"inquiryId": "q-old", "state": "answered", "question": "legacy", "questionSha256": "c" * 64,
+             "askedAt": "t", **IDENTITY, "answer": {"text": "legacy", "bytes": 6, "truncated": False,
+                                                    "via": "x", "toolCallId": "c", "at": "t"}},
+        ]
+        with self.journal.open("a") as stream:
+            stream.write("not json at all\n" + "".join(json.dumps(record) + "\n" for record in records))
+        result = self.call("buddy_checkpoint", {})
+        receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
+        self.assertEqual([item["inquiryId"] for item in receipt["inquiries"]], ["q-mine"])
+        for inquiry_id in ("q-foreign", "q-unbound", "q-old"):
+            with self.subTest(inquiryId=inquiry_id):
+                refused = self.call("buddy_answer_inquiry", {"inquiryId": inquiry_id, "answer": "x"})
+                self.assertTrue(refused["isError"])
+                self.assertIn("unknown inquiryId", refused["content"][0]["text"])
+        # A finish is not blocked by a foreign "answered" or unversioned record.
+        completed = self.call("buddy_finish_turn", self.outcome("completed"))
+        self.assertTrue(completed["isError"], "q-mine still blocks completion")
+        with self.journal.open("a") as stream:
+            stream.write(json.dumps({"version": 1, "inquiryId": "q-mine", "state": "answered",
+                                     "question": question, "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                                     "askedAt": "t", **IDENTITY,
+                                     "answer": {"text": "done", "bytes": 4, "truncated": False,
+                                                "via": "tool:buddy_answer_inquiry", "toolCallId": "c", "at": "t"}}) + "\n")
+        settled = self.call("buddy_finish_turn", self.outcome("completed"))
+        self.assertFalse(settled.get("isError"), settled)
 
     def test_pending_inquiries_is_none_without_a_journal(self):
         bare = {k: v for k, v in self.config.items() if k != "inquiryJournalPath"}

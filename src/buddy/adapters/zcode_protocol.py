@@ -10,6 +10,7 @@ import select
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -25,6 +26,18 @@ MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES = 32
 MAX_INQUIRY_ID_BYTES = 128
+
+#: The only inquiry-journal record format this source writes and replays. Every
+#: reader requires exactly this version and the record's attempt identity, so a
+#: malformed, foreign or unbound line is ignored instead of merged.
+INQUIRY_JOURNAL_VERSION = 1
+
+#: Bounded retention for completed inquiry tool calls inside one native turn.
+#: Only the most recent terminal call identities per tool are kept (to reject an
+#: immediate duplicate terminal result); a verified receipt is handed to its
+#: callback instead of being retained. Pending scheduled calls are never evicted
+#: and no cumulative call count ever ends a long ``timeoutSeconds: 0`` turn.
+MAX_RETAINED_INQUIRY_CALLS = 64
 
 
 class NativeError(Exception):
@@ -393,6 +406,8 @@ class RootTurnEvidence:
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
         self.checkpoint_calls: dict[str, dict] = {}
         self.answer_calls: dict[str, dict] = {}
+        self._terminal_checkpoint_calls: deque[str] = deque()
+        self._terminal_answer_calls: deque[str] = deque()
 
     def observe(self, message: dict, ordinal: int) -> None:
         p = message.get("params")
@@ -471,36 +486,56 @@ class RootTurnEvidence:
                 self.result_seq = seq
             return
         if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
-            self._inquiry_result(self.checkpoint_calls[tool_call_id], data, kind, seq, "inquiry-checkpoint", tool_call_id)
+            self._inquiry_result(self.checkpoint_calls, self._terminal_checkpoint_calls, data, kind,
+                                 "inquiry-checkpoint", tool_call_id)
             return
         if kind in ("result", "error") and tool_call_id in self.answer_calls:
-            self._inquiry_result(self.answer_calls[tool_call_id], data, kind, seq, "inquiry-answer", tool_call_id)
+            self._inquiry_result(self.answer_calls, self._terminal_answer_calls, data, kind,
+                                 "inquiry-answer", tool_call_id)
             return
 
-    def _inquiry_result(self, call: dict, data: dict, kind: str, seq: int, receipt_kind: str, tool_call_id: str) -> None:
+    def _retain_terminal(self, calls: dict[str, dict], terminal: deque[str], tool_call_id: str) -> None:
+        """Keep only the most recent terminal call identities, never a payload.
+
+        Pending scheduled calls are never evicted; an evicted terminal identity
+        means a much later duplicate result for it is simply ignored (never
+        imported) instead of raising, and no cumulative count limits the turn.
+        """
+        terminal.append(tool_call_id)
+        while len(terminal) > MAX_RETAINED_INQUIRY_CALLS:
+            calls.pop(terminal.popleft(), None)
+
+    def _inquiry_result(self, calls: dict[str, dict], terminal: deque[str], data: dict, kind: str,
+                        receipt_kind: str, tool_call_id: str) -> None:
         """Import one checkpoint/answer tool result under root-turn authority.
 
         An ordinary tool error keeps the turn alive for a corrected retry, exactly
         like a failed finish. A successful result must carry a signed receipt the
         controller re-verifies; the bridge callback then applies the state change
         or raises for a forged, stale or conflicting binding. A duplicate terminal
-        result for one call identity is a protocol violation.
+        result for one retained call identity is a protocol violation. The
+        verified receipt itself is handed to its callback and never retained, so
+        an unlimited turn cannot accumulate checkpoint question text.
         """
+        call = calls[tool_call_id]
         if call["result"] is not None:
             raise NativeError("invalid-provenance", f"the native {receipt_kind} call produced a duplicate terminal result")
         if kind == "error":
             call["result"] = "tool-error"
+            self._retain_terminal(calls, terminal, tool_call_id)
             return
         result = data.get("result") or {}
         if result.get("truncated") is not False:
             raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result was truncated")
         if result.get("success") is False:
             call["result"] = "tool-error"
+            self._retain_terminal(calls, terminal, tool_call_id)
             return
         if result.get("success") is not True:
             raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result has no explicit success evidence")
         receipt = verify_inquiry_receipt(result.get("content"), self.bridge, receipt_kind)
-        call["result"] = receipt
+        call["result"] = "receipt-verified"
+        self._retain_terminal(calls, terminal, tool_call_id)
         callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
         if callback is not None:
             callback(receipt, tool_call_id)

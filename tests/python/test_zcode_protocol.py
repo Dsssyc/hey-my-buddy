@@ -319,6 +319,49 @@ class InquiryEvidenceTests(unittest.TestCase):
                                            "toolCallId": "late-ckpt"})
         self.assertEqual(error.exception.code, "duplicate-finish")
 
+    def test_thousands_of_inquiry_calls_stay_bounded_and_functional(self):
+        # An unlimited (timeoutSeconds: 0) turn may checkpoint constantly. Every
+        # verified receipt is handed to its callback and never retained, only a
+        # bounded recent window of terminal call identities is kept, and no
+        # cumulative count ever ends the turn.
+        from buddy.adapters.zcode_protocol import MAX_RETAINED_INQUIRY_CALLS
+
+        self.started()
+        content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
+        total = 1200
+        for index in range(total):
+            self.event(2 * index + 2, "tool.updated", {"kind": "scheduled",
+                                                       "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                                       "toolCallId": f"ckpt-{index}"})
+            self.event(2 * index + 3, "tool.updated", {"kind": "result", "toolCallId": f"ckpt-{index}",
+                                                       "result": {"success": True, "truncated": False,
+                                                                  "content": content}})
+        self.assertEqual(len(self.deliveries), total)
+        self.assertLessEqual(len(self.tracker.checkpoint_calls), MAX_RETAINED_INQUIRY_CALLS)
+        self.assertTrue(all(call["result"] in (None, "tool-error", "receipt-verified")
+                            for call in self.tracker.checkpoint_calls.values()),
+                        "a verified checkpoint receipt payload must never be retained")
+        self.assertFalse(any(isinstance(call["result"], dict) for call in self.tracker.checkpoint_calls.values()))
+        # The turn is still fully functional after all those checkpoints...
+        self.event(2 * total + 2, "tool.updated", {"kind": "scheduled",
+                                                   "toolName": "mcp__buddy_x__buddy_checkpoint",
+                                                   "toolCallId": "ckpt-live"})
+        self.event(2 * total + 3, "tool.updated", {"kind": "result", "toolCallId": "ckpt-live",
+                                                   "result": {"success": True, "truncated": False,
+                                                              "content": content}})
+        self.assertEqual(len(self.deliveries), total + 1)
+        # ...a duplicate terminal result for a retained call still fails...
+        with self.assertRaises(NativeError):
+            self.event(2 * total + 4, "tool.updated", {"kind": "result", "toolCallId": "ckpt-live",
+                                                       "result": {"success": True, "truncated": False,
+                                                                  "content": content}})
+        # ...and a result for an evicted ancient call identity is ignored (never
+        # imported) instead of raising or delivering again.
+        self.event(2 * total + 5, "tool.updated", {"kind": "result", "toolCallId": "ckpt-0",
+                                                   "result": {"success": True, "truncated": False,
+                                                              "content": content}})
+        self.assertEqual(len(self.deliveries), total + 1)
+
 
 class ConfigurationTests(unittest.TestCase):
     def test_controller_refuses_incomplete_configuration_before_native_setters(self):
