@@ -109,7 +109,8 @@ class ChecksEnvironmentTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
             tmp = root / "tmp"
             self.assertTrue(tmp.is_dir())
-            environment = checks.child_environment(Path("/repo"), root)
+            environment = checks.child_environment(Path("/repo"), root,
+                                                   home_root=root / "home")
             self.assertEqual(environment["TMPDIR"], str(tmp))
             completed = subprocess.run(
                 [sys.executable, "-c", "import tempfile; print(tempfile.mkdtemp(prefix='inside-'))"],

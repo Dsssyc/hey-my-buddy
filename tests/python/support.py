@@ -186,6 +186,7 @@ _INHERITED_CHILD_KEYS = {
     "BUDDY_WORKER_STATE", "BUDDY_WORKER_ID", "BUDDY_AGENT_CREDENTIAL",
     "BUDDY_AGENT_CREDENTIAL_FILE", "BUDDY_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
     "BUDDY_SUPERVISOR_START_ID",
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 }
 
 
@@ -211,8 +212,6 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         CODEX_HOME=str(private_home / ".codex"),
         CLAUDE_CONFIG_DIR=str(private_home / ".claude"),
         ZCODE_DATA_BASE_DIR=str(private_home / ".zcode"),
-        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/builtin-provider.json"),
-        ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(private_home / ".zcode/personal-provider.json"),
         DSH_HOME=str(private_home / ".dsh"),
         XDG_CONFIG_HOME=str(private_home / ".config"),
         XDG_DATA_HOME=str(private_home / ".local/share"),
@@ -367,20 +366,6 @@ class BoardTestCase(unittest.TestCase):
         self._stack = []
         self.directory = Path(tempfile.mkdtemp(prefix="buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
-        # Local store tests also query harness capabilities in this process.
-        # Unless a fixture supplies its own selection, none is installed.
-        selection = self.directory / "harness-selection.json"
-        selection.write_text(json.dumps({name: {"adapter": name, "status": "missing", "command": [],
-                                              "reasonCode": "not-found"}
-                                        for name in ("dsh", "codex", "claude", "zcode")}))
-        previous_selection = os.environ.get("BUDDY_HARNESS_RECORD_FILE")
-        os.environ["BUDDY_HARNESS_RECORD_FILE"] = str(selection)
-        def restore_selection():
-            if previous_selection is None:
-                os.environ.pop("BUDDY_HARNESS_RECORD_FILE", None)
-            else:
-                os.environ["BUDDY_HARNESS_RECORD_FILE"] = previous_selection
-        self.addCleanup(restore_selection)
         # In-process boards read the source hook from this process environment; pin
         # the same offline fixture path the child environments get, so enabling a
         # model in any test cannot reach the network.

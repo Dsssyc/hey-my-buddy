@@ -151,17 +151,17 @@ Host 本次输入报告：前一封存在整合树上完整 Python 检查 216 �
 
 **最终位置。** 每条 ACP 启动补丁现在按顺序包含 `session-persistence-jsonl.root=<原会话根>`、`storage-json.root=<原会话根的父目录>/storages`、原来的暂行权限行。Worker 的索引在 `T/storages/session_projcache/sessions/`，发现与无工具的索引在 `N/dsh-home/storages/session_projcache/sessions/`；会话记录、绑定、身份、续接与 workflow 判断都不变。重定向的是整个原生 JSON storage 后端，并未改它的路由、用户设置或凭据主目录。投影缓存是原生文档所说的派生数据，记录仍是权威；不搬用户目录留下的旧缓存，不加旧位置读取，缓存缺失由 DSH 自己从记录重建。
 
-**无模型验收补充。** 最终 dump 的 storage-json.root 应等于会话根父目录下的 storages，同时会话 root、标题和权限核对照旧；真实两进程探针已写入相同的 storage-json 补丁。Host 在运行探针前、确认两个进程停止后，分别只列用户 `$DSH_HOME/storages`（未设置时为 `~/.dsh/storages`）下的相对文件名，比对没有新增文件，私有 storage 根下出现本次会话索引；这一步不读取凭据或索引正文，证据只保留核对摘要。无模型验证仍由 Host 显式执行，检查套件不再代跑真实 CLI。
+**无模型验收补充。** 最终 dump 的 storage-json.root 应等于会话根父目录下的 storages，同时会话 root、标题和权限核对照旧；真实两进程探针已写入相同的 storage-json 补丁。Host 在运行探针前、确认两个进程停止后，分别只列用户 `$DSH_HOME/storages`（未设置时为 `~/.dsh/storages`）下的相对文件名，比对没有新增文件，私有 storage 根下出现本次会话索引；这一步不读取凭据或索引正文，证据只保留核对摘要。用户真实配置的无模型验证仍由 Host 显式执行；普通测试能力查询可以在私有主目录下做版本探测，不再用全局未安装记录改变它的路径。
 
 **删除的真实发现测试与覆盖归属。** `InstalledHarnessDiscoveryTests.test_installed_harness_discovery_is_truthful_and_credential_free` 整条删除，因为它守的内容已有模拟验证：形状、原生身份及每模型推理强度由 `blackboard.catalog.test_catalog.CatalogTests.test_same_provider_and_model_in_different_harnesses_stay_distinct` 与 `test_each_model_declares_its_own_legal_efforts` 守；凭据/原生私有设置不进公开结果由 `test_unknown_native_settings_never_enter_public_catalog_or_proposals` 守；新发现的 buddy 默认不启用由同文件前一项及 `blackboard.evaluation.test_evaluation.EvaluationEvidenceTests.test_catalog_refresh_is_explicit_attributed_and_failure_safe` 守；启用经过用户发布由 `EvaluationPublishTests.test_user_patches_preserve_omitted_fields_and_maintenance_patches_cards` 守，借用用户权限被拒由 `blackboard.evaluation.test_user_policy.UserPolicyTests.test_host_cannot_claim_human_or_borrow_human_grant` 守。没有另留一个环境变量开启真实发现的测试。
 
-**测试目录审计。** 对整个 tests 树搜索启动、discovery、available、cli_command/command_for、用户主目录与安装路径，再按测试函数和 setUp 核对调用周围的模拟/环境来源；原始候选留在忽略的 tmp/adr030-batch3d/audit-candidates.txt 与 other-harness-audit.txt。DSH 的 NativeRunCase / ACP support 本来就在设置模拟用户目录和假进程；角色接线、no-tool、runtime_version、adapter_usage 与 private_adapter_invariants 使用同一假程序或测试选择记录；locator/stop-timing 文件使用临时可执行文件并替换候选扫描/握手，不用本机 CLI。查出的共享真实发现入口已经删除；防线又抓到了 ConsoleCoreTests 和 UserPolicyTests 的普通快照通过 capability 查询落入 DSH 版本探测的路径，由下面的默认选择修掉。
+**测试目录审计。** 对整个 tests 树搜索启动、discovery、available、cli_command/command_for、用户主目录与安装路径，再按测试函数和 setUp 核对调用周围的模拟/环境来源；原始候选留在忽略的 tmp/adr030-batch3d/audit-candidates.txt 与 other-harness-audit.txt。DSH 的 NativeRunCase / ACP support 本来就在设置模拟用户目录和假进程；角色接线、no-tool、runtime_version、adapter_usage 与 private_adapter_invariants 使用同一假程序或测试选择记录；locator/stop-timing 文件使用临时可执行文件并替换候选扫描/握手，不用本机 CLI。查出的共享真实发现入口已经删除；调查还发现 ConsoleCoreTests 和 UserPolicyTests 的普通快照可能通过 capability 查询落入 DSH 版本探测；按 Host 最新决定保留产品的正常路径，版本探测继承检查运行器的私有主目录即可。
 
 **其他 harness 的实际风险，仅列不改。** `buddy.harnesses.zcode.test_zcode_native.InstalledZcodeTests` 六项会从本机 ZCode 安装加载 CLI/内置供应方文件，并通过一个测试自己生成的 sandbox-exec shell 包装运行真实 CLI；它的私有数据目录与 loopback 模型桩不改变“真实安装被启动”的事实。`buddy.harnesses.zcode.test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities` 会加载默认已安装的 bundle 并运行免费版本/插件探测；fake global_root 也不改变这一事实。两组都未修改；按 Host 最新决定，它们照旧运行，继承检查运行器的私有主目录，迁成探针或改用模拟由 Host 另排，不是本批的阻断项。其他 ZCode 的普通 adapter/native_run、Codex 的 codex/native_run、Claude 的 claude/native_run，以及共用 runtime_version 矩阵，都从各自 setUp 的私有假程序/替换函数取命令；没有找到另一个未模拟的 Codex/Claude 真实 CLI 入口。`tests/probes/` 的真实调用保留，必须由 Host 在检查根之外显式运行。
 
-**选择的防线。** checks 的每个子进程现在有自己的 HOME、USERPROFILE/HOMEPATH、四个 harness 的配置路径、ZCode 两个供应方路径、XDG/AppData 路径；这覆盖在测试进程里直接调用产品代码的情形。Claude/Codex 沿用已有的未安装 CLI 哨兵，DSH/ZCode 默认读一份 status=missing、command=[] 的测试选择记录；模型目录默认是不存在的离线夹具路径，具体测试显式提供自己的模拟来源。BoardTestCase 的本进程默认冻结四个 harness 的未安装选择（其中 catalog 的 Claude 模拟测试不继承这个基类），避免绕过检查运行器时普通 capability 查询意外探测本机。模仿 CLI 的测试仍可提供它自己的选择和程序，没有真实测试的 opt-in。
+**选择的防线。** checks 的每个子进程只有私有 HOME、USERPROFILE/HOMEPATH、四个 harness 的主目录、XDG/AppData 配置路径这一组隔离变量；保留原检查运行器的运行时/端口和离线 model-facts 约定。并行的每个 pNNN 主目录是同一检查根下面的 pNNN-home，与 pNNN 的状态/临时材料并列；串行主目录是整个检查根下面的 home，与 state/runtime/tmp 并列，测试自己创建的空目录不被填入隔离文件。检查运行器不再默认赋 BUDDY_MODEL_CATALOG_FILE 或 BUDDY_HARNESS_RECORD_FILE，BoardTestCase 不再冻结任何 harness 的安装状态；普通能力查询可进行继承私有主目录的版本探测。ZCode 两个供应方配置变量不再有测试默认值，也不继承 shell 的这两个变量，具体夹具的显式覆盖仍按既有边界处理；不改 ZCode 模块与它的测试。
 
-**防线的界限。** 只保留私有主目录与配置路径这一个隔离机制：即使测试启动了本机安装的 harness，正常原生配置解析看到的也是空的私有目录；不再根据可执行文件名字、shell 命令或脚本头判断是否为真实安装。它不是系统沙箱，挡不住测试硬编码用户文件路径或自行覆盖私有环境，这些需要测试审查；直接运行 unittest 必须按约定提供私有环境，BoardTestCase 的未安装选择仅避免它自己的普通发现。真实配置与原生接口验收仍由 Host 在 tests/probes 显式运行。
+**防线的界限。** 只保留私有主目录与配置路径这一个隔离机制：即使测试启动了本机安装的 harness，正常原生配置解析看到的也是空的私有目录；不再根据可执行文件名字、shell 命令或脚本头判断是否为真实安装。它不是系统沙箱，挡不住测试硬编码用户文件路径或自行覆盖私有环境，这些需要测试审查；直接运行 unittest 必须按约定提供私有环境，BoardTestCase 不再代替测试决定安装状态或模型目录来源。真实配置与原生接口验收仍由 Host 在 tests/probes 显式运行。
 
 **索引修正回合的验证记录（历史结果）。** 上一回合用指定只读解释器和 checks.child_environment 的新私有根运行，281 项通过（43.718 秒，退出 0），日志在忽略的 `tmp/adr030-batch3d/host-fixes-final.log`。包含 evaluation/user_policy/catalog、测试环境隔离、检查运行器、support 和 DSH ACP/存储/记录/发现/native_run/native_resume 的聚焦测试；九项 C-Two 与四项进程枚举清理测试未运行。该结果不是本次删除之后的验证，本次最终结果另列。
 
@@ -176,3 +176,17 @@ Host 本次输入报告：前一封存在整合树上完整 Python 检查 216 �
 本次最终验证：指定只读解释器、checks.create_private_root 的默认独立临时根和 checks.child_environment 下，276 项通过（40.684 秒、退出 0），日志在忽略的 `tmp/adr030-batch3d/simplification-default-root.log`；覆盖与上一回合相同，少了三个启动门测试与两个标题禁用旧测试。首轮把检查根误放在本检出 tmp 内，导致 evaluation 的多工作目录被识别为同一个 Git 检出，276 项中一项触发已有写入排他检查；改用默认独立临时根后整组重跑通过，未改该测试或生产行为。五个本次改动的 Python 文件编译通过，探针 --help 退出 0，最终 diff 检查通过；这只验证探针的入口，不是实际原生握手。
 
 完整检查、受限测试、用户原生标题行为与 storages 零新增仍由 Host 验证，本次未运行本机安装的 harness、服务、Worker 或模型调用。
+
+## Host 全量回归打回：只隔离主目录
+
+Host 在 a1096620 与整合分支合并后的树上报告：两进程无模型探针、三次授权的可写/同会话续接/无工具调用通过，用户会话索引目录零新增，原生发现的 16 个名字与现有看板一致；这些是 Host 提供的证据，本回合没有读取日常看板或重复真实调用。完整检查 218 文件有四文件失败，Host 交回 test_continue_catalog_trust、test_catalog_trust、test_harness_health 和 test_upgrade_service 的具体输出；本回合只修测试基础设施，不改 DSH 产品行为。
+
+核对源码与输出：BUDDY_MODEL_CATALOG_FILE 指向不存在的文件会让目录读取走覆盖分支，绕过各测试本来准备的真实规则/模拟 reread；默认 missing 选择会改变健康与能力路径；BoardTestCase 的 harness-selection.json 是 load_fixture(self.directory) 拒绝非空目录的直接来源。已删除这些默认值与文件物化，将并行子进程的主目录由 child_environment 的必填 home_root 显式指定在同一检查根内的兄弟位置；原状态、runtime、tmp 的路径不变，隔离也不再往状态根写 catalog/selection 文件。support._child_environment 的原有每夹具子进程 home 约定未变，它不是这次新增的本进程默认值；该夹具自己的显式配置与边界继续沿用。
+
+需要模型目录覆盖的现有测试各自准备：EvaluationTestCase.setUp、ConsoleTestCase.setUp 调用自己的 catalog_fixture；ExplicitCatalogTrustTests.test_override_file_rejection_carries_the_reason_and_starts_no_native_read 与 ContinueCatalogTrustTests.test_override_file_route_without_a_profile_row_refuses_not_enabled 各自调用 catalog_fixture，其他用例保留模拟 reread；SharedStaleCatalogFlightTests 自己模拟健康发现并注册 reread，不需要全局覆盖。tests/python/blackboard/tasks/test_workflow_real.py 的 RealAdapterTests 假进程夹具自行传 BUDDY_HARNESS_RECORD_FILE，DSH NativeRunCase/ACP support 及其他 harness 的模拟运行也各自准备选定命令；没有再加一个全局未安装选择。删除原来“不启动 metadata 进程”的旧断言，以状态根没有多余文件、没有目录/安装覆盖、主目录位于旁边及真实 load_fixture 可加载为回归；并行假子进程也实际核对自己的 HOME 与状态根并列。
+
+按 Host 对另一批已合入事实的指示，删除 checks 与 support 中 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE、ZCODE_PERSONAL_PROVIDER_CONFIG_FILE 的默认值；只清除这两个继承键并保持显式夹具覆盖的既有校验，没有改 ZCode 的源码或专属测试。support 的共享 R-06 环境断言相应不再要求两个已删默认值出现，前缀并集由 Host 合并，本检出未移植另一批改动。
+
+本回合不运行 Host 指定的四个受限文件，它们仍由 Host 重跑；也不运行完整检查、服务、Worker、真实 harness 或模型调用。范围内验证结果在下面记录。
+
+本回合最终验证：指定只读解释器、checks 的私有环境与独立临时根下，25 项通过（1.777 秒，退出 0），日志在忽略的 `tmp/adr030-batch3d/environment-scope-final.log`；覆盖 test_harness_test_safety 全文件，test_checks_cleanup 的环境/锁/模拟 lsof 三类，test_checks_parallel 的 ScheduledModules/ResolveJobs/ParallelOutcome 三类，以及 test_support_cleanup 的两个环境用例。六个改动的 Python 文件编译通过，diff 检查通过；没有运行那四个 Host 点名文件。test_support_cleanup 的 R-06 子进程用例虽然只更新了旧环境断言，但需要 C-Two，也交由 Host 运行该文件全量；原四项进程枚举清理与 LeftoverProcessTests 继续由 Host 跑，完整检查负责其余共享基础设施影响。

@@ -56,6 +56,8 @@ SANITIZED_VARIABLES = (
     "BUDDY_AGENT_CREDENTIAL_FILE",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
+    "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 )
 
 #: A held lock with one of these names observes a live Buddy daemon or supervisor.
@@ -92,18 +94,16 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     return root
 
 
-def child_environment(root: Path, private_root: Path) -> dict:
-    """The suite environment, with every child temp file inside the private root."""
+def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dict:
+    """The suite's private state and a separately owned native home."""
     values = test_environment(root)
-    home = private_root / "home"
+    home = home_root
     home.mkdir(mode=0o700, parents=True, exist_ok=True)
     values.update({
         "HOME": str(home), "USERPROFILE": str(home),
         "HOMEDRIVE": home.drive, "HOMEPATH": str(home),
         "CODEX_HOME": str(home / ".codex"), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
         "DSH_HOME": str(home / ".dsh"), "ZCODE_DATA_BASE_DIR": str(home / ".zcode"),
-        "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE": str(home / ".zcode/builtin-provider.json"),
-        "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE": str(home / ".zcode/personal-provider.json"),
         "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"),
         "XDG_CACHE_HOME": str(home / ".cache"), "XDG_STATE_HOME": str(home / ".local/state"),
         "XDG_RUNTIME_DIR": str(private_root / "runtime"),
@@ -113,14 +113,6 @@ def child_environment(root: Path, private_root: Path) -> dict:
     values["BUDDY_CHECKS_TMPDIR"] = str(private_root / "tmp")
     values['BUDDY_STATE_DIR'] = str(private_root / 'state')
     values['BUDDY_RUNTIME_ROOT'] = str(private_root / 'runtime')
-    selection = private_root / "harness-selection.json"
-    selection.write_text(json.dumps({name: {"adapter": name, "status": "missing", "command": [],
-                                          "reasonCode": "not-found"}
-                                    for name in ("dsh", "zcode")}))
-    values["BUDDY_HARNESS_RECORD_FILE"] = str(selection)
-    # Model metadata tests replace this with their own fixture or an explicit
-    # fake discovery. A default capability read never probes installed CLIs.
-    values["BUDDY_MODEL_CATALOG_FILE"] = str(private_root / "model-catalog-fixture.json")
     # Model-facts refreshes stay offline in the check suite: the pinned source is a
     # private fixture path inside this root, and a missing one retains the snapshot
     # instead of fetching.
@@ -268,7 +260,8 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
     detached process that inherited the pipes cannot hold the runner.
     """
     child_root = private_root / directory_name
-    environment = child_environment(root, child_root)
+    environment = child_environment(root, child_root,
+                                    home_root=private_root / f"{directory_name}-home")
     started = time.monotonic()
     with guard:
         # The interrupt check, the spawn and the registration share one lock: an
@@ -409,7 +402,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int) -> str | None
 
 def run_suites_serially(root: Path, private_root: Path) -> str | None:
     """One Python discovery process using the same private environment."""
-    env = child_environment(root, private_root)
+    env = child_environment(root, private_root, home_root=private_root / "home")
     python = subprocess.run(
         [sys.executable, "-m", "unittest", "discover", "-s", str(root / "tests" / "python"), "-v"],
         cwd=str(root),
