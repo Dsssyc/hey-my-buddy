@@ -85,6 +85,52 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             'macroTaskId': target, 'microTaskCount': 1, 'confirm': True,
         })['state'], 'deleted')
 
+    def test_missing_repository_with_allocation_deletes_macro_task_records(self):
+        self.missing_repository_deletion(allocation_present=True)
+
+    def test_missing_repository_with_only_refs_deletes_macro_task_records(self):
+        self.missing_repository_deletion(allocation_present=False)
+
+    def missing_repository_deletion(self, *, allocation_present):
+        board = self.board()
+        run = self.create(board, macroTask={'title': 'Missing repository'})
+        with board.store.db.read() as connection:
+            manifest = json.loads(connection.execute(
+                'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
+                (run['runId'],)).fetchone()[0])
+        directory = board.store.directory / 'workspaces' / manifest['workspaceId']
+        if not allocation_present:
+            directory.rename(directory.with_name('retained-' + manifest['workspaceId']))
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        refs = self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix)
+        self.assertTrue(refs)
+        retained = self.repo.with_name('retained-repository')
+        self.repo.rename(retained)
+        try:
+            _, browser = self.open_console(board)
+            result = self.command(browser, DELETE, {
+                'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True,
+            })
+            self.assertEqual(result['state'], 'deleted')
+            self.assertIsNotNone(result['deletedAt'])
+            self.assertEqual(result['skipped'], [{
+                'kind': 'allocation' if allocation_present else 'ref',
+                'path': manifest['snapshot']['repositoryPath'], 'workspaceId': manifest['workspaceId'],
+                'reason': {'code': 'macro-task-deletion.repository-missing', 'params': {}},
+            }])
+            self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']}, status=404, code='NOT_FOUND')
+            with board.store.db.read() as connection:
+                for table in ('macro_tasks', 'macro_task_deletions', 'workflow_runs', 'tasks',
+                              'workflow_turns', 'workflow_artifacts', 'workflow_requests',
+                              'workspace_reservations', 'commands'):
+                    self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+                self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+            self.assertEqual(directory.exists(), allocation_present)
+            self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix,
+                                      cwd=retained), refs)
+        finally:
+            retained.rename(self.repo)
+
     def test_service_host_and_worker_credentials_do_not_authorize_either_operation(self):
         board = self.board()
         owner = self.create(board, macroTask={'title': 'Console owned'})

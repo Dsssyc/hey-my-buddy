@@ -90,6 +90,7 @@ export default {
   "macro-task-deletion.ref-changed": "Git 引用已变化。",
   "macro-task-deletion.ref-unproven": "无法证明 Git 引用的归属。",
   "macro-task-deletion.repository-changed": "仓库身份已变化。",
+  "macro-task-deletion.repository-missing": "仓库已不存在，未删除其 Git 引用。",
   "macro-task-deletion.review": "微任务仍在等待验收。",
   "macro-task-deletion.routing": "微任务仍在路由。",
   "macro-task-deletion.running": "微任务仍在执行。",

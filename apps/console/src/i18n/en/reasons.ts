@@ -92,6 +92,7 @@ export default {
   "macro-task-deletion.ref-changed": "The Git reference changed.",
   "macro-task-deletion.ref-unproven": "Ownership of the Git reference could not be proven.",
   "macro-task-deletion.repository-changed": "The repository identity changed.",
+  "macro-task-deletion.repository-missing": "The repository no longer exists; its Git references were skipped.",
   "macro-task-deletion.review": "A micro task still awaits acceptance.",
   "macro-task-deletion.routing": "A micro task is still routing.",
   "macro-task-deletion.running": "A micro task is still executing.",

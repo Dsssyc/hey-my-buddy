@@ -16,6 +16,7 @@ _SKIP_CODES = {
     "REF_CHANGED": "macro-task-deletion.ref-changed",
     "OWNER_UNPROVEN": "macro-task-deletion.owner-unproven",
     "REPOSITORY_CHANGED": "macro-task-deletion.repository-changed",
+    "REPOSITORY_MISSING": "macro-task-deletion.repository-missing",
     "DEPENDENCY_RETAINED": "macro-task-deletion.dependency-retained",
     "owner-unproven": "macro-task-deletion.owner-unproven",
     "not-a-managed-worktree": "macro-task-deletion.not-a-managed-worktree",
@@ -34,6 +35,18 @@ _SKIP_CODES = {
 def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> dict:
     return {"kind": kind, "path": path, "workspaceId": workspace_id,
             "reason": reason(_SKIP_CODES[code])}
+
+
+def _repository_skip(manifest: dict, kind: str, path: str) -> dict | None:
+    repository = Path(manifest["snapshot"]["repositoryPath"])
+    if not private_dirs.linked(repository):
+        try:
+            identity = workspace._identity(repository)
+        except FileNotFoundError:
+            return _skip(kind, str(repository), "REPOSITORY_MISSING", manifest["workspaceId"])
+        if identity == manifest["repositoryId"]:
+            return None
+    return _skip(kind, path, "REPOSITORY_CHANGED", manifest["workspaceId"])
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:
@@ -209,10 +222,9 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                 blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
                 continue
-            repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked(repository)
-                    or workspace._identity(repository) != manifest["repositoryId"]):
-                skipped.append(_skip("allocation", str(directory), "REPOSITORY_CHANGED", identifier))
+            repository_skip = _repository_skip(manifest, "allocation", str(directory))
+            if repository_skip is not None:
+                skipped.append(repository_skip)
                 blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
                 continue
             checkout = directory / "checkout"
@@ -244,9 +256,9 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
             continue
         if not directory.exists() and not directory.is_symlink():
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked(repository)
-                    or workspace._identity(repository) != manifest["repositoryId"]):
-                skipped.append(_skip("ref", _PREFIX + identifier + "/", "REPOSITORY_CHANGED", identifier))
+            repository_skip = _repository_skip(manifest, "ref", _PREFIX + identifier + "/")
+            if repository_skip is not None:
+                skipped.append(repository_skip)
                 continue
             ref_skips = _delete_refs(repository, identifier, expected[identifier])
             skipped.extend(ref_skips)
@@ -264,9 +276,9 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                 continue
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked(repository)
-                    or workspace._identity(repository) != manifest["repositoryId"]):
-                skipped.append(_skip("allocation", str(directory), "REPOSITORY_CHANGED", identifier))
+            repository_skip = _repository_skip(manifest, "allocation", str(directory))
+            if repository_skip is not None:
+                skipped.append(repository_skip)
                 continue
             if manifest["kind"] == "worktree" and workspace._path_present(directory / "checkout"):
                 skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
