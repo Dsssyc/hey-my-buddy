@@ -43,7 +43,7 @@ from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Op
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
-from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE
+from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE, REFUSED
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
@@ -348,7 +348,7 @@ class Execution:
         with self._hint_lock:
             self._hints.update(data)
 
-    def flush_hints(self) -> bool:
+    def flush_hints(self, *, delivering: bool = False) -> bool:
         with self._flush_lock:
             with self._hint_lock:
                 pending = dict(self._hints)
@@ -364,10 +364,14 @@ class Execution:
                                      data=pending or None)
             except BoardError as error:
                 if error.code in RETRYABLE:
-                    self._next_hint_at = time.monotonic() + self._hint_delay
-                    self._hint_delay = min(10.0, self._hint_delay * 2)
-                    return False
-                raise
+                    return self._defer_hints(error)
+                if delivering or error.code in REFUSED:
+                    raise
+                return self._defer_hints(error)
+            except Exception as error:
+                if delivering:
+                    raise
+                return self._defer_hints(error)
             self._next_hint_at = 0.0
             self._hint_delay = 0.25
             with self._hint_lock:
@@ -376,6 +380,12 @@ class Execution:
                     if self._hints.get(key) == value:
                         self._hints.pop(key)
             return True
+
+    def _defer_hints(self, error: Exception) -> bool:
+        self.log(f"execution progress pending: {error!r}")
+        self._next_hint_at = time.monotonic() + self._hint_delay
+        self._hint_delay = min(10.0, self._hint_delay * 2)
+        return False
 
     def run(self):
         # The durable empty journal precedes the identity acknowledgement:
@@ -394,13 +404,15 @@ class Execution:
                 if not delivered:
                     delay = min(10.0, delay * 2)
         receipt = self.execute()
+        if receipt["report"]["shutdownConfirmed"] is True:
+            (self.directory / BUDGET).unlink(missing_ok=True)
         self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
 
     def _flush_delivery_hints(self):
         self.control.raise_fatal()
-        return self.flush_hints()
+        return self.flush_hints(delivering=True)
 
     def execute(self) -> dict:
         """Run one attempt and always return a durable receipt.
@@ -716,11 +728,11 @@ class Execution:
             self.hint(activity=result.activity.value)
         # A Router projection must retain a failure to preserve its native evidence.
         retention_failure = getattr(handle, "evidence_retention_failure", None)
-        if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
+        if isinstance(retention_failure, dict):
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
-                and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
+                and outcome.result.get('modelStarted') is False
                 and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             holder['started'] = False
             holder['confirmed_stopped'] = True
@@ -729,8 +741,7 @@ class Execution:
         if timed_out:
             outcome.status = "failed"
             outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
-            if isinstance(outcome.result, dict):
-                outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
+            outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
@@ -747,7 +758,7 @@ class Execution:
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
                                   TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
             outcome.status = "cancelled"
-        if isinstance(outcome.result, dict) and "partialOutput" in outcome.result:
+        if "partialOutput" in outcome.result:
             outcome.result["partialOutput"]["reason"] = termination_reason
         report = outcome.to_report()
         if holder.get('harnessHistory'):
@@ -775,11 +786,6 @@ class Execution:
 
     def receipt(self, claim: dict, report: dict, directory: Path) -> dict:
         attempt = claim["attempt"]
-        if report["shutdownConfirmed"] is True:
-            try:
-                (directory / BUDGET).unlink(missing_ok=True)
-            except Exception as error:
-                self.log(f"private execution budget cleanup failed: {error!r}")
         receipt = {
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],

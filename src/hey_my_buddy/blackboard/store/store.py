@@ -192,10 +192,15 @@ class BoardStore:
     def _notify(self, head: int) -> None:
         with self._condition:
             changed = head > self._head
+            if changed and self.on_change is not None:
+                with self.db.read() as connection:
+                    task_ids = frozenset(row["task_id"] for row in connection.execute(
+                        "SELECT DISTINCT task_id FROM events WHERE seq>? AND seq<=? AND task_id IS NOT NULL",
+                        (self._head, head)))
             self._head = max(self._head, head)
             self._condition.notify_all()
         if changed and self.on_change is not None:
-            self.on_change()
+            self.on_change(task_ids)
 
     def stop_waiters(self) -> None:
         """Release all event waits before shutting down their service transport."""
@@ -1731,108 +1736,107 @@ class BoardStore:
                         blocker = "no-queued-work"
                 head = self._head_of(connection)
                 response = {"claim": None, "reason": blocker}
-                self._notify(head)
-                return response
-            # Coverage fence before anything is admitted, on every pass: the
-            # chosen run's repository must be a key this claim's own
-            # pre-transaction pass observed — the run's identity alone proves
-            # nothing, because the targeted pass can legitimately find the run
-            # not queued (another worker holds it) and observe no repository for
-            # it at all. A miss rolls the whole transaction back for targeted
-            # re-collection. Exhausting the bounded retry reports a conflict,
-            # never an idle snapshot: another claim must collect fresh facts.
-            # Nothing is admitted and no receipt is stored on a miss; a
-            # repository whose reading genuinely failed is
-            # present as a key and may start with its honest ``unknown``.
-            repository = self.workflow.run_repository_path(connection, chosen["task_id"])
-            if repository is not None and repository not in stash_facts["repositories"]:
-                raise ClaimStashCoverageRetry(chosen["task_id"])
-            spec = self.workflow.effective_spec(connection, chosen)
-            generation = chosen_generation
-            attempt_id = chosen_attempt_id
-            now = self.now()
-            connection.execute(
-                "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
-                " execution_state, ownership, adapter, model_harness, model_provider, model_model,"
-                " started_at, created_at, updated_at, revision)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
-                (
-                    attempt_id,
-                    chosen["task_id"],
-                    generation,
-                    self.db.nonce_verifier(nonce),
-                    "starting",
-                    "owned",
-                    chosen["adapter"],
-                    # Frozen model service identity: written by this claim transaction and
-                    # never updated afterwards, so historical and shutdown-uncertain
-                    # attempts cannot change which model service slot they occupy.
-                    *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
-                    now,
-                    now,
-                    now,
-                ),
-            )
-            connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id,))
-            effective_cwd = chosen["cwd"]
-            for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
-                for resource in values:
-                    # (task, resource) is unique, so a retried task re-holds its own
-                    # previously released claim instead of leaving it released.
-                    connection.execute(
-                        "INSERT INTO resource_claims(claim_id, task_id, attempt_id, resource, kind, state, created_at)"
-                        " VALUES(?,?,?,?,?,?,?)"
-                        " ON CONFLICT(task_id, resource) DO UPDATE SET attempt_id=excluded.attempt_id,"
-                        " kind=excluded.kind, state='held', created_at=excluded.created_at",
-                        (str(uuid.uuid4()), chosen["task_id"], attempt_id, resource, kind, "held", now),
-                    )
-            self._transition_task(connection, chosen, "running")
-            connection.execute(
-                "UPDATE tasks SET active_attempt_id=?, selected_attempt_id=?, queue_reason=NULL WHERE task_id=?",
-                (attempt_id, attempt_id, chosen["task_id"]),
-            )
-            self._append_event(
-                connection,
-                "execution.admitted",
-                task_id=chosen["task_id"],
-                attempt_id=attempt_id,
-                revision=chosen["revision"] + 1,
-                payload={"generation": generation, "adapter": chosen["adapter"]},
-            )
-            task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (chosen["task_id"],)).fetchone()
-            attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
-            # Execution inputs start from mechanical facts, never the decorated read view.
-            response = {
-                "claim": {
-                    "attempt": self._attempt_view(attempt_row, include_result=False),
-                    "task": self._task_view(task_row, execution_spec=spec),
-                },
-                "reason": None,
-            }
-            if chosen_input is not None:
-                # The bounded decision payload the service persisted for this attempt.
-                # It travels only to the claiming worker and is written to the private
-                # attempt directory by the decision adapter; adapters never see the
-                # database, and no credential is part of this document.
-                response["claim"]["decisionInput"] = chosen_input
-            turn_claim = self.workflow.begin_turn(
-                connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now,
-                stash_facts=stash_facts,
-            )
-            if turn_claim is not None:
-                # The service-owned turn identity and bounded context travel to the
-                # execution process, which receives them in its private startup material. The
-                # attempt-scoped credential is handed over next to it and is stored
-                # only as a verifier.
-                response["claim"]["turn"] = {
-                    "turnId": turn_claim["turnId"],
-                    "turnIndex": turn_claim["turnIndex"],
-                    "resumeMode": turn_claim["resumeMode"],
-                    "inputSha256": turn_claim["inputSha256"],
-                    "input": turn_claim["input"],
+            else:
+                # Coverage fence before anything is admitted, on every pass: the
+                # chosen run's repository must be a key this claim's own
+                # pre-transaction pass observed — the run's identity alone proves
+                # nothing, because the targeted pass can legitimately find the run
+                # not queued (another worker holds it) and observe no repository for
+                # it at all. A miss rolls the whole transaction back for targeted
+                # re-collection. Exhausting the bounded retry reports a conflict,
+                # never an idle snapshot: another claim must collect fresh facts.
+                # Nothing is admitted and no receipt is stored on a miss; a
+                # repository whose reading genuinely failed is
+                # present as a key and may start with its honest ``unknown``.
+                repository = self.workflow.run_repository_path(connection, chosen["task_id"])
+                if repository is not None and repository not in stash_facts["repositories"]:
+                    raise ClaimStashCoverageRetry(chosen["task_id"])
+                spec = self.workflow.effective_spec(connection, chosen)
+                generation = chosen_generation
+                attempt_id = chosen_attempt_id
+                now = self.now()
+                connection.execute(
+                    "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
+                    " execution_state, ownership, adapter, model_harness, model_provider, model_model,"
+                    " started_at, created_at, updated_at, revision)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    (
+                        attempt_id,
+                        chosen["task_id"],
+                        generation,
+                        self.db.nonce_verifier(nonce),
+                        "starting",
+                        "owned",
+                        chosen["adapter"],
+                        # Frozen model service identity: written by this claim transaction and
+                        # never updated afterwards, so historical and shutdown-uncertain
+                        # attempts cannot change which model service slot they occupy.
+                        *(chosen_model_service if chosen_model_service is not None else (None, None, None)),
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id,))
+                effective_cwd = chosen["cwd"]
+                for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
+                    for resource in values:
+                        # (task, resource) is unique, so a retried task re-holds its own
+                        # previously released claim instead of leaving it released.
+                        connection.execute(
+                            "INSERT INTO resource_claims(claim_id, task_id, attempt_id, resource, kind, state, created_at)"
+                            " VALUES(?,?,?,?,?,?,?)"
+                            " ON CONFLICT(task_id, resource) DO UPDATE SET attempt_id=excluded.attempt_id,"
+                            " kind=excluded.kind, state='held', created_at=excluded.created_at",
+                            (str(uuid.uuid4()), chosen["task_id"], attempt_id, resource, kind, "held", now),
+                        )
+                self._transition_task(connection, chosen, "running")
+                connection.execute(
+                    "UPDATE tasks SET active_attempt_id=?, selected_attempt_id=?, queue_reason=NULL WHERE task_id=?",
+                    (attempt_id, attempt_id, chosen["task_id"]),
+                )
+                self._append_event(
+                    connection,
+                    "execution.admitted",
+                    task_id=chosen["task_id"],
+                    attempt_id=attempt_id,
+                    revision=chosen["revision"] + 1,
+                    payload={"generation": generation, "adapter": chosen["adapter"]},
+                )
+                task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (chosen["task_id"],)).fetchone()
+                attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
+                # Execution inputs start from mechanical facts, never the decorated read view.
+                response = {
+                    "claim": {
+                        "attempt": self._attempt_view(attempt_row, include_result=False),
+                        "task": self._task_view(task_row, execution_spec=spec),
+                    },
+                    "reason": None,
                 }
-                response["claim"]["agentCredential"] = turn_claim["credential"]
-            head = self._head_of(connection)
+                if chosen_input is not None:
+                    # The bounded decision payload the service persisted for this attempt.
+                    # It travels only to the claiming worker and is written to the private
+                    # attempt directory by the decision adapter; adapters never see the
+                    # database, and no credential is part of this document.
+                    response["claim"]["decisionInput"] = chosen_input
+                turn_claim = self.workflow.begin_turn(
+                    connection, task=chosen, attempt_id=attempt_id, generation=generation, spec=spec, now=now,
+                    stash_facts=stash_facts,
+                )
+                if turn_claim is not None:
+                    # The service-owned turn identity and bounded context travel to the
+                    # execution process, which receives them in its private startup material. The
+                    # attempt-scoped credential is handed over next to it and is stored
+                    # only as a verifier.
+                    response["claim"]["turn"] = {
+                        "turnId": turn_claim["turnId"],
+                        "turnIndex": turn_claim["turnIndex"],
+                        "resumeMode": turn_claim["resumeMode"],
+                        "inputSha256": turn_claim["inputSha256"],
+                        "input": turn_claim["input"],
+                    }
+                    response["claim"]["agentCredential"] = turn_claim["credential"]
+                head = self._head_of(connection)
         self._notify(head)
         return response
 
@@ -2046,6 +2050,7 @@ class BoardStore:
         """Read an authenticated attempt's fixed private receipt at the RPC boundary."""
         from ...private_dirs import attempt_root
         from ...protocol.execution import RECEIPT, read_execution_receipt
+        from ..tasks.interruption import attempt_private_adapter
 
         schemas.reject_unknown(params, {"attemptId", "generation", "nonce", "receipt"}, "execution.result")
         reference = params.get("receipt")
@@ -2058,8 +2063,8 @@ class BoardStore:
             raise BoardError("INVALID_ARGUMENT", "receipt.sha256 is required")
         with self.db.read() as connection:
             attempt = self._verify_attempt_actor(connection, params)
-            adapter = attempt["model_harness"] if attempt["adapter"] == "decision" else attempt["adapter"]
-            directory = attempt_root(self.directory, adapter, attempt["task_id"], attempt["attempt_id"])
+            directory = attempt_root(self.directory, attempt_private_adapter(attempt),
+                                     attempt["task_id"], attempt["attempt_id"])
             binding = {"taskId": attempt["task_id"], "attemptId": attempt["attempt_id"],
                        "generation": attempt["generation"]}
         if path != str(directory / RECEIPT):

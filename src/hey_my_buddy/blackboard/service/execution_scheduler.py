@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -38,6 +39,15 @@ class _ConnectionWatch:
     error: Exception | None = None
 
 
+@dataclass
+class _ExecutionObservation:
+    task_id: str
+    condition: threading.Condition
+    revision: int = 0
+    consumed: int = -1
+    watch: _ConnectionWatch | None = None
+
+
 class ExecutionScheduler:
     """Admit within store capacity and observe every process through its endpoint."""
 
@@ -52,9 +62,8 @@ class ExecutionScheduler:
         self._stopping = threading.Event()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
-        self._revision = 0
         self._connections: dict[int, _ConnectionWatch] = {}
-        self._observed: dict[str, int] = {}
+        self._observed: dict[str, _ExecutionObservation] = {}
         self._handles: dict[str, tuple[object, dict | None]] = {}
         self._threads: set[threading.Thread] = set()
         self._thread = threading.Thread(target=self._run, name="execution-scheduler", daemon=True)
@@ -62,11 +71,20 @@ class ExecutionScheduler:
     def start(self) -> None:
         self._thread.start()
 
-    def wake(self) -> None:
+    def wake(self, task_ids: frozenset[str] | None = None) -> None:
         self._wake.set()
         with self._condition:
-            self._revision += 1
-            self._condition.notify_all()
+            for observer in self._observed.values():
+                if task_ids is None or observer.task_id in task_ids:
+                    observer.revision += 1
+                    observer.condition.notify()
+
+    def wake_attempt(self, attempt_id: str) -> None:
+        with self._condition:
+            observer = self._observed.get(attempt_id)
+            if observer is not None:
+                observer.revision += 1
+                observer.condition.notify()
 
     def stop(self) -> None:
         self._stopping.set()
@@ -83,12 +101,13 @@ class ExecutionScheduler:
         """Push durable stop intent through the observers' existing connections."""
         with self._condition:
             self.wake()
-            revision = self._revision
-            observed = tuple(self._observed)
+            observed = tuple((attempt_id, observer, observer.revision)
+                             for attempt_id, observer in self._observed.items())
             # A zero-drain stop can begin detaching immediately after this
             # returns. Each observer must first consume the committed intent.
             self._condition.wait_for(lambda: all(
-                self._observed.get(attempt_id, revision) >= revision for attempt_id in observed))
+                self._observed.get(attempt_id) is not observer or observer.consumed >= revision
+                for attempt_id, observer, revision in observed))
 
     def _issue(self, attempt_id: str, stage: str, error: Exception) -> None:
         try:
@@ -179,7 +198,8 @@ class ExecutionScheduler:
                                    name=f"execution-{claim['attempt']['attemptId']}", daemon=True)
         with self._condition:
             self._threads.add(monitor)
-            self._observed[attempt_id] = -1
+            self._observed[attempt_id] = _ExecutionObservation(
+                claim["task"]["taskId"], threading.Condition(self._lock))
             try:
                 monitor.start()
             except BaseException:
@@ -198,7 +218,8 @@ class ExecutionScheduler:
             with self._condition:
                 self._threads.discard(threading.current_thread())
                 del self._observed[claim["attempt"]["attemptId"]]
-                self.wake()
+                self._condition.notify_all()
+                self._wake.set()
 
     def _admit_available(self) -> None:
         while not self._stopping.is_set():
@@ -253,9 +274,10 @@ class ExecutionScheduler:
     def _settle_unidentified(self, claim: dict, handle) -> None:
         """Use the creator's reaped child and empty group when no identity was published."""
         attempt_id = claim["attempt"]["attemptId"]
+        observer = self._observed[attempt_id]
         while not self._stopping.is_set():
             with self._condition:
-                revision = self._revision
+                revision = observer.revision
                 identity = self._handles[attempt_id][1]
             if identity is not None:
                 self._observe(claim, handle, identity)
@@ -277,10 +299,10 @@ class ExecutionScheduler:
             except Exception as error:
                 self._issue(attempt_id, "unidentified-observation", error)
             with self._condition:
-                self._observed[attempt_id] = revision
+                observer.consumed = revision
                 self._condition.notify_all()
-                self._condition.wait_for(
-                    lambda: revision != self._revision or self._stopping.is_set(), 0.1)
+                observer.condition.wait_for(
+                    lambda: revision != observer.revision or self._stopping.is_set(), 0.1)
 
     def _endpoint(self, attempt_id: str, handle, identity: dict):
         # Publication precedes the identity acknowledgement. Sample the latter
@@ -322,13 +344,16 @@ class ExecutionScheduler:
         with self._condition:
             watch.error = error
             del self._connections[key]
-            self._revision += 1
-            self._condition.notify_all()
+            for observer in self._observed.values():
+                if observer.watch is watch:
+                    observer.revision += 1
+                    observer.condition.notify()
 
     def _observe(self, claim: dict, handle, identity: dict) -> None:
         attempt_id = claim["attempt"]["attemptId"]
         task_id = claim["task"]["taskId"]
-        client = watch = None
+        observer = self._observed[attempt_id]
+        client = None
         stop_sent: tuple | None = None
         forced_at: float | None = None
         force_checked = False
@@ -341,14 +366,23 @@ class ExecutionScheduler:
             while not self._stopping.is_set():
                 # A notification during any read/call below must prevent sleep.
                 with self._condition:
-                    revision = self._revision
+                    revision = observer.revision
                 next_deadline = None
                 try:
                     if handle.process is not None:
                         handle.process.poll()  # Reap the creator's child only.
-                    if watch is not None and watch.error is not None:
-                        raise watch.error
-                    if client is None and (retry_at is None or time.monotonic() >= retry_at):
+                    if observer.watch is not None and observer.watch.error is not None:
+                        self._unknown(attempt_id, observer.watch.error)
+                        self.live_registry.unbind(attempt_id, client)
+                        client = None
+                        with self._condition:
+                            observer.watch = None
+                        retry_at = time.monotonic() + delay
+                        delay = min(delay * 2, self.TICK_SECONDS)
+                    view = self.store.task_get({"runId": task_id})["task"]
+                    pending_stop = (view.get("cancelRequested") or
+                                    (view.get("selectedAttempt") or {}).get("forceRequestedAt") is not None)
+                    if client is None and (pending_stop or retry_at is None or time.monotonic() >= retry_at):
                         observation = inspect_process_identity(identity)
                         if observation in ("identity-absent", "boot-changed"):
                             if self._recover_if_gone(attempt_id, identity, observation):
@@ -361,7 +395,8 @@ class ExecutionScheduler:
                                 self._unknown(attempt_id, error)
                             if client is not None:
                                 self.live_registry.bind(attempt_id, client)
-                                watch = self._watch_connection(client.connection_observation)
+                                with self._condition:
+                                    observer.watch = self._watch_connection(client.connection_observation)
                                 stop_sent = None  # Re-send durable intent on every new channel.
                                 delay, retry_at = 0.1, None
                                 self.store.execution_connection(attempt_id, connected=True)
@@ -373,7 +408,6 @@ class ExecutionScheduler:
                             delay = min(delay * 2, self.TICK_SECONDS)
                     # This reads the budget on first attachment and every wake,
                     # including a late budget publication or a deadline expiry.
-                    view = self.store.task_get({"runId": task_id})["task"]
                     if forced_at is None:
                         forced_at = self._force_requested_at(view)
                     stop_sent, forced_at, next_deadline = self._apply_stop(
@@ -385,7 +419,9 @@ class ExecutionScheduler:
                         self._issue(attempt_id, "observation", error)
                     if client is not None:
                         self.live_registry.unbind(attempt_id, client)
-                        client = watch = None
+                        client = None
+                        with self._condition:
+                            observer.watch = None
                     retry_at = time.monotonic() + delay
                     delay = min(delay * 2, self.TICK_SECONDS)
                 if forced_at is not None and not force_checked and (
@@ -411,12 +447,12 @@ class ExecutionScheduler:
                 ) if value is not None]
                 timeout = max(0, min(deadlines) - time.monotonic()) if deadlines else None
                 with self._condition:
-                    if self._observed[attempt_id] < revision:
-                        self._observed[attempt_id] = revision
+                    if observer.consumed < revision:
+                        observer.consumed = revision
                         self._condition.notify_all()
-                    if revision == self._revision and not self._stopping.is_set():
-                        self._condition.wait_for(
-                            lambda: revision != self._revision or self._stopping.is_set(), timeout)
+                    if revision == observer.revision and not self._stopping.is_set():
+                        observer.condition.wait_for(
+                            lambda: revision != observer.revision or self._stopping.is_set(), timeout)
         finally:
             if client is not None:
                 self.live_registry.unbind(attempt_id, client)
@@ -428,11 +464,10 @@ class ExecutionScheduler:
         self.store.execution_connection(attempt_id, connected=False)
         detail = error.message if isinstance(error, BoardError) else str(error)
         details = error.details if isinstance(error, BoardError) else {}
-        if details:
-            # execution_issues stores the message; retain the structured cause
-            # there as well as on the error passed to the recording boundary.
-            detail += f"; {canonical_json(details)}"
-        self._issue(attempt_id, "connection", BoardError("EXECUTION_UNKNOWN", detail, **details))
+        logging.warning("Execution %s connection unavailable: %s; %s",
+                        attempt_id, detail, canonical_json(details))
+        self._issue(attempt_id, "connection", BoardError(
+            "EXECUTION_UNKNOWN", "The execution connection is unavailable"))
 
     def _recover_if_gone(self, attempt_id: str, identity: dict, observation: str | None = None) -> bool:
         observation = observation or inspect_process_identity(identity)

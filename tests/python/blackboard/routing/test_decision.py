@@ -127,6 +127,22 @@ class DecisionTestCase(BoardTestCase):
 
 
 class SelectionRequestTests(DecisionTestCase):
+    def test_unclaimed_router_cancellation_notifies_its_task_after_commit(self):
+        from unittest.mock import Mock
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        changed = Mock()
+        board.store.on_change = changed
+        def cancel(connection, *, task, now):
+            board.store.decisions._cancel_queued_task(connection, task, now)
+            return 'decision-closed'
+        with patch.object(board.store.decisions, 'prepare_router_claim', side_effect=cancel):
+            response = board.store.admit_execution('n' * 32)
+        self.assertIsNone(response['claim'])
+        changed.assert_called_once_with(frozenset({request['runId']}))
+        self.assertEqual(board.client().get(runId=request['runId'])['state'], 'cancelled')
+
     def test_request_is_durable_idempotent_and_conflicts_on_changed_input(self):
         board = self.board()
         self.seed(board)

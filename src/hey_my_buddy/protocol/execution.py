@@ -26,6 +26,7 @@ from .run_identity import RunIdentity
 STARTUP = "execution-start.json"
 LIVE = "execution-live.json"
 RECEIPT = "result-receipt.json"
+DELIVERY = "result-delivery.json"
 BUDGET = "execution-budget.json"
 
 
@@ -165,6 +166,29 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     if binding is not None and any(value[key] != binding[key] for key in
                                    ("taskId", "attemptId", "generation")):
         raise BoardError("INVALID_ARGUMENT", "Execution receipt binding differs")
+    return value
+
+
+def read_execution_delivery(directory: Path, *, binding: dict) -> dict | None:
+    """Read the service's delivery decision, bound to this one attempt."""
+    try:
+        value = _private_json(Path(directory) / DELIVERY)
+    except FileNotFoundError:
+        return None
+    if (set(value) != {"taskId", "attemptId", "generation", "accepted", "error"}
+            or any(value[key] != binding[key] for key in binding)
+            or type(value["generation"]) is not int
+            or type(value["accepted"]) is not bool):
+        raise BoardError("INVALID_ARGUMENT", "Execution delivery decision has a different binding or shape")
+    error = value["error"]
+    if value["accepted"]:
+        valid = error is None
+    else:
+        valid = (isinstance(error, dict) and set(error) == {"code", "message"}
+                 and isinstance(error["code"], str) and bool(error["code"])
+                 and isinstance(error["message"], str) and bool(error["message"]))
+    if not valid:
+        raise BoardError("INVALID_ARGUMENT", "Execution delivery decision has an invalid refusal")
     return value
 
 

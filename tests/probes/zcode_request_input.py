@@ -105,7 +105,7 @@ class ProbeConnection(NativeConnection):
         except queue.Empty:
             return
         if message is None:
-            raise NativeError("native-disconnected", "the native app server closed before settlement")
+            raise NativeError("transport-error", "the native app server closed before settlement")
         if isinstance(message, NativeError):
             raise message
         self.ordinal += 1

@@ -28,10 +28,13 @@ def record_identity(connection, attempt_id: str, record: dict) -> None:
                         record['processGroupId'], record['jobName']))
 
 
+def attempt_private_adapter(attempt) -> str:
+    return attempt['model_harness'] if attempt['adapter'] == 'decision' else attempt['adapter']
+
+
 def _directory(board, attempt):
     from ...private_dirs import attempt_root
-    adapter = attempt['model_harness'] if attempt['adapter'] == 'decision' else attempt['adapter']
-    return attempt_root(board.directory, adapter, attempt['task_id'], attempt['attempt_id'])
+    return attempt_root(board.directory, attempt_private_adapter(attempt), attempt['task_id'], attempt['attempt_id'])
 
 
 def _evidence_directory(board, attempt):
@@ -136,7 +139,7 @@ def _stop_reason(attempt):
 
 
 def _cleanup_dead_material(board, attempt, identity, observation):
-    from ...protocol.execution import STARTUP, LIVE, cleanup_execution_endpoint
+    from ...protocol.execution import LIVE, cleanup_execution_endpoint
     directory = _directory(board, attempt)
     cleaned = True
     try:
@@ -152,24 +155,15 @@ def _cleanup_dead_material(board, attempt, identity, observation):
     except Exception as error:
         cleaned = False
         board.record_execution_issue(attempt['attempt_id'], 'endpoint-cleanup', error)
-    finally:
-        # The endpoint reader retains its credential until reap succeeds. It is
-        # the retry evidence for a failed cleanup, even after result settlement.
-        try:
-            (directory / STARTUP).unlink(missing_ok=True)
-            board.clear_execution_issue(attempt['attempt_id'], 'private-material-cleanup')
-        except OSError as error:
-            cleaned = False
-            board.record_execution_issue(attempt['attempt_id'], 'private-material-cleanup', error)
     # Execution death precedes this function, but surviving native work can
     # still be unknown. Only committed complete stop proof permits deletion.
     with board.db.read() as connection:
         stopped = board._attempt_row(connection, attempt['attempt_id'])['shutdown_confirmed']
     if stopped:
         from ...private_dirs import cleanup_attempt_credentials
-        adapter = attempt['model_harness'] if attempt['adapter'] == 'decision' else attempt['adapter']
         try:
-            cleanup_attempt_credentials(board.directory, adapter, attempt['task_id'], attempt['attempt_id'])
+            cleanup_attempt_credentials(board.directory, attempt_private_adapter(attempt),
+                                        attempt['task_id'], attempt['attempt_id'])
             board.clear_execution_issue(attempt['attempt_id'], 'credential-cleanup')
         except (BoardError, OSError) as error:
             cleaned = False
@@ -181,7 +175,7 @@ def _cleanup_dead_material(board, attempt, identity, observation):
 
 
 def _recover_one(board, attempt, identity, stopped_evidence):
-    from ...protocol.execution import read_execution_receipt
+    from ...protocol.execution import read_execution_receipt, read_execution_delivery
     if stopped_evidence is None:
         if identity is None:
             identity = _marker_identity(board, attempt)
@@ -238,8 +232,10 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                         evidence[key] = partial[key]
             return board.confirm_execution_shutdown(attempt['attempt_id'], evidence)
         directory = _directory(board, attempt)
-        receipt = read_execution_receipt(directory, binding={
-            'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']})
+        binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']}
+        delivery = read_execution_delivery(directory, binding=binding)
+        refusal = delivery['error'] if delivery is not None and not delivery['accepted'] else None
+        receipt = read_execution_receipt(directory, binding=binding) if refusal is None else None
         if receipt is not None:
             response = board.execution_result({**receipt['report'], 'attemptId': attempt['attempt_id'],
                 'generation': attempt['generation']}, recovered=True,
@@ -257,11 +253,14 @@ def _recover_one(board, attempt, identity, stopped_evidence):
         if result is None:
             return None
         stopped = attempt['cancel_requested_at'] is not None or attempt['stop_initiator'] is not None
-        reason = _stop_reason(attempt) if stopped else 'interrupted'
+        reason = _stop_reason(attempt) if stopped and refusal is None else 'interrupted'
         result['partialOutput']['reason'] = reason
-        report = {'status': 'cancelled' if stopped else 'failed', 'result': result,
-                  'error': result.get('workspaceSealError', 'Execution stopped before result delivery' if stopped
-                                      else 'Execution was interrupted'),
+        if refusal is not None:
+            result['receiptRejection'] = refusal
+        report = {'status': 'cancelled' if stopped and refusal is None else 'failed', 'result': result,
+                  'error': (f"Execution result refused: {refusal['code']}: {refusal['message']}" if refusal is not None else
+                            result.get('workspaceSealError', 'Execution stopped before result delivery' if stopped
+                                       else 'Execution was interrupted')),
                   'exitCode': None, 'signal': None, 'shutdownConfirmed': confirmed, 'artifacts': [],
                   'terminationReason': reason if confirmed or not stopped else None,
                   'logPaths': json.loads(attempt['log_paths']), 'runtimeIdentity': attempt['runtime_identity']}

@@ -4,13 +4,18 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from ...protocol.execution import fsync_json, read_execution_receipt as read_receipt, receipt_reference, RECEIPT
+from ...protocol.execution import (fsync_json, read_execution_receipt as read_receipt,
+                                  receipt_reference, RECEIPT, DELIVERY)
 
 from ...errors import BoardError
 
-DELIVERY = "result-delivery.json"
 RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"})
-REFUSED = frozenset({"ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT"})
+# The execution.result boundary and its result transaction make these decisions.
+REFUSED = frozenset({"MESSAGE_TOO_LARGE", "INVALID_ARGUMENT", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND",
+                    "STALE_GENERATION", "ATTEMPT_FINISHED", "PRIVATE_PATH_UNSAFE", "RECEIPT_MISSING",
+                    "RECEIPT_MISMATCH", "ARTIFACT_MISSING", "ARTIFACT_MISMATCH", "CONFLICT",
+                    "ILLEGAL_TRANSITION", "REVISION_CONFLICT", "WORKSPACE_INVALID", "ANCESTOR_TERMINAL",
+                    "SHUTDOWN_UNCONFIRMED", "PREPARATION_CONFLICT"})
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -24,9 +29,10 @@ def write_receipt(directory: Path, receipt: dict) -> None:
 
 def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=lambda message: None,
                     flush_hints=None) -> bool:
-    """Keep the execution alive until its result is confirmed or explicitly refused."""
+    """Retry offline delivery; retain unknown outcomes for service recovery."""
     reference = receipt_reference(directory)
     delay = 0.25
+    refusal = None
     while True:
         # Hints and results share this delivery wait. Identity rejection from
         # flushing hints is terminal and must reach the caller.
@@ -37,7 +43,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
             except BoardError as error:
                 if error.code in REFUSED:
                     accepted = False
-                    log(f"result refused: {error.code}")
+                    refusal = {"code": error.code, "message": error.message}
                     break
                 if error.code not in RETRYABLE:
                     raise
@@ -47,8 +53,12 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
                 break
         time.sleep(delay)
         delay = min(10.0, delay * 2)
-    # The acknowledgement is durable before removing the pending receipt.
-    # A crash before it is written replays the same attempt result.
-    fsync_json(directory / DELIVERY, {"attemptId": receipt["attemptId"], "accepted": accepted}, immutable=True)
-    (directory / RECEIPT).unlink(missing_ok=True)
+    # Recovery reads this decision before considering a pending receipt. A
+    # refused receipt remains evidence, and can never be replayed as a result.
+    fsync_json(directory / DELIVERY, {**{key: receipt[key] for key in ("taskId", "attemptId", "generation")},
+                                      "accepted": accepted, "error": refusal}, immutable=True)
+    if refusal is not None:
+        log(f"result refused: {refusal['code']}: {refusal['message']}")
+    if accepted:
+        (directory / RECEIPT).unlink(missing_ok=True)
     return accepted

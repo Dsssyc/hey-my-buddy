@@ -14,7 +14,8 @@ import time
 import unittest
 from unittest.mock import Mock, call, patch
 
-from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
+from hey_my_buddy.blackboard.service.execution_scheduler import (
+    ExecutionScheduler, _RecoveredExecution, _ExecutionObservation)
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
 from hey_my_buddy.protocol.run_identity import RunIdentity
@@ -55,22 +56,24 @@ class ExecutionObservationTests(unittest.TestCase):
 
     @staticmethod
     def monitor(scheduler, claim, handle, identity=None):
-        scheduler._observed[claim["attempt"]["attemptId"]] = -1
+        scheduler._observed[claim["attempt"]["attemptId"]] = _ExecutionObservation(
+            claim["task"]["taskId"], scheduler._condition)
         scheduler._monitor(claim, handle, identity)
 
     @contextmanager
-    def observing(self, scheduler, claim, location, client):
+    def observing(self, scheduler, claim, location, client, *, endpoint_reads=None):
         identity = {"pid": 1}
         attempt_id = claim["attempt"]["attemptId"]
         waits = queue.Queue()
-        original_wait = scheduler._condition.wait_for
-        def wait(predicate, timeout=None):
+        original_wait = threading.Condition.wait_for
+        def wait(condition, predicate, timeout=None):
             if threading.current_thread().name == f"execution-{attempt_id}":
                 waits.put(timeout)
-            return original_wait(predicate, timeout)
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint", return_value=client), \
+            return original_wait(condition, predicate, timeout)
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
+                   return_value=client, side_effect=endpoint_reads), \
              patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity", return_value="alive"), \
-             patch.object(scheduler._condition, "wait_for", side_effect=wait):
+             patch.object(threading.Condition, "wait_for", autospec=True, side_effect=wait):
             scheduler._handles[attempt_id] = (location, identity)
             scheduler._start_observer(claim, location, identity)
             try:
@@ -418,6 +421,66 @@ class ExecutionObservationTests(unittest.TestCase):
             self.assertEqual(client.stop.call_count, 1)
             store.record_execution_deadline.assert_called_once_with("attempt", "service-stop")
             store.recover_executions.assert_not_called()
+
+    def test_zero_drain_stop_bypasses_an_unconnected_observers_reconnect_backoff(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.execution_identity_confirmed.return_value = False
+            view = {'cancelRequested': False}
+            store.task_get.side_effect = lambda _params: {'task': dict(view)}
+            store.record_execution_deadline.return_value = {
+                'forceRequestedAt': datetime.now(timezone.utc).isoformat(), 'forceReason': 'service-stop'}
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            claim, location = self.recovered(root)
+            client = self.client()
+            with patch('hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic', return_value=100.0), \
+                 self.observing(scheduler, claim, location, client, endpoint_reads=[None, client]) as waits:
+                self.assertAlmostEqual(waits.get(timeout=2), .1)
+                client.connect.assert_not_called()
+                view.update(cancelRequested=True, stopInitiator='service')
+                scheduler.send_pending_stops()
+                client.connect.assert_called_once()
+                client.stop.assert_called_once_with(initiator='service', grace_deadline=None, force=True)
+            store.recover_executions.assert_not_called()
+
+    def test_task_progress_and_connection_wakes_never_make_another_observer_read(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = Mock(directory=Path(root))
+            store.task_get.side_effect = lambda _params: {'task': {'cancelRequested': False}}
+            scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            pairs = [self.recovered(Path(root) / name, task_id=name, attempt_id=name) for name in ('a', 'b')]
+            clients = {name: self.client() for name in ('a', 'b')}
+            waits = queue.Queue()
+            original_wait = threading.Condition.wait_for
+            def wait(condition, predicate, timeout=None):
+                name = threading.current_thread().name
+                if name in ('execution-a', 'execution-b'):
+                    waits.put((name, timeout))
+                return original_wait(condition, predicate, timeout)
+            with patch('hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity', return_value='alive'), \
+                 patch('hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint',
+                       side_effect=lambda directory, *_args, **_kwargs: clients[directory.name]), \
+                 patch.object(threading.Condition, 'wait_for', autospec=True, side_effect=wait):
+                for claim, location in pairs:
+                    scheduler._handles[claim['attempt']['attemptId']] = (location, {'pid': 1})
+                    scheduler._start_observer(claim, location, {'pid': 1})
+                try:
+                    self.assertEqual({waits.get(timeout=2), waits.get(timeout=2)},
+                                     {('execution-a', None), ('execution-b', None)})
+                    other_reads = store.task_get.call_args_list.count(call({'runId': 'b'}))
+                    scheduler.wake(frozenset({'a'}))
+                    self.assertEqual(waits.get(timeout=2), ('execution-a', None))
+                    scheduler.wake_attempt('a')
+                    self.assertEqual(waits.get(timeout=2), ('execution-a', None))
+                    clients['a'].connection_observation.closed.set()
+                    name, timeout = waits.get(timeout=2)
+                    self.assertEqual(name, 'execution-a')
+                    self.assertGreater(timeout, 0)
+                    self.assertEqual(store.task_get.call_args_list.count(call({'runId': 'b'})), other_reads)
+                    with self.assertRaises(queue.Empty):
+                        waits.get(timeout=.03)
+                finally:
+                    scheduler.stop()
 
     def test_stop_arriving_during_authentication_uses_that_same_connection(self):
         with tempfile.TemporaryDirectory() as root:
@@ -769,7 +832,8 @@ class ExecutionObservationTests(unittest.TestCase):
                 kill.assert_not_called()
                 issue = store.record_execution_issue.call_args.args[2]
                 self.assertEqual(issue.code, "EXECUTION_UNKNOWN")
-                self.assertIn('"reason":"peer_closed"', issue.message)
+                self.assertEqual(issue.message, "The execution connection is unavailable")
+                self.assertEqual(issue.details, {})
 
     def test_logical_reconnects_share_one_physical_close_waiter(self):
         scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)

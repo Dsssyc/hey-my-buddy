@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from admission import admit_execution
 from support import BoardTestCase, InProcessBoard
 from hey_my_buddy.blackboard.tasks import interruption
+from hey_my_buddy.blackboard.service.execution_scheduler import _ExecutionObservation
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
@@ -88,7 +89,8 @@ class InterruptionRecoveryTests(BoardTestCase):
                            'hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity',
                            return_value='alive'), patch.object(
                            scheduler, '_watch_connection', return_value=Mock(error=None)):
-                    scheduler._observed[actor['attemptId']] = -1
+                    scheduler._observed[actor['attemptId']] = _ExecutionObservation(
+                        task['taskId'], scheduler._condition)
                     scheduler._monitor(claim, location, IDENTITY)
                 self.assertEqual(len(reads), 2)
                 if acknowledgement == 'after-first-wait':
@@ -217,17 +219,21 @@ class InterruptionRecoveryTests(BoardTestCase):
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
         credential.write_text('private fixture')
+        startup = root / 'execution-start.json'
+        fsync_json(startup, {'claim': {'agentCredential': 'private fixture'}})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(interruption, '_stop_native', return_value=(False, None)):
             board.store.recover_executions()
         self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
         self.assertTrue(credential.exists())
+        self.assertTrue(startup.exists())
         with board.store.db.read() as connection:
             self.assertTrue(board.store._attempt_row(connection, actor['attemptId'])['cleanup_pending'])
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             board.store.recover_executions()
         self.assertTrue(client.get(runId=task['taskId'])['shutdownConfirmed'])
         self.assertFalse(credential.exists())
+        self.assertFalse(startup.exists())
 
     def test_credential_cleanup_failure_is_visible_and_retried_without_losing_receipt(self):
         board, client, task, _, actor = self.claimed()
@@ -273,17 +279,57 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual((root / RECEIPT).read_bytes(), original)
         self.assertFalse(credential.exists())
 
-    def test_unknown_connection_retains_structured_transport_details_in_issue(self):
+    def test_unknown_connection_logs_diagnostics_and_deduplicates_a_stable_issue(self):
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
         board, client, task, _, actor = self.claimed()
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
-        scheduler._unknown(actor['attemptId'], BoardError('LIVE_UNAVAILABLE', 'connect failed',
-            io_kind='permission_denied', raw_os_error=13, io_operation='connect'))
+        with self.assertLogs(level='WARNING') as logs:
+            scheduler._unknown(actor['attemptId'], BoardError('LIVE_UNAVAILABLE', 'connect failed',
+                io_kind='permission_denied', raw_os_error=13, io_operation='connect', connectionId=1, cause='first'))
+            head = board.store.head()
+            scheduler._unknown(actor['attemptId'], BoardError('LIVE_UNAVAILABLE', 'connect failed again',
+                io_kind='permission_denied', raw_os_error=13, io_operation='connect', connectionId=2, cause='second'))
+        self.assertEqual(board.store.head(), head)
         issue = client.get(runId=task['taskId'])['selectedAttempt']['issues'][0]
         self.assertEqual(issue['code'], 'EXECUTION_UNKNOWN')
-        for field in ('io_kind', 'raw_os_error', 'io_operation'):
-            self.assertIn(field, issue['message'])
+        self.assertEqual(issue['message'], 'The execution connection is unavailable')
+        for field in ('io_kind', 'raw_os_error', 'io_operation', 'connectionId', 'first', 'second'):
+            self.assertIn(field, '\n'.join(logs.output))
         self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+
+    def test_refused_receipt_is_never_replayed_and_settles_failed_with_released_capacity(self):
+        from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
+        from hey_my_buddy.protocol.execution import DELIVERY
+        board, client, task, _, actor = self.claimed()
+        directory = Path(self.journal(board, actor['attemptId'])['path']).parent
+        binding = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation']}
+        receipt = {**binding, 'createdAt': board.store.now(),
+                   'report': {'status': 'invalid-status', 'shutdownConfirmed': True}}
+        fsync_json(directory / RECEIPT, receipt)
+        original = (directory / RECEIPT).read_bytes()
+        self.assertEqual(board.store.capacity_report()['totalActive'], 1)
+        self.assertFalse(deliver_receipt(client, receipt, directory, nonce=actor['nonce']))
+        decision = json.loads((directory / DELIVERY).read_text())
+        self.assertEqual(decision['error']['code'], 'INVALID_ARGUMENT')
+        self.assertFalse(decision['accepted'])
+        # A rejection records no stop proof. Until the root is absent it still
+        # owns capacity; recovery must not replay its invalid report afterwards.
+        with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+            self.assertEqual(board.store.recover_executions(), [])
+        self.assertEqual(board.store.capacity_report()['totalActive'], 1)
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
+             patch.object(board.store, 'execution_result', wraps=board.store.execution_result) as commit:
+            self.assertEqual(len(board.store.recover_executions()), 1)
+        self.assertEqual(commit.call_count, 1)
+        self.assertEqual(commit.call_args.args[0]['status'], 'failed')
+        view = client.get(runId=task['taskId'])
+        self.assertEqual(view['state'], 'failed')
+        self.assertEqual(view['selectedAttempt']['result']['result']['receiptRejection'], decision['error'])
+        self.assertIn('INVALID_ARGUMENT', view['selectedAttempt']['result']['error'])
+        self.assertIn(decision['error']['message'], view['selectedAttempt']['result']['error'])
+        self.assertTrue(view['shutdownConfirmed'])
+        self.assertEqual(board.store.capacity_report()['totalActive'], 0)
+        self.assertEqual((directory / RECEIPT).read_bytes(), original)
 
     def test_unchanged_progress_notifies_observer_without_creating_an_event(self):
         board, _, _, _, actor = self.claimed()
@@ -293,7 +339,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         response = board.call('execution_progress', {**actor, 'data': {'waitingReason': None}})
         self.assertTrue(response['recorded'])
         self.assertEqual(board.store.head(), head)
-        scheduler.wake.assert_called_once_with()
+        scheduler.wake_attempt.assert_called_once_with(actor['attemptId'])
 
     def test_no_receipt_preserves_the_persisted_stop_reason(self):
         for initiator, expected in (('console', 'console-stop'), ('service', 'service-stop'),
@@ -470,7 +516,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(view['terminationReason'], 'service-stop')
         self.assertEqual(view['selectedAttempt']['forceReason'], 'service-stop')
 
-    def test_recovery_cleans_dead_execution_secrets_even_when_receipt_is_bad(self):
+    def test_unsettled_recovery_retains_startup_credentials_with_a_bad_receipt(self):
         from hey_my_buddy.protocol.execution import STARTUP, LIVE
         board, client, task, _, actor = self.claimed()
         with board.store.db.read() as db:
@@ -481,7 +527,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         fsync_json(directory / RECEIPT, {'bad': 'receipt'})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             board.store.recover_executions()
-        self.assertFalse((directory / STARTUP).exists())
+        self.assertTrue((directory / STARTUP).exists())
         # A failed endpoint reap keeps the sole cleanup credential for retry.
         self.assertTrue((directory / LIVE).exists())
         self.assertTrue((directory / RECEIPT).exists())
@@ -506,7 +552,8 @@ class InterruptionRecoveryTests(BoardTestCase):
             board.store.reconcile_startup()
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         def retain_observer(claim, *_args):
-            scheduler._observed[claim['attempt']['attemptId']] = -1
+            scheduler._observed[claim['attempt']['attemptId']] = _ExecutionObservation(
+                claim['task']['taskId'], scheduler._condition)
         with patch.object(scheduler, '_start_observer', side_effect=retain_observer) as observe:
             scheduler._resume_executions()
             scheduler._resume_executions()
