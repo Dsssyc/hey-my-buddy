@@ -91,6 +91,24 @@ class InterruptionRecoveryTests(BoardTestCase):
             self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
         self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
 
+    def test_failed_identity_commit_does_not_confirm_the_report(self):
+        board, _client, _task, _claim, actor = self.claimed(identity=False)
+        windows = {'pid': 301, 'startedAt': 1339247086400000000,
+                   'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d3'}
+        with patch.object(board.store, '_record_process_identity',
+                          side_effect=RuntimeError('identity commit failed')):
+            with self.assertRaises(RuntimeError):
+                board.store.execution_progress({**actor, 'processIdentity': windows},
+                                               verify_identity=lambda *_args: windows)
+        with board.store.db.read() as connection:
+            self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
+        self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
+        # The failed commit fences nothing: the retried report confirms normally.
+        board.call('execution_progress', {**actor, 'processIdentity': windows})
+        with board.store.db.read() as connection:
+            self.assertEqual(interruption.read_identity(connection, actor['attemptId']), windows)
+        self.assertTrue(board.store.execution_identity_confirmed(actor['attemptId']))
+
     def test_normal_startup_waits_for_endpoint_without_unknown_or_reconnect_events(self):
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
         from hey_my_buddy.protocol.run_identity import RunIdentity

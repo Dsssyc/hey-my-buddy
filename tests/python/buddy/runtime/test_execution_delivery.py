@@ -296,6 +296,14 @@ class ExecutionDeliveryTests(unittest.TestCase):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
         fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64, "sessionRecordPath": None})
+        # A Windows main reads the published root from the marker before it can
+        # replay the deferred stop; POSIX never reads it.
+        evidence = self.state / "attempts/task-1/attempt-1"
+        evidence.mkdir(parents=True, exist_ok=True)
+        fsync_json(evidence / "spawn.marker",
+                   {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1,
+                    "processIdentity": {"pid": 301, "startedAt": 1339247086400000000,
+                                        "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000de"}})
         seen = []
 
         def run(execution):
@@ -324,6 +332,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(identity["pid"], identity["processGroupId"])
         self.assertIsNone(identity["jobName"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX reports its own identity without a marker")
     def test_main_reports_identity_without_a_parent_marker(self):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
@@ -394,7 +403,10 @@ class ExecutionDeliveryTests(unittest.TestCase):
         client = mock.Mock()
         journal_installed = []
         def progress(*_args, **_kwargs):
-            self.assertEqual(journal_installed, [True])
+            # POSIX installs the empty journal before the first progress; a
+            # Windows execution writes no journal and still gates native work.
+            if os.name != "nt":
+                self.assertEqual(journal_installed, [True])
             if client.progress.call_count == 1:
                 raise BoardError("SERVICE_UNAVAILABLE", "offline")
             return {}
@@ -420,10 +432,13 @@ class ExecutionDeliveryTests(unittest.TestCase):
              mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
              mock.patch.object(entry.time, "sleep", side_effect=advance) as pause:
             execution.run()
-        journal.assert_called_once()
+        if os.name == "nt":
+            journal.assert_not_called()
+        else:
+            journal.assert_called_once()
         pause.assert_called_once_with(0.25)
 
-    def test_identity_refusal_prevents_native_work_after_empty_journal(self):
+    def test_identity_refusal_prevents_native_work(self):
         for code in ("INVALID_ARGUMENT", "CONFLICT"):
             with self.subTest(code=code):
                 client = mock.Mock()
@@ -436,8 +451,12 @@ class ExecutionDeliveryTests(unittest.TestCase):
                         execution.run()
                 self.assertEqual(caught.exception.code, code)
                 native.assert_not_called()
-                journal.assert_called_once()
+                if os.name == "nt":
+                    journal.assert_not_called()
+                else:
+                    journal.assert_called_once()
 
+    @unittest.skipIf(os.name == "nt", "POSIX installs the native journal before acknowledging")
     def test_journal_failure_prevents_identity_acknowledgement_and_native_work(self):
         client = mock.Mock()
         execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)

@@ -352,19 +352,6 @@ class WindowsProcessTests(unittest.TestCase):
         self.assertTrue(job.transferred)
         self.assertIsNone(job.handle)
 
-    def test_duplicate_failure_keeps_the_service_handle_for_cleanup(self):
-        api, _process, child, job = self.suspended_root()
-        api.fail_at = "duplicate"
-        with self.assertRaises(OSError):
-            transfer_job_to_child(child, job)
-        self.assertFalse(job.transferred)
-        self.assertEqual(job.handle, 77)
-        with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={})
-        handle.terminate(grace_seconds=0)
-        self.assertIn(("terminate", 77), api.events)
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
-
     def test_transferred_job_observes_and_stops_through_its_recorded_name(self):
         api, process, child, job = self.suspended_root()
         transfer_job_to_child(child, job)

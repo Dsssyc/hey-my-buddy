@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -20,7 +21,7 @@ from . import rpc_config
 from .contracts import ExecutionLive
 from .process_identity import capture_process_identity, validate_process_identity, boot_id, _creation_time
 from .process_controller import launch_controller
-from .owned_process import transfer_job_to_child
+from .owned_process import ProcessCreationEvidence, transfer_job_to_child
 from .run_identity import RunIdentity
 
 STARTUP = "execution-start.json"
@@ -51,7 +52,10 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
 
     A Windows root joins its exclusively created Job while still suspended;
     the marker is published before the child runs, and the Job's lifetime is
-    then duplicated into the created process so it survives this service.
+    then duplicated into the created process so it survives this service. A
+    failure between the spawn and that duplicated handle stops the root on the
+    Job handle the service still holds and reports creation evidence instead of
+    returning a half-created root.
     """
     state_dir = Path(state_dir)
     attempt = claim["attempt"]
@@ -92,6 +96,33 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
             transfer_job_to_child(handle.process, handle.job)
         return handle
     except BaseException as error:
+        if handle is not None and handle.job is not None:
+            # The creation boundary reaches past the controller to the identity,
+            # the marker, the resume and the duplicated handle. A failure at any
+            # of those steps tears the root down on the root Job this service
+            # still holds, exactly like owned_popen's own failure path, and a
+            # half-created root is never handed to the scheduler.
+            stopped = True
+            try:
+                handle.job.terminate()
+                handle.process.wait(timeout=2)
+                stopped = handle.job.active() == 0
+            except (OSError, subprocess.TimeoutExpired):
+                stopped = False
+            try:
+                handle.job.close()
+            except OSError:
+                stopped = False
+            evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,
+                                               exit_code=handle.process.returncode)
+            error.spawn_created = True
+            if not stopped:
+                failure = RuntimeError("execution root shutdown is unconfirmed after creation failure")
+                failure.owned_popen_evidence = evidence
+                failure.spawn_created = True
+                raise failure from error
+            error.owned_popen_evidence = evidence
+            raise
         surviving_handle = handle if handle is not None else getattr(error, "execution_handle", None)
         if surviving_handle is not None:
             surviving_handle.execution_directory = directory

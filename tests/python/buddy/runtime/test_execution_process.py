@@ -212,32 +212,6 @@ class ExecutionEndpointTests(unittest.TestCase):
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
                               "jobName": None, "sessionRecordPath": None})
 
-    def test_marker_failure_keeps_created_handle_for_service_recovery(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            claim = {"task": {"taskId": "task-4", "spec": {"adapter": "command"}},
-                     "attempt": {"taskId": "task-4", "attemptId": "attempt-4", "generation": 1}}
-            handle = SimpleNamespace(pid=401)
-            identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                        "pid": 401, "startedAt": 106, "processGroupId": 401, "jobName": None}
-            original = launch_protocol.fsync_json
-
-            def write(path, value):
-                if path.name == "spawn.marker":
-                    raise OSError("marker write failed")
-                original(path, value)
-
-            with mock.patch.object(launch_protocol, "launch_controller",
-                            return_value=handle), \
-                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity), \
-                 mock.patch.object(launch_protocol, "fsync_json", side_effect=write):
-                with self.assertRaises(OSError) as caught:
-                    launch_protocol.launch_execution(claim, state, "n" * 64)
-            self.assertTrue(caught.exception.spawn_created)
-            self.assertIs(caught.exception.execution_handle, handle)
-            self.assertEqual(handle.process_identity, identity)
-            self.assertFalse((state / "attempts/task-4/attempt-4/spawn.marker").exists())
-
     def test_startup_write_failure_never_creates_a_child(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
@@ -257,21 +231,6 @@ class ExecutionEndpointTests(unittest.TestCase):
             spawn.assert_not_called()
             self.assertFalse(caught.exception.spawn_created)
             self.assertTrue((state / "attempts/task-5/attempt-5/spawn.intent").is_file())
-
-    def test_capture_failure_retains_the_unidentified_owned_handle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            claim = {"task": {"taskId": "task-6", "spec": {"adapter": "command"}},
-                     "attempt": {"taskId": "task-6", "attemptId": "attempt-6", "generation": 1}}
-            handle = SimpleNamespace(pid=601)
-            with mock.patch.object(launch_protocol, "launch_controller", return_value=handle), \
-                 mock.patch.object(launch_protocol, "capture_process_identity",
-                                   side_effect=OSError("identity capture failed")):
-                with self.assertRaises(OSError) as caught:
-                    launch_protocol.launch_execution(claim, state, "n" * 64)
-            self.assertIs(caught.exception.execution_handle, handle)
-            self.assertIsNone(handle.process_identity)
-            self.assertTrue(caught.exception.spawn_created)
 
     def test_windows_launch_publishes_the_marker_before_resume_and_transfer(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -306,26 +265,6 @@ class ExecutionEndpointTests(unittest.TestCase):
             startup = json.loads((launch_protocol.execution_directory(claim, state)
                                   / "execution-start.json").read_text(encoding="utf-8"))
             self.assertEqual(startup["jobName"], job_name)
-
-    def test_transfer_failure_after_the_marker_keeps_the_created_handle(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            claim = {"task": {"taskId": "task-8", "spec": {"adapter": "command"}},
-                     "attempt": {"taskId": "task-8", "attemptId": "attempt-8", "generation": 1}}
-            handle = mock.Mock()
-            identity = {"pid": 301, "startedAt": 105,
-                        "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000008"}
-            windows_os = SimpleNamespace(name="nt", environ=dict(os.environ))
-            with mock.patch.object(launch_protocol, "os", windows_os), \
-                 mock.patch.object(launch_protocol, "launch_controller", return_value=handle), \
-                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity), \
-                 mock.patch.object(launch_protocol, "transfer_job_to_child",
-                                   side_effect=OSError("duplicate refused")):
-                with self.assertRaises(OSError) as caught:
-                    launch_protocol.launch_execution(claim, state, "n" * 64)
-            self.assertIs(caught.exception.execution_handle, handle)
-            self.assertTrue(caught.exception.spawn_created)
-            self.assertTrue((state / "attempts/task-8/attempt-8/spawn.marker").is_file())
 
     def test_spawn_marker_is_read_once_at_its_file_boundary(self):
         with tempfile.TemporaryDirectory() as directory:

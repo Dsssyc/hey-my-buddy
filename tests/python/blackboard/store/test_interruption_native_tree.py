@@ -39,22 +39,24 @@ class NativeTreeTests(BoardTestCase):
     def windows_attempt(self, *, journal_state):
         board, client, task, _, actor = self.claimed(identity=False)
         board.call('execution_progress', {**actor, 'processIdentity': WINDOWS_IDENTITY})
-        if journal_state is not None:
-            with board.store.db.read() as connection:
-                attempt = dict(board.store._attempt_row(connection, actor['attemptId']))
-            path = processes.native_process_journal_path(interruption._directory(board.store, attempt),
-                                                         WINDOWS_IDENTITY)
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            fsync_json(Path(path), {'binding': {'taskId': task['runId'], 'attemptId': actor['attemptId'],
-                                                'generation': 1},
-                                    'pending': [] if journal_state == 'empty' else ['a' * 32],
-                                    'identities': []})
-        return board, client, task, actor
+        with board.store.db.read() as connection:
+            attempt = dict(board.store._attempt_row(connection, actor['attemptId']))
+        journal_path = processes.native_process_journal_path(interruption._directory(board.store, attempt),
+                                                             WINDOWS_IDENTITY)
+        if journal_state != 'missing':
+            Path(journal_path).parent.mkdir(parents=True, exist_ok=True)
+            fsync_json(Path(journal_path), {'binding': {'taskId': task['runId'], 'attemptId': actor['attemptId'],
+                                                        'generation': 1},
+                                            'pending': [] if journal_state == 'empty' else ['a' * 32],
+                                            'identities': []})
+        return board, client, task, actor, Path(journal_path)
 
     def test_windows_root_stop_evidence_covers_pending_or_missing_journal(self):
         for journal_state in ('missing', 'pending', 'empty'):
             with self.subTest(journal_state=journal_state):
-                board, client, task, actor = self.windows_attempt(journal_state=journal_state)
+                board, client, task, actor, journal_path = self.windows_attempt(journal_state=journal_state)
+                # 'missing' is a truly absent file, not an empty or pending one.
+                self.assertEqual(journal_path.exists(), journal_state != 'missing')
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                         patch.object(processes, 'stop_orphan_process') as stop:
                     board.store.recover_executions()

@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
+import contextlib
+import os
 import queue
 import threading
 import json
@@ -16,10 +18,16 @@ from unittest.mock import Mock, call, patch
 
 import c_two as cc
 
+from admission import admit_execution
+from support import BoardTestCase, InProcessBoard
+from buddy.runtime.test_execution_delivery import WindowsOSProxy
+from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from hey_my_buddy.blackboard.service.execution_scheduler import (
     ExecutionScheduler, _RecoveredExecution, _ExecutionObservation)
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+from hey_my_buddy.protocol import execution as launch_protocol
+from hey_my_buddy.protocol import owned_process, process_identity
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
@@ -1154,6 +1162,100 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler._admit_available()
         self.assertEqual(launch.call_args.kwargs["session_record_path"], claim["sessionRecordPath"])
         store.db.read.assert_not_called()
+
+
+class RootCreationTeardownTests(BoardTestCase):
+    """A failure inside the extended creation boundary never returns a root.
+
+    The real launch_execution runs its Windows path over a faked OS boundary
+    (Popen and the Win32 API), and the real scheduler and store settle the
+    attempt: the root is stopped on the Job handle the service still holds and
+    the failure is reported as creation evidence, never as a live handle.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.case_index = 0
+
+    def launched_windows_root(self, *, fail_at=None, fail_capture=False, fail_marker=False):
+        self.case_index += 1
+        board = InProcessBoard(self.directory / f"case-{self.case_index}")
+        self._stack.append(board)
+        client = board.client()
+        task = board.submit_execution(requestId="creation-failure", task="work", adapter="command",
+                                      cwd=str(self.workdir()), argv=["echo", "work"])["task"]
+        claim = admit_execution(client, "n" * 32)["claim"]
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
+        process = FakeProcess()
+        api = FakeAPI(process)
+        api.fail_at = fail_at
+        original = launch_protocol.fsync_json
+
+        def write(path, value):
+            if fail_marker and path.name == "spawn.marker":
+                raise OSError("marker write failed")
+            original(path, value)
+
+        with contextlib.ExitStack() as stack:
+            for boundary in (
+                    patch.object(board.service, "admit_execution", return_value={"claim": claim}),
+                    patch.object(launch_protocol, "os", WindowsOSProxy()),
+                    patch.object(owned_process, "os", WindowsOSProxy()),
+                    patch.object(owned_process, "WindowsAPI", return_value=api),
+                    patch.object(owned_process.subprocess, "Popen", return_value=process),
+                    patch.object(process_identity, "_creation_time", return_value=10),
+                    patch.object(launch_protocol, "fsync_json", side_effect=write)):
+                stack.enter_context(boundary)
+            if fail_capture:
+                stack.enter_context(patch.object(launch_protocol, "capture_process_identity",
+                                                 side_effect=OSError("identity capture failed")))
+            scheduler._admit_available()
+        return board, client, task, claim, api, process, scheduler
+
+    def test_failure_before_the_resume_stops_the_suspended_root_and_settles_creator_reaped(self):
+        for fail_capture, fail_marker in ((True, False), (False, True)):
+            with self.subTest(fail_capture=fail_capture, fail_marker=fail_marker):
+                board, client, task, claim, api, process, scheduler = self.launched_windows_root(
+                    fail_capture=fail_capture, fail_marker=fail_marker)
+                attempt_id = claim["attempt"]["attemptId"]
+                self.assertEqual(scheduler._handles, {})
+                # The suspended root is stopped on the service-held Job handle
+                # and observed empty; no resume or duplication ever happens.
+                self.assertEqual(api.events, ["create", ("assign", 77, 42), ("terminate", 77),
+                                              ("active", 77), ("close", 77)])
+                self.assertEqual(process.returncode, 1)
+                self.assertFalse((board.directory / "attempts" / task["runId"] / attempt_id
+                                  / "spawn.marker").exists())
+                view = client.get(runId=task["runId"])
+                self.assertEqual(view["attemptState"], "finished")
+                self.assertTrue(view["shutdownConfirmed"])
+                self.assertEqual(board.store.capacity_report()["totalActive"], 0)
+
+    def test_duplicate_failure_after_the_resume_stops_the_root_and_settles_creator_reaped(self):
+        board, client, task, claim, api, process, scheduler = self.launched_windows_root(fail_at="duplicate")
+        attempt_id = claim["attempt"]["attemptId"]
+        self.assertEqual(scheduler._handles, {})
+        self.assertEqual(api.events, ["create", ("assign", 77, 42), ("resume", 42),
+                                      ("duplicate", 321, 77), ("terminate", 77),
+                                      ("active", 77), ("close", 77)])
+        self.assertEqual(process.returncode, 1)
+        self.assertTrue((board.directory / "attempts" / task["runId"] / attempt_id
+                         / "spawn.marker").is_file())
+        view = client.get(runId=task["runId"])
+        self.assertEqual(view["attemptState"], "finished")
+        self.assertTrue(view["shutdownConfirmed"])
+        self.assertEqual(board.store.capacity_report()["totalActive"], 0)
+
+    def test_unconfirmed_root_stop_keeps_the_attempt_unknown_and_occupied(self):
+        board, client, task, claim, api, _process, scheduler = self.launched_windows_root(
+            fail_at="active", fail_marker=True)
+        self.assertEqual(scheduler._handles, {})
+        self.assertIn(("terminate", 77), api.events)  # A kill request is not stop evidence.
+        view = client.get(runId=task["runId"])
+        self.assertNotEqual(view["attemptState"], "finished")
+        self.assertFalse(view["shutdownConfirmed"])
+        self.assertEqual(board.store.capacity_report()["totalActive"], 1)
+        self.assertTrue(any(issue["stage"] == "launch" for issue in view["selectedAttempt"]["issues"]))
 
 
 class SessionRecordGroupingTests(WorkflowTestCase):
