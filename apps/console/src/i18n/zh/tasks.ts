@@ -1,7 +1,6 @@
 export const tasks = {
   drawing: {
     stopUnconfirmed: "停止未确认",
-    elapsed: { less: "不足 1 分", min: "{{n}} 分", hr: "{{h}} 时", hrMin: "{{h}}时{{m}}分" },
     running: "进行中 {{duration}}", failed: "{{duration}} 失败", queue: "排队 {{duration}}",
     expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silence: "静默 {{duration}}", silentLegend: "静默的尾巴",
     waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{author}} · {{at}} · {{state}}",
@@ -20,7 +19,7 @@ export const tasks = {
   execution: "执行",
   wait: "等待",
   now: "现在",
-  fixes: "修正另一项微任务",
+  fixes: "修正 {{title}}",
   fixedBy: "由 {{n}} 项微任务修正",
   newMicroTask: "新出现的微任务",
   track: "{{title}} 的时间条",

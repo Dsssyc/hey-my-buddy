@@ -5,7 +5,7 @@ const macro = "macro-11111111-1111-4111-8111-111111111111";
 const waiting = "preview-run-a1-h1";
 const names = (page: Page) => page.locator('[data-slot=task-names]');
 const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-name][data-run-id="${id}"]:visible`);
-const shots = "../../tmp/f2-shots";
+const shots = process.env.HMB_TIMELINE_SHOTS;
 
 for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) for (const width of [1440, 800, 390]) {
   test.describe(`new task structure ${locale} ${theme} ${width}`, () => {
@@ -23,11 +23,11 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       await expectNoSidewaysScroll(page);
       const overflow = await page.locator('[data-slot=timeline-tracks]').evaluate(node => node.scrollWidth > node.clientWidth);
       expect(overflow).toBe(false);
-      if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
+      if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
       const segment = page.locator('[data-key="span:execution:att-a1-2"]');
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
-      if (locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
+      if (shots && locale === "zh-CN" && theme === "light" && width === 1440) await page.screenshot({ path: `${shots}/segment-readout.png` });
       await selected.click();
       await expect(page.locator('[data-slot=task-detail]')).toBeVisible();
       await expect(page.locator('[data-slot=detail-rail]')).toBeVisible();
@@ -52,7 +52,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
         expect((await row(page, waiting).boundingBox())!.y).toBeCloseTo(after!.y, 0);
         await names(page).evaluate(node => { node.scrollTop = 0; });
       }
-      if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
+      if (shots && locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/detail-${theme}-${width}.png` });
       await row(page, waiting).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
       await expect(row(page, waiting)).toBeFocused();

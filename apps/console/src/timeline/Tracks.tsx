@@ -6,15 +6,11 @@ import type { TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-typ
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { TimelineScale } from "./scale";
 import { parseTimelineInstant as instant } from "./instant";
+import { formatDurationMinutes } from "../i18n/format";
 import { fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label } from "./labels";
 
 export function eventName(event: TimelineEvent): string { return i18n.t(`tasks:drawing.events.${event.kind}`); }
-
-export function timelineDuration(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  return minutes < 1 ? i18n.t("tasks:drawing.elapsed.less") : minutes < 60 ? i18n.t("tasks:drawing.elapsed.min", { n: minutes }) : minutes % 60 ? i18n.t("tasks:drawing.elapsed.hrMin", { h: Math.floor(minutes / 60), m: minutes % 60 }) : i18n.t("tasks:drawing.elapsed.hr", { h: minutes / 60 });
-}
 
 export function eventReadout(event: TimelineEvent): string {
   return [eventName(event), clockTime(event.at), event.summary].filter(Boolean).join(" · ");
@@ -42,11 +38,21 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
   const width = scale.widthPx;
   const nowX = scale.toX(nowMs)!;
   const now = `${t("now")} ${clockTime(nowMs)}`;
-  const gapLabels = scale.breaks.map(gap => timelineDuration(gap.endMs - gap.startMs));
+  const gapLabels = scale.breaks.map(gap => formatDurationMinutes(gap.endMs - gap.startMs));
   const { measure, ruler } = useTextMeasure([now, ...gapLabels, ...scale.ticks.filter(tick => tick.labeled).map(tick => clockTime(tick.atMs))]);
   const nowLeft = Math.max(0, Math.min(width - measure(now), nowX - measure(now)));
-  const occupied: Interval[] = scale.breaks.map(gap => ({ left: gap.startX - 4, right: gap.endX + 4 }));
+  const occupied: Interval[] = [];
   if (ongoing) occupied.push({ left: nowLeft - 8, right: nowLeft + measure(now) + 4 });
+  const visibleGapLabels = new Set<number>();
+  scale.breaks.forEach((gap, index) => {
+    const center = (gap.startX + gap.endX) / 2, labelWidth = measure(gapLabels[index]!);
+    const left = center - labelWidth / 2, right = center + labelWidth / 2;
+    if (left >= 0 && right <= width && occupied.every(item => right + 4 <= item.left || left - 4 >= item.right)) {
+      visibleGapLabels.add(gap.startMs);
+      occupied.push({ left: left - 4, right: right + 4 });
+    }
+    occupied.push({ left: gap.startX - 4, right: gap.endX + 4 });
+  });
   const labels: Label[] = [];
   for (const tick of scale.ticks.filter(item => item.labeled)) {
     const text = clockTime(tick.atMs), x = scale.toX(tick.atMs)!;
@@ -59,7 +65,7 @@ export function Axis({ scale, ongoing, nowMs }: { scale: TimelineScale; ongoing:
     {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
       <rect x={gap.startX} width={gap.endX - gap.startX} height={36} className="fill-sunk"/>
       <path data-slot="axis-break-mark" d={`M${center - 7} 34l6-8m0 8l6-8`} className="stroke-line2"/>
-      {measure(gapLabels[index]!) <= gap.endX - gap.startX - 4 && <text data-slot="gap-label" x={center} y={16} textAnchor="middle" className="fill-ink3">{gapLabels[index]}</text>}
+      {visibleGapLabels.has(gap.startMs) && <text data-slot="gap-label" x={center} y={16} textAnchor="middle" className="fill-ink3">{gapLabels[index]}</text>}
     </g>; })}
     {scale.ticks.map(tick => <line key={tick.atMs} x1={scale.toX(tick.atMs)!} x2={scale.toX(tick.atMs)!} y1={tick.labeled ? 24 : 27} y2={31} className="stroke-line2"/>)}
     {labels.map(label => <text data-slot="axis-label" key={label.left} x={label.left} y={label.y} className={label.className}>{label.text}</text>)}
@@ -93,19 +99,19 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const acceptanceOpen = row.state === "delivered" && executions.length > 0 && executions.every(span => span.endAt !== null && span.shutdownConfirmed === true);
   const waitStart = latest ? instant(latest.endAt) : null;
   const waitEnd = acceptanceOpen ? nowMs : settledWait !== null ? instant(row.acceptedAt ?? row.reviewRejectedAt) : null;
-  const acceptance = waitStart !== null && waitEnd !== null ? { start: scale.toX(waitStart)!, end: scale.toX(waitEnd)!, duration: timelineDuration(waitEnd - waitStart) } : null;
+  const acceptance = waitStart !== null && waitEnd !== null ? { start: scale.toX(waitStart)!, end: scale.toX(waitEnd)!, duration: formatDurationMinutes(waitEnd - waitStart) } : null;
   const markers = events.filter(event => event.kind !== "dispatch").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
   const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, x: scale.toX(instant(inquiry.createdAt)!)! })));
-  const duration = (item: PositionedSpan) => timelineDuration((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
+  const duration = (item: PositionedSpan) => formatDurationMinutes((instant(item.span.endAt) ?? nowMs) - instant(item.span.startAt)!);
   const waitingKind = (span: TimelineSpan) => span.kind === "queue" ? t("kind.queue") : i18n.t(row.rootLeadRunId ? "console:waitingForLead" : "console:waitingForHost");
   const fullLabel = (item: PositionedSpan) => item.execution ? item.outcome === "running" ? t("drawing.running", { duration: duration(item) }) : item.outcome === "failed" ? t("drawing.failed", { duration: duration(item) }) : duration(item)!
     : t(item.span.kind === "queue" ? "drawing.queue" : "drawing.waiting", { kind: waitingKind(item.span), duration: duration(item) });
   const tails = positioned.filter(item => item.outcome === "running" && item.span.reminders?.possiblyStuck)
-    .map(item => ({ item, x: scale.toX(instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!)!, duration: timelineDuration(nowMs - instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!) }));
+    .map(item => ({ item, x: scale.toX(instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!)!, duration: formatDurationMinutes(nowMs - instant(item.span.reminders!.lastNativeEventAt ?? item.span.startAt)!) }));
   const expected = positioned.filter(item => item.outcome === "running" && item.span.expectedSeconds !== null)
     .map(item => ({ item, at: instant(item.span.startAt)! + item.span.expectedSeconds! * 1000 }))
-    .filter(entry => entry.at <= (scale.toTime(scale.widthPx) ?? nowMs))
-    .map(entry => ({ ...entry, x: scale.toX(entry.at)!, text: t("drawing.expected", { duration: timelineDuration(entry.item.span.expectedSeconds! * 1000) }) }));
+    .filter(entry => entry.at < nowMs)
+    .map(entry => ({ ...entry, x: scale.toX(entry.at)!, text: t("drawing.expected", { duration: formatDurationMinutes(entry.item.span.expectedSeconds! * 1000) }) }));
   const acceptanceLabel = acceptance ? t("drawing.waiting", { kind: t("review"), duration: acceptance.duration }) : "";
   const candidates = [t("drawing.inquiry"), t("review"), ...positioned.flatMap(item => [fullLabel(item), duration(item)!, waitingKind(item.span)]),
     ...tails.flatMap(tail => [t("drawing.silent", { duration: tail.duration }), t("drawing.silence", { duration: tail.duration })]),
@@ -121,7 +127,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     const labelWidth = measure(t("drawing.inquiry"));
     add([t("drawing.inquiry")], x - labelWidth / 2, x + labelWidth / 2, 12, "fill-ink2");
   }
-  for (const entry of expected) add([entry.text], entry.item.start, Math.max(entry.item.end, entry.x), 58, entry.at < nowMs ? "fill-hand" : "fill-ink3", entry.x - measure(entry.text) - 4);
+  for (const entry of expected) add([entry.text], entry.item.start, entry.item.end, 58, "fill-hand", entry.x - measure(entry.text) - 4);
   for (const marker of markers) add([eventName(marker.event)], marker.x + 10, scale.widthPx, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
   if (acceptance && acceptanceOpen) add([acceptanceLabel, t("review"), acceptance.duration!], acceptance.start + 10, acceptance.end, 12, "fill-hand");
   for (const item of positioned) {
@@ -148,7 +154,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       {outcome === "unknown" && <path data-slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} className="fill-none stroke-hand-mark" strokeWidth={2}/>}
     </g>)}
     {tails.map(tail => <rect pointerEvents="none" data-slot="silent-tail" key={tail.item.span.spanId} x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} strokeWidth={1.5} className="fill-hand-wash stroke-hand-mark"/>)}
-    {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className={entry.at < nowMs ? "stroke-hand-mark" : "stroke-ink3"}/>)}
+    {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className="stroke-hand-mark"/>)}
     {inquiries.map(({ inquiry, x }) => <path pointerEvents="none" data-slot="inquiry-mark" key={inquiry.inquiryId} d={diamond(x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>)}
     {markers.map(({ event, x }) => <g key={event.seq} role="button" tabIndex={-1} data-key={`event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => onEvent(event)} onPointerLeave={() => onEvent(null)} onFocus={() => onEvent(event)} onBlur={() => onEvent(null)}
       onClick={() => onOpen(row.runId, `event:${event.seq}`)} onKeyDown={key => { if (key.key === "Enter") onOpen(row.runId, `event:${event.seq}`); }} className="cursor-pointer outline-none">

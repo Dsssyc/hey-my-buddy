@@ -9,7 +9,7 @@ import { buddyLabel, clockTime, durationText, rowStateInfo } from "../macro-task
 import type { FriendlyBuddy } from "../macro-task-display";
 import type { MacroTaskSummary, MacroTaskTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import { parseTimelineInstant as instant } from "./instant";
-import { scaleWithExpectedTimes, timelineScaleInput } from "./scale";
+import { createTimelineScale, timelineScaleInput } from "./scale";
 import { RowName } from "./RowName";
 import { Axis, Track, spanReadout, eventReadout } from "./Tracks";
 
@@ -59,7 +59,7 @@ export function TaskWork(props: TaskWorkProps) {
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
   const displayed = useMemo(() => timeline ? { ...timeline, observedAt: displayObservedAt ?? timeline.observedAt } : null, [timeline, displayObservedAt]);
   const input = useMemo(() => displayed ? timelineScaleInput(displayed) : null, [displayed]);
-  const scale = useMemo(() => input ? scaleWithExpectedTimes(input, Math.max(1, width - 48), displayed!.spans) : null, [input, width, displayed]);
+  const scale = useMemo(() => input ? createTimelineScale(input, Math.max(1, width - 48)) : null, [input, width]);
   useEffect(() => {
     const element = trackRef.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -100,7 +100,7 @@ export function TaskWork(props: TaskWorkProps) {
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
   const renderName = (row: TimelineRow) => <Collapsible key={row.runId} open={openedRunId === row.runId} className={cn("min-w-0", open && openedRunId !== row.runId && "max-[760px]:hidden")}>
     <RowName ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-      row={row} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+      row={row} fixesTitle={rows.find(target => target.runId === row.fixes)?.title ?? null} selected={selectedRunId === row.runId} open={openedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
       onClick={() => openedRunId === row.runId ? props.onClose() : props.onOpen(row.runId)}
       onEnter={() => { setPointerX(null); setActiveEvent(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={() => setFocusedRow(row)} onBlur={() => setFocusedRow(null)}
       onKeyDown={event => {

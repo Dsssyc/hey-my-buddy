@@ -2,7 +2,6 @@ import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
   drawing: {
     stopUnconfirmed: "Stop unconfirmed",
-    elapsed: { less: "<1m", min: "{{n}}m", hr: "{{h}}h", hrMin: "{{h}}h{{m}}m" },
     running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
     expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Silent tail",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
@@ -17,6 +16,6 @@ export const tasks = {
   offline: "Disconnected", lastRead: "Showing content read at {{time}}", noMatch: "No matching macro tasks", noTasks: "No macro tasks", emptyTitle: "No macro tasks yet", emptyBody: "Delegate a task in a Host session and it will appear here.", choose: "Choose a macro task", harnesses: "Available harnesses {{n}}", buddies: "Enabled buddies {{n}}", buddy: "Buddy", stop: "Stop", more: "More", detail: "Macro task detail", unknown: "Not recorded", readonly: "This session is read only", stopping: "Stopping",
   turn: "Turn {{n}}", kind: { execution: "Execution", routing: "Route", queue: "Queue" },
   microTasks: "Micro tasks",
-  timeline: "Timeline", execution: "Execution", wait: "Wait", now: "Now", fixes: "Repairs another micro task", fixedBy: "Repaired by {{n}} micro tasks", newMicroTask: "New micro task", track: "Tracks for {{title}}", segment: "{{label}}", openWait: "Waiting {{duration}}", turnCount: "{{n}} turns", range: "{{start}}–{{end}} · {{n}} micro tasks", noTime: "Time not recorded", noMicroTasks: "No micro tasks", uncompressed: "Truncated or filtered read; time is not compressed", timelineReadFailed: "Read failed; time frozen at {{at}}", staleTimeline: "Showing the last read", closeDetail: "Close detail",
+  timeline: "Timeline", execution: "Execution", wait: "Wait", now: "Now", fixes: "Repairs {{title}}", fixedBy: "Repaired by {{n}} micro tasks", newMicroTask: "New micro task", track: "Tracks for {{title}}", segment: "{{label}}", openWait: "Waiting {{duration}}", turnCount: "{{n}} turns", range: "{{start}}–{{end}} · {{n}} micro tasks", noTime: "Time not recorded", noMicroTasks: "No micro tasks", uncompressed: "Truncated or filtered read; time is not compressed", timelineReadFailed: "Read failed; time frozen at {{at}}", staleTimeline: "Showing the last read", closeDetail: "Close detail",
 } satisfies typeof zh;
 export default tasks;

@@ -60,6 +60,14 @@ describe("timeline drawings follow recorded facts", () => {
     cleanup(); track([execution({ reminders: null })]);
     expect(slot("silent-tail")).toBeNull(); expect(slot("expected-mark")).toBeNull();
   });
+  it("keeps an unreached expectation in the readout and off the execution bar", () => {
+    const live = execution({ startAt: at(5), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: 7200 });
+    track([live]);
+    expect(slot("expected-mark")).toBeNull();
+    expect(spanReadout(live, Date.parse(at(40)))).toContain("预期 2 小时");
+    cleanup(); track([{ ...live, expectedSeconds: 35 * 60 }]);
+    expect(slot("expected-mark")).toBeNull();
+  });
   it("keeps Router executions hollow and distinguishes failures and cancelled/abstained routes", () => {
     for (const outcome of ["ok", "failed", "cancelled", "abstention"] as const) {
       cleanup(); track([execution({ kind: "routing", expectedSeconds: null, inquiries: null, resultStatus: outcome === "abstention" ? undefined : outcome, disposition: outcome === "abstention" ? "abstention" : undefined, routing: { routingMode: "review" } })]);
@@ -90,5 +98,10 @@ describe("timeline drawings follow recorded facts", () => {
     const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(38)), endMs: Date.parse(at(40)) }], instants: [Date.parse(at(2)), Date.parse(at(38))], canFold: true, nowAtEnd: true }, 800);
     render(<Axis scale={folded} ongoing nowMs={Date.parse(at(40))}/>);
     expect(slot("axis-break-mark")).toBeTruthy(); expect(slot("gap-label")?.textContent).toBe("36 分");
+  });
+  it("keeps the shared hour-and-minute spacing in a centered break label", () => {
+    const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(138)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(136)), endMs: Date.parse(at(138)) }], instants: [Date.parse(at(2)), Date.parse(at(136))], canFold: true, nowAtEnd: true }, 800);
+    render(<Axis scale={folded} ongoing nowMs={Date.parse(at(138))}/>);
+    expect(slot("gap-label")?.textContent).toBe("2 时 14 分");
   });
 });

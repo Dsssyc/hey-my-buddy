@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MacroTaskTimeline, TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { ScaleInput } from "./scale";
-import { createTimelineScale, scaleWithExpectedTimes, timelineScaleInput } from "./scale";
+import { createTimelineScale, timelineScaleInput } from "./scale";
 
 const MINUTE = 60_000;
 const BASE = Date.parse("2026-10-17T00:00:00Z");
@@ -360,20 +360,5 @@ describe("timelineScaleInput", () => {
 
   it("has no domain without available instants", () => {
     expect(timelineScaleInput(timeline({ spans: [] })).domain).toBeNull();
-  });
-});
-
-
-describe("future expected time", () => {
-  it("keeps observed time and real breaks intact while placing a future expected mark on the same ratio", () => {
-    const live = span({ startAt: at(100), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: 2400 });
-    const facts = timelineScaleInput(timeline({ spans: [span(), live] }));
-    const base = createTimelineScale(facts, 600);
-    const extended = scaleWithExpectedTimes(facts, 600, [live]);
-    expect(extended.breaks).toEqual(base.breaks);
-    expect(extended.toX(ms(120))).toBe(base.widthPx);
-    expect(extended.widthPx - base.widthPx).toBeCloseTo(base.pixelsPerMinute * 20);
-    expect(extended.toTime(extended.widthPx)).toBe(ms(140));
-    expect(extended.toX(ms(130))! - extended.toX(ms(120))!).toBeCloseTo(base.pixelsPerMinute * 10);
   });
 });

@@ -102,7 +102,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         expect(await drawing.locator(`[data-slot="${slot}"]`).count(), `${slot} is drawn`).toBeGreaterThan(0);
       }
       if (width === 1440) await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? "可能卡住" : "Possibly stuck" })).toHaveCount(1);
-      expect(await drawing.locator('[data-slot="gap-label"]').count(), "at least one break names its duration").toBeGreaterThan(0);
+      await expect(drawing.locator('[data-slot="gap-label"]')).toHaveText(locale === "zh-CN" ? ["35 分", "2 时 14 分"] : ["35 min", "2 h 14 min"]);
       await expect(page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a1"]:visible [data-slot="fixed-by"]')).toHaveText("↩ 2");
       for (const run of ["preview-run-a2", "preview-run-a3"])
         await expect(page.locator(`[data-slot="timeline-row-name"][data-run-id="${run}"]:visible`)).toHaveAttribute("data-fixes", "preview-run-a1");
@@ -160,25 +160,24 @@ test.describe("incomplete timeline drawing", () => {
 });
 
 
-test.describe("future expected duration", () => {
+test.describe("unreached expected duration", () => {
   test.use({ locale: "en-US", viewport: { width: 1440, height: 1000 } });
-  test("keeps Now at the observed time and places an unreached expectation beyond it", async ({ page }) => {
+  test("keeps the timeline at Now and the expectation in its readout", async ({ page }) => {
     await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
       const response = await route.fetch();
       const timeline = await response.json() as MacroTaskTimeline;
       const live = timeline.spans.find(span => span.spanId === "execution:att-a3-1")!;
-      live.expectedSeconds = 3600; live.reminders!.overdue = false;
+      live.expectedSeconds = 14400; live.reminders!.overdue = false;
       await route.fulfill({ response, json: timeline });
     });
     await open(page, `#tasks/${macro}`);
     const track = page.locator('[data-slot="timeline-track"]').last();
-    const expected = track.locator('[data-slot="expected-mark"]');
-    await expect(expected).toHaveClass("stroke-ink3");
-    const expectedX = Number(await expected.getAttribute("x1"));
+    await expect(track.locator('[data-slot="expected-mark"]')).toHaveCount(0);
     const nowX = Number(await track.locator('[data-slot="timeline-now"]').getAttribute("x1"));
-    expect(expectedX).toBeGreaterThan(nowX);
-    const bar = track.locator('[data-slot="execution-bar"]');
-    expect(Number(await bar.getAttribute("x")) + Number(await bar.getAttribute("width"))).toBeCloseTo(nowX);
+    const frame = await track.getAttribute("viewBox");
+    expect(Number(frame!.split(" ")[2]) - 16).toBeCloseTo(nowX);
+    await track.locator('[data-key="span:execution:att-a3-1"]').hover();
+    await expect(page.locator('[data-slot="timeline-status"]')).toContainText("Expected 4 hr");
     await expectDrawingGeometry(page);
   });
 });
