@@ -127,8 +127,11 @@ class CliViewTests(RealWorkspaceTestCase):
         submitted, service_view = self.delivered()
         truncated = {"decisions": {"droppedItems": 7, "shortenedItems": 0}}
         with self.board_instance.store.db.write() as connection:
-            connection.execute("UPDATE workflow_turns SET outcome_truncated_json=? WHERE run_id=?",
-                               (json.dumps(truncated), submitted["runId"]))
+            connection.execute(
+                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcomeTruncated',json(?))"
+                " WHERE attempt_id=?",
+                (json.dumps(truncated), service_view["currentTurn"]["attemptId"]),
+            )
         code, brief, _ = self.cli("get", {"runId": submitted["runId"]})
         self.assertEqual(code, 0, brief)
         self.assertEqual(brief["currentTurn"]["state"], "returned")

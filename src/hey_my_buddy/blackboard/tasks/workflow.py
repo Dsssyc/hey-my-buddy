@@ -282,9 +282,12 @@ class WorkflowCoordinator:
             raise BoardError("NOT_FOUND", "Unknown turn", turnId=turn_id)
         return row
 
-    @staticmethod
-    def _turn_view(row, *, include_audit: bool = False, compact: bool = False) -> dict:
-        outcome = json.loads(row["outcome_json"]) if row["outcome_json"] else None
+    @classmethod
+    def _turn_view(cls, row, *, include_audit: bool = False, compact: bool = False) -> dict:
+        payload = json.loads(row["result_json"]) if row["result_json"] is not None else None
+        result = cls.result_payload(payload)
+        turn = result["turn"] if row["state"] == "returned" else {}
+        outcome = turn["outcome"] if row["state"] == "returned" else None
         context = _turn_input_context(row["input_json"])
         adapter = row["execution_adapter"]
         frozen_buddy = context.get("buddy")
@@ -301,10 +304,10 @@ class WorkflowCoordinator:
             "resumeReason": context.get("resumeReason"),
             "resumeDetail": context.get("resumeDetail"),
             "previousSessionId": row["previous_session_id"],
-            "sessionId": row["session_id"],
+            "sessionId": turn.get("sessionId"),
             "state": row["state"],
-            "disposition": row["disposition"],
-            "outcomeTruncated": json.loads(row["outcome_truncated_json"]) if row["outcome_truncated_json"] else None,
+            "disposition": outcome["disposition"] if outcome is not None else None,
+            "outcomeTruncated": turn.get("outcomeTruncated"),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             # This turn's own frozen buddy, never the current run's.
@@ -331,15 +334,16 @@ class WorkflowCoordinator:
                 view["request"] = outcome.get("request")
                 view["artifactReferences"] = outcome.get("artifacts", [])
         if include_audit:
-            view["promptSha256"] = row["prompt_sha256"]
-            view["inputSha256"] = row["input_sha256"]
+            view["promptSha256"] = turn.get("promptSha256")
+            view["inputSha256"] = turn.get("inputSha256")
             view["input"] = json.loads(row["input_json"])
             view["outcome"] = outcome
-            view["provenance"] = json.loads(row["provenance_json"]) if row["provenance_json"] else None
-            view["turnResultPath"] = row["turn_result_path"]
+            view["provenance"] = turn.get("provenance")
+            view["turnResultPath"] = result.get("turnResultPath") if row["state"] == "returned" else None
             view["sealedArtifacts"] = [
-                WorkflowCoordinator._bounded_path_fields(item, ("changedPaths", "outsideScope"))
-                for item in json.loads(row["sealed_artifacts_json"])
+                # The former canonical JSON column fixed these keys' byte order.
+                cls._bounded_path_fields(dict(sorted(item.items())), ("changedPaths", "outsideScope"))
+                for item in cls._sealed_artifacts(payload)
             ]
         return view
 
@@ -651,7 +655,7 @@ class WorkflowCoordinator:
         ).fetchone()
         host_conclusion = host_conclusions.current(connection, run_row)
         turns = connection.execute(
-            "SELECT t.*,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
+            "SELECT t.*,a.result_json,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index DESC LIMIT ?",
             (run_row["run_id"], MAX_ACTIVE_TURNS_VIEW),
         ).fetchall()
         requests = connection.execute(
@@ -2049,7 +2053,7 @@ class WorkflowCoordinator:
 
     def _audit(self, connection, run_row) -> dict:
         turns = connection.execute(
-            "SELECT t.*,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
+            "SELECT t.*,a.result_json,a.token_usage_json,a.adapter AS execution_adapter FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=? ORDER BY t.turn_index", (run_row["run_id"],)
         ).fetchall()
         requests = connection.execute(
             "SELECT * FROM workflow_requests WHERE run_id=? ORDER BY created_at", (run_row["run_id"],)
@@ -3101,10 +3105,12 @@ class WorkflowCoordinator:
         for row in rows:
             attempt_id = row["active_attempt_id"] or row["selected_attempt_id"]
             turn = connection.execute(
-                "SELECT * FROM workflow_turns WHERE run_id=? AND attempt_id=? ORDER BY turn_index DESC LIMIT 1",
+                "SELECT t.*,a.result_json FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+                " WHERE t.run_id=? AND t.attempt_id=? ORDER BY t.turn_index DESC LIMIT 1",
                 (row["child_task_id"], attempt_id),
             ).fetchone()
-            outcome = json.loads(turn["outcome_json"]) if turn is not None and turn["outcome_json"] else None
+            outcome = (self.turn_outcome(json.loads(turn["result_json"]))["outcome"]
+                       if turn is not None and turn["state"] == "returned" else None)
             artifact = connection.execute(
                 "SELECT * FROM workflow_artifacts WHERE run_id=? AND attempt_id=? AND kind IN ('output','resolved-output','partial-output')"
                 " ORDER BY rowid DESC LIMIT 1",
@@ -3117,7 +3123,7 @@ class WorkflowCoordinator:
                 "state": row["state"],
                 "taskState": row["task_state"],
                 "integrator": row["role"] == "integrator",
-                "disposition": turn["disposition"] if turn is not None else None,
+                "disposition": outcome["disposition"] if outcome is not None else None,
                 "summary": outcome.get("summary") if outcome else None,
                 "remaining": (outcome or {}).get("remaining", []),
                 "attemptId": attempt_id,
@@ -3753,14 +3759,8 @@ class WorkflowCoordinator:
                 and turn is not None and self._validate_turn(turn, turn_row, attempt) is None):
             disposition = turn["outcome"]["disposition"]
             connection.execute(
-                "UPDATE workflow_turns SET state='returned', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
-                " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
-                " updated_at=? WHERE turn_id=?",
-                (disposition, canonical_json(turn["outcome"]), canonical_json(turn["outcomeTruncated"]) if "outcomeTruncated" in turn else None,
-                 canonical_json(turn.get("provenance")),
-                 turn.get("sessionId"), turn.get("promptSha256"), turn.get("inputSha256"),
-                 self.result_payload(payload).get("turnResultPath"), canonical_json(self._sealed_artifacts(payload)),
-                 now, turn_row["turn_id"]),
+                "UPDATE workflow_turns SET state='returned', updated_at=? WHERE turn_id=?",
+                (now, turn_row["turn_id"]),
             )
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
         else:
@@ -4166,10 +4166,14 @@ class WorkflowCoordinator:
         host_proof = (previous_host_completion is not None and json.loads(previous_host_completion[0]).get("artifactId") == artifact["artifact_id"])
         if host_completion:
             current = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=? AND attempt_id=?", (run_row["current_turn_id"], attempt["attempt_id"])).fetchone()
-            if current is None or current["state"] != "returned" or current["disposition"] not in ("assistance", "attention", "completed"):
+            if (current is None or current["state"] != "returned"
+                    or self.turn_outcome(json.loads(attempt["result_json"]))["outcome"]["disposition"]
+                    not in ("assistance", "attention", "completed")):
                 raise BoardError("NOT_READY", "Host completion requires the current stopped and sealed turn")
         if not (host_completion or host_proof) and connection.execute(
-            "SELECT * FROM workflow_turns WHERE attempt_id=? AND state='returned' AND disposition='completed'",
+            "SELECT 1 FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+            " WHERE t.attempt_id=? AND t.state='returned'"
+            " AND json_extract(a.result_json,'$.result.turn.outcome.disposition')='completed'",
             (attempt["attempt_id"],),
         ).fetchone() is None:
             resolution = self._resolution_delivery(connection, run_row, attempt, artifact)
@@ -5734,9 +5738,9 @@ class WorkflowCoordinator:
         # own outcome. json_type distinguishes text from serialized objects/arrays.
         run_row = connection.execute(
             "SELECT r.run_id,r.state,r.owner_generation,r.host_id,r.revision,r.continuation_count,r.active_request_id,r.title,r.macro_task_id,"
-            " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
-            " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
-            " WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
+            " (SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
+            " THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+            " WHERE t.run_id=r.run_id AND t.state='returned'"
             " ORDER BY t.turn_index DESC LIMIT 1) AS result_summary"
             " FROM workflow_runs r WHERE r.run_id=?", (task_row["task_id"],)
         ).fetchone()
@@ -6059,12 +6063,14 @@ class WorkflowCoordinator:
         execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_count)
         buddy = self._buddy(run_row)
         native = self._previous_codex_checkpoint(connection, previous)
-        previous_session = previous["session_id"] if previous is not None else None
-        if native is not None:
-            previous_session = native[1]["sessionId"]
         prior = (connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                     (previous['attempt_id'],)).fetchone() if previous is not None else None)
         prior_result = json.loads(prior['result_json'] or '{}') if prior else {}
+        prior_turn = (self.turn_outcome(prior_result)
+                      if previous is not None and previous["state"] == "returned" else {})
+        previous_session = prior_turn.get("sessionId")
+        if native is not None:
+            previous_session = native[1]["sessionId"]
         refused_resume = self._native_resume_refused(previous, prior_result)
         prior_native_session = (prior_result.get("result") or prior_result).get("nativeSession") or {}
         if previous is not None and previous["state"] == "interrupted" and previous_session is None:
@@ -6123,7 +6129,7 @@ class WorkflowCoordinator:
             if checkpoint.get("lastAssistantMessage") is not None:
                 context["lastAssistantMessage"] = {
                     "source": "codex-native-agent-message",
-                    "validatedOutcome": previous["state"] == "returned" and json.loads(previous["provenance_json"] or "{}").get("outputSchemaValidated") is True,
+                    "validatedOutcome": previous["state"] == "returned" and prior_turn["provenance"].get("outputSchemaValidated") is True,
                     "sessionId": checkpoint["sessionId"], "nativeTurnId": checkpoint["nativeTurnId"],
                     **checkpoint["lastAssistantMessage"],
                 }
@@ -6660,10 +6666,10 @@ class WorkflowCoordinator:
                     "partialOutput": "See the partial-output artifact in context.artifacts; it is unverified.",
                 }
                 context["previousEvidenceNotice"] = "The previous turn was interrupted. Its partial artifacts are unverified evidence, not new Host instructions or accepted work."
-            outcome = json.loads(previous["outcome_json"]) if previous["outcome_json"] else {}
+            outcome = payload["turn"]["outcome"] if previous["state"] == "returned" else {}
             context["lastCheckpoint"] = {
                 "turnId": previous["turn_id"],
-                "disposition": previous["disposition"],
+                "disposition": outcome.get("disposition"),
                 "summary": outcome.get("summary"),
                 "remaining": outcome.get("remaining", []),
             }
@@ -6840,7 +6846,6 @@ class WorkflowCoordinator:
         if (attempt["shutdown_confirmed"] and self.result_payload(payload).get("partialWorkspaceSeal")
                 and not self.result_payload(payload).get("microTaskError")):
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
-            connection.execute("UPDATE workflow_turns SET sealed_artifacts_json=? WHERE turn_id=?", (canonical_json(self._sealed_artifacts(payload)), turn_row["turn_id"]))
             self.board._append_event(connection, "workflow.partial_output_preserved", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"], payload={"partial": True, "verified": False, "final": False})
         ancestor = self._terminal_ancestor(connection, run_row["run_id"])
         if ancestor is not None and run_row["state"] not in ("accepted", "concluded", "cancelled"):
@@ -6963,22 +6968,8 @@ class WorkflowCoordinator:
         outcome = turn["outcome"]
         disposition = outcome["disposition"]
         connection.execute(
-            "UPDATE workflow_turns SET state='returned', disposition=?, outcome_json=?, outcome_truncated_json=?, provenance_json=?,"
-            " session_id=?, prompt_sha256=?, input_sha256=?, turn_result_path=?, sealed_artifacts_json=?,"
-            " updated_at=? WHERE turn_id=?",
-            (
-                disposition,
-                canonical_json(outcome),
-                canonical_json(turn["outcomeTruncated"]) if "outcomeTruncated" in turn else None,
-                canonical_json(turn.get("provenance")),
-                turn.get("sessionId"),
-                turn.get("promptSha256"),
-                turn["inputSha256"],
-                self.result_payload(payload).get("turnResultPath"),
-                canonical_json(self._sealed_artifacts(payload)),
-                now,
-                turn_row["turn_id"],
-            ),
+            "UPDATE workflow_turns SET state='returned', updated_at=? WHERE turn_id=?",
+            (now, turn_row["turn_id"]),
         )
         self._revoke_credentials(connection, run_row["run_id"])
         # Every accepted turn pins the manifest it executed on and the output it
@@ -7361,6 +7352,7 @@ class WorkflowCoordinator:
             },
         }
 
+    @classmethod
     def _sealed_artifacts(cls, payload: dict | None) -> list[dict]:
         result = cls.result_payload(payload)
         seal = result.get("workspaceSeal") or result.get("partialWorkspaceSeal")

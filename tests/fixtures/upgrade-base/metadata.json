@@ -8,10 +8,27 @@
     "pydantic": "2.13.5",
     "zstandard": "0.25.0"
   },
+  "edgeStock": {
+    "partial-failed": {
+      "attemptId": "00000000-0000-0000-0000-000000000110",
+      "runId": "00000000-0000-0000-0000-00000000010c",
+      "turnId": "00000000-0000-0000-0000-000000000112"
+    },
+    "partial-interrupted": {
+      "attemptId": "00000000-0000-0000-0000-000000000121",
+      "runId": "00000000-0000-0000-0000-00000000011e",
+      "turnId": "00000000-0000-0000-0000-000000000123"
+    },
+    "rejected-turn": {
+      "attemptId": "00000000-0000-0000-0000-000000000130",
+      "runId": "00000000-0000-0000-0000-00000000012d",
+      "turnId": "00000000-0000-0000-0000-000000000132"
+    }
+  },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir tmp/s3-task-only-generation-2 --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "f4dd20c4c13a5a19bdf690000986eb7cb3ace70d656baf201952f2a3d450334b",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir tmp/s4b-generation-7 --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "bb2f10fc3530fe9cb1af60fb154894a7346db420621a85dafa6c0e813bb932f9",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000bb",
@@ -245,10 +262,10 @@
     "src/hey_my_buddy/protocol/windows_process.py",
     "src/hey_my_buddy/windows_files.py"
   ],
-  "operationsSha256": "e60eb33d010012ef61e1bda2027483a7aafe0ba3a8a2fdf30584067c4c5f229b",
+  "operationsSha256": "2926394eebb023982bfcdaeaf45c03421c2323a92dc28e1e55f4b42e02287d4e",
   "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
   "pythonVersion": "3.12.12",
-  "resourcesSha256": "8834423fa73dd802f0bbb104bd1f92ac159c66a7c37faaac93ae2409e6d27d8f",
+  "resourcesSha256": "a141a3985ae00cc88256f5ba4f72589d09094e5248d4be0e8c0dc542c37d038c",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 28; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -452,7 +469,7 @@
   },
   "sourceTree": "507fd2b6b2fbda0b1953781419358fecc43e9236",
   "sourceVersion": "0.51.0",
-  "sqlSha256": "0bb75e173f1ee0fd7d985cda4147807030fef3a071cf4b3c929f6751ff187bd6",
+  "sqlSha256": "cc97465f334ac91e6d975e06b27d02923ca97dfe7ce5da3967a68bc19dae1ecb",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000003e",
     "cancelled": "00000000-0000-0000-0000-00000000006c",
@@ -468,14 +485,14 @@
     "verified": "00000000-0000-0000-0000-0000000000a5"
   },
   "tableRowCounts": {
-    "agent_credentials": 9,
+    "agent_credentials": 12,
     "artifacts": 0,
     "attempt_activity": 1,
-    "attempt_interruptions": 1,
-    "attempt_process_identities": 1,
+    "attempt_interruptions": 2,
+    "attempt_process_identities": 2,
     "attempt_reminders": 2,
-    "attempt_shutdown_evidence": 1,
-    "attempts": 16,
+    "attempt_shutdown_evidence": 2,
+    "attempts": 19,
     "buddies": 3,
     "catalog_current": 1,
     "catalog_observations": 4,
@@ -485,19 +502,19 @@
     "evaluation_catalog": 3,
     "evaluation_decisions": 8,
     "evaluation_preferences": 2,
-    "events": 213,
+    "events": 233,
     "execution_issues": 0,
     "harness_account_reads": 1,
     "harness_health": 4,
     "macro_task_deletions": 1,
-    "macro_tasks": 1,
+    "macro_tasks": 2,
     "messages": 12,
     "meta": 2,
     "model_service_concurrency": 1,
     "model_service_notes": 1,
     "provider_cooling": 1,
     "reminder_settings": 1,
-    "resource_claims": 15,
+    "resource_claims": 18,
     "router_buddies": 2,
     "router_claims": 7,
     "router_dispatches": 7,
@@ -505,8 +522,8 @@
     "router_requests": 6,
     "router_settings": 1,
     "service_issues": 0,
-    "tasks": 17,
-    "workflow_artifacts": 36,
+    "tasks": 20,
+    "workflow_artifacts": 45,
     "workflow_children": 1,
     "workflow_continuations": 1,
     "workflow_fixes": 0,
@@ -515,13 +532,13 @@
     "workflow_lead_tasks": 1,
     "workflow_requests": 4,
     "workflow_routes": 1,
-    "workflow_runs": 10,
-    "workflow_scope_versions": 10,
+    "workflow_runs": 13,
+    "workflow_scope_versions": 13,
     "workflow_suggestions": 2,
-    "workflow_turns": 9,
+    "workflow_turns": 12,
     "workflow_workspace_conflicts": 2,
     "workspace_cleanup_plans": 6,
-    "workspace_reservations": 10
+    "workspace_reservations": 13
   },
   "taskOnlyStock": {
     "initialSole": "dec-00000000-0000-0000-0000-000000000016",

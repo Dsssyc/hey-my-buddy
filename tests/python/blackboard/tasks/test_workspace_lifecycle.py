@@ -2421,7 +2421,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for path, raw in initial_files.items():
             self.assertEqual((self.directory / path).read_bytes(), raw, path)
         with board.store.db.read() as connection:
-            saved = connection.execute("SELECT input_json,input_sha256 FROM workflow_turns WHERE attempt_id=?",
+            saved = connection.execute("SELECT t.input_json,json_extract(a.result_json,'$.result.turn.inputSha256')"
+                                       " AS input_sha256 FROM workflow_turns t JOIN attempts a USING(attempt_id)"
+                                       " WHERE t.attempt_id=?",
                                        (attempt["attemptId"],)).fetchone()
         self.assertEqual(json.loads(saved["input_json"]), claimed["claim"]["turn"]["input"])
         self.assertEqual(saved["input_sha256"], claimed["claim"]["turn"]["inputSha256"])

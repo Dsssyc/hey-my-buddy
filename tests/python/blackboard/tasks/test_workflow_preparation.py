@@ -712,7 +712,8 @@ class RestartPreparationTests(WorkflowTestCase):
     def test_restart_failed_helper_partial_recovery_uses_the_same_checkout(self):
         board, parent, helper_id, failed, checkout = self.failed_helper()
         with board.store.db.read() as connection:
-            original_turn = tuple(connection.execute("SELECT input_json,input_sha256 FROM workflow_turns WHERE attempt_id=?",
+            original_turn = tuple(connection.execute("SELECT t.input_json,a.result_json FROM workflow_turns t"
+                                                    " JOIN attempts a USING(attempt_id) WHERE t.attempt_id=?",
                                                     (failed["claim"]["attempt"]["attemptId"],)).fetchone())
         board = self.board()
         view = board.call("workflow_get", {"runId": parent["runId"]})
@@ -729,7 +730,8 @@ class RestartPreparationTests(WorkflowTestCase):
         rows = self.rows(board, helper_id, continuation["continuationId"])
         self.assertEqual(rows[3]["state"], "held")
         with board.store.db.read() as connection:
-            saved = connection.execute("SELECT input_json,input_sha256 FROM workflow_turns WHERE attempt_id=?",
+            saved = connection.execute("SELECT t.input_json,a.result_json FROM workflow_turns t"
+                                       " JOIN attempts a USING(attempt_id) WHERE t.attempt_id=?",
                                        (failed["claim"]["attempt"]["attemptId"],)).fetchone()
         self.assertEqual(json.loads(saved["input_json"]), failed["claim"]["turn"]["input"])
         self.assertEqual(tuple(saved), original_turn)

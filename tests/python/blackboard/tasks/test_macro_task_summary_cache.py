@@ -184,7 +184,12 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_requests SET state='declined' WHERE run_id=?",(root,))
             self.read()
             self.assert_recomputed(counter,[group])
-            self.sql("UPDATE workflow_turns SET disposition='attention' WHERE run_id=?",(root,))
+            self.sql(
+                "UPDATE attempts SET result_json=json_set(result_json,"
+                "'$.result.turn.outcome.disposition','attention') WHERE attempt_id=("
+                "SELECT attempt_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1)",
+                (root,),
+            )
             self.read()
             self.assert_recomputed(counter,[group])
 
@@ -395,16 +400,48 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?", ("Fictional task fallback\nmore", root))
             self.assertEqual(self.rows()[group]["title"], "Fictional task fallback")
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?", ("  Fictional  corrected summary\nsecond line", root))
+            self.sql(
+                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',?)"
+                " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?"
+                " ORDER BY turn_index DESC LIMIT 1)",
+                ("  Fictional  corrected summary\nsecond line", root),
+            )
             self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
             self.assert_recomputed(counter, [group])
-            self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,expected_seconds,state,outcome_json,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write',1800,'prepared',?, '2026-01-01','2026-01-01')", (root,json.dumps({"summary":"Fictional newest summary"})))
+            self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,expected_seconds,state,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write',1800,'prepared','2026-01-01','2026-01-01')", (root,))
             self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_turns SET state='returned' WHERE turn_id='fictional-turn-2'")
+            second_attempt = "fictional-attempt-" + root
+            with self.store.db.write() as connection:
+                first = connection.execute(
+                    "SELECT a.attempt_id,a.generation,a.result_json FROM workflow_turns t"
+                    " JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=?"
+                    " AND t.turn_index=1", (root,),
+                ).fetchone()
+                second_generation = first["generation"] + 1
+                receipt = json.loads(first["result_json"])
+                receipt["result"]["turn"].update(
+                    attemptId=second_attempt, generation=second_generation, turnId="fictional-turn-2",
+                )
+                receipt["result"]["turn"]["outcome"]["summary"] = "Fictional newest summary"
+                connection.execute(
+                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
+                    "adapter,result_json,shutdown_confirmed,created_at,updated_at)"
+                    " SELECT ?,task_id,?,nonce_verifier,'finished',adapter,?,shutdown_confirmed,"
+                    "created_at,updated_at FROM attempts WHERE attempt_id=?",
+                    (second_attempt, second_generation, json.dumps(receipt), first["attempt_id"]),
+                )
+                connection.execute(
+                    "UPDATE workflow_turns SET state='returned',attempt_id=?,generation=?"
+                    " WHERE turn_id='fictional-turn-2'",
+                    (second_attempt, second_generation),
+                )
             self.assertEqual(self.rows()[group]["summary"], "Fictional newest summary")
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary','Fictional latest corrected') WHERE turn_id='fictional-turn-2'")
+            self.sql(
+                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',"
+                "'Fictional latest corrected') WHERE attempt_id=?", (second_attempt,),
+            )
             self.assertEqual(self.rows()[group]["summary"], "Fictional latest corrected")
             self.assert_recomputed(counter, [group])
             self.assertNotEqual(initial["summary"], self.rows()[group]["summary"])
@@ -596,8 +633,17 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def test_marker_never_copies_large_result_or_outcome_documents(self):
         root=self.root_for(self.fixture.macros[1])
         self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?",(root,))
-        self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.privatePadding',?) WHERE run_id=?",("fictional-padding-"*120000,root))
         self.read()
+        with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
+            self.sql(
+                "UPDATE attempts SET result_json=json_set(result_json,"
+                "'$.result.turn.outcome.privatePadding',?) WHERE attempt_id=("
+                "SELECT attempt_id FROM workflow_turns WHERE run_id=? AND state='returned'"
+                " ORDER BY turn_index DESC LIMIT 1)",
+                ("fictional-padding-"*120000,root),
+            )
+            self.read()
+            self.assert_recomputed(counter,[])
         cache=memo.for_store(self.store)
         encoded=json.dumps(list(cache.entries.values()))
         self.assertNotIn("privateSyntheticInjection",encoded)
@@ -605,7 +651,12 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertLess(len(encoded),100000)
         # Arbitrarily large raw-SQL display fields are bounded in the marker;
         # instead of risking a collision outside its prefix, decline reuse.
-        self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?",(" "*5000+"fictional-visible",root))
+        self.sql(
+            "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',?)"
+            " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?"
+            " AND state='returned' ORDER BY turn_index DESC LIMIT 1)",
+            (" "*5000+"fictional-visible",root),
+        )
         self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
             self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")

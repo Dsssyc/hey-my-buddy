@@ -85,7 +85,9 @@ class DshResumeSelectionTests(WorkflowTestCase):
         self.assertEqual(done["taskState"], "completed")
         with board.store.db.read() as db:
             rows = db.execute(
-                "SELECT session_id, state FROM workflow_turns WHERE run_id=? ORDER BY turn_index",
+                "SELECT CASE WHEN t.state='returned' THEN json_extract(a.result_json,'$.result.turn.sessionId') END"
+                " AS session_id,t.state FROM workflow_turns t LEFT JOIN attempts a USING(attempt_id)"
+                " WHERE t.run_id=? ORDER BY t.turn_index",
                 (submitted["runId"],)).fetchall()
         self.assertEqual([row["state"] for row in rows], ["returned", "returned"])
         self.assertEqual(rows[-1]["session_id"], CANDIDATE_SESSION)
