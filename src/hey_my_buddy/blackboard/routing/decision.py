@@ -1004,18 +1004,21 @@ class DecisionCoordinator:
             connection.execute("RELEASE decision_publication")
             row = self._row(connection, descriptor["decisionId"])
             self._record_publication_issue(connection, attempt, failure, now)
+            failure_reason = ({"code": failure.code, "params": failure.details}
+                              if failure.code == "router-input-too-large" else
+                              make_reason("decision-publication-failed", errorCode=failure.code))
             self._finish(
                 connection,
                 row,
                 status="needs-host",
                 now=now,
-                reason={"code": failure.code, "params": {}},
+                reason=failure_reason,
             )
             return {
                 "decisionId": row["decision_id"],
                 "kind": row["kind"],
                 "status": "needs-host",
-                "reason": {"code": failure.code, "params": {}},
+                "reason": failure_reason,
             }
         except Exception as failure:  # noqa: BLE001 - a decision bug must not poison the receipt
             connection.execute("ROLLBACK TO decision_publication")

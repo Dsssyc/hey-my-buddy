@@ -1,6 +1,9 @@
 """Current selected-buddy bounds through real claim and publication transactions."""
 from admission import admit_execution
 import json
+from unittest.mock import patch
+
+from hey_my_buddy.errors import BoardError
 
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C
 import blackboard.routing.test_router_failover_integration as _failover
@@ -93,6 +96,18 @@ class SelectionPublicationTests(RouterDispatchTestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='decision.selection_rerouted'").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT shutdown_confirmed FROM attempts WHERE attempt_id=?",
                                         (first["attempt"]["attemptId"],)).fetchone()[0], 0)
+
+    def test_selection_retry_dispatch_limit_retains_its_size_facts(self):
+        request, first = self.start(three=True, micro_task=True)
+        self.invalidate(B, "disabled")
+        coordinator = self.board_.store.decisions
+        with patch.object(coordinator, "_queue_router_dispatch", side_effect=BoardError(
+                "router-input-too-large", "dispatch preparation diagnostic", bytes=200, limit=100)):
+            response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertTrue(response["committed"])
+        view = self.decision_row(request["decisionId"])
+        self.assertEqual(view["reason"], {"code": "router-input-too-large", "params": {"bytes": 200, "limit": 100}})
+        self.assertIsNone(view["note"])
 
     def test_second_invalid_selection_reaches_host_with_reason(self):
         request, first = self.start(three=True, micro_task=True)

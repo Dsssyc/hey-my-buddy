@@ -35,6 +35,11 @@ _NATIVE_SOURCES = {
     'zcode': 'zcode-native-app-server',
     'claude': 'claude-code-initialize',
 }
+_DISPATCH_REJECTION_ERRORS = frozenset((
+    'BUDDY_UNAVAILABLE', 'CATALOG_UNAVAILABLE', 'HARNESS_UNAVAILABLE',
+    'INVALID_ARGUMENT', 'INVALID_BUDDY', 'PERMISSION_DENIED', 'UNSUPPORTED_ADAPTER',
+    'UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_HARNESS',
+))
 _DISCOVERY_ERRORS = frozenset((
     'BUDDY_UNAVAILABLE', 'CATALOG_INVALID', 'CATALOG_LIMIT', 'CATALOG_UNAVAILABLE',
     'CONFLICT', 'HARNESS_DISCOVERY_STOP_UNCONFIRMED', 'HARNESS_RECORD_INVALID',
@@ -411,7 +416,10 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
         elif payload.get('source') == 'routing':
             decision_id = payload.get('decisionId')
             if decision_id is None:
-                structured = make_reason('history.reason-unavailable', recordId=record_id)
+                diagnostic = row['summary'].split(':', 1)[0] if isinstance(row['summary'], str) else ''
+                structured = (make_reason('dispatch.buddy-rejected', errorCode=diagnostic)
+                              if diagnostic in _DISPATCH_REJECTION_ERRORS else
+                              make_reason('history.reason-unavailable', recordId=record_id))
             elif (not isinstance(decision_id, str) or not decision_id or
                   connection.execute('SELECT 1 FROM evaluation_decisions WHERE decision_id=?',
                                      (decision_id,)).fetchone() is None):
@@ -428,8 +436,8 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
                     if route['state'] != 'needs-host':
                         raise BoardError('UPGRADE_INVALID_BOARD', 'Completed routing request lacks validation boundary')
                     diagnostic = row['summary'].split(':', 1)[0] if isinstance(row['summary'], str) else ''
-                    if diagnostic in _REGISTERED_REASON_PARAMETERS:
-                        structured = {'code': diagnostic, 'params': {}}
+                    if diagnostic in _DISPATCH_REJECTION_ERRORS:
+                        structured = make_reason('dispatch.buddy-rejected', errorCode=diagnostic)
                     else:
                         structured = make_reason('routing-unusable-selection')
                 elif decision['status'] in ('queued', 'running') and route['state'] != 'fenced':
@@ -706,10 +714,6 @@ _RELEASE_REASON_CODES = {
     'Execution process could not be started': 'execution-process-not-created',
     'No execution process was created': 'execution-process-not-created',
 }
-_UNCERTAIN_ATTEMPT_TEXT = (
-    'service restarted while this attempt owned possible external work; '
-    'its resource claims are retained until the execution reconnects or recovery proves shutdown'
-)
 
 
 def _upgrade_router_snapshot(value, *, record_id: str):
@@ -801,10 +805,9 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
         raise BoardError('UPGRADE_INVALID_BOARD', 'Decision output has unknown ownership')
     program = output.get('programSelection') if output else None
     if (status == 'completed' and error is None and isinstance(program, dict) and
-            program.get('code') == 'single-candidate' and program.get('buddyId') == row['buddy_id'] and
-            old == '唯一合法候选，未调用 Router'):
+            program.get('code') == 'single-candidate' and program.get('buddyId') == row['buddy_id']):
         return make_reason('single-candidate'), None
-    adopted = output.get('decision') if output and output.get('status') == 'ok' and output.get('operation') == 'select' else None
+    adopted = output.get('decision') if output and output.get('status') == 'ok' and output.get('operation') == 'select' and 'code' not in output else None
     if (isinstance(adopted, dict) and isinstance(adopted.get('reason'), str) and
             isinstance(adopted.get('evidence'), list) and error is None):
         buddy = adopted.get('buddyId')
@@ -819,6 +822,8 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
         return None, None
     if error:
         code = error if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', error) else error.split(':', 1)[0]
+        if code in _DISPATCH_REJECTION_ERRORS:
+            return make_reason('decision-publication-failed', errorCode=code), None
         if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', code) and code in _REGISTERED_REASON_PARAMETERS:
             if code == 'router-out-of-bounds':
                 bounds = {
@@ -888,8 +893,8 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
             if converted != json.loads(raw):
                 connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?',
                                    (canonical_json(converted), record_id))
-    for seq, kind, task_id, attempt_id, raw in connection.execute(
-        'SELECT seq,kind,task_id,attempt_id,payload_json FROM events'
+    for seq, kind, task_id, attempt_id, raw, actor_role in connection.execute(
+        'SELECT seq,kind,task_id,attempt_id,payload_json,actor_role FROM events'
     ):
         if kind.startswith('decision.') or kind in ('workflow.routing_needs_host', 'workflow.routing_settled'):
             payload = json.loads(raw)
@@ -899,23 +904,35 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
                 payload.pop(key, None)
             connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
                                (canonical_json(payload), seq))
-        elif kind == 'task.cancelled' and task_id is not None:
+        elif kind in ('task.cancelled', 'task.cancel_requested') and task_id is not None:
             task = connection.execute('SELECT spec_json FROM tasks WHERE task_id=?', (task_id,)).fetchone()
             spec = json.loads(task[0]) if task is not None else {}
             decision = spec.get('decision') if isinstance(spec, dict) else None
             if isinstance(decision, dict) and isinstance(decision.get('decisionId'), str):
                 payload = json.loads(raw)
-                if (not isinstance(payload, dict) or payload.get('phase') != 'queued' or
-                        payload.get('actor') != {'role': 'service', 'id': 'service'}):
-                    raise BoardError('UPGRADE_INVALID_BOARD', 'Decision task cancellation has unknown ownership')
-                payload.pop('reason', None)
-                payload['decisionId'] = decision['decisionId']
-                connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
-                                   (canonical_json(payload), seq))
+                owning_run_id = payload.get('owningRunId')
+                owned_route = (connection.execute(
+                    'SELECT 1 FROM workflow_routes WHERE decision_id=? AND run_id=?',
+                    (decision['decisionId'], owning_run_id)).fetchone() if owning_run_id is not None else None)
+                if (owned_route is not None or payload.get('phase') == 'queued' and
+                        payload.get('actor') == {'role': 'service', 'id': 'service'}):
+                    payload.pop('reason', None)
+                    payload['decisionId'] = decision['decisionId']
+                    connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                       (canonical_json(payload), seq))
+                elif 'reason' in payload:
+                    authored, note = _converted_event_note(
+                        connection, {'kind': kind, 'actor_role': actor_role}, payload)
+                    if not authored:
+                        raise BoardError('UPGRADE_INVALID_BOARD', 'Decision task cancellation has unknown ownership')
+                    payload.pop('reason')
+                    payload['note'] = note
+                    connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
+                                       (canonical_json(payload), seq))
         elif kind == 'attempt.released':
             payload = json.loads(raw)
-            if not isinstance(payload, dict) or attempt_id is None or payload.get('releaseEvidence') != 'processCreated=false':
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Execution release lacks ownership evidence')
+            if not isinstance(payload, dict) or attempt_id is None:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Execution release lacks its attempt identity')
             old_reason = payload.get('reason')
             code = _RELEASE_REASON_CODES.get(old_reason)
             if code is None:
@@ -933,9 +950,7 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
                                (canonical_json(payload), seq))
         elif kind == 'attempt.uncertain':
             payload = json.loads(raw)
-            if not isinstance(payload, dict) or payload.get('reason') != _UNCERTAIN_ATTEMPT_TEXT:
-                raise BoardError('UPGRADE_INVALID_BOARD', 'Uncertain attempt reason has unknown ownership')
-            payload.pop('reason')
+            payload.pop('reason', None)
             connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
                                (canonical_json(payload), seq))
 

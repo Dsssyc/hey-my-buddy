@@ -34,7 +34,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                   'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
                   'processState': {'shutdownConfirmed': True},
                   'rawAnswer': {'buddyId': packet['expected']['buddyId'],
-                                'reason': packet['expected']['marker'], 'evidence': []}}
+                                'note': packet['expected']['marker'], 'evidence': []}}
         return AdapterOutcome(status='ok', result=result, shutdown_confirmed=True)
 
     def test_preparation_never_selects_or_starts_a_native_adapter(self):

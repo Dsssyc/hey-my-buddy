@@ -549,7 +549,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                         "manifestSha256": (claim["decisionInput"].get("executionWorkspace") or {}).get("manifestSha256")},
-                  "decision": {"buddyId": "dsh:fixture:bravo:max", "reason": "The frozen legal choice",
+                  "decision": {"buddyId": "dsh:fixture:bravo:max", "note": "The frozen legal choice",
                                "evidence": []}}
         settled = self.board_.call("execution_result", {**actor, "status": "ok",
                                                          "shutdownConfirmed": True, "result": output})

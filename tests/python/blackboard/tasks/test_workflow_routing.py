@@ -212,14 +212,14 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(view["routing"]["status"], "needs-host")
         self.assertEqual(view["counts"]["turns"], 0)
         self.assertEqual(view["activeRequest"]["reason"],
-                         {"code": "CATALOG_UNAVAILABLE", "params": {}})
+                         {"code": "dispatch.buddy-rejected", "params": {"errorCode": "CATALOG_UNAVAILABLE"}})
         with board.store.db.read() as connection:
             request = connection.execute(
                 "SELECT summary,reason_code,reason_params_json,decision_id,payload_json"
                 " FROM workflow_requests WHERE request_id=?", (view["activeRequest"]["requestId"],),
             ).fetchone()
             self.assertIsNone(request["summary"])
-            self.assertEqual(request["reason_code"], "CATALOG_UNAVAILABLE")
+            self.assertEqual(request["reason_code"], "dispatch.buddy-rejected")
             self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
             self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
 
@@ -230,20 +230,25 @@ class TestWorkflowRouting(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET validated_buddy_revision=NULL WHERE run_id=?",
                                (submitted["runId"],))
-        self.catalog_validation.side_effect = BoardError("CATALOG_UNAVAILABLE", "catalog disappeared")
+        cause = {"code": "catalog-unavailable", "params": {}}
+        self.catalog_validation.side_effect = BoardError(
+            "BUDDY_UNAVAILABLE", "native diagnostic must not become a reason",
+            buddy=BUDDY, enabled=False, catalogReadAt="2026-10-18T00:00:00Z", reason=cause)
         self.register(board)
         claim = self.claim(board, run_id=submitted["runId"])
         self.assertIsNone(claim["claim"])
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["activeRequest"]["reason"],
-                         {"code": "CATALOG_UNAVAILABLE", "params": {}})
+                         {"code": "dispatch.buddy-rejected", "params": {
+                             "errorCode": "BUDDY_UNAVAILABLE", "buddy": BUDDY, "enabled": False,
+                             "catalogReadAt": "2026-10-18T00:00:00Z", "cause": cause}})
         with board.store.db.read() as connection:
             request = connection.execute(
                 "SELECT summary,reason_code,decision_id,payload_json FROM workflow_requests WHERE request_id=?",
                 (view["activeRequest"]["requestId"],),
             ).fetchone()
             self.assertIsNone(request["summary"])
-            self.assertEqual(request["reason_code"], "CATALOG_UNAVAILABLE")
+            self.assertEqual(request["reason_code"], "dispatch.buddy-rejected")
             self.assertIsNone(request["decision_id"])
             self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
 

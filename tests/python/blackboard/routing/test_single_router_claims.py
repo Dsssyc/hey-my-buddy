@@ -341,7 +341,12 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.assertEqual(decision['status'], 'needs-host')
         self.assertIsNone(decision['buddyId'])
         self.assertIsNone(decision['selectedBuddy'])
+        self.assertEqual(decision['reason'], {'code': 'decision-publication-failed',
+                                              'params': {'errorCode': 'fixture-failure'}})
         with board.store.db.read() as connection:
+            issue = connection.execute("SELECT code,message FROM execution_issues WHERE stage='decision-publication'").fetchone()
+            self.assertEqual((issue['code'], issue['message']),
+                             ('fixture-failure', 'fail after choice and event publication'))
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.completed'").fetchone()[0], 0)
             self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
 

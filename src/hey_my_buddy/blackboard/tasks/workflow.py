@@ -1565,8 +1565,13 @@ class WorkflowCoordinator:
                         ) if key in error.details}
                         if error.code in ("HARNESS_UNAVAILABLE", "UNSUPPORTED_CAPABILITY"):
                             facts["harness"] = buddy["harness"]
-                        self._routing_attention(connection, current, self.now(),
-                                                {"code": error.code, "params": facts})
+                        rejection = make_reason("dispatch.buddy-rejected", errorCode=error.code)
+                        rejection["params"].update(facts)
+                        if error.code in ("BUDDY_UNAVAILABLE", "CATALOG_UNAVAILABLE", "HARNESS_UNAVAILABLE"):
+                            cause = error.details.get("reason")
+                            if cause is not None:
+                                rejection["params"]["cause"] = cause
+                        self._routing_attention(connection, current, self.now(), rejection)
                     head = self.board._head_of(connection)
                 self.board._notify(head)
             else:

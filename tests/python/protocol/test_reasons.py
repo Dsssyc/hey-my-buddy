@@ -151,6 +151,15 @@ class ReasonTests(unittest.TestCase):
 
 
 class ReasonCodesTableTests(unittest.TestCase):
+    def test_dispatch_errors_are_parameters_not_reason_codes(self):
+        codes = declared_codes()
+        for code in ("BUDDY_UNAVAILABLE", "CATALOG_UNAVAILABLE", "HARNESS_UNAVAILABLE", "INVALID_ARGUMENT",
+                     "INVALID_BUDDY", "PERMISSION_DENIED", "UNSUPPORTED_ADAPTER", "UNSUPPORTED_CAPABILITY",
+                     "UNSUPPORTED_HARNESS"):
+            self.assertNotIn(code, codes)
+        self.assertIn("errorCode", codes["dispatch.buddy-rejected"])
+        self.assertIn("cause", codes["dispatch.buddy-rejected"])
+
     def test_the_table_maps_codes_to_unique_parameter_names(self):
         codes = declared_codes()
         self.assertIsInstance(codes, dict)

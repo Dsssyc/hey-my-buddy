@@ -1,44 +1,14 @@
 {
   "ANCESTOR_TERMINAL": [],
-  "BUDDY_UNAVAILABLE": [
-    "buddy",
-    "enabled",
-    "catalogReadAt"
-  ],
-  "CATALOG_UNAVAILABLE": [
-    "buddy",
-    "harness",
-    "catalogReadAt"
-  ],
   "CONFLICT": [],
   "HARNESS_BALANCE_ZERO": [],
   "HARNESS_QUOTA_EXHAUSTED": [],
   "HARNESS_QUOTA_LIMIT_REPORTED": [],
   "HARNESS_QUOTA_NEAR_LIMIT": [],
   "HARNESS_RATE_LIMIT_REPORTED": [],
-  "HARNESS_UNAVAILABLE": [
-    "buddy",
-    "harness"
-  ],
   "ILLEGAL_TRANSITION": [],
-  "INVALID_ARGUMENT": [
-    "legalEfforts",
-    "buddy"
-  ],
-  "INVALID_BUDDY": [],
-  "PERMISSION_DENIED": [],
   "REVISION_CONFLICT": [],
   "SHUTDOWN_UNCONFIRMED": [],
-  "UNSUPPORTED_ADAPTER": [
-    "adapter"
-  ],
-  "UNSUPPORTED_CAPABILITY": [
-    "harness",
-    "access",
-    "requiredCapability",
-    "missingCapabilities"
-  ],
-  "UNSUPPORTED_HARNESS": [],
   "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
@@ -77,7 +47,22 @@
   "config-shape-unreadable": [],
   "deadline": [],
   "decision-cancelled": [],
-  "decision-publication-failed": [],
+  "decision-publication-failed": [
+    "errorCode"
+  ],
+  "dispatch.buddy-rejected": [
+    "errorCode",
+    "buddy",
+    "enabled",
+    "catalogReadAt",
+    "legalEfforts",
+    "access",
+    "requiredCapability",
+    "missingCapabilities",
+    "adapter",
+    "harness",
+    "cause"
+  ],
   "execution-launch-failed": [],
   "execution-process-not-created": [],
   "harness.account-read-failed": [

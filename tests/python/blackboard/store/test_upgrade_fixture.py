@@ -1320,7 +1320,13 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_decision_cancel_reason_does_not_consume_host_cancel_note(self):
         fixture, connection = self.restored('decision-host-cancel')
         decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
-        task_id = fixture['stableIds']['delivered']
+        task_id = 'host-cancel-router-task'
+        spec = json.dumps({'decision': {'decisionId': decision_id, 'kind': 'select'}})
+        connection.execute(
+            "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
+            "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
+            " VALUES(?,?,'decision',?,?,'fixture-digest',1,'decision','/work',60,'cancelled',1,'created','updated')",
+            (task_id, task_id, spec, spec))
         note = 'Host cancelled this choice  '
         connection.execute("UPDATE evaluation_decisions SET status='cancelled',buddy_id=NULL,reason=?,error=NULL"
                            ' WHERE decision_id=?', ('the decision run was cancelled: ' + note, decision_id))
@@ -1335,3 +1341,57 @@ class UpgradeFixtureTests(unittest.TestCase):
         event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='task.cancelled'"
                                               ' ORDER BY seq DESC LIMIT 1').fetchone()[0])
         self.assertEqual(event['note'], note)
+
+
+    def test_blackboard_event_reason_cleanup_uses_writer_not_wording(self):
+        fixture, connection = self.restored('blackboard-event-writers')
+        attempt = connection.execute('SELECT attempt_id,task_id FROM attempts LIMIT 1').fetchone()
+        old = ('service restarted while this attempt owned possible external work; '
+               'its resource claims are retained until the worker reattaches or an operator retries')
+        current = ('service restarted while this attempt owned possible external work; '
+                   'its resource claims are retained until the execution reconnects or recovery proves shutdown')
+        events = []
+        for kind, text in [('attempt.uncertain', old), ('attempt.uncertain', current),
+                           ('attempt.uncertain', 'an earlier unrecognized service sentence'),
+                           ('attempt.uncertain', None), ('workflow.attempt_released', 'older service wording')]:
+            seq = connection.execute(
+                'INSERT INTO events(kind,task_id,attempt_id,payload_json,created_at) VALUES(?,?,?,?,?)',
+                (kind, attempt['task_id'], attempt['attempt_id'],
+                 json.dumps({'reason': text, 'retainedFact': 7}), 'created')).lastrowid
+            events.append(seq)
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for seq in events:
+            row = connection.execute('SELECT payload_json FROM events WHERE seq=?', (seq,)).fetchone()
+            self.assertEqual(json.loads(row[0]), {'retainedFact': 7})
+
+    def test_dispatch_rejection_upgrade_keeps_error_code_as_a_parameter(self):
+        fixture, connection = self.restored('dispatch-rejection')
+        run_id = fixture['stableIds']['delivered']
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        connection.execute('INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,reason,created_at,updated_at)'
+                           " VALUES(?,?,1,'needs-host','BUDDY_UNAVAILABLE: old diagnostic','created','updated')",
+                           (decision_id, run_id))
+        self.old_request(connection, run_id, 'dispatch-with-decision', summary='BUDDY_UNAVAILABLE: old diagnostic',
+                         payload={'source': 'routing', 'decisionId': decision_id})
+        self.old_request(connection, run_id, 'dispatch-explicit', summary='HARNESS_UNAVAILABLE: old diagnostic',
+                         payload={'source': 'routing', 'decisionId': None})
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for request_id, error_code, relation in [('dispatch-with-decision', 'BUDDY_UNAVAILABLE', decision_id),
+                                                ('dispatch-explicit', 'HARNESS_UNAVAILABLE', None)]:
+            row = connection.execute('SELECT * FROM workflow_requests WHERE request_id=?', (request_id,)).fetchone()
+            self.assertEqual(row['reason_code'], 'dispatch.buddy-rejected')
+            self.assertEqual(json.loads(row['reason_params_json']), {'errorCode': error_code})
+            self.assertEqual(row['decision_id'], relation)
+            self.assertIsNone(row['summary'])
+            self.assertEqual(json.loads(row['payload_json']), {'source': 'routing'})
+
+    def test_program_selection_upgrade_uses_recorded_result_not_sentence(self):
+        fixture, connection = self.restored('program-result-writer')
+        connection.execute("UPDATE evaluation_decisions SET reason='older program description'")
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        row = connection.execute('SELECT reason_code,reason_params_json,note FROM evaluation_decisions').fetchone()
+        self.assertEqual((row['reason_code'], row['reason_params_json'], row['note']),
+                         ('single-candidate', '{}', None))
