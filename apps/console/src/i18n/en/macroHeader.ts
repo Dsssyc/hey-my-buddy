@@ -41,6 +41,7 @@ export default {
   currentHost: "Current Host {{host}}",
   standalone: "Historical standalone micro task",
   identifier: "ID",
+  goalHint: "Goal",
   goalTitle: "Goal description",
   goalRevision: "Version {{revision}}",
   goalHistory: "History",

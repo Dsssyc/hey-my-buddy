@@ -55,8 +55,8 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
   }, [open]);
   return <Dialog.Root modal={false} open={open} onOpenChange={setOpen}>
-    <Hint text={t("goalTitle")}><Dialog.Trigger asChild>
-      <Button ref={trigger} type="button" variant="ghost" size="icon-sm" data-slot="macro-goal-trigger" className="goal-trigger" aria-label={t("goalTitle")}><Target aria-hidden="true"/></Button>
+    <Hint text={t("goalHint")}><Dialog.Trigger asChild>
+      <Button ref={trigger} type="button" variant="ghost" size="icon-sm" data-slot="macro-goal-trigger" className="goal-trigger" aria-label={t("goalHint")}><Target aria-hidden="true"/></Button>
     </Dialog.Trigger></Hint>
     <Dialog.Content ref={content} data-slot="macro-goal-card" style={geometry} className="goal-card" aria-describedby={undefined}
       onOpenAutoFocus={event => { event.preventDefault(); content.current?.focus(); }}

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/console-goal-card", import.meta.url));
+const captures = fileURLToPath(new URL("../../../tmp/console-header/goals", import.meta.url));
 const body = "让黑板靠 Git 里的项目标记认仓库，路径只用来找到它；宏任务有一份可修改、留历史的目标说明；没有任务的空壳在删除失败或中断之后仍能证明归属。\n\n### 做到\n\n- 三项随 0.59.0 一次升级装上，日常黑板的存量都转换过来\n- 搬家、拷贝与新 clone 的情形都有真实 Git 的测试\n\n### 不做\n\n- 没有 Git 的文件夹的入口\n- 把位置记成第二份身份";
 const goals = [
   { body, revision: 3, createdAt: "2026-11-01T06:02:00Z" },
@@ -53,10 +53,10 @@ for (const scene of [
   await open(page, `#tasks/${macro}`);
   const trigger = page.locator('[data-slot="macro-goal-trigger"]');
   await expect(trigger).toBeVisible();
-  await expect(trigger).toHaveCSS("text-overflow", "ellipsis");
+  await expect(trigger.locator("svg.lucide-target")).toHaveCount(1);
   const header = page.locator('[data-slot="macro-overview-header"]');
   const facts = header.locator('[data-slot="macro-overview-facts"]');
-  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["项目", "Host", "历时", "编号", "目标"] : ["Project", "Host", "Elapsed", "ID", "Goal"]);
+  await expect(facts.locator("dt")).toHaveText(scene.language === "zh" ? ["项目", "Host", "历时", "ID"] : ["Project", "Host", "Elapsed", "ID"]);
   expect(reads).toBe(0);
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-closed.png` });
@@ -97,7 +97,7 @@ for (const scene of [
     const frame = element.getBoundingClientRect();
     const body = element.querySelector('[data-slot="macro-goal-body"]')!;
     const bounds = body.getBoundingClientRect();
-    const padding = getComputedStyle(element.querySelector('[data-slot="macro-goal-scroll"]')!);
+    const padding = getComputedStyle(element.querySelector(".goal-main")!);
     const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
     const textOutside: string[] = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -162,8 +162,8 @@ test("reads the synthetic preview's real goal endpoint and confines long content
   await trigger.click();
   expect((await response).ok()).toBe(true);
   const card = page.locator('[data-slot="macro-goal-card"]');
-  await expect(card.locator(".goal-version")).toHaveCount(1);
-  await expectHistoryPadding(card);
+  await expect(card.locator(".goal-history")).toHaveCount(0);
+  await expect(card.locator(".goal-version")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await page.route(`**/api/macro-tasks/${macro}/goals`, route => route.fulfill({ json: { macroTaskId: macro, goals: [{ ...goals[0], revision: 1, body: body.repeat(30) }] } }));
   await trigger.click();
@@ -210,7 +210,7 @@ test("keeps the Chinese zoom hint on one line at 1280px and wraps only when its 
 });
 
 
-test("keeps the information row fixed while identifier copy feedback replaces the value", async ({ page, context }) => {
+test("keeps the information row fixed while the copy icon becomes a checkmark", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.setViewportSize({ width: 1280, height: 850 });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -220,9 +220,9 @@ test("keeps the information row fixed while identifier copy feedback replaces th
   const before = await facts.locator(":scope > div").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
   const copy = facts.getByRole("button", { name: `复制标识 ${macro}`, exact: true });
   await copy.click();
-  await expect(copy.locator('[aria-live="polite"]')).toHaveText("已复制");
+  await expect(copy.locator(".lucide-check")).toBeVisible();
   expect(await facts.locator(":scope > div").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))).toEqual(before);
-  await expect(copy.locator('[aria-live="polite"]')).toBeEmpty();
+  await expect(copy.locator(".lucide-copy")).toBeVisible();
   expect(await copy.innerText()).toContain("macro-");
 });
 

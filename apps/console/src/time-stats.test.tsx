@@ -49,9 +49,9 @@ describe("macro task time statistics", () => {
     const dialog = screen.getByRole("dialog", { name: "时间统计" });
     expect(container.contains(dialog)).toBe(false);
     const values = dialog.querySelector('[data-slot="time-stats-values"]')!;
-    expect([...values.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["跨度", "运行", "累计"]);
+    expect([...values.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["从开始到最近活动", "有工作在运行的时间", "各回合相加"]);
     expect([...values.querySelectorAll("dt")].map(node => node.firstElementChild?.getAttribute("aria-description")))
-      .toEqual(["从开始到最近一次活动：", "其间至少有一项在运行的时间：", "回合累计："]);
+      .toEqual([null, null, null]);
     expect(values.querySelectorAll("dd")).toHaveLength(3);
     expect(dialog.textContent).toContain("结束未确认 1 回合 · 未计入");
     expect(dialog.textContent).toContain("来源 Host codex-desktop");

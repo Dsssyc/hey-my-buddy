@@ -322,7 +322,8 @@ describe("the head", () => {
     expect(f.onBack).toHaveBeenCalledOnce();
     expect(titled.textContent).not.toContain("等待验收");
     const right = children[1] as HTMLElement;
-    expect(right.textContent).toMatch(/开始.*历时.*回合/);
+    expect(right.textContent).toMatch(/历时.*回合/);
+    expect(within(right).queryByText("开始")).toBeNull();
     expect(within(right).getByText("等待验收")).toBeTruthy();
     expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
     expect(within(right).getByRole("button", { name: "重新读取" })).toBeTruthy();
@@ -345,19 +346,20 @@ describe("the head", () => {
     release();
   });
 
-  it("says the checking time of the read the head rests on, and none when that read carries none", async () => {
+  it("keeps refresh free of a checking-time tooltip whether or not the read has a checking time", async () => {
     const reads = client();
     const f = open({ client: reads });
     await ready();
     await f.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText(/核对时间 \d{2}:\d{2}:\d{2}/))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.getByRole("button", { name: "重新读取" }).hasAttribute("aria-description")).toBe(false);
     cleanup();
     const bare = client();
     (bare.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
     const g = open({ client: bare });
     await ready();
     await g.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText("核对时间未记录"))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("writes a relative time with a space between the number and the unit", async () => {
@@ -492,13 +494,15 @@ describe("the seal of a turn", () => {
 });
 
 describe("what a turn says of its session, its usage and its buddy's origin", () => {
-  it("says in the hint of the session where it is kept, who holds it, whether the app lists it, whether it can be resumed, whether it is bound, and the harness's own note", async () => {
+  it("keeps session ownership and resume facts accessible without a tooltip", async () => {
     const sessioned = task({ selectedAttempt: { result: { terminationReason: "completed", result: { nativeSession: { storageScope: "harness-user-store", storageOwner: "harness-user-store",
       nativeAppVisibility: "listed-in-native-app", resumable: true, bindingPresent: false, note: "Codex owns the native thread" } } } } });
     open({ step: 7, replies: { task: sessioned } });
     await ready();
-    await userEvent.setup().hover(within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ }));
-    expect((await screen.findAllByText(/Harness 用户存储 · 由 Harness 的用户目录持有 · 原生应用里列出 · 可恢复 · 私有绑定不存在 · Codex owns the native thread/))[0]).toBeTruthy();
+    const copy = within(band()).getByRole("button", { name: /复制标识 01a2f7c4-2e31/ });
+    await userEvent.setup().hover(copy);
+    expect(copy.getAttribute("aria-description")).toContain("Harness 用户存储 · 由 Harness 的用户目录持有 · 原生应用里列出 · 可恢复 · 私有绑定不存在 · Codex owns the native thread");
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("says in the hint of the usage whose it is, where it came from, that it is partial, and that the cache is counted apart when its basis says so", async () => {

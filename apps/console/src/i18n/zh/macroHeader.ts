@@ -39,6 +39,7 @@ export default {
   currentHost: "当前 Host {{host}}",
   standalone: "历史独立微任务",
   identifier: "ID",
+  goalHint: "目标说明",
   goalTitle: "目标说明",
   goalRevision: "第 {{revision}} 版",
   goalHistory: "历史",

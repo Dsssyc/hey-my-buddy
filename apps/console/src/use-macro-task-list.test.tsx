@@ -50,23 +50,14 @@ describe("grouped macro task list hook", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { ETag: '"list"', Date: "Thu, 01 Jan 1970 00:00:01 GMT" } }))
       .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: "Thu, 01 Jan 1970 00:00:04 GMT" } }));
     const api = createApi("", fetcher);
-    const formatted = vi.spyOn(formatting, "formatDateTime");
-    function List() {
-      const list = useMacroTaskList(api, query, true);
-      return <MacroTaskList {...list} sortFor={list.sortFor} filter="all" query="" selected={null}
-        onSortChange={list.changeSort} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
-        onMore={list.more} onApplyReorder={list.applyReorder}/>;
-    }
-    try {
-      render(<TooltipProvider><List/></TooltipProvider>);
-      await startRead();
-      const calls = formatted.mock.calls.length;
-      expect(calls).toBeGreaterThan(0);
-      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
-      expect(formatted).toHaveBeenCalledTimes(calls);
-    } finally { formatted.mockRestore(); }
+    const view = renderHook(() => useMacroTaskList(api, query, true));
+    await startRead();
+    const groups = view.result.current.groups;
+    expect(groups).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
+    expect(view.result.current.groups).toBe(groups);
   });
 
   it("pages one project using its own cursor and keeps the other projects and standalone group", async () => {
