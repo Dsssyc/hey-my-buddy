@@ -55,3 +55,15 @@ B 的五份累计固定改动原样合入 Lead 提交 `64a4ab7a`。使用第四�
 Host 要求范围内缺陷用 `continue` 打回、不由 Lead 代改，且验收与整合流程走不通时停下报告；共享 workflow 同时明确已验收的微任务不能继续。A 与 B 已经完成固定产物验收并回收检出，当前没有可用于打回的非终态微任务，因此 Lead 停在此处，请 Host 决定返修途径，不自行修改测试、不以 `notRequired` 或调整验收结果绕过。需要的具体修复是给这两项测试使用符合类型的 fixture（或者明确的测试边界断言），然后重跑类型检查及受影响测试；之后从浏览器检查继续，成功后重建打包资源，再按指定解释器运行 Python 预览检查。若 Host 允许在本 Lead 检出直接修复这两行，即可继续同一份整合产物；若仍要求由微任务实现，则需要 Host 授权新的返修微任务。
 
 截至停止点，最终打包资源未重建，最终整合检出的 Python 检查未运行；此前 B 自身交付上的 Python 3 项和浏览器 10 项通过仅证明 B 的独立产物，不能当作整合后检查通过。额外原生剪贴板与窄屏复制入口检查尚未执行。
+
+## Host 继续指令与返修计划
+
+第五回合 Host 明确：已验收微任务晚发现的缺陷，另提交名下返修微任务是产品已有路径，不需要额外授权；不授权 Lead 自己修改代码。此前 Lead 把“不能继续已验收微任务”理解成需要再请示新的返修途径，造成一次可避免的停顿，属于 Lead 对流程的理解偏差。
+
+新增顺序执行的微任务 C，以已整合封存提交 `12b8a4b0` 为基点，写入范围仅 `apps/console/src/console-data.test.ts`，按文件内或相邻测试的合法夹具写法修复第 25、26 行，不使用 `as unknown as` 绕过类型检查。C 只运行 `npm --prefix apps/console run typecheck` 与 `npm --prefix apps/console test`，交付三句话，环境规矩四项原文写入提示。C 交回后 Lead 审查差异并自行重跑这两项，再整合并验收，接续浏览器检查、资源重建、指定 Python 预览检查。
+
+C 已通过本回合执行凭据 `submit --params-file tmp/fixture-repair-submit.json` 提交，退出码 0，runId 为 `67b47a8e-28ec-4778-a6b3-a16327409c3a`，回执为 `executing` / `queued`、`awaiting-model-selection`；未指定 buddy，继续默认路由。提示中带了完整环境规矩和验收前 typecheck 要求，目前 C 返修 0 次，等待交回。
+
+本次检查遗漏形成一条后续验收要求：凡名下微任务改动控制台，验收之前先运行 `npm --prefix apps/console run typecheck`，因为 `npm test` 不执行类型检查；这条也写入后续微任务提示。它只补齐本次工作检查，不修改产品行为或其他文档。
+
+供 Host 另查的 harness 失败证据：微任务 B 为 `97e3de5a-d4f5-4d15-ba79-a8362b8b8701`，首回合 `af8881ef-3ac7-43da-a968-392b67692206`，尝试 `59fa3a0a-d0d3-49f4-bd35-d735de450984`，Codex CLI，`openai / gpt-6.1-sol / max`；`get.currentTurn.createdAt` 为 `2026-10-15T05:26:53.511Z`，`updatedAt` 为 `2026-10-15T06:06:25.624Z`。当时 `get` 输出 `state: failed`、`disposition: null`，`result.selectedAttempt.exitCode: 1`、`error: multiple native final messages completed`，同份结果中 `turnError: the runner did not exit zero`、`terminationReason: harness-error`、`shutdownConfirmed: true`；没有有效三句模型交付，只有标记为 partial / unverified 的固定部分产物 `ce2fd2ae-fef8-488f-8ffe-5dfd829158d7`（提交 `29ffedbd`）。通过本轮执行凭据读取自身名下的 `get` / `result` 的原始 JSON 保留在 ignored `tmp/preview-failed-get.json`、`tmp/preview-failed-result.json`，未读取日常服务日志或私有 harness 记录。
