@@ -40,8 +40,9 @@ def _is_link(path: Path) -> bool:
 
 def _create_claude_link(link: Path, target: Path) -> None:
     if os.name == "nt":
-        from _winapi import CreateJunction
-        CreateJunction(str(native_path(target)), str(native_path(link)))
+        from ..windows_files import WindowsFileAPI
+        # The target is stored as link content; keep its ordinary absolute path.
+        WindowsFileAPI().junction(target, link)
     else:
         native_path(link).symlink_to(target, target_is_directory=True)
 

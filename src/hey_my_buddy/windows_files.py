@@ -29,6 +29,7 @@ FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 IO_REPARSE_TAG_SYMLINK = 0xA000000C
+IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 FILE_TYPE_DISK = 1
 FSCTL_GET_REPARSE_POINT = 0x000900A8
 FSCTL_SET_REPARSE_POINT = 0x000900A4
@@ -180,6 +181,29 @@ class WindowsFileAPI:
             self._call(self.win32file.DeviceIoControl, handle, FSCTL_SET_REPARSE_POINT,
                        _link_with_print_name(raw, target), None)
         except BaseException:
+            self.delete(handle)
+            raise
+        finally:
+            self.close(handle)
+
+    def junction(self, target, path):
+        """Store an ordinary absolute target, extending only file API paths."""
+        ordinary = windows_path(target, extended=False)
+        substitute = ("\\??\\" + ordinary).encode("utf-16-le")
+        display = ordinary.encode("utf-16-le")
+        body = substitute + b"\0\0" + display + b"\0\0"
+        data = struct.pack("<IHHHHHH", IO_REPARSE_TAG_MOUNT_POINT, 8 + len(body), 0,
+                           0, len(substitute), len(substitute) + 2, len(display)) + body
+        self.mkdir(path)
+        try:
+            handle = self._open(path, GENERIC_WRITE | DELETE, OPEN_EXISTING)
+        except BaseException:
+            os.rmdir(windows_path(path))
+            raise
+        try:
+            self._call(self.win32file.DeviceIoControl, handle, FSCTL_SET_REPARSE_POINT, data, None)
+        except BaseException:
+            # Remove only the link entry through its handle, never its target.
             self.delete(handle)
             raise
         finally:
