@@ -1139,6 +1139,7 @@ class Database:
         self._connections: dict[tuple[int, int], sqlite3.Connection] = {}
         self._connection_files: dict[tuple[int, int], tuple[int, int]] = {}
         self._connection_depths: dict[int, int] = {}
+        self._transaction_callbacks: dict[sqlite3.Connection, tuple[list, list]] = {}
         self._file_identity: tuple[int, int] | None = None
         self._closed = False
 
@@ -1214,12 +1215,29 @@ class Database:
         """One short write transaction; rolled back on any exception."""
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            callbacks = ([], [])
+            self._transaction_callbacks[connection] = callbacks
             try:
                 yield connection
                 connection.execute("COMMIT")
             except BaseException:
                 connection.rollback()
+                del self._transaction_callbacks[connection]
+                for callback in callbacks[1]:
+                    callback()
                 raise
+            else:
+                del self._transaction_callbacks[connection]
+                for callback in callbacks[0]:
+                    callback()
+
+    def after_commit(self, connection: sqlite3.Connection, callback) -> None:
+        """Run an owned filesystem effect only after this writer commits."""
+        self._transaction_callbacks[connection][0].append(callback)
+
+    def after_rollback(self, connection: sqlite3.Connection, callback) -> None:
+        """Remove material published by a writer whose facts did not commit."""
+        self._transaction_callbacks[connection][1].append(callback)
 
     @contextmanager
     def read(self) -> Iterator[sqlite3.Connection]:

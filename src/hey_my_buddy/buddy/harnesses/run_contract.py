@@ -470,7 +470,7 @@ class RunFeedback(InternalModel):
     The actions are exactly three: ``continue`` lets the run proceed, ``stop``
     asks the driver to interrupt the native run at once, and ``correct``
     carries the complete next input text of one in-run correction. Whether a
-    correction is offered at all — at most once, never for an enum violation —
+    correction is offered at all, including its count and eligible errors,
     and how that text is assembled stay with the role's observation code; the
     driver only executes the feedback, keeps the one native process and the
     total deadline, and reports how many corrections happened. No role verdict

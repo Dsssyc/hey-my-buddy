@@ -7,7 +7,7 @@ import json
 from ...protocol.structured_schema import schema_errors
 from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
-from .evidence import domain_statistics, round_classification
+from .evidence import NEITHER, PROVIDER_REJECTIONS, domain_statistics, round_classification
 
 
 TASK_TYPES = {
@@ -19,10 +19,26 @@ TASK_TYPES = {
     "research": "Investigate a question and synthesize findings.",
     "write": "Write or revise explanatory content.",
 }
-PENDING_WHERE = """r.state IN ('accepted','concluded','cancelled','failed') AND (
+_ENDED_TURNS = ("returned", "failed", "rejected", "interrupted")
+
+
+def _sql_values(values):
+    return ",".join("'" + value.replace("'", "''") + "'" for value in sorted(values))
+
+
+ABILITY_WHERE = f"""w.state IN ({_sql_values(_ENDED_TURNS)})
+    AND a.result_json IS NOT NULL
+    AND COALESCE(json_extract(a.result_json,'$.terminationReason'),'') NOT IN ({_sql_values(NEITHER)})
+    AND COALESCE(json_extract(a.result_json,'$.result.code'),'') != 'harness-unavailable'
+    AND COALESCE(json_extract(a.result_json,'$.result.providerRejection.code'),'')
+        NOT IN ({_sql_values(PROVIDER_REJECTIONS)})"""
+
+PENDING_WHERE = """r.state IN ('accepted','concluded') AND (
     NOT EXISTS (SELECT 1 FROM micro_task_classifications c WHERE c.run_id=r.run_id)
     OR EXISTS (
-        SELECT 1 FROM workflow_turns w WHERE w.run_id=r.run_id AND w.input_json IS NOT NULL
+        SELECT 1 FROM workflow_turns w JOIN attempts a ON a.attempt_id=w.attempt_id
+        WHERE w.run_id=r.run_id AND """ + ABILITY_WHERE + """
+        AND w.input_json IS NOT NULL
         AND json_type(w.input_json,'$.context.buddy')='object'
         AND NOT EXISTS (
             SELECT 1 FROM kind_summary_evidence e WHERE e.run_id=r.run_id
@@ -36,6 +52,10 @@ PENDING_WHERE = """r.state IN ('accepted','concluded','cancelled','failed') AND 
 
 def _kind(value):
     return (value["harness"], value["model"], value["effort"])
+
+
+def _kind_id(value):
+    return json.dumps(_kind(value), ensure_ascii=False, separators=(",", ":"))
 
 
 def _node_rows(connection):
@@ -57,8 +77,8 @@ def build_packet(connection) -> dict | None:
     """The oldest 50 tasks still needing classification or a kind's reading."""
     runs = list(connection.execute(
         "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,r.buddy_revision,"
-        " t.spec_json,m.project_id,m.project_path,c.note AS conclusion_note,"
-        " c.reason_code AS conclusion_reason,c.execution_status,"
+        " t.spec_json,t.accepted_at,m.project_id,m.project_path,c.note AS conclusion_note,"
+        " c.reason_code AS conclusion_reason,c.execution_status,c.created_at AS concluded_at,"
         " x.domain_node_id,x.task_type,"
         " (SELECT i.verification_json FROM workflow_integrations i"
         " WHERE i.run_id=r.run_id AND i.artifact_id=r.final_artifact_id"
@@ -68,7 +88,7 @@ def build_packet(connection) -> dict | None:
         " LEFT JOIN workflow_host_conclusions c ON c.run_id=r.run_id"
         " LEFT JOIN micro_task_classifications x ON x.run_id=r.run_id"
         " WHERE " + PENDING_WHERE +
-        " ORDER BY r.updated_at,r.run_id LIMIT 50"))
+        " ORDER BY COALESCE(t.accepted_at,c.created_at),r.run_id LIMIT 50"))
     classification_ids = [row["run_id"] for row in runs if row["domain_node_id"] is None]
     if not runs:
         return None
@@ -77,6 +97,7 @@ def build_packet(connection) -> dict | None:
     turns = defaultdict(list)
     kinds = {}
     unread = defaultdict(set)
+    participating = defaultdict(set)
     read = {(_kind(row), row["run_id"]) for row in connection.execute(
         f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", run_ids)}
     for row in connection.execute(
@@ -86,15 +107,18 @@ def build_packet(connection) -> dict | None:
         f" WHERE w.run_id IN ({placeholders}) ORDER BY w.run_id,w.turn_index", run_ids):
         buddy = turn_buddy(row["input_json"])
         kind = {key: buddy[key] for key in ("harness", "model", "effort")} if buddy is not None else None
-        if kind is not None and (_kind(kind), row["run_id"]) not in read:
-            kinds[_kind(kind)] = kind
-            unread[_kind(kind)].add(row["run_id"])
         receipt = json.loads(row["result_json"]) if row["result_json"] else None
+        category = round_classification(receipt) if row["state"] in _ENDED_TURNS else None
+        if kind is not None and category == "ability":
+            participating[_kind(kind)].add(row["run_id"])
+            if (_kind(kind), row["run_id"]) not in read:
+                kinds[_kind(kind)] = kind
+                unread[_kind(kind)].add(row["run_id"])
         result = (receipt or {}).get("result") or {}
         turns[row["run_id"]].append({
             "turnIndex": row["turn_index"], "state": row["state"], "kind": kind,
             "outcome": (result.get("turn") or {}).get("outcome"),
-            "failureCategory": round_classification(receipt) if row["finished_at"] else None,
+            "failureCategory": category,
             "terminationReason": (receipt or {}).get("terminationReason"),
             "failureReason": result.get("code"),
             "startedAt": row["started_at"], "finishedAt": row["finished_at"],
@@ -126,7 +150,8 @@ def build_packet(connection) -> dict | None:
                        "hostBoundaryFacts": boundaries[row["run_id"]],
                        "reassigned": row["buddy_revision"] > 1,
                        "integration": json.loads(row["integration_json"]) if row["integration_json"] else None,
-                       "createdAt": row["created_at"], "finishedAt": row["updated_at"],
+                       "createdAt": row["created_at"],
+                       "finishedAt": row["accepted_at"] or row["concluded_at"],
                        "turns": turns[row["run_id"]]},
         })
     summaries = {}
@@ -147,7 +172,8 @@ def build_packet(connection) -> dict | None:
         "classificationRunIds": classification_ids,
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
-        "kinds": [{**kind, "unreadRunIds": sorted(unread[key]), "summary": summaries.get(key),
+        "kinds": [{**kind, "kindId": _kind_id(kind), "unreadRunIds": sorted(unread[key]),
+                   "citationRunIds": sorted(participating[key]), "summary": summaries.get(key),
                    "statistics": statistics[buddy_ids[key]]}
                   for key, kind in kinds.items()],
     }
@@ -165,8 +191,14 @@ def _object(properties):
 def answer_schema(packet) -> dict:
     """Use only the JSON Schema keywords supported by structured_call."""
     ids = packet["classificationRunIds"]
-    kind_schema = {key: {"type": "string", "enum": sorted({kind[key] for kind in packet["kinds"]})}
-                   for key in ("harness", "model", "effort")}
+    summary_properties = {}
+    for kind in packet["kinds"]:
+        original = (kind.get("summary") or {}).get("citations") or []
+        citation_ids = sorted(set(kind["citationRunIds"]) | set(original))
+        summary_properties[kind["kindId"]] = _object({
+            "text": _string(4000),
+            "citations": {"type": "array", "items": {"type": "string", "enum": citation_ids}},
+        })
     schema = _object({
         "newNodes": {"type": "array", "items": _object({
             "id": _string(128), "name": _string(120), "definition": _string(400),
@@ -177,17 +209,12 @@ def answer_schema(packet) -> dict:
             "runId": {"type": "string", "enum": ids},
             "domainNodeId": _string(128),
             "taskType": {"type": "string", "enum": list(TASK_TYPES)}})},
-        "summaries": {"type": "array", "items": _object({
-            **kind_schema, "text": _string(4000),
-            "citations": {"type": "array", "items": {"type": "string"}}})},
+        "summaries": {"type": "object", "properties": summary_properties,
+                      "required": list(summary_properties), "additionalProperties": False},
     })
     if not ids:
         schema["properties"]["classifications"]["maxItems"] = 0
         schema["properties"]["classifications"]["items"]["properties"]["runId"] = {"type": "string"}
-    if not packet["kinds"]:
-        schema["properties"]["summaries"]["maxItems"] = 0
-        for key in ("harness", "model", "effort"):
-            schema["properties"]["summaries"]["items"]["properties"][key] = {"type": "string"}
     return schema
 
 
@@ -196,7 +223,9 @@ def _shape_errors(value, schema, path="answer"):
     direct = {key: part for key, part in schema.items() if key not in ("properties", "items")}
     if "properties" in schema:
         direct["properties"] = {key: {} for key in schema["properties"]}
-    errors = [f"{path}: {keyword}" for keyword in schema_errors(value, direct)]
+    missing = iter(key for key in schema.get("required", []) if isinstance(value, dict) and key not in value)
+    errors = [f"{path}.{next(missing)}: required" if keyword == "required" else f"{path}: {keyword}"
+              for keyword in schema_errors(value, direct)]
     if isinstance(value, dict):
         for key, child in schema.get("properties", {}).items():
             if key in value:
@@ -215,11 +244,10 @@ def _check_tree(nodes):
             if target is None or target["merged_into_id"] is not None:
                 raise ValueError("merge target must be an active node")
             continue
-        if not node["name"].strip() or not node["definition"].strip():
-            raise ValueError("domain name and definition must be nonblank")
-        if node["name"] in active_names:
-            raise ValueError(f"active domain name already exists: {node['name']}")
-        active_names.add(node["name"])
+        name = node["name"]
+        if name in active_names:
+            raise ValueError(f"active domain name already exists: {name}")
+        active_names.add(name)
         seen = set()
         cursor = node["node_id"]
         while cursor is not None:
@@ -235,7 +263,10 @@ def _check_tree(nodes):
 def rename_domain(connection, node_id, name, definition):
     if not isinstance(node_id, str) or not node_id or len(node_id) > 128:
         raise BoardError("INVALID_ARGUMENT", "domain node id must have 1 to 128 characters")
-    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+    if not isinstance(name, str):
+        raise BoardError("INVALID_ARGUMENT", "domain name must be a string")
+    name = name.strip()
+    if not name or len(name) > 120:
         raise BoardError("INVALID_ARGUMENT", "domain name must have 1 to 120 characters")
     if not isinstance(definition, str) or not definition.strip() or len(definition) > 400:
         raise BoardError("INVALID_ARGUMENT", "domain definition must have 1 to 400 characters")
@@ -256,19 +287,13 @@ def merge_domain(connection, source_id, target_id):
         raise BoardError("INVALID_ARGUMENT", "merge source id must have 1 to 128 characters")
     if not isinstance(target_id, str) or not target_id or len(target_id) > 128:
         raise BoardError("INVALID_ARGUMENT", "merge target id must have 1 to 128 characters")
+    _merge_domains(connection, source_id, target_id)
+
+
+def _merge_domains(connection, source_id, target_id):
     nodes = _node_rows(connection)
     if source_id not in nodes or nodes[source_id]["merged_into_id"] is not None:
         raise BoardError("INVALID_ARGUMENT", f"merge source is not active: {source_id}")
-    if target_id not in nodes or nodes[target_id]["merged_into_id"] is not None:
-        raise BoardError("INVALID_ARGUMENT", f"merge target is not active: {target_id}")
-    if source_id == target_id:
-        raise BoardError("INVALID_ARGUMENT", "merge source and target are the same")
-    # A target below its source would cycle when the source's children move.
-    cursor = target_id
-    while cursor is not None:
-        if cursor == source_id:
-            raise BoardError("INVALID_ARGUMENT", "merge target is a descendant of source")
-        cursor = nodes[cursor]["parent_id"]
     for node in nodes.values():
         if node["parent_id"] == source_id:
             node["parent_id"] = target_id
@@ -306,6 +331,22 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
     valid = {}
     for field, field_schema in schema["properties"].items():
         items = answer.get(field)
+        if field == "summaries":
+            valid[field] = {}
+            summary_shape = {**field_schema, "properties": {key: {} for key in field_schema["properties"]}}
+            errors.extend(_shape_errors(items, summary_shape, "answer.summaries"))
+            if not isinstance(items, dict):
+                continue
+            for kind_id, item in items.items():
+                item_schema = field_schema["properties"].get(kind_id)
+                if item_schema is None:
+                    continue
+                item_errors = _shape_errors(item, item_schema, f"answer.summaries[{kind_id}]")
+                if item_errors:
+                    errors.extend(item_errors)
+                else:
+                    valid[field][kind_id] = item
+            continue
         field_errors = _shape_errors(items, {key: part for key, part in field_schema.items() if key != "items"},
                                      f"answer.{field}")
         if field_errors:
@@ -326,13 +367,9 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
     if not surviving:
         return {"errors": [], "written": counts}
     batch = set(packet["classificationRunIds"]) & surviving
-    evidence = packet_run_ids & surviving
-    surviving_kinds = {_kind(turn["kind"]) for task in packet["microTasks"]
-                       if task["runId"] in surviving for turn in task["result"]["turns"] if turn["kind"] is not None}
-    deleted_kinds = {_kind(turn["kind"]) for task in packet["microTasks"]
-                     if task["runId"] not in surviving for turn in task["result"]["turns"] if turn["kind"] is not None}
     packet_kinds = {_kind(kind): kind for kind in packet["kinds"]
-                    if _kind(kind) in surviving_kinds and set(kind["unreadRunIds"]) & surviving}
+                    if set(kind["unreadRunIds"]) & surviving}
+    kinds_by_id = {kind["kindId"]: _kind(kind) for kind in packet["kinds"]}
     read = {(_kind(row), row["run_id"]) for row in connection.execute(
         f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", tuple(packet_run_ids))}
     missing_reads = {key: {run_id for run_id in kind["unreadRunIds"]
@@ -353,17 +390,24 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 continue
             del pending[node_id]
             progressed = True
+            name = item["name"].strip()
+            if not name or not item["definition"].strip():
+                errors.append(f"newNodes[{node_id}]: name and definition must be nonblank")
+                continue
             if node_id in nodes:
                 # A previously accepted node from this run survives correction.
                 owner = connection.execute("SELECT maintenance_run_id FROM domain_nodes WHERE node_id=?",
                                            (node_id,)).fetchone()[0]
-                if owner != maintenance_run_id or nodes[node_id]["name"] != item["name"] or nodes[node_id]["definition"] != item["definition"]:
+                resolved_parent = (nodes[parent]["merged_into_id"] or parent) if parent in nodes else parent
+                if (owner != maintenance_run_id or nodes[node_id]["name"] != name
+                        or nodes[node_id]["definition"] != item["definition"]
+                        or nodes[node_id]["parent_id"] != resolved_parent):
                     errors.append(f"newNodes[{node_id}]: existing node cannot be changed")
                 continue
             if parent is not None and (parent not in nodes or nodes[parent]["merged_into_id"] is not None):
                 errors.append(f"newNodes[{node_id}]: parent is not active: {parent}")
                 continue
-            candidate = {"node_id": node_id, "name": item["name"], "definition": item["definition"],
+            candidate = {"node_id": node_id, "name": name, "definition": item["definition"],
                          "parent_id": parent, "merged_into_id": None}
             try:
                 _check_tree({**nodes, node_id: candidate})
@@ -371,7 +415,7 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 errors.append(f"newNodes[{node_id}]: {exc}")
                 continue
             connection.execute("INSERT INTO domain_nodes VALUES(?,?,?,?,NULL,?)",
-                               (node_id, item["name"], item["definition"], parent, maintenance_run_id))
+                               (node_id, name, item["definition"], parent, maintenance_run_id))
             nodes[node_id] = candidate
             counts["nodes"] += 1
         if not progressed:
@@ -386,18 +430,13 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 errors.append(f"merges[{source}]: duplicate source")
             seen_merges.add(source)
             continue
-        if source in seen_merges:
-            errors.append(f"merges[{source}]: duplicate source")
-            continue
         seen_merges.add(source)
         current_nodes = _node_rows(connection)
-        resolved = target
-        while resolved in current_nodes and current_nodes[resolved]["merged_into_id"] is not None:
-            resolved = current_nodes[resolved]["merged_into_id"]
+        resolved = (current_nodes[target]["merged_into_id"] or target) if target in current_nodes else target
         if source in current_nodes and current_nodes[source]["merged_into_id"] == resolved:
             continue
         try:
-            merge_domain(connection, source, target)
+            _merge_domains(connection, source, target)
             counts["merges"] += 1
         except BoardError as exc:
             errors.append(f"merges[{source}]: {exc}")
@@ -413,9 +452,6 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 errors.append(f"classifications[{run_id}]: duplicate runId")
             classified.add(run_id)
             continue
-        if run_id in classified:
-            errors.append(f"classifications[{run_id}]: duplicate runId")
-            continue
         classified.add(run_id)
         prior = connection.execute("SELECT 1 FROM micro_task_classifications WHERE run_id=?", (run_id,)).fetchone()
         if prior:
@@ -429,30 +465,15 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
     for run_id in batch - classified:
         if not connection.execute("SELECT 1 FROM micro_task_classifications WHERE run_id=?", (run_id,)).fetchone():
             errors.append(f"classifications[{run_id}]: missing classification")
-    summary_counts = Counter(_kind(item) for item in valid["summaries"])
-    seen_kinds = set()
-    for item in valid["summaries"]:
-        key = _kind(item)
-        if summary_counts[key] > 1:
-            if key not in seen_kinds:
-                errors.append(f"summaries[{key}]: duplicate kind")
-            seen_kinds.add(key)
-            continue
-        if key in seen_kinds:
-            errors.append(f"summaries[{key}]: duplicate kind")
-            continue
-        seen_kinds.add(key)
+    for kind_id, item in valid["summaries"].items():
+        key = kinds_by_id[kind_id]
         if key not in packet_kinds:
-            if key in deleted_kinds:
-                continue
-            errors.append(f"summaries[{key}]: kind is not in packet")
             continue
         if not missing_reads[key]:
             continue
-        original = set((packet_kinds[key].get("summary") or {}).get("citations") or ())
         cited = item["citations"]
-        if len(cited) != len(set(cited)) or not set(cited) <= evidence | original:
-            errors.append(f"summaries[{key}]: citations must be unique and from batch or original summary")
+        if len(cited) != len(set(cited)):
+            errors.append(f"summaries[{key}]: duplicate citation")
             continue
         if cited:
             cited_placeholders = ",".join("?" for _ in cited)
@@ -471,7 +492,4 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
             " ON CONFLICT(harness,model,effort,run_id) DO UPDATE SET cited=excluded.cited",
             [(*key, run_id, int(run_id in cited)) for run_id in missing_reads[key] | set(cited)])
         counts["summaries"] += 1
-    for key in packet_kinds.keys() - seen_kinds:
-        if missing_reads[key]:
-            errors.append(f"summaries[{key}]: missing summary")
     return {"errors": errors, "written": counts}

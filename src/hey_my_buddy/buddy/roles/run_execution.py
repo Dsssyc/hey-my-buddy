@@ -559,9 +559,14 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     handle = _launch(control, context, environment=native_environment, identity=identity)
     handle.no_tool = True
+    audit_request = request_values
+    if control["maintenance"]:
+        document = context.spec["decision"]["document"]
+        audit_request = {"kind": "maintain", "maintenanceRunId": document["maintenanceRunId"],
+                         "input": document["input"], "budget": document["budget"]}
     handle.no_tool_evidence = _NoToolEvidence(
         name, context.task_id, context.attempt_id, context.generation, directory,
-        invocation, directory / invocation_name, canonical_json(request_values))
+        invocation, directory / invocation_name, canonical_json(audit_request))
     return handle
 
 

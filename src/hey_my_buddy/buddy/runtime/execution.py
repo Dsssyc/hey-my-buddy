@@ -799,10 +799,13 @@ class Execution:
         run_id = self.claim["decisionInput"]["maintenanceRunId"]
         reference = files.publish(self.state_dir, run_id, {"answer": raw, "observations": observations})
         attempt = self.claim["attempt"]
-        response = self.client.call("execution_maintenance", {
-            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
-            "round": round_index, "answer": reference})
-        return files.read(self.state_dir, run_id, response["feedback"])
+        try:
+            response = self.client.call("execution_maintenance", {
+                "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": self.nonce,
+                "round": round_index, "answer": reference})
+            return files.read(self.state_dir, run_id, response["feedback"])
+        finally:
+            files.discard_reference(self.state_dir, run_id, reference)
 
     def _wait_control_observation(self, claim, control, retry):
         control.raise_fatal()
