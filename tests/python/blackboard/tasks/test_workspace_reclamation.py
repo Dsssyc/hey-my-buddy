@@ -94,6 +94,138 @@ class ReclamationTests(LifecycleTestCase):
         self.assertEqual(git(self.repo, 'rev-parse', 'refs/heads/held-branch').strip(),
                          accepted['reclaim']['attachedBranch']['headCommit'])
 
+    def test_blocked_terminal_checkout_rechecks_only_after_run_or_physical_change(self):
+        import os
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        submitted, _, _, checkout, _, view, artifact = self.run_worktree(board)
+        git(checkout, 'switch', '-q', '-c', 'held-for-cache')
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, 'cleanup_inspect', wraps=workspace.cleanup_inspect) as inspect:
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 1)
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 1)
+            (checkout / 'untracked.txt').write_text('new evidence')
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 2)
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 2)
+            git(checkout, 'switch', '-q', '-c', 'another-held-cache-branch')
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 3)
+            git(self.repo, 'branch', 'new-cache-reference')
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 4)
+            git_dir = Path((checkout / '.git').read_text().strip().removeprefix('gitdir: '))
+            lock = git_dir / 'locked'
+            facts = lock.stat()
+            os.utime(lock, ns=(facts.st_atime_ns, facts.st_mtime_ns + 1_000_000_000))
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 5)
+            current = self.view(board, submitted['runId'])
+            board.call('workflow_takeover', {
+                'runId': submitted['runId'], 'commandId': 'cache-run-change',
+                'expectedOwnerGeneration': current['ownerGeneration'], 'newHostId': 'replacement-host',
+                **self.control(view),
+            })
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 6)
+            maintenance.changed(['unrelated-task'])
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 6)
+            maintenance.changed([submitted['runId']])
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 7)
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_terminal_observation_failure_retries_without_a_physical_change(self):
+        from unittest.mock import patch
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        _, _, _, checkout, _, view, artifact = self.run_worktree(board)
+        git(checkout, 'switch', '-q', '-c', 'held-for-retry')
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        maintenance = reclamation.Reclamation(board.store)
+        with patch.object(workspace, 'cleanup_inspect', side_effect=BoardError(
+                'WORKSPACE_GIT_UNKNOWN', 'Temporary Git observation failure')):
+            maintenance.run()
+        self.assertEqual([(issue['stage'], issue['code']) for issue in board.store.service_issues()],
+                         [('workspace-cleanup', 'WORKSPACE_GIT_UNKNOWN')])
+        with patch.object(workspace, 'cleanup_inspect', wraps=workspace.cleanup_inspect) as inspect:
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 1)
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_a_checkout_changed_during_observation_is_not_cached_as_already_observed(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        _, _, _, checkout, _, view, artifact = self.run_worktree(board)
+        git(checkout, 'switch', '-q', '-c', 'held-during-observation')
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        maintenance = reclamation.Reclamation(board.store)
+        real = board.store.workflow._reclaim_checkout
+        def change_after_observation(*, run_id):
+            result = real(run_id=run_id)
+            (checkout / 'changed-during-observation.txt').write_text('new evidence')
+            return result
+        with patch.object(workspace, 'cleanup_inspect', wraps=workspace.cleanup_inspect) as inspect:
+            with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=change_after_observation):
+                maintenance.run()
+            maintenance.run()
+            maintenance.run()
+            self.assertEqual(inspect.call_count, 2)
+        self.assertTrue(checkout.exists())
+
+    def test_terminal_maintenance_does_not_take_storage_lock(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        board = self.board()
+        _, _, _, checkout, _, view, artifact = self.run_worktree(board)
+        git(checkout, 'switch', '-q', '-c', 'held-without-storage-lock')
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        real = board.store.workflow._reclaim_checkout
+        unlocked = []
+        def reclaim_without_storage_lock(*, run_id):
+            with storage.locked(board.store):
+                unlocked.append(run_id)
+            return real(run_id=run_id)
+        with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=reclaim_without_storage_lock):
+            reclamation.Reclamation(board.store).run()
+        self.assertEqual(unlocked, [view['runId']])
+        self.assertTrue(checkout.exists())
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_unowned_allocation_ignores_only_unreadable_processes_older_than_creation(self):
+        import sys
+        from unittest.mock import Mock, patch
+        import psutil
+        from hey_my_buddy.blackboard.tasks import checkout_processes, reclamation
+        if sys.platform == 'win32':
+            self.skipTest('POSIX process cwd observation')
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        for age, removed in ((-60, True), (60, False)):
+            with self.subTest(age=age):
+                board = self.board()
+                manifest = workspace.prepare(board.directory, f'unowned-process-{age}', intent)
+                checkout = Path(manifest['checkoutRoot'])
+                created_at = (checkout.parent / 'request.json').stat().st_mtime
+                process = Mock(pid=34567)
+                process.cwd.side_effect = psutil.AccessDenied(pid=process.pid)
+                process.create_time.return_value = created_at + age
+                process.name.return_value = '(sd-pam)'
+                with patch.object(checkout_processes, '_processes', return_value=([process], True)), \
+                     patch.object(checkout_processes, 'process_start', return_value=created_at + age):
+                    reclamation.Reclamation(board.store).run()
+                self.assertEqual(checkout.exists(), not removed)
+                self.assertEqual([(issue['stage'], issue['code']) for issue in board.store.service_issues()],
+                                 [] if removed else [('allocation-reclamation', 'NOT_READY')])
+
     def test_native_roots_wait_three_days_and_require_confirmed_stop(self):
         from support import FakeClock
         from hey_my_buddy import private_dirs

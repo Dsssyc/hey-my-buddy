@@ -4,6 +4,9 @@ from __future__ import annotations
 from contextlib import ExitStack, closing
 from datetime import datetime, timedelta
 import hashlib
+import json
+import os
+import stat
 import threading
 from pathlib import Path
 
@@ -247,7 +250,11 @@ def allocation_plan(store, item):
     if not item['reasons'] and workspace._path_present(checkout):
         from .checkout_processes import require_idle_checkout
         try:
-            require_idle_checkout(checkout)
+            # request.json is written before the checkout is created and is
+            # immutable for this allocation. Its file time is a conservative
+            # lower bound for processes that could have entered the checkout.
+            created_at = (directory / 'request.json').stat().st_mtime
+            require_idle_checkout(checkout, first_execution_at=created_at)
         except BoardError as error:
             cause = error.details.get('reason', {})
             if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'
@@ -294,6 +301,7 @@ class Reclamation:
         self._owned_allocations = {}
         self._dependencies = {}
         self._blocked_allocations = {}
+        self._blocked_workspaces = {}
 
     def changed(self, task_ids):
         with self._lock:
@@ -309,6 +317,7 @@ class Reclamation:
             self._workspaces.update(workspace_candidates(self.store, changed))
             with self.store.db.read() as connection:
                 for task_id in changed:
+                    self._blocked_workspaces.pop(task_id, None)
                     digest = hashlib.sha256(task_id.encode()).hexdigest()
                     if connection.execute('SELECT 1 FROM tasks WHERE task_id=?', (task_id,)).fetchone():
                         self._task_ids[digest] = task_id
@@ -348,7 +357,6 @@ class Reclamation:
                 self._owned_allocations.setdefault(task_id, set()).add(directory)
 
     def _discover_allocations(self):
-        import os
         root = self.store.directory.resolve() / 'workspaces'
         if not root.is_dir():
             return
@@ -369,6 +377,74 @@ class Reclamation:
                 self._allocations.add(directory)
                 del self._blocked_allocations[directory]
 
+    @staticmethod
+    def _tree_entry(path):
+        """Physical stamp without following a checkout or Git metadata link."""
+        entries, pending = [], [path]
+        while pending:
+            current = pending.pop()
+            try:
+                entry = current.lstat()
+            except FileNotFoundError:
+                facts = None
+            else:
+                facts = (entry.st_dev, entry.st_ino, entry.st_mode, entry.st_size,
+                         entry.st_mtime_ns, entry.st_ctime_ns)
+                if stat.S_ISDIR(entry.st_mode) and not current.is_junction():
+                    # Close this iterator before descending, keeping descriptor
+                    # use and Python stack depth independent of the tree depth.
+                    with os.scandir(current) as children:
+                        pending.extend(Path(child.path) for child in children)
+            entries.append((str(current.relative_to(path)), facts))
+        return hashlib.sha256(json.dumps(sorted(entries), separators=(',', ':')).encode()).hexdigest()
+
+    def _workspace_entry(self, run_id):
+        """Stamp the run and owned Git inputs without asking Git to inspect them."""
+        with self.store.db.read() as connection:
+            run = connection.execute(
+                'SELECT revision,state,workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run_id,)
+            ).fetchone()
+            if run is None:
+                return None
+            manifest = json.loads(run['workspace_manifest_json'])
+            plan = connection.execute(
+                'SELECT state,revision,workspace_id,path FROM workspace_cleanup_plans'
+                ' WHERE run_id=? AND checkout_id=? ORDER BY rowid DESC LIMIT 1',
+                (run_id, manifest['checkoutId']),
+            ).fetchone()
+            children = tuple(tuple(row) for row in connection.execute(
+                'SELECT child_task_id,state FROM workflow_children WHERE parent_run_id=? ORDER BY child_task_id',
+                (run_id,),
+            ))
+            reservations = tuple(tuple(row) for row in connection.execute(
+                'SELECT holder_task_id,state FROM workspace_reservations WHERE checkout_id=?'
+                ' ORDER BY holder_task_id,reservation_id', (manifest['checkoutId'],),
+            ))
+        checkout = Path(manifest['checkoutRoot'])
+        workspace_id = checkout.parent.name
+        if (checkout.name != 'checkout' or not workspace._workspace_identifier(workspace_id)
+                or not workspace._workspace_identifier(manifest['workspaceId'])
+                or checkout.parent.parent != self.store.directory / 'workspaces'):
+            return None
+        repository = Path(manifest['snapshot']['repositoryPath'])
+        def linked_ancestor(path):
+            return any(private_dirs.linked(parent) for parent in (path, *path.parents))
+        if (linked_ancestor(checkout.parent) or linked_ancestor(repository)
+                or workspace._identity(repository) != manifest['repositoryId']):
+            return None
+        # Only Git metadata is read at the external repository. Broad refs and
+        # worktree stamps conservatively wake this checkout after Git changes.
+        directories = {checkout.parent, self.store.directory / 'workspaces' / manifest['workspaceId']}
+        paths = (*sorted(directories), repository / 'HEAD', repository / 'index',
+                 repository / 'packed-refs', repository / 'config',
+                 repository / 'refs', repository / 'worktrees', repository / 'info',
+                 repository / 'objects' / 'info')
+        if any(linked_ancestor(path.parent) for path in paths):
+            return None
+        return ((run['revision'], run['state'], run['workspace_manifest_json'],
+                 tuple(plan) if plan is not None else None, children, reservations),
+                tuple(self._tree_entry(path) for path in paths))
+
     def run(self, *, stopping=lambda: False):
         from .storage import locked
         store = self.store
@@ -380,13 +456,37 @@ class Reclamation:
             if stopping():
                 return
             try:
-                with locked(store):
-                    result = store.workflow._reclaim_checkout(run_id=run_id)
+                before = self._workspace_entry(run_id)
+                cached = self._blocked_workspaces.get(run_id)
+                if cached is not None and before == cached:
+                    continue
+                result = store.workflow._reclaim_checkout(run_id=run_id)
                 if result.get('removed'):
                     self._workspaces.discard(run_id)
+                    self._blocked_workspaces.pop(run_id, None)
+                elif set(result.get('reasons', ())) <= {
+                    'attached-branch', 'unsealed-changes', 'lock-mismatch',
+                    'unregistered-checkout', 'identity-changed',
+                    'unsealed-handoff', 'sealed-output-invalid',
+                    'checkout.process-blockers',
+                } and result.get('reasons') and not result.get('detail'):
+                    after = self._workspace_entry(run_id)
+                    # cleanup_plan may advance this run's own revision. The
+                    # physical inputs and related child/reservation facts must
+                    # still be the same on both sides of the Git observation.
+                    if (before is not None and after is not None
+                            and before[1] == after[1]
+                            and before[0][1:3] == after[0][1:3]
+                            and before[0][4:] == after[0][4:]):
+                        self._blocked_workspaces[run_id] = after
+                    else:
+                        self._blocked_workspaces.pop(run_id, None)
+                else:
+                    self._blocked_workspaces.pop(run_id, None)
                 if result.get('detail'):
                     raise BoardError(result['reasons'][0], result['detail'])
             except (BoardError, OSError) as error:
+                self._blocked_workspaces.pop(run_id, None)
                 if isinstance(error, BoardError) and error.code in ('NOT_READY', 'TASK_DELETING', 'WORKSPACE_BUSY', 'STORAGE_BUSY', 'NOT_FOUND'):
                     if error.code == 'NOT_FOUND':
                         self._workspaces.discard(run_id)

@@ -188,13 +188,65 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
 
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
+        self.db.executescript((FIXTURE / 'schema-30-reservation-stock.sql').read_text())
         def step_with_new_form(db):
             schema_30_31.upgrade(db)
             add_schema31_stock(db)
         with mock.patch.dict(upgrade.STEPS, {30: step_with_new_form}):
             self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 30, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM maintenance_runs').fetchone()[0], 1)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM workspace_reservations w JOIN workflow_runs r"
+                                        " ON r.run_id=w.holder_task_id WHERE w.state='held'"
+                                        " AND r.state IN ('accepted','concluded')").fetchone()[0], 0)
         self.assert_current_structure()
+
+    def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):
+        self.db.executescript((FIXTURE / 'schema-30-reservation-stock.sql').read_text())
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        reader_id = metadata['reservationStockRunId']
+        reader = self.db.execute("SELECT w.*,r.execution_workspace_json,h.created_at AS concluded_at"
+                                 " FROM workspace_reservations w JOIN workflow_runs r ON r.run_id=w.holder_task_id"
+                                 " JOIN workflow_host_conclusions h ON h.run_id=r.run_id WHERE r.run_id=?",
+                                 (reader_id,)).fetchone()
+        self.assertEqual((reader['access'], reader['state'], reader['released_at']), ('read', 'held', None))
+        self.assertEqual(json.loads(reader['execution_workspace_json'])['kind'], 'existing')
+        self.assertEqual(reader['concluded_at'], metadata['reservationStockConcludedAt'])
+        # The floor's accept writer already releases its own reservations. Also
+        # exercise an inherited held acceptance without changing that evidence.
+        self.db.execute("UPDATE workspace_reservations SET state='held',released_at=NULL WHERE holder_task_id=?",
+                        (metadata['stableIds']['accepted'],))
+        self.db.commit()
+        self.schema31()
+        before = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_reservations ORDER BY rowid')]
+        decisions = dict(self.db.execute("SELECT r.run_id,CASE r.state WHEN 'accepted' THEN t.accepted_at ELSE h.created_at END"
+                                         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                                         " LEFT JOIN workflow_host_conclusions h ON h.run_id=r.run_id"
+                                         " WHERE r.state IN ('accepted','concluded')"))
+        self.assertEqual({row[0] for row in self.db.execute("SELECT DISTINCT r.state FROM workflow_runs r"
+                         " JOIN workspace_reservations w ON w.holder_task_id=r.run_id WHERE w.state='held'")},
+                         {'accepted', 'concluded', 'failed'})
+        # updated_at may move for a later lifecycle operation; it is no decision time.
+        self.db.execute("UPDATE workflow_runs SET updated_at='2026-02-01T00:00:00.000Z'")
+        self.db.commit()
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
+                  for table in ('workflow_host_conclusions', 'workflow_artifacts', 'workflow_turns')}
+        upgrade.upgrade_state(self.state)
+        expected = [{**row, 'state': 'released', 'released_at': decisions[row['holder_task_id']]}
+                    if row['state'] == 'held' and row['holder_task_id'] in decisions else row for row in before]
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_reservations ORDER BY rowid')], expected)
+        for table, rows in frozen.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+        self.assert_current_structure()
+
+    def test_a_terminal_reservation_without_its_decision_time_aborts_the_upgrade(self):
+        self.schema31()
+        self.db.execute("DELETE FROM workflow_host_conclusions WHERE run_id IN"
+                        " (SELECT holder_task_id FROM workspace_reservations WHERE state='held')")
+        self.db.commit()
+        before = list(self.db.iterdump())
+        with self.assertRaisesRegex(ValueError, 'no acceptance or conclusion timestamp'):
+            upgrade.upgrade_state(self.state)
+        self.assertEqual(list(self.db.iterdump()), before)
 
     def test_schema31_preserves_every_surviving_value_and_old_maintenance_deadlines(self):
         self.schema31()
@@ -264,6 +316,9 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertTrue(all(row['command_id'] for row in before))
         self.assertGreater(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
                                           " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
+        deleted = {row['plan_id'] for row in before if row['state'] in ('planned','blocked')}
+        event_plans = {json.loads(row[0]).get('planId') for row in self.db.execute('SELECT payload_json FROM events')}
+        self.assertTrue(deleted <= event_plans)
         inbound = [(table[0], tuple(fk)) for table in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
                    for fk in self.db.execute(f'PRAGMA foreign_key_list("{table[0]}")') if fk[2]=='workspace_cleanup_plans']
         self.assertEqual(inbound, [])
@@ -274,6 +329,5 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')], expected)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
                                         " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
-        deleted = {row['plan_id'] for row in before if row['state'] in ('planned','blocked')}
         self.assertFalse(any(json.loads(row[0]).get('planId') in deleted for row in self.db.execute('SELECT payload_json FROM events')))
         self.assert_current_structure()

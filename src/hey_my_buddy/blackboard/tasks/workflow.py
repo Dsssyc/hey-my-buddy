@@ -1178,7 +1178,7 @@ class WorkflowCoordinator:
 
     def _release_reservations(self, connection, holder_task_id: str, now: str, *, state: str = "released") -> None:
         # A transferred reservation is still this task's logical ownership: cancelling
-        # or accepting the micro task releases it too, so no writer claim leaks forever.
+        # accepting or concluding the micro task releases it too.
         connection.execute(
             "UPDATE workspace_reservations SET state=?, released_at=? WHERE holder_task_id=?"
             " AND state IN ('held','transferred')",
@@ -4373,11 +4373,12 @@ class WorkflowCoordinator:
 
         A failed, cancelled or delivered-but-unaccepted micro task receives one
         independent Host conclusion next to the real execution result; an
-        accepted micro task is already closed. After the stop evidence holds, managed
+        accepted micro task is already closed. After the stop evidence holds, writable
         changes that no fixed output has sealed yet become an independent Host
         partial output (never overwriting an earlier partial of the same
         attempt), the conclusion and that seal commit together, and the
-        registered checkout is reclaimed. An unresolved workspace conflict, a
+        reservations are released and the registered checkout is reclaimed.
+        Read-only work ends without a seal. An unresolved workspace conflict, a
         pending continuation or a live helper refuses the conclusion instead of
         being bypassed by it. The same note replays; a changed note conflicts.
         """
@@ -4566,11 +4567,12 @@ class WorkflowCoordinator:
         return task
 
     def _conclude_seal_work(self, connection, run_row, task):
-        """A Host partial seal's manifest, allowed paths and attempt, once an attempt ran."""
+        """A writable attempt's Host partial seal, allowed paths and identity."""
         manifest = json.loads(run_row["workspace_manifest_json"])
-        if not task["selected_attempt_id"]:
-            # No execution attempt ever ran on this checkout; there is nothing that
-            # could be unsealed, and a partial output needs an attempt identity.
+        if manifest["access"] == "read" or not task["selected_attempt_id"]:
+            # Read-only work and an unstarted checkout have no changes to seal.
+            # Ending a reader does not depend on its checkout still matching
+            # the frozen input, and a partial output needs an attempt identity.
             return None
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
         return manifest, allowed, task["selected_attempt_id"]
@@ -4616,6 +4618,7 @@ class WorkflowCoordinator:
         self.board._transition_task(connection, task, "concluded")
         connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (run_id,))
         connection.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (run_id,))
+        self._release_reservations(connection, run_id, now)
         accumulate_overall(connection, run_id)
         run_row = self._bump_run(connection, run_row, now)
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()

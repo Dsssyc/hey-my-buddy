@@ -1,10 +1,10 @@
 {
-  "baseGeneratorSha256": "e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313",
   "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
   "cleanupStockBaseSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
-  "cleanupStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --cleanup-stock-for tests/fixtures/upgrade-floor",
-  "cleanupStockSha256": "fad061f66ad266646505328ca5521ef51d9b5ff290706839bcddee21ba6dc764",
+  "cleanupStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --cleanup-stock-for tests/fixtures/upgrade-floor",
+  "cleanupStockGeneratorSha256": "61e9608a9b20d70f4c0c2e24bed7d563554b2788c4a212fb5a52b4c0d8b19749",
+  "cleanupStockSha256": "2511d0e53f4321ce9df89461835b76c61f4cb74c1304829939e7719969770073",
   "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
     "c-two": "0.9.0",
@@ -37,7 +37,7 @@
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
   "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "9ba67b567f394367fb25cf97b539ce64c56121df1e311083169fe829338bde44",
+  "generatorSha256": "e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000c1",
@@ -276,6 +276,12 @@
   "operationsSha256": "a61e0aac454dca78ba6b82d5f7a692fce11c532206fdcf83b1fdd612b1a39216",
   "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
   "pythonVersion": "3.12.12",
+  "reservationStockBaseSha256": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
+  "reservationStockConcludedAt": "2026-01-04T00:01:00.000Z",
+  "reservationStockGenerationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir> --reservation-stock-for tests/fixtures/upgrade-floor",
+  "reservationStockGeneratorSha256": "61e9608a9b20d70f4c0c2e24bed7d563554b2788c4a212fb5a52b4c0d8b19749",
+  "reservationStockRunId": "00000000-0000-0000-0000-00000000016b",
+  "reservationStockSha256": "a7bc4e3cb4b666644ae47dcbcf1cb9f96f25a80f2722d7336dae8dc1d6cdf432",
   "resourcesSha256": "350b4a63afce3b5ab02d44b19c773efc424895614c6e77ecf7aac9fa1e14dabe",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 30; baseline only after return",
   "routerBuddyIds": [

@@ -382,6 +382,82 @@ from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase
 
 
 class HostConclusionCleanupTests(LifecycleTestCase):
+    def test_read_only_existing_conclusion_releases_a_changed_checkout_without_a_partial_seal(self):
+        from support import FakeClock
+        for status in ("failed", "cancelled"):
+            with self.subTest(status=status):
+                clock = FakeClock()
+                board = self.board(clock=clock)
+                submitted = board.call("workflow_submit", {
+                    **BUDDY, "requestId": "read-only-" + status, "hostId": "host-1",
+                    "task": "Inspect the checkout", "cwd": str(self.repo),
+                    "executionWorkspace": {"kind": "existing", "access": "read"},
+                })
+                claimed = self.claim(board, submitted["runId"])["claim"]
+                if status == "cancelled":
+                    board.call("workflow_cancel", {"runId": submitted["runId"], **submitted["control"]})
+                attempt = claimed["attempt"]
+                board.call("execution_result", {
+                    "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "n" * 16,
+                    "status": status, "result": {"status": status}, "shutdownConfirmed": True,
+                })
+                (self.repo / "tracked.txt").write_text("Changed after the reader stopped\n", encoding="utf-8")
+                clock.advance(60)
+                concluded = board.call("workflow_conclude", {
+                    "runId": submitted["runId"], "note": "Inspection ended", **submitted["control"],
+                })
+                self.assertEqual(concluded["state"], "concluded")
+                self.assertEqual(concluded["hostConclusion"]["executionStatus"], status)
+                self.assertIsNone(concluded["partialArtifactId"])
+                with board.store.db.read() as connection:
+                    rows = connection.execute("SELECT state,released_at FROM workspace_reservations WHERE holder_task_id=?",
+                                              (submitted["runId"],)).fetchall()
+                    self.assertTrue(rows)
+                    self.assertTrue(all(row["state"] == "released" for row in rows))
+                    if status == "failed":
+                        self.assertEqual(rows[0]["released_at"], concluded["hostConclusion"]["createdAt"])
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE run_id=? AND kind='partial-output'",
+                                                        (submitted["runId"],)).fetchone()[0], 0)
+                successor = board.call("workflow_submit", {
+                    **BUDDY, "requestId": "next-reader-" + status, "hostId": "host-2",
+                    "task": "Inspect the changed checkout", "cwd": str(self.repo),
+                    "executionWorkspace": {"kind": "existing", "access": "read"},
+                })
+                self.assertEqual(successor["state"], "executing")
+                board.call("workflow_cancel", {"runId": successor["runId"], **successor["control"]})
+
+    def test_read_only_existing_conclusion_survives_a_rebuilt_repository(self):
+        from blackboard.tasks.workspace_lifecycle_case import git
+        board = self.board()
+        submitted = board.call("workflow_submit", {
+            **BUDDY, "requestId": "read-only-rebuilt", "hostId": "host-1",
+            "task": "Inspect the checkout", "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+        })
+        attempt = self.claim(board, submitted["runId"])["claim"]["attempt"]
+        board.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "n" * 16,
+            "status": "failed", "result": {"status": "failed"}, "shutdownConfirmed": True,
+        })
+        (self.repo / ".git").rename(self.directory / "original-git")
+        git(self.repo, "init", "-q")
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-qm", "Rebuilt repository")
+        concluded = board.call("workflow_conclude", {
+            "runId": submitted["runId"], "note": "Inspection ended", **submitted["control"],
+        })
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertIsNone(concluded["partialArtifactId"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=? AND state='held'",
+                                                (submitted["runId"],)).fetchone()[0], 0)
+        successor = board.call("workflow_submit", {
+            **BUDDY, "requestId": "reader-of-rebuilt", "hostId": "host-2",
+            "task": "Inspect the rebuilt repository", "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+        })
+        self.assertEqual(successor["state"], "executing")
+
     def test_acceptance_records_only_real_separate_host_paths(self):
         from blackboard.tasks.workspace_lifecycle_case import git
         board = self.board()
