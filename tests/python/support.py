@@ -201,6 +201,10 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         HMB_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
     )
     environment.update(overrides or {})
+    if environment.get("HMB_HARNESS_RECORD_FILE"):
+        selected = json.loads(Path(environment["HMB_HARNESS_RECORD_FILE"]).read_text())
+        for harness in selected:
+            environment.pop(f"HMB_{harness.upper()}_CLI", None)
     # Test-supplied paths may vary within the fixture, but must not redirect its
     # daemon or installed runtime into another board's state.
     environment["HMB_STATE_DIR"] = str(directory)

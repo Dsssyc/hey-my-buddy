@@ -71,7 +71,7 @@ from ..native_support import (
     identity_or_none,
     utc_now,
 )
-from ....protocol.owned_process import owned_popen
+from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..run_contract import (
     CheckedBuddy,
     CheckedValue,
@@ -323,6 +323,8 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
                 if owned is not None:
                     owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                                  "exit_code": evidence.exit_code}]
+                if isinstance(error, WindowsCommandLineTooLong):
+                    raise ClaudeProtocolError(error.code, str(error)) from None
                 if isinstance(error, OSError):
                     raise ClaudeProtocolError("harness-unavailable",
                                               "The selected Claude executable could not start") from None
@@ -1197,7 +1199,11 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 request_interrupt()
         except ClaudeUnavailable as error:
             state.status = "error"
-            state.reason = "claude-unavailable"
+            launch_reason = getattr(error, "reason", None)
+            state.reason = launch_reason["code"] if launch_reason is not None else "claude-unavailable"
+            if state.reason == "harness.shutdown-unverified":
+                # Entry resolution may own a Node probe before the main spawn.
+                owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
             state.error_text = str(error)
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             state.status = "error"
@@ -1324,7 +1330,8 @@ def check_preparation(spec: dict, environment: dict) -> None:
     try:
         cli_command(environment)
     except ClaudeUnavailable as error:
-        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="claude") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="claude",
+                         reason=getattr(error, "reason", None)) from None
 
 
 def session_facts(native_root: Path, session_id: str | None) -> dict:

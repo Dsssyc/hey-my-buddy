@@ -42,6 +42,8 @@ export default {
   "execution-process-not-created": "执行进程未创建。",
   "harness.account-read-failed": "无法读取 harness 账户，请检测后重试。",
   "harness.auth-unverified": "尚未确认 harness 的登录状态，请登录后检测。",
+  "harness.command-line-too-long": "{{operation}} 命令需要 {{utf16Units}} 个 UTF-16 代码单元，Windows 上限为 {{limit}}。请缩短命令参数。",
+  "harness.entry-unsupported": "无法识别该 harness 入口或其 Node 目标；请选择原生可执行文件或可识别的 npm Node 入口。",
   "harness.interpreter-missing": "缺少 harness 所需的解释器，请安装后检测。",
   "harness.launch-failed": "harness 启动失败，请检查 CLI 或指定路径。",
   "harness.login-required": "harness 需要登录，请登录后检测。",

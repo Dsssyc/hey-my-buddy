@@ -12,6 +12,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
@@ -53,8 +54,9 @@ class NoToolCodexTests(unittest.TestCase):
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
                            HMB_STATE_DIR=str(self.root / 'state'), HMB_RUNTIME_ROOT=str(self.runtime),
-                           HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_DEV_SOURCE="1",
                            HMB_CODEX_FIXTURE_CASE=case, HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+        select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment,
@@ -120,9 +122,10 @@ class NoToolCodexTests(unittest.TestCase):
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.home),
                            PYTHONPATH=os.pathsep.join(filter(None, (str(SOURCE), os.environ.get('PYTHONPATH')))),
                            HMB_RUNTIME_ROOT=str(self.runtime),
-                           HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_DEV_SOURCE="1",
                            HMB_STATE_DIR=str(self.root / "state"),
                            HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
+        select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
                                     "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment,

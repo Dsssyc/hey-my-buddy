@@ -7,6 +7,7 @@ claude run seam; the catalog rule is pure and runs anywhere.
 import json
 import unittest
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
 from hey_my_buddy.buddy.harnesses.registry import adapter
@@ -35,12 +36,12 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
-        FIXTURE.chmod(0o755)
 
     def env(self):
-        return {"HMB_CLAUDE_CLI": str(FIXTURE),
-                "HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
-                "HMB_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
+        environment = {"HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
+                       "HMB_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
+        select_fixture(environment, self.directory, "claude", FIXTURE)
+        return environment
 
     def execute_fixture(self):
         code, submission = self.cli("submit", json.dumps({

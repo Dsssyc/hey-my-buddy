@@ -3,12 +3,9 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from pathlib import Path
 
 from .protocol import NativeError
-
-DEFAULT_CLI = Path("/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs")
 
 
 def cli_command(environment: dict | None = None) -> list[str]:
@@ -20,18 +17,14 @@ def cli_command(environment: dict | None = None) -> list[str]:
             return command_for("zcode", env)
         except BoardError as error:
             raise NativeError("harness-unavailable", error.message) from None
-    value = env.get("HMB_ZCODE_CLI") or shutil.which("zcode", path=env.get("PATH")) or str(DEFAULT_CLI)
-    path = Path(value).expanduser().resolve()
-    if not path.is_file():
-        raise NativeError("harness-unavailable", "ZCode CLI is missing; configure HMB_ZCODE_CLI")
-    if path.suffix in (".js", ".cjs", ".mjs"):
-        node = env.get("HMB_NODE") or shutil.which("node", path=env.get("PATH"))
-        if not node:
-            raise NativeError("harness-unavailable", "Node.js is required for the installed ZCode bundle")
-        return [node, str(path)]
-    if not os.access(path, os.X_OK):
-        raise NativeError("harness-unavailable", "the configured ZCode CLI is not executable")
-    return [str(path)]
+    from ..discovery import EntryUnavailable, _launch_command
+    path = Path(env["HMB_ZCODE_CLI"]).expanduser().absolute()
+    try:
+        return _launch_command(path, env)
+    except EntryUnavailable as error:
+        failure = NativeError(error.code, str(error))
+        failure.reason = error.reason
+        raise failure from None
 
 
 def provider_paths(environment: dict, command: list[str]) -> tuple[Path, Path]:

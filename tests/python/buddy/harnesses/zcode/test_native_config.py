@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
 
 from buddy.harnesses.zcode.test_native_run import NativeRunCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FAKE
@@ -24,7 +26,6 @@ class NativeConfigCase(NativeRunCase):
         self.fake = self.native_config / "bin/zcode"
         self.fake.parent.mkdir(parents=True)
         self.fake.write_text(FAKE)
-        self.fake.chmod(0o755)
         self.builtin = self.native_config / "config/provider/zcode-builtin.json"
         self.builtin.parent.mkdir(parents=True)
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {
@@ -32,7 +33,8 @@ class NativeConfigCase(NativeRunCase):
         self.personal = self.native_config / ".zcode/v2/provider_config.json"
         self.personal.parent.mkdir(parents=True)
         self.write_provider("zhipu-account")
-        os.environ.update(HMB_ZCODE_CLI=str(self.fake), ZCODE_DATA_BASE_DIR=str(self.native_config))
+        os.environ.update(ZCODE_DATA_BASE_DIR=str(self.native_config))
+        select_fixture(os.environ, self.root, "zcode", self.fake)
         # These deliberately wrong shell pins must not override native defaults.
         os.environ.update(ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.root / "missing-builtin"),
                           ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.root / "missing-personal"))
@@ -115,7 +117,8 @@ class NativeConfigTests(NativeConfigCase):
         self.assertEqual(provider_access_types(self.builtin, self.personal), {"fixture-account": "unknown"})
 
     def test_availability_and_preparation_do_not_read_provider_files(self):
-        with mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+        with mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value={
+                "harness": "zcode", "status": "ready", "command": [sys.executable, str(self.fake)]}), \
              mock.patch.object(Path, "read_text", side_effect=AssertionError("provider read")):
             self.assertEqual(ZcodeAdapter().available(), (True, None))
             native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))

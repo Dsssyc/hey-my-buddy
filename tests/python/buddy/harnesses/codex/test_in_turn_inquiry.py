@@ -161,8 +161,7 @@ class ClientToolWorkerTests(SeamCase):
             answer_schema=ANSWER_SCHEMA)
 
     def test_worker_declares_tool_and_native_resume_reuses_thread_declaration(self):
-        FIXTURE.chmod(0o755)
-        os.environ.update(self.environment, HMB_CODEX_CLI=str(FIXTURE),
+        os.environ.update(self.environment,
                           HMB_CODEX_FIXTURE_STATE=str(self.base / "trace.json"))
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="buddy-turn-1", input_sha256="a" * 64, native="native")
@@ -185,8 +184,7 @@ class ClientToolWorkerTests(SeamCase):
         self.assertFalse((Path(request.private_state.invocation_root) / "inquiry-bridge.json").exists())
 
     def test_fake_app_server_answers_or_keeps_unanswered_and_invalid_calls_continue(self):
-        FIXTURE.chmod(0o755)
-        os.environ.update(self.environment, HMB_CODEX_CLI=str(FIXTURE))
+        os.environ.update(self.environment)
         for case, answered in (("inquiry-active", True), ("inquiry-unanswered", False), ("inquiry-invalid-retry", True)):
             with self.subTest(case=case):
                 self.set_case(case)

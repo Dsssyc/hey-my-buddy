@@ -52,7 +52,7 @@ from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
-from ....protocol.owned_process import owned_popen
+from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
 from ..native_support import (
@@ -453,6 +453,8 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     try:
         command = cli_command(incoming)
     except CodexUnavailable as error:
+        if getattr(error, "reason", None):
+            raise CodexProtocolError(error.reason["code"], str(error)) from None
         raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
     environment = native_environment(incoming)
     if mode == "fast":
@@ -490,6 +492,8 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                 evidence = error.owned_popen_evidence
                 owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                              "exit_code": evidence.exit_code}]
+                if isinstance(error, WindowsCommandLineTooLong):
+                    raise CodexProtocolError(error.code, str(error)) from None
                 if isinstance(error, OSError):
                     raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
@@ -1176,6 +1180,9 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         except (CodexProtocolError, VersionShutdownError) as error:
             state.status = "cancelled" if error.code == "user-cancel" else "error"
             state.reason, state.error_text = error.code, str(error)
+            if error.code == "harness.shutdown-unverified":
+                # Entry resolution may own a Node probe before the main spawn.
+                owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
             if connection is not None and state.thread_id and state.turn_id \
                     and error.code in ("user-cancel", "deadline"):
                 _interrupt(connection, state, chain.session)
@@ -1931,7 +1938,8 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
         try:
             command = cli_command(incoming)
         except CodexUnavailable as error:
-            raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
+            raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex",
+                             reason=getattr(error, "reason", None)) from None
         environment = native_environment(incoming)
         try:
             version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
@@ -2001,7 +2009,8 @@ def check_preparation(spec: dict, environment: dict) -> None:
     try:
         cli_command(environment)
     except CodexUnavailable as error:
-        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
+        raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex",
+                         reason=getattr(error, "reason", None)) from None
 
 
 def prepare_run_services(*, tool_scope: str = "write",

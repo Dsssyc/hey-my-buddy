@@ -18,6 +18,7 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -361,7 +362,6 @@ class ProbeFixtureCase(unittest.TestCase):
         self.probe = load_probe()
         self.fake = self.root / "fake-app-server.py"
         self.fake.write_text(FAKE_SERVER)
-        self.fake.chmod(0o755)
         builtin = self.root / "provider/zcode-builtin.json"
         builtin.parent.mkdir()
         builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
@@ -376,10 +376,11 @@ class ProbeFixtureCase(unittest.TestCase):
         environment.update({"PROBE_FAKE_CASE": case, "PROBE_FAKE_REPORT": str(self.fake_report),
                             "PROBE_FAKE_NONCE": self.nonce, "PROBE_FAKE_CWD": str(self.root / "scratch"),
                             "HOME": str(self.root), "USERPROFILE": str(self.root)})
-        with mock.patch.dict(os.environ, environment):
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(self.probe, "cli_command", return_value=[sys.executable, str(self.fake)]):
             report = self.probe.run_probe(self.root / "probe", cwd=self.root / "scratch",
                                           provider="fixture-api", model="fixture-model", effort="low",
-                                          nonce=self.nonce, wall_seconds=30.0, zcode_cli=str(self.fake))
+                                          nonce=self.nonce, wall_seconds=30.0)
         fake = json.loads(self.fake_report.read_text()) if self.fake_report.exists() else {}
         return report, fake
 
@@ -430,7 +431,7 @@ class ProbeAcceptFlowTests(ProbeFixtureCase):
     def test_inherited_buddy_and_native_pins_never_reach_the_probe_child(self):
         _report, fake = self.run_fake_probe("ok")
         pins = fake["nativePins"]
-        self.assertEqual(sorted(pins), ["HMB_ZCODE_CLI", "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
+        self.assertEqual(sorted(pins), ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_LOG_CONSOLE", "ZCODE_LOG_DIR",
                                         "ZCODE_SESSION_DB_PATH",
                                         "ZCODE_STORAGE_DIR"], pins)
         self.assertEqual(pins["ZCODE_LOG_CONSOLE"], "0")

@@ -33,6 +33,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from ....errors import BoardError
 from ....protocol.reasons import reason as make_reason
+from ....protocol.owned_process import WindowsCommandLineTooLong
 from ....private_dirs import ensure_private_dir, open_regular_fd
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ...roles.turn_io import private_json
@@ -619,6 +620,11 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
         failure = NativeError("harness-unavailable",
                               "the ACP agent failed during its launch bookkeeping")
         failure.spawn_evidence = error.evidence
+        raise failure from None
+    except WindowsCommandLineTooLong as error:
+        failure = NativeError(error.code, str(error))
+        failure.spawn_evidence = {"phase": "pre-spawn-validation", "created": False,
+                                  "groupObserved": "gone", "shutdownConfirmed": True}
         raise failure from None
     except OSError:
         raise NativeError("harness-unavailable", "The selected DSH executable could not start") from None

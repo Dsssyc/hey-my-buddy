@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
 
 import c_two as cc
 
@@ -34,14 +35,14 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
-        FIXTURE.chmod(0o755)
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700, exist_ok=True)
         self.environment.update(HOME=str(native_home), USERPROFILE=str(native_home),
-                                ZCODE_DATA_BASE_DIR=str(native_home), HMB_CONSOLE_PORT="0", HMB_ZCODE_CLI=str(FIXTURE.resolve()), HMB_STATE_DIR=str(self.root / "state"),
+                                ZCODE_DATA_BASE_DIR=str(native_home), HMB_CONSOLE_PORT="0", HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
+        select_fixture(self.environment, self.root, "zcode", FIXTURE.resolve())
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.root / "state")
         self.addCleanup(cc.shutdown)

@@ -2,6 +2,7 @@
 import json
 import subprocess
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase, BUDDY
 
@@ -147,10 +148,12 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
         (self.directory / "codex-home/config.toml").write_text("")
 
     def env(self):
-        return {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
-                "HMB_CODEX_CLI": str(Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py"),
-                "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
-                "HMB_CODEX_FIXTURE_CASE": "quota-failure"}
+        environment = {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
+                       "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
+                       "HMB_CODEX_FIXTURE_CASE": "quota-failure"}
+        select_fixture(environment, self.directory, "codex",
+                       Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py")
+        return environment
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):

@@ -18,6 +18,7 @@ import time
 import unittest
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
+from buddy.harnesses.fixture_selection import select_command, select_fixture
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
@@ -43,14 +44,14 @@ class CodexAdapterTests(unittest.TestCase):
         self.cwd.mkdir()
         self.home = self.root / 'native-account'
         self.home.mkdir()
-        FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_CLI=str(FIXTURE), HMB_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 CODEX_HOME=str(self.home), HOME=str(self.root),
                                 HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HMB_DEV_SOURCE="1",
                                 PYTHONPATH=str(SOURCE) + os.pathsep + self.environment.get("PYTHONPATH", ""))
+        select_fixture(self.environment, self.root, "codex", FIXTURE)
         self.adapter = worker_executor("codex")
 
     def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8):
@@ -211,9 +212,9 @@ class CodexAdapterTests(unittest.TestCase):
         (self.home / 'auth.json').write_text('source login')
         broken = self.root / 'broken-codex'
         broken.write_text('not an executable payload')
-        broken.chmod(stat_module.S_IXUSR | stat_module.S_IRUSR)
+        broken.chmod(stat_module.S_IRUSR)
         context = self.context()
-        context.environment["HMB_CODEX_CLI"] = str(broken)
+        select_command(context.environment, self.root, "codex", [str(broken)])
         outcome = self.execute(context)
         self.assertEqual(outcome.status, 'failed', outcome.to_report())
         self.assertIs(outcome.result['modelStarted'], False)

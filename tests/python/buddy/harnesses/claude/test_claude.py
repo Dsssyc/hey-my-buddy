@@ -13,6 +13,7 @@ import json
 import math
 import os
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -20,6 +21,7 @@ import unittest
 import uuid
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
@@ -58,13 +60,13 @@ class ClaudeFixtureCase(unittest.TestCase):
         (self.root / "state").mkdir(mode=0o700)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
-        FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FIXTURE), HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HMB_DEV_SOURCE="1")
+        select_fixture(self.environment, self.root, "claude", FIXTURE)
         # Controllers change cwd to the fixture checkout; a relative
         # PYTHONPATH would import the interpreter's installed source instead.
         self.environment["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parents[5] / "src"), os.environ.get('PYTHONPATH', '')))
@@ -78,6 +80,8 @@ class ClaudeFixtureCase(unittest.TestCase):
                                                           'params': {'harness': 'claude'}}}]}}
         complete = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'complete'}]}}
         with mock.patch.dict(os.environ, self.environment, clear=True), \
+             mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+             mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
              mock.patch.object(claude_module, '_probe_native_metadata', side_effect=[unknown, complete]) as probe, \
              mock.patch.object(claude_module.time, 'monotonic', side_effect=[10, 11, 71]):
             self.assertEqual(self.adapter.available(), (False, 'catalog.native-unknown'))
@@ -120,6 +124,8 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
             raise BoardError("HARNESS_UNAVAILABLE", "fixture unauthenticated")
 
         with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+                mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
                 mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
                 ThreadPoolExecutor(max_workers=8) as pool:
             futures = [pool.submit(self.adapter.available) for _ in range(8)]
@@ -431,10 +437,9 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_a_completed_turn_does_not_publish_quota_failure(self):
         usage_fixture = FIXTURE.with_name("fake_claude_usage.py")
-        usage_fixture.chmod(0o755)
         native = json.loads(FIXTURE.with_name("native-usage-claude.json").read_text())
         context = self.context("usage-ok", model=native["modelId"])
-        context.environment["HMB_CLAUDE_CLI"] = str(usage_fixture)
+        select_fixture(context.environment, self.root, "claude", usage_fixture)
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNotNone(outcome.result["tokenUsage"])
@@ -457,7 +462,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_discovery_catalog_uses_resolved_ids_without_a_user_turn(self):
         (self.root / "fixture.json").unlink(missing_ok=True)
-        with mock.patch.dict("os.environ", self.environment, clear=False):
+        with mock.patch.dict("os.environ", self.environment, clear=True):
             catalog = self.adapter.discover_models()
         provider = catalog["providers"][0]
         self.assertEqual(provider["provider"], "anthropic")
@@ -483,7 +488,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
             with self.subTest(case=case):
                 (self.root / "fixture.json").unlink(missing_ok=True)
                 environment = {**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}
-                with mock.patch.dict("os.environ", environment, clear=False):
+                with mock.patch.dict("os.environ", environment, clear=True):
                     catalog = self.adapter.discover_models()
                 self.assertEqual(catalog["discoveries"],
                                  [{"harness": "claude", "status": "complete", "accountStatus": "unknown"}])

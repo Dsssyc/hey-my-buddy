@@ -14,6 +14,7 @@ original = Daemon.service
 def service(daemon):
     result = original(daemon)
     result.automatic_discovery = False
+    selected = json.loads(Path(os.environ['HMB_HARNESS_RECORD_FILE']).read_text()) if os.environ.get('HMB_HARNESS_RECORD_FILE') else {}
     # Native discovery is the fixture boundary, just like MODEL_CATALOG_FILE.
     # No private service integration test inspects the user's native login.
     with daemon.store.db.write() as db:
@@ -22,6 +23,7 @@ def service(daemon):
             command = [executable or 'fixture-' + name]
             if executable and Path(executable).suffix == '.py':
                 command.insert(0, sys.executable)
+            command = selected.get(name, {}).get('command', command)
             record = {'harness': name, 'status': 'ready', 'command': command,
                       'executable': executable, 'version': 'fixture', 'source': 'fixture', 'reason': None}
             db.execute("INSERT OR REPLACE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)", (name, json.dumps(record)))

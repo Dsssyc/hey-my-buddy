@@ -14,6 +14,9 @@ dependencies = [
 [project.scripts]
 hey-my-buddy = "hey_my_buddy.install.package_install:main"
 
+[dependency-groups]
+dev = ["distlib>=0.4,<0.5"]
+
 [build-system]
 requires = ["hatchling", "portalocker>=3,<4"]
 build-backend = "hatchling.build"

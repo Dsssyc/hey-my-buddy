@@ -24,6 +24,7 @@ import unittest
 import uuid
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
+from buddy.harnesses.fixture_selection import select_command, select_fixture
 from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -116,7 +117,9 @@ class SeamCase(unittest.TestCase):
         self.environment.update(HOME=str(self.base), CODEX_HOME=str(self.home),
                                 HMB_STATE_DIR=str(self.base / "state"),
                                 HMB_RUNTIME_ROOT=str(self.base / "runtime"))
+        select_fixture(self.environment, self.base, "codex", FIXTURE)
         os.environ.update(self.environment)
+        os.environ.pop("HMB_CODEX_CLI", None)
 
     def set_case(self, case: str) -> None:
         os.environ["HMB_CODEX_FIXTURE_CASE"] = case
@@ -208,10 +211,8 @@ class FastSeamTests(SeamCase):
 
     def setUp(self):
         super().setUp()
-        FIXTURE.chmod(0o755)
-        FAST_FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["HMB_CODEX_CLI"] = str(FAST_FIXTURE)
+        select_fixture(os.environ, self.base, "codex", FAST_FIXTURE)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "fast-trace.json")
         cache = {"client_version": "0.157.0", "models": [{
             "slug": "fixture-model", "display_name": "Fixture", "shell_type": "unified_exec",
@@ -541,8 +542,7 @@ class FastSeamTests(SeamCase):
     def test_an_unrunnable_executable_fails_native_creation_without_a_child(self):
         garbage = self.base / "not-a-cli"
         garbage.write_bytes(b"\x00\x01not an executable")
-        garbage.chmod(0o755)
-        os.environ["HMB_CODEX_CLI"] = str(garbage)
+        select_command(os.environ, self.base, "codex", [str(garbage)])
         request = self.request(permission="none", output_schema=FAST_SCHEMA,
                                prompt="Pick a buddy", timeout=5)
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
@@ -583,9 +583,7 @@ class FastSeamTests(SeamCase):
 class CodexSeamCase(SeamCase):
     def setUp(self):
         super().setUp()
-        FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["HMB_CODEX_CLI"] = str(FIXTURE)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
@@ -1947,9 +1945,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
 class DiscoverySeamTests(SeamCase):
     def setUp(self):
         super().setUp()
-        FIXTURE.chmod(0o755)
         os.environ.update(self.environment)
-        os.environ["HMB_CODEX_CLI"] = str(FIXTURE)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "discovery-trace.json")
         self.addCleanup(os.environ.pop, "HMB_CODEX_FIXTURE_CASE", None)
 

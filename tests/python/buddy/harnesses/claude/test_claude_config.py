@@ -2,17 +2,13 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude.config import (
-    ClaudeUnavailable,
     DEFAULT_EFFORT,
     READONLY_TOOLS,
     WRITABLE_TOOLS,
-    cli_command,
     discovery_args,
     execution_args,
     native_environment,
@@ -71,25 +67,6 @@ class ClaudeConfigTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, environment, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-
-    def test_cli_override_and_missing_cli(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-config-") as temp:
-            cli = Path(temp) / "claude"
-            cli.write_text("#!/bin/sh\n")
-            cli.chmod(0o755)
-            self.assertEqual(cli_command({"HMB_CLAUDE_CLI": str(cli), "PATH": tempfile.mkdtemp()}),
-                             [str(cli.resolve())])
-            with tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-empty-") as empty:
-                with self.assertRaises(ClaudeUnavailable):
-                    cli_command({"PATH": empty})
-
-
-
-
-
-
-
-
 
     def test_read_sandbox_settings_use_the_documented_network_keys(self):
         self.assertEqual(set(permission_sandbox_settings("read")), {"sandbox"})
