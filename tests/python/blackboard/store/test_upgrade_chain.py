@@ -104,7 +104,7 @@ class UpgradeChainTests(unittest.TestCase):
             self.db.execute("UPDATE attempt_process_identities SET job_name='unexpected-job' WHERE boot_id IS NOT NULL")
         self.assert_current_structure()
 
-    def test_usage_stock_drops_only_the_counters_and_keeps_frozen_content(self):
+    def test_result_stock_drops_read_counters_and_budget_copies_and_keeps_frozen_content(self):
         self.schema31()
         frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
                   for table in ('router_requests', 'workflow_turns', 'attempt_received_receipts')}
@@ -123,11 +123,11 @@ class UpgradeChainTests(unittest.TestCase):
                 for field in path:
                     usage = usage.get(field, {})
                 result = value['result'] if table == 'attempts' else value
-                budget = result.get('budget', {})
+                budget = result.pop('budget', None)
                 if 'bytesRead' in usage:
                     self.assertIsNone(usage.pop('bytesRead'))
-                    self.assertEqual(budget.pop('bytesRead'), 2097152)
-                else:
+                    self.assertEqual(budget['bytesRead'], 2097152)
+                elif budget is None:
                     unchanged[table][row[key]] = row[column]
                 expected[table][row[key]] = value
         upgrade.upgrade_state(self.state)
@@ -136,34 +136,48 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual({key: json.loads(value) for key, value in actual.items()}, expected[table])
             self.assertEqual({key: actual[key] for key in unchanged[table]}, unchanged[table])
             self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table},json_tree({column}) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
+            budget_path = '$.result.budget' if table == 'attempts' else '$.budget'
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL",
+                                             (budget_path,)).fetchone()[0], 0)
         for table, rows in frozen.items():
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
         self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid')), specs)
         self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
 
-    def test_catalog_observation_stock_drops_only_unused_metadata(self):
+    def test_budget_copies_are_removed_even_without_retired_read_counters(self):
+        self.schema31()
+        for table, column, usage_path, budget_path in (
+                ('attempts', 'result_json', '$.result.usage.bytesRead', '$.result.budget'),
+                ('decision_requests', 'output_json', '$.usage.bytesRead', '$.budget')):
+            self.db.execute(f'UPDATE {table} SET {column}=json_remove({column},?,?)',
+                            (usage_path, budget_path + '.bytesRead'))
+            self.assertGreater(self.db.execute(f'SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL',
+                                               (budget_path,)).fetchone()[0], 0)
+        self.db.commit()
+        upgrade.upgrade_state(self.state)
+        for table, column, path in (('attempts', 'result_json', '$.result.budget'),
+                                    ('decision_requests', 'output_json', '$.budget')):
+            self.assertEqual(self.db.execute(f'SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL',
+                                             (path,)).fetchone()[0], 0)
+
+    def test_catalog_observation_stock_keeps_only_observation_facts(self):
         self.schema31()
         query = 'SELECT rowid,observation_id,request_id,response_json,harnesses_json FROM catalog_observations ORDER BY rowid'
         before = [tuple(row) for row in self.db.execute(query)]
         self.assertEqual(len(before), 4)
         expected = {}
-        removed = {'providerVersion': 0, 'packageName': 0, 'packageVersion': 0}
+        completed = 0
         for row in before:
             if row[3] is None:
                 expected[row[0]] = None
                 continue
             value = json.loads(row[3])
-            catalog = value['catalog']
-            self.assertEqual(catalog.pop('providerVersion'),
-                             None if row[1] == 3 else 'fixture-provider-version')
-            removed['providerVersion'] += 1
-            for provider in catalog['providers']:
-                for field in ('packageName', 'packageVersion'):
-                    self.assertEqual(provider.pop(field), '')
-                    removed[field] += 1
-            expected[row[0]] = value
-        self.assertEqual(removed, {'providerVersion': 3, 'packageName': 3, 'packageVersion': 3})
+            expected[row[0]] = {'discoveryId': value['discoveryId'], 'observationId': value['observationId'],
+                                'duplicate': value['duplicate'], 'discoveredAt': value['catalog']['discoveredAt'],
+                                'appliedHarnesses': value['appliedHarnesses'], 'staleHarnesses': value['staleHarnesses']}
+            completed += 1
+        self.assertEqual(completed, 3)
         retained = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
                     for table in ('evaluation_catalog', 'catalog_current', 'catalog_pending')}
         upgrade.upgrade_state(self.state)

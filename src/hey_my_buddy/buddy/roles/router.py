@@ -182,14 +182,12 @@ class DecisionAdapter(Adapter):
                and isinstance(native_result.get("error"), str) else {}),
             "correctionCount": native_result.get("correctionCount"),
             "inputVerification": verification,
-            **(router.routing_facts(document) if document.get("kind") != "maintain" else {}),
+            **(router.routing_facts(document, include_budget=False) if document.get("kind") != "maintain" else {}),
             "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                              "native": native_result.get("processState"),
                              "nativeInterruptRequested": native_result.get("nativeInterruptRequested"),
                              "nativeInterruptAcknowledged": native_result.get("nativeInterruptAcknowledged")},
         }
-        if document.get("kind") != "maintain":
-            result["budget"] = document["budget"]
         code = native_result.get("code")
         if code in ("deadline", "timeout", "readonly-budget-exhausted"):
             code = "router-budget-exhausted"

@@ -918,7 +918,7 @@ class RoutingSpanTests(WorkflowTestCase):
         self.finish_turn(board, claim, runner_status=result_status, shutdown=shutdown)
         return board, run['runId']
 
-    def decision(self, board, task_id, *, output=None, status='completed', selected=None, buddy_id='frozen-buddy'):
+    def decision(self, board, task_id, *, output=None, status='completed', selected=None, buddy_id='frozen-buddy', budget=None):
         with board.store.db.write() as db:
             note = (output or {}).get('decision', {}).get('note')
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,buddy_id,note,created_at)"
@@ -929,7 +929,7 @@ class RoutingSpanTests(WorkflowTestCase):
                         json.dumps({})))
             now = '2026-01-01T00:00:00Z'
             router_sequence.freeze_request(db, 'recorded-decision',
-                                           snapshot={'facts': {'budget': (output or {}).get('budget')},
+                                           snapshot={'facts': {'budget': budget},
                                                      'baseInput': {'task': 'task'}, 'inspections': []}, now=now)
             router_sequence.reserve_dispatch(db, decision_id='recorded-decision', task_id=task_id, router_index=0,
                                              buddy={'buddyId': 'frozen-router', 'harness': 'dsh', 'provider': 'fixture',
@@ -946,17 +946,17 @@ class RoutingSpanTests(WorkflowTestCase):
         output = {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': 'frozen-buddy', 'note': 'frozen note',
                   'evidence': [], 'policyCheck': {'ignored': True}},
                   'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},
-                  'budget': {'preset': 'quick', 'toolCalls': 8},
                   'usage': {'elapsedMs': 120, 'toolCalls': 3},
                   'stopEvidence': {'shutdownConfirmed': True}}
-        self.decision(board, task_id, output=output, selected=selected)
+        budget = {'preset': 'brief', 'toolCalls': 8}
+        self.decision(board, task_id, output=output, selected=selected, budget=budget)
         before = self.spans(board, task_id)[0]
         self.assertEqual(before['decisionId'], 'recorded-decision')
         self.assertEqual(before['routing'], {'routerBuddyIds': None, 'routerIdentities': None, 'routerIndex': None,
                          'routerRetryIntervalSeconds': None, 'routingBudget': None,
                          'routerBuddyId': None, 'routerBuddy': None, 'routerProblem': None, 'routingMode': None,
                          'selectedBuddy': selected, 'reason': None, 'note': 'frozen note',
-                         'policyCheck': output['policyCheck'], 'budget': output['budget'], 'usage': output['usage']})
+                         'policyCheck': output['policyCheck'], 'budget': budget, 'usage': output['usage']})
         # Changing the owner's current execution buddy cannot rewrite this history.
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
@@ -972,6 +972,24 @@ class RoutingSpanTests(WorkflowTestCase):
                 db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                            " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z')", (decision_id, task_id))
         self.assertEqual(self.spans(board, task_id)[0], before)
+
+    def test_review_unavailability_keeps_its_own_round_budget_without_a_result_copy(self):
+        board, task_id = self.recorded_task()
+        budget = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152}
+        self.decision(board, task_id, status='needs-host', budget=budget)
+        with board.store.db.write() as db:
+            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.routingMode','review',"
+                       "'$.result.code','router-review-unavailable') WHERE task_id=?", (task_id,))
+            router_sequence.freeze_request(db, 'recorded-decision', round=2,
+                                           snapshot={'facts': {'budget': None, 'routerCalled': False},
+                                                     'baseInput': {'task': 'current task'}, 'inspections': []},
+                                           now='2026-01-02T00:00:00Z')
+        span = self.spans(board, task_id)[0]
+        self.assertEqual(span['routing']['budget'], {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64})
+        self.assertEqual(span['routing']['routingMode'], 'review')
+        self.assertIsNone(span['routing']['usage'])
+        self.assertIsNone(span['routing']['policyCheck'])
+        self.assertIsNone(span['routing']['selectedBuddy'])
 
     def test_missing_details_are_null_and_current_pointer_cannot_rewrite_dispatch(self):
         board, task_id = self.recorded_task()

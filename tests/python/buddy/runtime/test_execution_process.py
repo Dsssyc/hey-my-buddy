@@ -38,6 +38,18 @@ def self_identity_for_endpoint() -> dict:
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    def test_review_unavailable_result_uses_frozen_request_without_copying_budget(self):
+        execution = object.__new__(Execution)
+        claim = {'decisionInput': {'routingMode': 'review', 'budget': {'preset': 'deep', 'timeoutSeconds': 600,
+                                                                     'toolCalls': 64, 'bytesRead': 2097152}}}
+        execution.receipt = mock.Mock(side_effect=lambda claim, report, directory: report)
+        report = execution._review_unavailable(claim, None, [], 'router-unavailable')
+        self.assertNotIn('budget', report['result'])
+        self.assertEqual(report['result']['routingMode'], 'review')
+        self.assertEqual(report['result']['code'], 'router-review-unavailable')
+        self.assertTrue(report['shutdownConfirmed'])
+        self.assertEqual(claim['decisionInput']['budget']['bytesRead'], 2097152)
+
     def test_nonretryable_endpoint_inspection_explains_the_start_failure(self):
         live = _ExecutionLive(SimpleNamespace(claim={
             "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt", "generation": 1}}))

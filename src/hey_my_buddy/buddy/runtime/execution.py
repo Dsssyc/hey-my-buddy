@@ -611,8 +611,7 @@ class Execution:
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',
             'modelStarted': False, 'harnessAttempts': history,
-            'budget': claim['decisionInput']['budget'],
-            **routing_facts(claim['decisionInput'])},
+            **routing_facts(claim['decisionInput'], include_budget=False)},
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
 

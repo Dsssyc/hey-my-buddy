@@ -1405,7 +1405,6 @@ class DecisionCoordinator:
             "note": row["note"],
             "evidence": evidence,
             "policyCheck": (output or {}).get("policyCheck"),
-            "budget": facts.get("budget"),
             "routingBasis": request.get("routingBasis"),
             "constraints": request.get("constraints", {}),
             "requiredCapabilities": request.get("requiredCapabilities", []),

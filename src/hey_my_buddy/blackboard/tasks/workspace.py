@@ -1242,14 +1242,10 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
 
 
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
-    """Freeze a whole-micro-task patch, reusing the sealed diff when its base matches."""
+    """Freeze a whole-micro-task patch from the seal/resolve in this call chain."""
     with _errors():
         _validate_manifest(manifest)
         if original_commit == manifest.get("inputCommit"):
-            _validate_output_record(manifest, artifact)
-            data = _read(Path(artifact["diffPath"]))
-            if data is None or _sha(data) != artifact["diffSha256"]:
-                raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output patch changed")
             return {"baseCommit": original_commit, "outputCommit": artifact["commit"], "path": artifact["diffPath"],
                     "sha256": artifact["diffSha256"], "changedPaths": list(artifact["changedPaths"])}
         repository, changed = _artifact_binding(manifest, manifest, artifact)

@@ -401,10 +401,18 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     return RouterResolution(None, None, None, facts, tuple(inspections), problem)
 
 
-def routing_facts(request: dict, *, actor: dict | None = None) -> dict:
+def budget_view(frozen: dict | None) -> dict | None:
+    """Project a frozen budget into the current public form without changing it."""
+    return ({key: frozen[key] for key in ("preset", "timeoutSeconds", "toolCalls") if key in frozen}
+            if frozen is not None else None)
+
+
+def routing_facts(request: dict, *, actor: dict | None = None, include_budget: bool = True) -> dict:
     facts = {key: request.get(key) for key in
              ("routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-              "routingMode", "routingBudget", "routerRetryIntervalSeconds", "budget", "routerProblem")}
+              "routingMode", "routingBudget", "routerRetryIntervalSeconds", "routerProblem")}
+    if include_budget:
+        facts["budget"] = budget_view(request.get("budget"))
     if actor is not None:
         facts.update(routerBuddyId=actor["buddyId"], routerBuddy=actor["buddy"],
                      routerIndex=actor["routerIndex"])

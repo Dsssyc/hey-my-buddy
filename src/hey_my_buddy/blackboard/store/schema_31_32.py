@@ -87,20 +87,19 @@ def upgrade(connection):
     connection.execute("DROP TABLE attempt_process_identities")
     connection.execute("ALTER TABLE attempt_process_identities_next RENAME TO attempt_process_identities")
     connection.execute("UPDATE attempts SET result_json=json_remove(result_json,"
-                       "'$.result.usage.bytesRead','$.result.budget.bytesRead')"
+                       "'$.result.usage.bytesRead','$.result.budget')"
                        " WHERE json_type(result_json,'$.result.usage.bytesRead') IS NOT NULL"
-                       " OR json_type(result_json,'$.result.budget.bytesRead') IS NOT NULL")
+                       " OR json_type(result_json,'$.result.budget') IS NOT NULL")
     connection.execute("UPDATE decision_requests SET output_json=json_remove(output_json,"
-                       "'$.usage.bytesRead','$.budget.bytesRead')"
+                       "'$.usage.bytesRead','$.budget')"
                        " WHERE json_type(output_json,'$.usage.bytesRead') IS NOT NULL"
-                       " OR json_type(output_json,'$.budget.bytesRead') IS NOT NULL")
+                       " OR json_type(output_json,'$.budget') IS NOT NULL")
     for observation_id, raw in connection.execute(
             "SELECT observation_id,response_json FROM catalog_observations WHERE response_json IS NOT NULL").fetchall():
         response = json.loads(raw)
-        catalog = response['catalog']
-        del catalog['providerVersion']
-        for provider in catalog['providers']:
-            del provider['packageName'], provider['packageVersion']
+        facts = {key: response[key] for key in
+                 ('discoveryId', 'observationId', 'duplicate', 'appliedHarnesses', 'staleHarnesses')}
+        facts['discoveredAt'] = response['catalog']['discoveredAt']
         connection.execute("UPDATE catalog_observations SET response_json=? WHERE observation_id=?",
-                           (json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(',', ':')), observation_id))
+                           (json.dumps(facts, ensure_ascii=False, sort_keys=True, separators=(',', ':')), observation_id))
     connection.execute("UPDATE meta SET value='32' WHERE key='schema_version'")

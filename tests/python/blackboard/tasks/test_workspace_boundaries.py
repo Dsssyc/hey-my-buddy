@@ -57,11 +57,12 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("diff", "--cached", "--name-only", cwd=checkout), b"")
         self.assertNotIn("changedEntries", resolved["artifact"]["snapshot"])
 
-    def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
+    def test_first_turn_cumulative_patch_reuses_verified_diff_without_io(self):
         manifest = self.prepare()
         native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
-        with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
+        with (patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")),
+              patch.object(workspace, "_read", side_effect=AssertionError("unexpected patch read"))):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/file.txt"])
         self.assertEqual(cumulative["path"], sealed["diffPath"])

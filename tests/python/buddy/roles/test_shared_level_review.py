@@ -128,6 +128,7 @@ class _ReviewCases:
         self.assertEqual(outcome.result["decision"],
                          {"domainNodeId": None, "taskType": "change", "buddyId": "legal", "note": "fixture", "evidence": []})
         self.assertTrue(outcome.result["inputVerification"]["unchanged"])
+        self.assertNotIn("budget", outcome.result)
         self.assertLessEqual(outcome.result["usage"]["toolCalls"], document["budget"]["toolCalls"])
         self.assertIsNone(judge_tool_evidence(outcome.result["toolEvidence"], "read",
                                                state_dir=Path(context.environment["HMB_STATE_DIR"])))
