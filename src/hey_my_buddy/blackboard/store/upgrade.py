@@ -477,9 +477,12 @@ def _note(value: str | None) -> str | None:
 def _manual_cancel_continuation(connection: sqlite3.Connection, row: sqlite3.Row,
                                 payload: dict) -> str:
     candidates = connection.execute(
-        "SELECT continuation_id FROM workflow_continuations WHERE run_id=? AND kind='manual'"
-        " AND helper_policy='cancel' AND created_at=?",
-        (payload['cancelledByRunId'], row['created_at']),
+        "SELECT c.continuation_id FROM workflow_continuations c JOIN events e"
+        " ON e.task_id=c.run_id AND e.kind='workflow.continued'"
+        " AND json_extract(e.payload_json,'$.continuationId')=c.continuation_id"
+        " WHERE c.run_id=? AND c.kind='manual' AND c.helper_policy='cancel'"
+        " AND c.created_at<=? AND e.created_at>=? AND e.seq>?",
+        (payload['cancelledByRunId'], row['created_at'], row['created_at'], row['seq']),
     ).fetchall()
     if len(candidates) != 1:
         raise BoardError('UPGRADE_INVALID_BOARD', 'Manual helper cancellation lacks one continuation')
@@ -502,7 +505,7 @@ def _converted_event_note(connection: sqlite3.Connection, row: sqlite3.Row,
     if kind in ('task.cancelled', 'task.cancel_requested'):
         return True, None if value == 'operator request' else _note(value)
     if kind in ('workflow.cancelled', 'workflow.helper_cancelled', 'workflow.lead_task_cancelled'):
-        if value == 'Owned micro task stopped because its Lead is being concluded' and role == 'lead':
+        if value == 'Owned micro task stopped because its Lead is being concluded':
             payload['leadRunId'] = (row['task_id'] if kind == 'workflow.cancelled'
                                     else payload['cancelledByRunId'])
             return True, None
@@ -581,8 +584,9 @@ def _upgrade_notes(connection: sqlite3.Connection) -> None:
             changed = True
         if changed:
             connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (canonical_json(payload), seq))
-    for task_id, artifact_id in connection.execute(
-        'SELECT t.task_id,r.final_artifact_id FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id'
+    for task_id, artifact_id, opinion in connection.execute(
+        'SELECT t.task_id,r.final_artifact_id,t.review_rejection_note FROM tasks t'
+        ' JOIN workflow_runs r ON r.run_id=t.task_id'
         ' WHERE t.review_rejected_at IS NOT NULL AND t.review_rejection_note IS NOT NULL'
     ).fetchall():
         event = connection.execute(
@@ -591,6 +595,7 @@ def _upgrade_notes(connection: sqlite3.Connection) -> None:
         ).fetchone()
         payload = json.loads(event[0]) if event is not None else None
         if (payload is not None and payload.get('artifactId') == artifact_id
+                and payload.get('opinion') == opinion
                 and 'note' in payload and payload['note'] is None):
             connection.execute('UPDATE tasks SET review_rejection_note=NULL WHERE task_id=?', (task_id,))
 
