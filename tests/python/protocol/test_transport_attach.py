@@ -19,6 +19,7 @@ from hey_my_buddy.protocol.transport import (
     ServiceError,
     _attach_read_only,
     _read_endpoint,
+    _request,
     _trusted_directory,
     call_service,
     ensure_service,
@@ -434,6 +435,26 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.assertEqual(before, snapshot(self.directory))
         self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o500)
         self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o700)
+
+    def test_error_reply_details_reach_the_client_unchanged(self):
+        # A direct WORKSPACE_GIT_ERROR reply keeps its recorded command facts:
+        # the client envelope carries them instead of only the message.
+        (self.directory / "ipc").mkdir(mode=0o700)
+        proxy = Mock()
+        proxy.__enter__ = Mock(return_value=proxy)
+        proxy.__exit__ = Mock(return_value=False)
+        proxy.ping.return_value = json.dumps({"error": {
+            "code": "WORKSPACE_GIT_ERROR", "message": "Git workspace operation failed",
+            "details": {"operation": "read-tree", "returncode": 128, "argv": ["git", "read-tree"],
+                        "reason": "fatal: cannot lock ref 'refs/buddy/workspaces/x/input'"}}})
+        with patch("hey_my_buddy.protocol.transport.cc.connect", return_value=proxy):
+            with self.assertRaises(ServiceError) as raised:
+                _request(ENDPOINT, "ping", {}, state_dir=self.directory)
+        self.assertEqual(raised.exception.code, "WORKSPACE_GIT_ERROR")
+        self.assertEqual(raised.exception.message, "Git workspace operation failed")
+        self.assertEqual(raised.exception.details, {"operation": "read-tree", "returncode": 128,
+                                                    "argv": ["git", "read-tree"],
+                                                    "reason": "fatal: cannot lock ref 'refs/buddy/workspaces/x/input'"})
 
     def test_missing_state_does_not_create_on_board_client_attach(self):
         from hey_my_buddy.protocol.client import BoardClient
