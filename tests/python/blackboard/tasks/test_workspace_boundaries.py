@@ -1,14 +1,11 @@
 """Fixed objects, individual retention refs and read-only cleanup proofs."""
 from pathlib import Path
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import blackboard.tasks.test_workspace as fixtures
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.tasks import workflow
-from hey_my_buddy.buddy.runtime import partial_outputs
 
 
 class WorkspaceBoundaryTests(unittest.TestCase):
@@ -31,16 +28,14 @@ class WorkspaceBoundaryTests(unittest.TestCase):
     def seal(self, manifest):
         return workspace.seal(self.state, manifest, "micro-task", "attempt")
 
-    def test_first_turn_cumulative_patch_rejects_truncated_output_without_git(self):
+    def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
         manifest = self.prepare()
         (Path(manifest["path"]) / "src/file.txt").write_text("output\n")
-        with patch.object(workspace, "OUTPUT_ENTRY_LIMIT", 0):
-            sealed = self.seal(manifest)
-            self.assertTrue(sealed["snapshot"]["changedEntriesTruncated"])
-            with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
-                self.assert_error("WORKSPACE_UNSUPPORTED", workspace.cumulative_patch,
-                                  manifest, sealed, manifest["inputCommit"])
-        self.assertFalse(list(Path(sealed["diffPath"]).parent.glob("cumulative-*.patch")))
+        sealed = self.seal(manifest)
+        with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
+            cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
+        self.assertEqual(cumulative["changedPaths"], ["src/file.txt"])
+        self.assertEqual(Path(cumulative["path"]).read_bytes(), Path(sealed["diffPath"]).read_bytes())
 
     def test_missing_staged_commit_rejects_turn_start_when_input_still_exists(self):
         source = self.repo / "src/file.txt"
@@ -59,23 +54,6 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         with patch.object(workspace, "_write_objects", side_effect=AssertionError("write before input proof")):
             self.assert_error("WORKSPACE_GIT_ERROR", self.seal, manifest)
         self.assertEqual(source.read_text(), "output after the staged commit disappeared\n")
-
-    def test_truncated_first_turn_is_failed_before_delivery(self):
-        manifest = self.prepare()
-        (Path(manifest["path"]) / "src/file.txt").write_text("output\n")
-        with patch.object(workspace, "OUTPUT_ENTRY_LIMIT", 0):
-            sealed = self.seal(manifest)
-        context = SimpleNamespace(
-            task_id="micro-task", attempt_id="attempt", environment={"HMB_STATE_DIR": str(self.state)},
-            turn_input={"executionWorkspace": manifest, "context": {"microTaskInputCommit": manifest["inputCommit"]}},
-        )
-        outcome = SimpleNamespace(status="ok", error=None, shutdown_confirmed=True, result={"workspaceSeal": sealed})
-        with patch.object(workflow, "_workspace_module", workspace):
-            partial_outputs.enrich(context, outcome)
-        self.assertEqual(outcome.status, "failed")
-        self.assertEqual(outcome.result["cumulativePatchError"]["code"], "WORKSPACE_UNSUPPORTED")
-        self.assertNotIn("workspaceSeal", outcome.result)
-        self.assertNotIn("cumulativePatch", outcome.result["partialWorkspaceSeal"])
 
     def test_unused_staged_commit_does_not_add_a_git_read(self):
         source = self.repo / "src/file.txt"

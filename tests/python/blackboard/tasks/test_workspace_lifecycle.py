@@ -308,38 +308,62 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
 
-    def test_retained_output_without_path_summary_uses_fixed_git_objects(self):
+    def test_thousand_file_rename_seals_patches_accepts_and_reclaims(self):
+        for number in range(1000):
+            (self.repo / f"old-{number:04d}.txt").write_text(f"file {number}\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "rename input")
+        original = self.git("rev-parse", "HEAD").strip()
         board = self.board()
-        self.register(board)
-        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
-            board, request_id="old-path-summary"
+        submitted = board.call("workflow_submit", {
+            **BUDDY, "requestId": "thousand-renames", "hostId": "host-1", "task": "rename files",
+            "cwd": str(self.repo), "submissionToken": "t" * 32,
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        run_id = submitted["runId"]
+        self.controls[run_id] = submitted["control"]
+        claimed = self.claim(board, run_id)
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        for number in range(1000):
+            (checkout / f"old-{number:04d}.txt").rename(checkout / f"new-{number:04d}.txt")
+        sealed = workspace_module.seal(self.directory, manifest, run_id,
+                                       claimed["claim"]["attempt"]["attemptId"])
+        expected = sorted([f"{prefix}-{number:04d}.txt" for prefix in ("new", "old") for number in range(1000)])
+        self.assertEqual(sealed["changedPaths"], expected)
+        self.assertEqual(sorted(sealed["snapshot"]["changedEntries"]), expected)
+        self.assertTrue(all(sealed["snapshot"]["changedEntries"][name] is None
+                            for name in expected if name.startswith("old")))
+        # Exercise both the sealed first-turn patch and the whole-task Git diff.
+        for base in (manifest["inputCommit"], original):
+            cumulative = workspace_module.cumulative_patch(manifest, sealed, base)
+            self.assertEqual(cumulative["changedPaths"], expected)
+            self.assertEqual(Path(cumulative["path"]).read_bytes(), Path(sealed["diffPath"]).read_bytes())
+        report = workspace_module.integration_verify(
+            sealed, original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD",
+            strategy="patch", before_commit=original,
         )
+        self.assertFalse(report["verified"])
+        self.assertEqual(len(report["differingPaths"]), 1000)
+        self.assertEqual(len(report["missingPaths"]), 1000)
+        self.assertEqual(len(report["unrecordedPaths"]), 2000)
+        self.finish_turn(board, claimed, sealed)
+        view = self.view(board, run_id)
+        artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact)
-        # Model a retained 0.7 output whose optional summary was never published.
-        with board.store.db.write() as connection:
-            row = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?",
-                                     (artifact["artifactId"],)).fetchone()
-            retained = json.loads(row["manifest_json"])
-            retained["snapshot"].pop("changedEntries")
-            retained["snapshot"].pop("changedEntriesTruncated")
-            retained["snapshotSha256"] = workspace_module._sha(workspace_module._json(retained["snapshot"]))
-            connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? WHERE artifact_id=?",
-                               (canonical_json(retained), retained["snapshotSha256"], artifact["artifactId"]))
-        recorded = self.accept(board, view, artifact, target=target, keepCheckout=True)
-        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
-        self.assertEqual(recorded["state"], "accepted")
-        (checkout / "tracked.txt").write_text("unsealed edit\n")
-        inspected = workspace_module.cleanup_inspect(self.directory, manifest, sealed=retained, retained=[manifest])
-        self.assertIn("unsealed-changes", inspected["reasons"])
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, self.view(board, submitted["runId"]))
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
+        accepted = self.accept(board, view, artifact, target=target, keepCheckout=True)
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["integration"]["verification"]["matchingPaths"], expected)
         self.assertTrue(checkout.exists())
-        # Returning the site to the sealed state makes the same workspace eligible.
-        (checkout / "tracked.txt").write_text("sealed output\n")
-        applied = self.reclaim(board, self.view(board, submitted["runId"]))
-        self.assertTrue(applied["removed"])
+        for number in range(1000):
+            (checkout / f"new-{number:04d}.txt").write_text("unsealed\n")
+        cleanup = workspace_module.cleanup_inspect(self.directory, manifest, sealed=sealed)
+        self.assertFalse(cleanup["eligible"])
+        self.assertEqual(cleanup["unsealedPaths"], [f"new-{number:04d}.txt" for number in range(1000)])
+        for number in range(1000):
+            (checkout / f"new-{number:04d}.txt").write_text(f"file {number}\n")
+        self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
+        self.assertFalse(checkout.exists())
 
     def test_spoofed_source_objects_cannot_verify(self):
         board = self.board()
@@ -353,10 +377,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 {**seal, "commit": "0" * 40}, original_input=manifest, final_input=manifest,
                 path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
             )
-        with mock.patch.object(workspace_module, "OUTPUT_ENTRY_LIMIT", 0):
-            with self.assertRaises(BoardError) as oversized:
-                self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
-        self.assertEqual(oversized.exception.code, "WORKSPACE_UNSUPPORTED")
 
     def test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup(self):
         board = self.board()

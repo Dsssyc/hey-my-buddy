@@ -26,7 +26,7 @@ def capture(context, outcome):
             payload["workspaceManifest"] = manifest
             payload["partialOutput"] = {"partial": True, "verified": False, "final": False}
     except BoardError as error:
-        payload["partialSealError"] = {"code": error.code, "message": error.message}
+        payload["partialSealError"] = error.payload()
 
 
 def enrich(context, outcome):
@@ -43,6 +43,7 @@ def enrich(context, outcome):
         seal["cumulativePatch"] = workspace_module().cumulative_patch(manifest, seal, original)
     except BoardError as error:
         outcome.status = "failed"
-        outcome.error = "Cumulative patch could not be preserved: " + error.message
+        patch_error = "Cumulative patch could not be preserved: " + error.message
+        outcome.error = f"{outcome.error}; {patch_error}" if outcome.error else patch_error
         outcome.result["cumulativePatchError"] = error.payload()
         capture(context, outcome)

@@ -6,4 +6,5 @@ WRAP_UP_INITIATORS = frozenset({"host", "lead"})
 TERMINATION_REASONS = (
     "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
     "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
+    "workspace-error",
 )

@@ -10,6 +10,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.upgrade import BASE_SCHEMA_VERSION
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
@@ -26,8 +27,8 @@ class BackupTests(BoardTestCase):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory)['path'])
-        self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(backup.verify(current)['schema'], BASE_SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], BASE_SCHEMA_VERSION)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -81,7 +82,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        for version in (21, 23, 24, 26):
+        for version in (21, 23, 24, 27):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest))

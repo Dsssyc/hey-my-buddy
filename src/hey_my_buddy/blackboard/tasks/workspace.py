@@ -1063,11 +1063,6 @@ SCOPE_EVIDENCE_LIMIT = 256
 STASH_ENTRY_LIMIT = 64
 #: Bounded per-side entries carried by one frozen stash comparison record.
 STASH_COMPARISON_LIMIT = 16
-#: Bounded per-path content binding of one sealed output. Keeping the blob
-#: identity of every changed path lets integration verification compare the
-#: immutable artifact with an actual target checkout independently of the
-#: artifact's own repository.
-OUTPUT_ENTRY_LIMIT = 512
 RESOLUTION_ACTIONS = ("restore", "adopt", "abandon")
 INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge", "not-required")
 
@@ -1175,9 +1170,8 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
 
 
 def _changed_entries(entries, changed):
-    """Per-path output binding, including deletions, bounded for verification."""
-    bounded = changed[:OUTPUT_ENTRY_LIMIT]
-    return {path: entries.get(path) for path in bounded}, len(changed) > OUTPUT_ENTRY_LIMIT
+    """Bind every changed path to its output entry, including deletions."""
+    return {path: entries.get(path) for path in changed}
 
 
 def _finish_output(repository, output, directory, *, fresh=False):
@@ -1268,7 +1262,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                     if error.code == "WORKSPACE_SCOPE_VIOLATION" and isinstance(error.details.get("evidence"), dict):
                         _record_scope_evidence(directory, error.details["evidence"], task_id, attempt_id)
                     raise
-            changed_entries, truncated = _changed_entries(entries, changed)
+            changed_entries = _changed_entries(entries, changed)
             tree = _tree(root, entries)
             if observation != _observe(root, manifest["snapshot"]["executionSelectors"]):
                 raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
@@ -1276,7 +1270,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             patch_data = _diff(repository, manifest["inputCommit"], commit)
             snapshot = {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
                         "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
-                        "changedEntries": changed_entries, "changedEntriesTruncated": truncated,
+                        "changedEntries": changed_entries,
                         "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
                         "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
                         "workspaceId": workspace_id, "taskId": task_id, "attemptId": attempt_id,
@@ -1310,9 +1304,6 @@ def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> di
     with _errors():
         if original_commit == manifest.get("inputCommit"):
             _validate_output_record(manifest, artifact)
-            if artifact["snapshot"]["changedEntriesTruncated"]:
-                raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact has too many changed paths to verify",
-                                 limit=OUTPUT_ENTRY_LIMIT)
             data = _read(Path(artifact["diffPath"]))
             if data is None or _sha(data) != artifact["diffSha256"]:
                 raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output patch changed")
@@ -1648,10 +1639,10 @@ def _reset_site(root, manifest, observation):
 
 
 def _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data):
-    changed_entries, truncated = _changed_entries(entries, changed)
+    changed_entries = _changed_entries(entries, changed)
     return {"headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
             "observationSha256": observation["fingerprint"], "tree": tree, "changedPaths": changed,
-            "changedEntries": changed_entries, "changedEntriesTruncated": truncated,
+            "changedEntries": changed_entries,
             "excludedChangedPaths": excluded_changes, "manifestSha256": manifest["manifestSha256"],
             "includedUntracked": sorted(entries.keys() & observation["untracked"].keys()),
             "workspaceId": manifest["workspaceId"], "taskId": task_id, "attemptId": attempt_id,
@@ -1909,16 +1900,15 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
 
 
 # -- integration verification -------------------------------------------------
-def _tree_entry(root, commit, path):
-    for record in _git(root, "ls-tree", "-z", commit, "--", path).split(b"\0"):
+def _tree_entries(root, commit):
+    entries = {}
+    for record in _git(root, "ls-tree", "-rz", commit).split(b"\0"):
         if not record:
             continue
         metadata, _, name = record.partition(b"\t")
-        if os.fsdecode(name) != path:
-            continue
         mode, _kind, oid = metadata.decode().split()
-        return {"mode": mode, "oid": oid}
-    return None
+        entries[_relative(os.fsdecode(name))] = {"mode": mode, "oid": oid}
+    return entries
 
 
 def _is_ancestor(root, ancestor, descendant):
@@ -1932,14 +1922,12 @@ def _is_ancestor(root, ancestor, descendant):
 
 
 def _tree_changes(root, before_tree, after_tree):
-    """Derive a bounded path binding from two proven immutable Git trees."""
+    """Derive every changed path binding from two proven immutable Git trees."""
     names = [_relative(os.fsdecode(name)) for name in _git(
         root, "diff-tree", "-r", "--no-renames", "--name-only", "-z", before_tree, after_tree, "--"
     ).split(b"\0") if name]
-    if len(names) > OUTPUT_ENTRY_LIMIT or len(set(names)) != len(names):
-        raise BoardError("WORKSPACE_UNSUPPORTED", "The artifact has too many changed paths to verify",
-                         limit=OUTPUT_ENTRY_LIMIT)
-    return {name: (_tree_entry(root, after_tree, name) or None) for name in names}
+    entries = _tree_entries(root, after_tree)
+    return {name: entries.get(name) for name in names}
 
 
 def _validate_output_record(final_input, artifact):
@@ -2076,11 +2064,12 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         source = artifact.get("commit")
         artifact_ancestor = _is_ancestor(root, source, after) if isinstance(source, str) and source else False
         matching, differing, missing = [], [], []
+        target_entries = _tree_entries(root, after)
         for name in sorted(changed):
             expected = changed[name]
             if expected is not None:
                 expected = [expected["mode"], expected["oid"]]
-            actual = _tree_entry(root, after, name)
+            actual = target_entries.get(name)
             if expected is None:
                 if actual is None:
                     matching.append(name)
@@ -2110,12 +2099,12 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             "beforeCommit": before, "beforeTree": before_tree, "afterCommit": after, "afterTree": after_tree,
             "sourceCommit": source, "sourceTree": artifact.get("tree"),
             "artifactAncestor": artifact_ancestor,
-            "matchingPaths": matching[:OUTPUT_ENTRY_LIMIT],
-            "differingPaths": differing[:OUTPUT_ENTRY_LIMIT],
-            "missingPaths": missing[:OUTPUT_ENTRY_LIMIT],
-            "adjustments": adjustments[:OUTPUT_ENTRY_LIMIT],
+            "matchingPaths": matching,
+            "differingPaths": differing,
+            "missingPaths": missing,
+            "adjustments": adjustments,
             "hostPaths": host_paths,
-            "unrecordedPaths": unrecorded[:OUTPUT_ENTRY_LIMIT],
+            "unrecordedPaths": unrecorded,
             "note": note,
         }
         return verification
@@ -2497,7 +2486,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
             raise
         unsealed = [path for path in (error.details.get("paths") or []) if path not in set(allowed)]
     result["reasons"].append("unsealed-changes")
-    result["unsealedPaths"] = unsealed[:32]
+    result["unsealedPaths"] = unsealed
     return
 
 
@@ -2585,7 +2574,7 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
             differences = [path for path, value in surviving.items() if expected.get(path) != value]
             if not differences:
                 return {"reasons": [], "resume": True}
-        return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences)[:32], "resume": True}
+        return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
 
 
 def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:

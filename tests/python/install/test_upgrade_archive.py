@@ -10,6 +10,7 @@ from unittest import mock
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store.upgrade import upgrade_schema_25_to_26
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -21,6 +22,7 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
+        upgrade_schema_25_to_26(self.state)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         store = BoardStore(self.state)
         store.db.close()

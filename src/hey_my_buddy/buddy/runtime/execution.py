@@ -51,7 +51,7 @@ PREFLIGHT_MAX_RETRY_SECONDS = 180.0
     TERMINATION_COMPLETED, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP,
     TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
-    TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED,
+    TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED, TERMINATION_WORKSPACE_ERROR,
 ) = TERMINATION_REASONS
 
 
@@ -85,6 +85,10 @@ def classify_termination(outcome, *, timed_out, cancel_requested,
         return role_seam.stop_termination_reason(shutdown_confirmed=outcome.shutdown_confirmed,
             stop_initiator=stop_initiator, grace_expired=result.get("graceExpired", grace_expired),
             wrap_up_delivered=result.get("wrapUpDelivered", False))
+    if isinstance(outcome.result, dict) and any(
+            outcome.result.get(key) is not None for key in (
+                "workspaceSealError", "partialSealError", "cumulativePatchError")):
+        return TERMINATION_WORKSPACE_ERROR
     if is_transport_failure(getattr(outcome, "result", None)):
         return TERMINATION_TRANSPORT_ERROR
     return TERMINATION_HARNESS_ERROR
