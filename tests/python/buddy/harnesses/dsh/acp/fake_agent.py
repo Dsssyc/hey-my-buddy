@@ -117,6 +117,8 @@ class FakeAgent:
         self.finish_tool = args.finish_tool
         self.checkpoint_tool = args.checkpoint_tool
         self.governed_permission = args.governed_permission
+        self.permission_command = args.permission_command
+        self.permission_path = args.permission_path
         self.finish_fail_then_retry = args.finish_fail_then_retry
         self.no_finish = args.no_finish
         self.forge_receipt = args.forge_receipt
@@ -488,7 +490,8 @@ class FakeAgent:
         else:
             first = self.request_client("session/request_permission", {
                 "sessionId": session_id,
-                "toolCall": {"toolCallId": "call_fake_1", "kind": "execute", "title": "run-command"},
+                "toolCall": {"toolCallId": "call_fake_1", "kind": "execute", "title": "run-command",
+                             "rawInput": {"command": self.permission_command}},
                 "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
                             {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
             log(self.log_path, {"event": "permission-answer-1", "answer": first})
@@ -500,7 +503,8 @@ class FakeAgent:
         second = self.request_client("session/request_permission", {
             "sessionId": session_id,
             "toolCall": {"toolCallId": "call_fake_2", "kind": "edit",
-                         "title": self.allowed_title or "write-file"},
+                         "title": self.allowed_title or "write-file",
+                         "rawInput": {"path": self.permission_path}},
             "options": [{"optionId": "opt-allow-only", "kind": "allow_once", "name": "Allow"}]
             + [{"optionId": f"opt-filler-{index}", "kind": f"kind-{index}",
                 "name": f"option {index}"}
@@ -598,7 +602,7 @@ class FakeAgent:
             answer = self.request_client("session/request_permission", {
                 "sessionId": session_id,
                 "toolCall": {"toolCallId": "call_upgrade_1", "kind": "edit",
-                             "title": "escalate-write"},
+                             "title": "escalate-write", "rawInput": {"path": self.permission_path}},
                 "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
                             {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
             log(self.log_path, {"event": "governed-permission-answer", "answer": answer})
@@ -1035,6 +1039,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-tool", default=None, help="the governed checkpoint tool's qualified name")
     parser.add_argument("--governed-permission", action="store_true",
                         help="request one upgrade permission before the governed tool calls")
+    parser.add_argument("--permission-command", default="printf native-command")
+    parser.add_argument("--permission-path", default="/outside/native.txt")
     parser.add_argument("--hang-prompt", action="store_true",
                         help="park the prompt until a session/cancel arrives, then stop cancelled")
     parser.add_argument("--park-prompt", action="store_true",

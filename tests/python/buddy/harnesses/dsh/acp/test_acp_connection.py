@@ -303,13 +303,20 @@ class PermissionAnswerTest(AcpTestCase):
         self.assertEqual("opt-allow-only", decisions[1]["outcome"]["optionId"])
         self.assertIn("allowed tool call", decisions[1]["basis"])
 
-    def test_retained_facts_never_carry_content_markers(self):
+    def test_only_permission_operation_summaries_retain_native_input(self):
         client = self.start_client("--allowed-title", "SAFE-TEST-MARKER-title",
                                    "--fs-path", "FULL-ARGS-marker-value")
         client.initialize(timeout=15.0)
         stop = self.prompt_and_collect(client)
         self.assertEqual("end_turn", stop["stopReason"])
-        blob = json.dumps(client.facts())
+        facts = client.facts()
+        self.assertEqual(facts["permissionDecisions"][0]["operation"],
+                         "run-command: command=printf native-command")
+        self.assertEqual(facts["permissionDecisions"][1]["operation"],
+                         "SAFE-TEST-MARKER-title: path=/outside/native.txt")
+        for decision in facts["permissionDecisions"]:
+            decision.pop("operation")
+        blob = json.dumps(facts)
         self.assertNotIn("SAFE-TEST-MARKER", blob)
         self.assertNotIn("FULL-ARGS", blob)
         frames_path = self.logs / "frames.jsonl"
@@ -335,7 +342,7 @@ class PermissionAnswerTest(AcpTestCase):
         outcome, basis = policy.decide({
             "toolCall": {"toolCallId": "call_x", "kind": "other", "title": "mystery"},
             "options": [{"optionId": "a", "name": "Allow", "kind": "allow_once"},
-                        {"optionId": "b", "name": "Odd", "kind": "weird-kind"}]})
+                        {"optionId": "b", "name": "Odd", "kind": "weird-kind"}]}, operation="mystery")
         self.assertEqual({"outcome": "cancelled"}, outcome)
         self.assertIn("never selected", basis)
 
@@ -344,18 +351,18 @@ class PermissionAnswerTest(AcpTestCase):
         allowed = {"toolCall": {"toolCallId": "call_y", "kind": "other",
                                 "title": "listed-title"},
                    "options": [{"optionId": "keep", "name": "Allow", "kind": "allow_once"}]}
-        outcome, basis = policy.decide(allowed)
+        outcome, basis = policy.decide(allowed, operation="listed-title")
         self.assertEqual({"outcome": "selected", "optionId": "keep"}, outcome)
         prefix = {"toolCall": {"toolCallId": "call_p", "kind": "edit",
                                "title": "listed-title-extra"},
                   "options": [{"optionId": "keep", "name": "Allow", "kind": "allow_once"}]}
-        outcome, basis = policy.decide(prefix)
+        outcome, basis = policy.decide(prefix, operation="listed-title-extra")
         self.assertEqual({"outcome": "cancelled"}, outcome)
         self.assertIn("not on the explicit allow list", basis)
         other = {"toolCall": {"toolCallId": "call_z", "kind": "edit", "title": "bash"},
                  "options": [{"optionId": "keep", "name": "Allow", "kind": "allow_once"},
                              {"optionId": "no", "name": "Reject", "kind": "reject_once"}]}
-        outcome, basis = policy.decide(other)
+        outcome, basis = policy.decide(other, operation="bash")
         self.assertEqual({"outcome": "cancelled"}, outcome,
                          "with a configured allow list, an unlisted title is never "
                          "selected even when a reject option exists")
@@ -369,7 +376,7 @@ class PermissionAnswerTest(AcpTestCase):
             {"toolCall": {"title": 42}, "options": []},
         ]
         for params in cases:
-            outcome, basis = policy.decide(params)
+            outcome, basis = policy.decide(params, operation="input unavailable")
             self.assertEqual({"outcome": "cancelled"}, outcome, f"params: {params!r}")
             self.assertIn("malformed", basis)
 

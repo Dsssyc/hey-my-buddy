@@ -87,7 +87,7 @@ class Schema17UpgradeTests(BoardTestCase):
             self.assertEqual(set(json.loads(after[cap_index])),
                              {cap for cap in json.loads(before[cap_index]) if not cap.startswith('permission:')}
                              | set(permission_capabilities(before[adapter_index])))
-            if before[adapter_index] == 'codex':
+            if before[adapter_index] in ('codex', 'dsh'):
                 self.assertIn('permission:full', json.loads(after[cap_index]))
         expected_turns = [row[:access_index] + (run_access[row[1]], None) + row[access_index:]
                           for row in old['workflow_turns']]

@@ -10,7 +10,7 @@ from blackboard.tasks import test_workspace_lifecycle as lifecycle_fixtures
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks.test_workflow_real import CONFIGURATION, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace
-from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.registry import _WORKER_PERMISSIONS
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.cli.cli_views import governed_brief
@@ -28,6 +28,9 @@ class PermissionLevelsTests(WorkflowTestCase):
         return board.call('worker_register', {'workerId': 'w1', 'capabilities': ['claude']})
 
     def test_submit_and_continue_reject_missing_harness_permission_without_mutation(self):
+        self.enterContext(patch.dict(_WORKER_PERMISSIONS, {'dsh': {
+            level: declaration for level, declaration in _WORKER_PERMISSIONS['dsh'].items()
+            if level != 'full'}}))
         board = self.board()
         for access, reason in [('full', 'Need system writes')]:
             with self.subTest(access=access):
@@ -134,9 +137,8 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         self.worker = "w-life"
 
     def test_real_checkout_reprepares_permissions_without_rewriting_history(self):
-        # Exercise storage and Git ownership against a synthetic future native
-        # declaration; no native DSH process is started by these receipts.
-        self.enterContext(patch.object(DshAdapter, 'capabilities', (*DshAdapter.capabilities, 'permission:full')))
+        # Exercise storage and Git ownership with DSH's declared permission
+        # levels; no native DSH process is started by these receipts.
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
@@ -174,7 +176,6 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             self.assertEqual(connection.execute("SELECT access FROM workspace_reservations WHERE state='held'").fetchone()[0], 'write')
 
     def test_full_reservation_is_recognized_at_a_routing_boundary(self):
-        self.enterContext(patch.object(DshAdapter, 'capabilities', (*DshAdapter.capabilities, 'permission:full')))
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {

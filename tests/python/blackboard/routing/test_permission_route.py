@@ -34,7 +34,7 @@ class WorkflowPermissionRouteTests(unittest.TestCase):
 
 class PermissionCandidateTests(BoardTestCase):
     def test_full_permission_routes_only_to_a_declaring_harness(self):
-        from blackboard.routing.test_decision import DecisionTestCase
+        from blackboard.routing.test_decision import DecisionTestCase, PROFILE_ID, SECOND_PROFILE_ID
         self.catalog_fixture()
         board = self.board()
         DecisionTestCase.seed(self, board)
@@ -54,4 +54,5 @@ class PermissionCandidateTests(BoardTestCase):
             read, _ = DecisionCoordinator._scan_candidates(connection, ['permission:read'], coding_only=True)
             self.assertEqual([row['profile_id'] for row in read], [row['profile_id'] for row in write])
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
-            self.assertEqual([row['profile_id'] for row in full], [codex_id])
+            self.assertCountEqual([row['profile_id'] for row in full],
+                                  [codex_id, PROFILE_ID, SECOND_PROFILE_ID])

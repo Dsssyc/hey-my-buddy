@@ -38,6 +38,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     SessionService,
 )
 from hey_my_buddy.buddy.harnesses.dsh import native_run
+from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.harnesses.dsh.native_run import SessionServices, prepare_session_service, run
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
@@ -118,7 +119,7 @@ class NativeRunCase(unittest.TestCase):
             budget=RunBudget(timeout_seconds=timeout))
 
     def worker_request(self, *, timeout: int = FAST_TIMEOUT, inquiry: bool = False,
-                       continuation=None, native_root=None):
+                       continuation=None, native_root=None, level="write"):
         """The governed binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
@@ -157,7 +158,8 @@ class NativeRunCase(unittest.TestCase):
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(native_root or self.root)),
-            input_text=prompt, tool_scope="write",
+            input_text=prompt, tool_scope=worker_permission("dsh", level).tool_scope,
+            worker_permission=worker_permission("dsh", level),
             output_schema=run_contract.FrozenJson.from_value(worker_services.OUTCOME_SCHEMA,
                                                              "schema", maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout),
@@ -433,6 +435,9 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         record = self.launch_records()[-1]
         self.assertIn("--patch", record["argv"])
+        self.assertNotIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertIsNone(observed["permissionMode"])
         patch_path = Path(record["argv"][record["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
         # The storage roots precede the disabled tool rows and plan-mode.
@@ -755,7 +760,7 @@ class MountTests(NativeRunCase):
     def variant_of(request: RunRequest, **overrides) -> RunRequest:
         fields = {name: getattr(request, name) for name in
                   ("identity", "harness", "configuration", "cwd", "private_state", "input_text",
-                   "tool_scope", "output_schema", "budget", "session_services")}
+                   "tool_scope", "worker_permission", "output_schema", "budget", "session_services")}
         fields.update(overrides)
         return RunRequest(**fields)
 

@@ -16,7 +16,8 @@ already timed out is ``late``, one for an answered id is ``duplicate``,
 anything else is ``unknown``. Requests from the agent are answered through
 handlers - the permission handler answers with the nested
 ``RequestPermissionOutcome`` shape, everything else is refused with ``-32601``
-- and both are recorded with closed-set metadata only; a malformed
+- and both are recorded with closed-set metadata; permission decisions also
+retain the tool and a bounded command or path from the native request. A malformed
 ``toolCall`` or ``options`` field is recorded conservatively exactly like the
 answer it receives. Observer callbacks receive live notifications; their
 failures are recorded facts, never silently swallowed.
@@ -33,14 +34,15 @@ delivered or failed. A frame that expires while queued is never sent, and
 every failure is a fact. The writer is never per-call, so stalled stdin
 accumulates neither threads nor expired frames.
 
-Retention carries no content: raw frames are reduced to direction, byte count
+Raw frames are reduced to direction, byte count
 and a short digest (an optional metadata-only log persists exactly that), and
-every in-memory fact is closed-set metadata, counts, lengths or digests. Raw
+in-memory facts are metadata, counts, lengths or digests, except the permission
+operation summary, limited to 512 UTF-8 bytes at extraction. Raw
 text reaches only the live observer callbacks, the exception object handed to
 the request caller, and the writer's bytes. Three truncation facts are kept
 distinct: a source-stream fault (protocol faults), an observation failure, and
 retention truncation of the optional metadata log - one never strengthens or
-weakens another. Stderr is kept as a bounded tail. No credential value is ever
+weakens another. Stderr is kept as a bounded tail. Full tool inputs are never
 recorded.
 """
 from __future__ import annotations
@@ -85,6 +87,22 @@ _MAX_WRITE_RECORDS = 50
 _MAX_NOTIFICATION_KINDS = 64
 _MAX_OPTIONS_PER_DECISION = 16
 _ID_TEXT_LIMIT = 64
+
+
+def permission_operation(params) -> str:
+    """Retain only the native tool title and command or path, bounded once."""
+    tool = params.get("toolCall") if isinstance(params, dict) else None
+    tool = tool if isinstance(tool, dict) else {}
+    title = tool.get("title")
+    title = title if isinstance(title, str) else "unknown tool"
+    inputs = tool.get("rawInput")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    detail = "input unavailable"
+    for name in ("command", "path"):
+        if isinstance(inputs.get(name), str):
+            detail = name + "=" + inputs[name]
+            break
+    return (title + ": " + detail).encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
 
 
 def now() -> str:
@@ -778,8 +796,9 @@ class AcpConnection:
         request_id = message.get("id")
         params = message.get("params") or {}
         if method == "session/request_permission" and self.permission_handler is not None:
+            operation = permission_operation(params)
             try:
-                outcome, basis = self.permission_handler(params)
+                outcome, basis = self.permission_handler(params, operation=operation)
             except Exception as error:  # noqa: BLE001 - a handler defect must still answer
                 outcome, basis = {"outcome": "cancelled"}, f"handler error: {type(error).__name__}"
             # The record is as conservative as the answer: every field is
@@ -796,6 +815,7 @@ class AcpConnection:
                 "ts": now(), "requestId": bounded_id(request_id),
                 "toolCallId": bounded_id((tool_call or {}).get("toolCallId") or ""),
                 "toolCallShape": "object" if tool_call is not None else "missing-or-not-object",
+                "operation": operation,
                 "titleMeta": content_meta(title) if isinstance(title, str) else None,
                 "optionsShape": options_shape,
                 "options": [{"optionId": brief(str(option.get("optionId")), 100),

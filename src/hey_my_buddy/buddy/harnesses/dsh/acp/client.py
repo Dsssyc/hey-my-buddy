@@ -49,7 +49,7 @@ class PermissionPolicy:
     def __init__(self, allowed_titles: tuple[str, ...] = ()):
         self.allowed_titles = tuple(allowed_titles)
 
-    def decide(self, params) -> tuple[dict, str]:
+    def decide(self, params, *, operation: str) -> tuple[dict, str]:
         if not isinstance(params, dict):
             return {"outcome": "cancelled"}, "malformed request: params is not an object"
         raw_options = params.get("options")

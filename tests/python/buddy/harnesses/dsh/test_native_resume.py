@@ -46,17 +46,17 @@ def _provenance(result) -> dict:
 class NativeResumeCase(NativeRunCase):
     """Two governed turns: the first opens the root, the second resumes it."""
 
-    def first_turn(self, *, record="usage", extra=(), inquiry=False):
-        request, bound, mount = self.worker_request(inquiry=inquiry)
+    def first_turn(self, *, record="usage", extra=(), inquiry=False, level="write"):
+        request, bound, mount = self.worker_request(inquiry=inquiry, level=level)
         self.governed_agent_args(mount)
         self.extra_agent_args += ["--session-record", record, *extra]
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
         return request, bound, mount, result
 
-    def resumed_turn(self, previous: str, *, record="resume", extra=(), inquiry=False):
+    def resumed_turn(self, previous: str, *, record="resume", extra=(), inquiry=False, level="write"):
         request, bound, mount = self.worker_request(
-            inquiry=inquiry,
+            inquiry=inquiry, level=level,
             continuation=RunContinuation(mode="native-session", previous_session_id=previous))
         self.governed_agent_args(mount)
         self.extra_agent_args += ["--session-record", record, *extra]
@@ -75,6 +75,29 @@ class NativeResumeCase(NativeRunCase):
 
 class ResumeTurnTests(NativeResumeCase):
     """V-R2 and V-R4: the resumed turn itself, its launch and its configuration."""
+
+    def assert_changed_permission(self, first_level, next_level, first_mode, next_mode):
+        _, _, _, first = self.first_turn(level=first_level)
+        self.assertEqual(first.end.status, "ok", first.end.message)
+        previous = first.native_identity.session_id
+        request, _, mount, second = self.resumed_turn(previous, level=next_level)
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(second.native_identity.session_id, previous)
+        self.assertEqual(second.value.parsed.value["disposition"], "completed")
+        homes = [entry for entry in self.agent_log() if entry.get("event") == "home-check"]
+        self.assertEqual([entry["permissionMode"] for entry in homes], [first_mode, next_mode])
+        self.assertEqual(first.effective_policy.tools.requested.value, {"permissionMode": first_mode})
+        self.assertEqual(second.effective_policy.tools.requested.value, {"permissionMode": next_mode})
+        self.assertIn("session/resume", self.methods_after_last_initialize())
+        self.assertNotIn("session/new", self.methods_after_last_initialize())
+        self.assertEqual(_provenance(second)["nativeTool"], mount.finish_tool)
+        self.assertEqual(second.identity, request.identity)
+
+    def test_read_then_write_launches_the_new_preset_on_the_same_session(self):
+        self.assert_changed_permission("read", "write", "read-only", "workspace-write")
+
+    def test_write_then_full_launches_the_new_preset_on_the_same_session(self):
+        self.assert_changed_permission("write", "full", "workspace-write", "danger-full-access")
 
     def test_two_invocations_resume_the_same_session_over_the_shared_root(self):
         request1, _bound1, mount1, result1 = self.first_turn()
