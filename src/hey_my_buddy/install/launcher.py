@@ -231,7 +231,7 @@ def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | Non
                 or not re.fullmatch(r'[0-9a-f]{32}', target.name) or target.is_symlink()):
             raise BoardError('ACTIVE_RUNTIME_INVALID', 'Active runtime is outside the configured root')
     if not runtime.is_ready(target):
-        raise BoardError('ACTIVE_RUNTIME_UNAVAILABLE', 'Selected runtime is not READY; use the new package upgrade command to recover')
+        raise BoardError('ACTIVE_RUNTIME_UNAVAILABLE', 'Selected runtime is not READY; rerun the fixed-version package install command')
     return target
 
 

@@ -22,7 +22,6 @@ from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
-from ..state_root import get_state_dir
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
 # in 5.5 seconds. Allow the seven-second observer join plus bounded client close.
@@ -173,7 +172,7 @@ def probe(state: Path, target: Path) -> dict | None:
     return None
 
 
-def detach(state: Path, target: Path, *, require_idle: bool = True) -> None:
+def detach(state: Path, target: Path, *, require_idle: bool) -> None:
     try:
         command(state, target, 'restart', {'drainSeconds': 0})
     except (BoardError, subprocess.SubprocessError):
@@ -319,7 +318,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
         if changed:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
     return {'runtimeContentId': target.name, 'schemaVersion': expected_schema,
-            **({'retainedDataFingerprints': True} if contract_changed else {}), 'sourceLeaks': []}
+            **({'retainedDataFingerprints': True} if contract_changed else {})}
 
 
 def _failure_reason(error: Exception) -> dict:
@@ -435,8 +434,7 @@ def _prepare_runtime(state: Path, *, skill_source: Path | None):
         yield installed
 
 
-def upgrade(*, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
-    state = get_state_dir()
+def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     root = runtime.runtime_root().resolve()
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
@@ -514,8 +512,6 @@ def upgrade(*, skill_source: Path | None = None, skill_target: Path | None = Non
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
                         journal.update(phase='backed-up', backup=backed_up)
                         write_journal(marker, journal)
-                    else:
-                        preflight(state, contract_changed=False)
                     journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
                 active = target
@@ -544,7 +540,7 @@ def upgrade(*, skill_source: Path | None = None, skill_target: Path | None = Non
                             error.setdefault('details', {})['reason'] = reason
                             return {'upgraded':False, 'error':error}
                     endpoint_now = _read_json(state / 'control.json') if (state / 'control.json').exists() else None
-                    if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
+                    if active == target and detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                         detach(state, active, require_idle=contract_changed)
                     if backed_up is not None:
                         with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
@@ -619,9 +615,11 @@ def recover(state: Path, root: Path) -> dict:
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}
-    if journal.get('phase') == 'preflight':
+    # A changed-contract cutover records its backup before starting the target.
+    # Without that record the board still holds the previous service's work.
+    if journal.get('phase') == 'preflight' or (contract_changed and 'backup' not in journal):
         if target_health is not None:
-            raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
+            raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner before a recorded cutover')
         if previous_health is None:
             with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
                  file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):

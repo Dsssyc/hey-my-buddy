@@ -74,6 +74,27 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["version"], stale["version"])
         self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["hey-my-buddy"])
 
+    def test_first_install_reports_old_skill_cleanup_failure_after_publication(self):
+        skill = self.agents / 'hey-my-buddy'
+        skill.mkdir(parents=True)
+        (skill / 'skill.json').write_text('{"name":"hey-my-buddy","version":"0.0.1"}', encoding='utf-8')
+        (skill / 'SKILL.md').write_text('---\nname: hey-my-buddy\n---\nold skill', encoding='utf-8')
+        remove = shutil.rmtree
+
+        def refuse_previous(path, *args, **kwargs):
+            if Path(path).name.startswith('.hey-my-buddy-install-previous-'):
+                raise PermissionError('old skill cleanup denied')
+            return remove(path, *args, **kwargs)
+
+        with patch('hey_my_buddy.install.skill_install.shutil.rmtree', side_effect=refuse_previous):
+            result = self.install()
+        self.assertEqual(result['skill']['placement'], 'updated')
+        self.assertEqual(result['service']['action'], 'none')
+        self.assertIn('old skill cleanup denied', result['skillCleanupError'])
+        self.assertTrue((self.base / 'state/active-runtime.json').is_file())
+        self.assertTrue((self.claude / 'hey-my-buddy').is_symlink())
+        self.assertEqual(len(list(self.agents.glob('.hey-my-buddy-install-previous-*'))), 1)
+
     def test_foreign_directories_are_never_replaced(self):
         from hey_my_buddy.errors import BoardError
         (self.claude / "hey-my-buddy").mkdir(parents=True)

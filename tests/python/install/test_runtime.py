@@ -554,6 +554,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
                 with self.assertRaises(BoardError) as failure:
                     runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
                 self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+                self.assertIn('READY marker', str(failure.exception))
                 self.assertEqual(marker.read_bytes(), replacement)
                 self.assertTrue(interpreter.is_file())
         marker.write_bytes(original)
@@ -561,6 +562,8 @@ class RuntimeMaterializationTests(unittest.TestCase):
         with self.assertRaises(BoardError) as failure:
             runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
         self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+        self.assertIn('Python interpreter', str(failure.exception))
+        self.assertEqual(failure.exception.details['python'], str(interpreter))
         self.assertEqual(marker.read_bytes(), original)
 
     def test_materialize_preserves_a_runtime_when_the_marker_is_unreadable(self):
@@ -571,6 +574,8 @@ class RuntimeMaterializationTests(unittest.TestCase):
             with self.assertRaises(BoardError) as failure:
                 runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
         self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+        self.assertIn('unreadable', str(failure.exception))
+        self.assertIn('READY read denied', failure.exception.details['reason'])
         self.assertEqual(marker.read_bytes(), original)
 
     def test_materialize_reports_a_failed_removal_before_replacing_partial_content(self):
@@ -588,6 +593,48 @@ class RuntimeMaterializationTests(unittest.TestCase):
         with patch.object(runtime.shutil, 'rmtree', side_effect=refuse_target), self.assertRaises(PermissionError):
             runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
         self.assertEqual(sentinel.read_bytes(), b'partial')
+
+    def test_install_failure_remains_primary_when_target_cleanup_is_denied(self):
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        log = self.runtime_root.parent / 'runtime-install.log'
+        remove = runtime.shutil.rmtree
+
+        def refuse_target(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError('target cleanup denied')
+            return remove(path, *args, **kwargs)
+
+        for returncode, message in ((1, 'uv sync failed'), (0, 'no Python interpreter')):
+            with self.subTest(returncode=returncode):
+                with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(returncode=returncode)), \
+                     patch.object(runtime.shutil, 'rmtree', side_effect=refuse_target), self.assertRaises(BoardError) as caught:
+                    runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), log_path=log)
+                failure = caught.exception
+                self.assertEqual(failure.code, 'RUNTIME_INSTALL_FAILED')
+                self.assertIn(message, str(failure))
+                self.assertIn('see the install log', str(failure))
+                self.assertEqual(failure.details['log'], str(log))
+                self.assertEqual(failure.details['cleanupErrors'], [{'path': str(target), 'code': 'PermissionError',
+                                                                  'message': 'target cleanup denied'}])
+                self.assertFalse((target / runtime.READY_FILE).exists())
+                self.assertTrue(target.is_dir())
+                remove(target)
+
+    def test_temporary_cleanup_reports_both_the_original_failure_and_removal_error(self):
+        log = self.runtime_root.parent / 'runtime-install.log'
+        for cause in (BoardError('RUNTIME_ASSET_MISSING', 'build asset unavailable'), OSError('asset copy denied')):
+            with self.subTest(cause=type(cause).__name__), \
+                 patch.object(runtime, '_copy_assets', side_effect=cause), \
+                 patch.object(runtime.shutil, 'rmtree', side_effect=PermissionError('temporary cleanup denied')), \
+                 self.assertRaises(BoardError) as caught:
+                runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), log_path=log)
+            failure = caught.exception
+            self.assertEqual(failure.code, cause.code if isinstance(cause, BoardError) else 'RUNTIME_INSTALL_FAILED')
+            self.assertIn(str(cause), str(failure))
+            self.assertEqual(failure.details['cleanupErrors'][0]['message'], 'temporary cleanup denied')
+            if isinstance(cause, OSError):
+                self.assertEqual(failure.details['reason'], {'code': 'OSError', 'message': 'asset copy denied'})
+                self.assertEqual(failure.details['log'], str(log))
 
     def test_runtime_and_skill_share_an_archive_source_identity(self):
         metadata = self.root / 'src/hey_my_buddy/build-info.json'
@@ -663,10 +710,6 @@ class RuntimeMaterializationTests(unittest.TestCase):
         runner.symlink_to(outside)
         self.assertTrue(runtime.is_ready(target))
         self.assertTrue(any("fixture.runner resolves outside" in leak for leak in runtime.source_leaks(record)))
-        with patch.dict(os.environ, {"HMB_RUNTIME": str(target)}), patch.object(runtime, "project_root", return_value=target):
-            with self.assertRaises(BoardError) as failure:
-                runtime.resolve_runtime()
-        self.assertEqual(failure.exception.code, 'RUNTIME_MANIFEST_INVALID')
 
     def test_a_shared_base_interpreter_symlink_is_allowed(self):
         target = self.materialize()
@@ -739,6 +782,13 @@ class RuntimeMaterializationTests(unittest.TestCase):
         (Path(record["environment"]) / "pyvenv.cfg").write_text(f"home = /usr/bin\nproject = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
+
+    def test_source_leaks_does_not_replace_invalid_pyvenv_bytes(self):
+        target = self.materialize()
+        record = runtime.read_ready(target)
+        (Path(record['environment']) / 'pyvenv.cfg').write_bytes(b'home = \xff\n')
+        with self.assertRaises(UnicodeDecodeError):
+            runtime.source_leaks(record)
 
 
 class CheckoutRuntimeTests(unittest.TestCase):

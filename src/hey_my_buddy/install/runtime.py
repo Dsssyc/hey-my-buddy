@@ -275,6 +275,12 @@ def runtime_dir(root: Path | None = None, destination: Path | None = None) -> Pa
     return base / content_id(root)
 
 
+def _valid_ready_marker(value: Any, directory: Path) -> bool:
+    return (isinstance(value, dict) and value.get("format") == RUNTIME_FORMAT
+            and value.get("state") == "READY" and value.get("contentId") == directory.name
+            and isinstance(value.get("python"), str))
+
+
 def is_ready(directory: Path) -> bool:
     """Recognize a published runtime without walking its build assets."""
     directory = Path(directory)
@@ -282,12 +288,7 @@ def is_ready(directory: Path) -> bool:
         value = _read_ready_file(directory)
     except (OSError, ValueError):
         return False
-    if not isinstance(value, dict) or value.get("format") != RUNTIME_FORMAT:
-        return False
-    if value.get("state") != "READY" or value.get("contentId") != directory.name:
-        return False
-    interpreter = value.get("python")
-    return isinstance(interpreter, str) and Path(interpreter).is_file()
+    return _valid_ready_marker(value, directory) and Path(value["python"]).is_file()
 
 
 @contextmanager
@@ -339,8 +340,16 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
         except FileNotFoundError:
             pass
         else:
-            raise BoardError("RUNTIME_NOT_READY", "Existing runtime has an unusable READY marker; it was preserved",
-                             runtimeDir=str(target))
+            try:
+                ready = _read_ready_file(target)
+            except (OSError, ValueError) as error:
+                raise BoardError("RUNTIME_NOT_READY", "Existing READY marker is unreadable or invalid; directory preserved",
+                                 runtimeDir=str(target), reason=str(error)) from error
+            if not _valid_ready_marker(ready, target):
+                raise BoardError("RUNTIME_NOT_READY", "Existing READY marker is invalid; directory preserved",
+                                 runtimeDir=str(target))
+            raise BoardError("RUNTIME_NOT_READY", "The published runtime's Python interpreter is missing or unavailable; directory preserved",
+                             runtimeDir=str(target), python=ready["python"])
         working = private_dirs.make_temporary_dir(prefix=f".{target.name}.build-", directory=target.parent)
         _copy_assets(root, working)
         absent = missing_resources(working)
@@ -387,16 +396,19 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
                 log_stream.close()
         if completed.returncode != 0:
             # An incomplete runtime is never READY and is removed so nothing can attach.
-            shutil.rmtree(target)
-            raise BoardError(
+            failure = BoardError(
                 "RUNTIME_INSTALL_FAILED",
                 "uv sync failed while installing the stable runtime; see the install log",
                 log=str(log_path) if log_path else None,
             )
+            _remove_build(target, failure=failure, log_path=log_path)
+            raise failure
         interpreter = runtime_python(target)
         if not interpreter.is_file():
-            shutil.rmtree(target)
-            raise BoardError("RUNTIME_INSTALL_FAILED", "The runtime environment has no Python interpreter")
+            failure = BoardError("RUNTIME_INSTALL_FAILED", "The runtime environment has no Python interpreter; see the install log",
+                                 python=str(interpreter), log=str(log_path) if log_path else None)
+            _remove_build(target, failure=failure, log_path=log_path)
+            raise failure
         from .skill_package import source_commit
         ready = {
             "format": RUNTIME_FORMAT,
@@ -418,7 +430,25 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
         return result
     finally:
         if working is not None and working.exists():
-            shutil.rmtree(working)
+            _remove_build(working, failure=sys.exception(), log_path=log_path)
+
+
+def _remove_build(path: Path, *, failure: BaseException | None, log_path: Path | None) -> None:
+    """Report cleanup alongside the failure that made this private build unusable."""
+    try:
+        shutil.rmtree(path)
+    except OSError as cleanup_error:
+        if failure is None:
+            raise
+        cleanup = {"path": str(path), "code": type(cleanup_error).__name__, "message": str(cleanup_error)}
+        if isinstance(failure, BoardError):
+            failure.details.setdefault("cleanupErrors", []).append(cleanup)
+            raise failure from cleanup_error
+        if isinstance(failure, Exception):
+            raise BoardError("RUNTIME_INSTALL_FAILED", f"{failure}; see the install log",
+                             reason={"code": type(failure).__name__, "message": str(failure)},
+                             cleanupErrors=[cleanup], log=str(log_path) if log_path else None) from failure
+        raise failure from cleanup_error
 
 
 def _copy_assets(root: Path, destination: Path) -> None:
@@ -621,7 +651,7 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
         if root and not _inside(root, value):
             leaks.append(f"{name} resolves outside the runtime: {value}")
     pyvenv = environment / "pyvenv.cfg"
-    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(errors="replace", encoding="utf-8"):
+    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(encoding="utf-8"):
         leaks.append(f"{pyvenv}: references the project source tree")
     return leaks
 

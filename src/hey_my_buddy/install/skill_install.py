@@ -152,10 +152,12 @@ def install(params: dict) -> dict:
     target = home / SKILL
     lock = private_dirs.open_lock_fd(home / f".{SKILL}-install.lock")
     built = None
+    recovery_result = None
+    skill_cleanup_error = None
     try:
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
-            upgrade()  # Recover the recorded generation before starting another install.
+            recovery_result = upgrade(state)
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
@@ -164,7 +166,6 @@ def install(params: dict) -> dict:
             skill_package.assemble(project_root(), built / SKILL)
             source = built / SKILL
         marker = _marker(source)
-        state = get_state_dir()
         pointer = state / "active-runtime.json"
         from . import runtime
         from .launcher import selected_runtime
@@ -179,6 +180,7 @@ def install(params: dict) -> dict:
                 write_runtime_hint(target, active)
                 return {'skill': {'path': str(target), 'version': marker['version'], 'contract': marker['contract'], 'placement': 'already-current'},
                         'claude': claude, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
+                        **({'recovery': recovery_result} if recovery_result is not None else {}),
                         'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():
@@ -197,7 +199,7 @@ def install(params: dict) -> dict:
             # Placement follows the actual content comparison above, not a marker
             # match: a same-version rebuild with changed files is an update.
             placement = "already-current" if intact else ("updated" if current else "installed")
-            result = upgrade(skill_source=source, skill_target=target)
+            result = upgrade(state, skill_source=source, skill_target=target)
             if result.get("error"):
                 error = result["error"]
                 raise BoardError(error["code"], error["message"], **{**error.get('details', {}), **{k: v for k, v in result.items() if k != "error"}})
@@ -233,15 +235,24 @@ def install(params: dict) -> dict:
                     shutil.rmtree(target)
                 raise
             if previous_skill is not None:
-                shutil.rmtree(previous_skill, ignore_errors=True)
+                try:
+                    shutil.rmtree(previous_skill)
+                except OSError as error:
+                    skill_cleanup_error = f'{previous_skill}: {error}'
             service = {"action": "none", "reason": "the first command starts the installed runtime"}
+    except BoardError as error:
+        if recovery_result is not None:
+            error.details['recovery'] = recovery_result
+        raise
     finally:
         if built is not None:
             shutil.rmtree(built, ignore_errors=True)
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
-              "claude": claude, "service": service}
+              "claude": claude, "service": service,
+              **({'recovery': recovery_result} if recovery_result is not None else {}),
+              **({'skillCleanupError': skill_cleanup_error} if skill_cleanup_error is not None else {})}
     result['writePaths'] = planned_paths
     result['diagnostics'] = {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                              'launcher': str(target / 'scripts/hey-my-buddy'),

@@ -132,11 +132,14 @@ class SkillPackageTests(unittest.TestCase):
             journal.write_text('{}', encoding='utf-8')
             calls = []
 
-            def cutover(**kwargs):
+            recovered = {'upgraded': False, 'recoveredJournal': True, 'rollback': {'workPreserved': True}}
+
+            def cutover(selected_state, **kwargs):
+                self.assertEqual(selected_state, state)
                 calls.append(kwargs)
                 if not kwargs:
                     journal.unlink()
-                    return {'recoveredJournal': True}
+                    return recovered
                 self.assertFalse(journal.exists())
                 raise BoardError('UPGRADE_NOT_IDLE', 'new work was admitted')
 
@@ -147,8 +150,47 @@ class SkillPackageTests(unittest.TestCase):
                 with self.assertRaises(BoardError) as caught:
                     skill_install.install({})
             self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+            self.assertEqual(caught.exception.details['recovery'], recovered)
             self.assertEqual(calls, [{}, {'skill_source': source, 'skill_target': target}])
             place.assert_not_called()
+
+    def test_install_preserves_recovery_result_and_passes_one_checked_state_root(self):
+        recovered = {'upgraded': True, 'recoveredJournal': True, 'skillCleanupError': 'old skill cleanup denied',
+                     'runtimePruning': {'complete': False, 'error': 'STORAGE_BUSY'}}
+        for intact in (True, False):
+            with self.subTest(intact=intact), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                source, target = self._upgrade_pair(root)
+                if not intact:
+                    (target / 'SKILL.md').write_text('changed generation', encoding='utf-8')
+                state = self._upgrade_state(root)
+                journal = state / 'upgrade.json'
+                journal.write_text('{}', encoding='utf-8')
+                active = root / 'runtime' / ('a' * 32)
+
+                def cutover(selected_state, **kwargs):
+                    self.assertEqual(selected_state, state)
+                    if not kwargs:
+                        journal.unlink()
+                        return recovered
+                    return {'upgraded': True}
+
+                with mock.patch.dict(os.environ, self._upgrade_environment(root, state), clear=True), \
+                     mock.patch.object(skill_install, 'get_state_dir', return_value=state) as select_state, \
+                     mock.patch.object(skill_install, 'check_state_root', wraps=skill_install.check_state_root) as check_state, \
+                     mock.patch.object(skill_install, 'packaged_skill', return_value=source), \
+                     mock.patch.object(skill_install, 'write_runtime_hint'), \
+                     mock.patch.object(skill_install, '_link_claude', return_value={'status': 'already-linked'}), \
+                     mock.patch('hey_my_buddy.install.runtime.runtime_dir', return_value=active), \
+                     mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=active), \
+                     mock.patch('hey_my_buddy.install.upgrade.upgrade', side_effect=cutover) as upgrade:
+                    result = skill_install.install({})
+                self.assertEqual(result['recovery'], recovered)
+                self.assertEqual(result['service']['action'], 'none' if intact else 'upgrade')
+                select_state.assert_called_once_with()
+                check_state.assert_called_once_with(state, create=True)
+                self.assertEqual(upgrade.call_args_list, [mock.call(state)] if intact else
+                                 [mock.call(state), mock.call(state, skill_source=source, skill_target=target)])
 
     def test_install_rejects_a_linked_lock_before_changing_the_skill(self):
         with tempfile.TemporaryDirectory() as temporary:

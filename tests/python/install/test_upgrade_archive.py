@@ -82,7 +82,6 @@ class UpgradeCutoverTests(BoardTestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.runtime_root)}))
             for name, options in (
-                ("get_state_dir", {"return_value": self.state}),
                 ("runtime.is_ready", {"return_value": True}),
                 ("runtime.read_ready", {"return_value": {"sourceCommit": "fixture-commit"}}),
                 ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
@@ -99,11 +98,11 @@ class UpgradeCutoverTests(BoardTestCase):
                     backup, "create", side_effect=BoardError("BACKUP_INVALID", "injected backup failure")))
             if interrupt_target:
                 with self.assertRaises(KeyboardInterrupt):
-                    upgrade.upgrade()
+                    upgrade.upgrade(self.state)
                 journal = json.loads((self.state / "upgrade.json").read_text(encoding="utf-8"))
                 self.assertEqual(journal["phase"], "prepared")
                 return upgrade.recover(self.state, self.runtime_root)
-            return upgrade.upgrade()
+            return upgrade.upgrade(self.state)
 
     def assert_history_preserved(self):
         self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)

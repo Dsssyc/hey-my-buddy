@@ -67,7 +67,7 @@ class UpgradeTests(BoardTestCase):
         target = self.directory / 'runtimes' / ('a' * 32)
         with mock.patch.object(upgrade, 'command', return_value={}) as command, \
              mock.patch.object(upgrade, 'ensure_idle'):
-            upgrade.detach(state, target)
+            upgrade.detach(state, target, require_idle=True)
         command.assert_called_once_with(state, target, 'restart', {'drainSeconds': 0})
 
     def test_runtime_environment_uses_pinned_runtime_and_excludes_dev_source(self):
@@ -111,7 +111,8 @@ class UpgradeTests(BoardTestCase):
         target = self.directory / 'runtimes' / ('a' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', side_effect=AssertionError('extra runtime request')):
-            self.assertEqual(upgrade.verify_started(self.directory, target, health, {}, contract_changed=False)['sourceLeaks'], [])
+            self.assertEqual(upgrade.verify_started(self.directory, target, health, {}, contract_changed=False),
+                             {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION})
             health['runtimeStable'] = False
             with self.assertRaises(BoardError) as failure:
                 upgrade.verify_started(self.directory, target, health, {}, contract_changed=False)
@@ -141,7 +142,6 @@ class UpgradeTests(BoardTestCase):
             return remove(path, *args, **kwargs)
 
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
-             mock.patch.object(upgrade, 'get_state_dir', return_value=state), \
              mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
              mock.patch.object(upgrade.runtime, 'read_ready', return_value={'sourceCommit': None}), \
              mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}), \
@@ -151,7 +151,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
              mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
              mock.patch.object(upgrade.shutil, 'rmtree', side_effect=refuse_previous):
-            result = upgrade.upgrade(skill_source=source, skill_target=skill)
+            result = upgrade.upgrade(state, skill_source=source, skill_target=skill)
         self.assertTrue(result['upgraded'], result)
         self.assertIn('skill cleanup denied', result['skillCleanupError'])
         self.assertFalse((state / 'upgrade.json').exists())
@@ -244,14 +244,13 @@ class UpgradeTests(BoardTestCase):
         health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32, 'contractVersion': '0.19.0'}
         busy = BoardError('UPGRADE_NOT_IDLE', 'running work', active=[{'runId': 'busy', 'state': 'running'}])
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
-                mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
                 mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'f' * 40}), \
                 mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
                 mock.patch('hey_my_buddy.install.upgrade.ensure_idle', side_effect=busy), \
                 mock.patch('hey_my_buddy.install.upgrade.runtime.materialize') as materialize:
             with self.assertRaises(BoardError) as caught:
-                upgrade.upgrade(skill_source=source, skill_target=skill)
+                upgrade.upgrade(state, skill_source=source, skill_target=skill)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
         self.assertEqual(caught.exception.details['active'][0]['runId'], 'busy')
         materialize.assert_not_called()
@@ -311,16 +310,27 @@ class UpgradeTests(BoardTestCase):
         (state / 'control.json').write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         busy = BoardError('UPGRADE_NOT_IDLE', 'raced task', active=[{'runId': 'raced', 'state': 'queued'}])
+
+        def raced_snapshot(directory):
+            self.assertEqual(directory, state)
+            command.assert_called_once_with(state, previous, 'restart', {'drainSeconds': 0})
+            with self.assertRaises(BoardError) as held:
+                with upgrade.file_lock(state / 'board-owner.lock'):
+                    self.fail('idle snapshot ran without the owner lock')
+            self.assertEqual(held.exception.code, 'UPGRADE_BUSY')
+            raise busy
+
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
-             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'f' * 40}), \
              mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
-             mock.patch('hey_my_buddy.install.upgrade.ensure_idle', return_value=SCHEMA_VERSION), \
-             mock.patch('hey_my_buddy.install.upgrade.detach', side_effect=busy) as detach, \
+             mock.patch.object(upgrade, 'ensure_idle', wraps=upgrade.ensure_idle) as ensure_idle, \
+             mock.patch.object(upgrade, 'idle_snapshot', side_effect=raced_snapshot) as snapshot, \
+             mock.patch.object(upgrade, 'command', return_value={}) as command, \
+             mock.patch.object(upgrade, 'start', return_value=health) as start, \
              mock.patch('hey_my_buddy.install.upgrade.backup.create') as create:
-            result = upgrade.upgrade()
+            result = upgrade.upgrade(state)
         self.assertEqual(result['error']['code'], 'UPGRADE_NOT_IDLE')
         self.assertEqual(result['error']['details']['active'][0]['runId'], 'raced')
         self.assertNotIn('failure', result)
@@ -328,12 +338,46 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(reason, {'code':'UPGRADE_NOT_IDLE', 'message':'raced task',
                                  'details':{'active':[{'runId':'raced', 'state':'queued'}], 'tables':[]}})
         journal = json.loads((state / 'upgrade-last.json').read_text(encoding="utf-8"))
-        self.assertEqual(journal['phase'], 'not-switched')
+        self.assertEqual(journal['phase'], 'rolled-back')
         self.assertEqual(journal['failure'], reason)
-        detach.assert_called_once()
+        self.assertTrue(result['rollback']['workPreserved'])
+        command.assert_called_once_with(state, previous, 'restart', {'drainSeconds': 0})
+        ensure_idle.assert_called_once_with(state)
+        snapshot.assert_called_once_with(state)
+        start.assert_called_once_with(state, previous)
         create.assert_not_called()
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(json.loads((state / 'control.json').read_text(encoding="utf-8")), endpoint)
+        self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(previous))
+
+    def test_changed_contract_recovery_without_backup_preserves_raced_work(self):
+        state, root = self.directory / 'state', self.directory / 'runtimes'
+        state.mkdir()
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        journal = {'phase': 'recovery-required', 'contractChanged': True, 'previous': str(previous),
+                   'target': str(target), 'before': {'schema': SCHEMA_VERSION}}
+        marker = state / 'upgrade.json'
+        upgrade.write_journal(marker, journal)
+        launcher.write_private(state / 'control.json', {'runtimeIdentity': 'runtime:' + previous.name})
+        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade, 'probe', return_value=None), \
+             mock.patch.object(upgrade, 'ensure_idle', side_effect=AssertionError('raced work must be kept')), \
+             mock.patch.object(upgrade, 'idle_snapshot', side_effect=AssertionError('raced work must be kept')), \
+             mock.patch.object(upgrade, 'restore', side_effect=AssertionError('no board was replaced')), \
+             mock.patch.object(upgrade, 'start', return_value={}) as start:
+            with upgrade.file_lock(state / 'board-owner.lock'), \
+                 mock.patch.object(upgrade, 'OWNER_LOCK_TIMEOUT_SECONDS', 0):
+                with self.assertRaises(BoardError) as held:
+                    upgrade.recover(state, root)
+            self.assertEqual(held.exception.code, 'UPGRADE_BUSY')
+            start.assert_not_called()
+            self.assertTrue(marker.exists())
+            result = upgrade.recover(state, root)
+        self.assertEqual(result, {'upgraded': False, 'recoveredJournal': True,
+                                 'rollback': {'runtimeContentId': previous.name, 'workPreserved': True}})
+        start.assert_called_once_with(state, previous)
+        self.assertFalse(marker.exists())
+        self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(previous))
 
     def test_fenced_upgrade_rejects_new_linked_state_file_and_rolls_back(self):
         board = self.board()
@@ -367,7 +411,6 @@ class UpgradeTests(BoardTestCase):
 
         board.store.db.close()
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
-             mock.patch('hey_my_buddy.install.upgrade.get_state_dir', return_value=state), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.is_ready', return_value=True), \
              mock.patch('hey_my_buddy.install.upgrade.runtime.read_ready', return_value={'sourceCommit': 'f' * 40}), \
              mock.patch('hey_my_buddy.install.upgrade.probe', return_value=health), \
@@ -375,7 +418,7 @@ class UpgradeTests(BoardTestCase):
              mock.patch('hey_my_buddy.install.upgrade.write_journal', side_effect=fenced_write), \
              mock.patch('hey_my_buddy.install.upgrade.detach') as detach, \
              mock.patch('hey_my_buddy.install.upgrade.start', return_value=health) as start:
-            result = upgrade.upgrade()
+            result = upgrade.upgrade(state)
         self.assertTrue(inserted)
         self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK', result)
         self.assertEqual(result['error']['message'], 'Installation failed; the previous runtime was restored')
