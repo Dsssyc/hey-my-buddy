@@ -7,7 +7,8 @@ import json
 from ...protocol.structured_schema import schema_errors
 from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
-from .evidence import domain_statistics, round_classification
+from .evidence import kind_domain_statistics
+from .statistics import accumulate_cell, round_classification
 
 
 TASK_TYPES = {
@@ -138,17 +139,14 @@ def build_packet(connection) -> dict | None:
         key = _kind(row)
         if key in summaries:
             summaries[key]["citations"].append(row["run_id"])
-    buddy_ids = {key: str(index) for index, key in enumerate(kinds)}
-    buddies = [{"buddy_id": buddy_ids[key], "provider": "", **kind}
-               for key, kind in kinds.items()]
-    statistics = domain_statistics(connection, buddies)
+    statistics = kind_domain_statistics(connection, list(kinds.values()))
     return {
         "microTasks": micro_tasks,
         "classificationRunIds": classification_ids,
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
         "kinds": [{**kind, "unreadRunIds": sorted(unread[key]), "summary": summaries.get(key),
-                   "statistics": statistics[buddy_ids[key]]}
+                   "statistics": statistics[key]}
                   for key, kind in kinds.items()],
     }
 
@@ -425,6 +423,7 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
             continue
         connection.execute("INSERT INTO micro_task_classifications VALUES(?,?,?,?)",
                            (run_id, node_id, item["taskType"], maintenance_run_id))
+        accumulate_cell(connection, run_id, node_id, item["taskType"])
         counts["classifications"] += 1
     for run_id in batch - classified:
         if not connection.execute("SELECT 1 FROM micro_task_classifications WHERE run_id=?", (run_id,)).fetchone():
