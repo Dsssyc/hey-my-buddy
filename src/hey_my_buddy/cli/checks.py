@@ -51,6 +51,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import stat
 import subprocess
@@ -448,11 +449,29 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
         tasks.insert(0, (FRONTEND_LABEL, partial(run_frontend_suite, root, private_root, live, guard, stop)))
     outcomes: list[ChildOutcome] = []
     futures: list[concurrent.futures.Future] = []
+    # Windows delivers CTRL_BREAK_EVENT as SIGBREAK, whose default action exits
+    # immediately. Use the normal interrupt cleanup for the owned suite children.
+    previous_break_handler = None
+    if os.name == "nt":
+        previous_break_handler = signal.signal(signal.SIGBREAK, signal.default_int_handler)
+
+    def completed():
+        if os.name != "nt":
+            yield from concurrent.futures.as_completed(futures)
+            return
+        pending = set(futures)
+        while pending:
+            # CPython 3.12's Windows lock wait does not wake for a signal.
+            # Return to Python so SIGBREAK can enter the existing cleanup below.
+            finished, pending = concurrent.futures.wait(
+                pending, timeout=0.1, return_when=concurrent.futures.FIRST_COMPLETED)
+            yield from finished
+
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(tasks)))
     try:
         for _, run in tasks:
             futures.append(pool.submit(run))
-        for done, future in enumerate(concurrent.futures.as_completed(futures), start=1):
+        for done, future in enumerate(completed(), start=1):
             outcome = future.result()
             if outcome is None:
                 continue
@@ -484,7 +503,11 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
             process.kill()
         raise
     finally:
-        pool.shutdown(wait=True)
+        try:
+            pool.shutdown(wait=True)
+        finally:
+            if previous_break_handler is not None:
+                signal.signal(signal.SIGBREAK, previous_break_handler)
     # Every scheduled suite must have reported: a file without an outcome did not run.
     reported = {outcome.label for outcome in outcomes}
     never_ran = sorted(label for label, _ in tasks if label not in reported)
@@ -545,7 +568,7 @@ def lock_is_held(path: Path) -> bool:
 def _private_lock_paths(root: Path):
     """Find lifetime lock names without entering links or reparse points."""
     if private_dirs.linked(root):
-        return
+        raise OSError(f"private root is a link or reparse point: {root}")
     pending = [root]
     while pending:
         directory = pending.pop()
@@ -760,7 +783,7 @@ def remove_private_test_root(directory: Path) -> None:
     def readonly_file(operation, name, error):
         if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
             raise error
-        path = native_path(Path(name))
+        path = Path(name)
         # Open only a regular leaf within the private root, without traversing
         # a link or reparse ancestor.
         for part in (path, *path.parents):
@@ -786,7 +809,7 @@ def _delete_readonly_test_leaf(path: Path) -> None:
     from ..windows_files import WindowsFileAPI, DELETE, FILE_READ_ATTRIBUTES, OPEN_EXISTING
 
     api = WindowsFileAPI()
-    handle = api._open(native_path(path), DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
+    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:
         # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
         flags = wintypes.DWORD(0x1 | 0x2 | 0x10)

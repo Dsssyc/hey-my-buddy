@@ -13,6 +13,7 @@ import stat
 from unittest.mock import patch
 
 from support import BoardTestCase
+from private_acl import assert_private_path
 from hey_my_buddy.cli import main as cli
 from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.protocol import schemas, transport
@@ -38,7 +39,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(bytes.fromhex(meta[SECRET_KEY]), database.secret)
         if os.name != 'nt':
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o750)
-            self.assertEqual(stat.S_IMODE(database.path.stat().st_mode), 0o600)
+        assert_private_path(self, database.path, 0o600)
 
     def test_existing_database_without_secret_is_corruption(self):
         directory = self.directory / "missing-secret"
@@ -136,7 +137,8 @@ class CurrentCoreTests(BoardTestCase):
             with self.subTest(version=version):
                 directory = self.directory / str(version)
                 path = self.old_database(directory, version)
-                directory.chmod(0o750)
+                if os.name != 'nt':
+                    directory.chmod(0o750)
                 before = path.read_bytes()
                 before_entries = sorted(item.name for item in directory.iterdir())
                 with self.assertRaises(Corruption) as caught:
@@ -147,7 +149,7 @@ class CurrentCoreTests(BoardTestCase):
                 self.assertNotIn("migrate", str(caught.exception))
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(sorted(item.name for item in directory.iterdir()), before_entries)
-                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o750)
+                assert_private_path(self, directory, 0o750)
 
     def test_unversioned_or_non_sqlite_files_are_not_adopted(self):
         directory = self.directory / "unversioned"

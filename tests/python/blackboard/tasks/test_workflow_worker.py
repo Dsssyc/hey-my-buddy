@@ -12,13 +12,13 @@ from admission import admit_board, admit_store
 
 import json
 import os
-import stat
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 from support import BoardTestCase, enable_fixture_buddy, wait_for
+from private_acl import assert_private_path
 from fake_executable import make_fake_executable
 from hey_my_buddy.cli.checks import prepare_test_home
 from console.test_console import Browser
@@ -136,7 +136,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertIn("controlFile", submitted)
             self.assertNotIn("controlToken", json.dumps(submitted))
             control_path = Path(submitted["controlFile"])
-            self.assertEqual(stat.S_IMODE(control_path.stat().st_mode), 0o600)
+            assert_private_path(self, control_path, 0o600)
 
             latest = {}
 

@@ -15,7 +15,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import locking, state_root
+from hey_my_buddy import locking, state_root, private_dirs
+from private_acl import assert_inherited_private_acl
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.protocol import service_process
 
@@ -78,9 +79,11 @@ class AttachFixture(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-attach-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
-        self.directory.mkdir(mode=0o700)
-        self.directory.chmod(0o700)
-        (self.directory / "ipc").mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
+        if os.name != 'nt':
+            self.directory.chmod(0o700)
+        if os.name != 'nt':
+            (self.directory / "ipc").mkdir(mode=private_dirs.directory_mode())
         self.endpoint_file = self.directory / "control.json"
         self.write_endpoint(ENDPOINT, 0o600)
         # The ping RPC is the only thing that may be touched: never the network.
@@ -94,7 +97,8 @@ class AttachFixture(unittest.TestCase):
 
     def write_endpoint(self, value, mode):
         self.endpoint_file.write_text(json.dumps(value), encoding="utf-8", newline="\n")
-        self.endpoint_file.chmod(mode)
+        if os.name != 'nt':
+            self.endpoint_file.chmod(mode)
 
 
 @unittest.skipIf(os.name == "nt", "POSIX directory ownership and account databases")
@@ -161,6 +165,9 @@ class ReadOnlyAttachTests(AttachFixture):
 
     def test_healthy_private_service_attaches_without_any_filesystem_mutation(self):
         before = snapshot(self.directory)
+        acl_before = ({path: assert_inherited_private_acl(self, path)
+                       for path in (self.directory, self.endpoint_file)}
+                      if os.name == 'nt' else {})
         with MutationRecorder() as recorder:
             endpoint = ensure_service(self.directory)
         self.assertEqual(endpoint, ENDPOINT)
@@ -168,6 +175,10 @@ class ReadOnlyAttachTests(AttachFixture):
         self.assertEqual(self.request.call_args.args[1], "ping")
         recorder.assert_no_mutation()
         self.assertEqual(before, snapshot(self.directory), "read-only attach changed the filesystem")
+        if os.name == 'nt':
+            self.assertFalse((self.directory / 'ipc').exists())
+            self.assertEqual({path: assert_inherited_private_acl(self, path)
+                              for path in acl_before}, acl_before)
 
     @unittest.skipIf(os.name == "nt", "POSIX directory write modes")
     def test_attach_succeeds_when_the_directory_cannot_be_written(self):
@@ -205,7 +216,7 @@ class EndpointlessObservationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-stop-")
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name) / "state"
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
 
     def hold(self, name: str) -> int:
         fd = os.open(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
@@ -421,7 +432,7 @@ class TrustBoundaryTests(AttachFixture):
         self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o770)
         for private in (False, True):
             directory = parent / ("state-" + str(private))
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=private_dirs.directory_mode())
             with self.subTest(private=private), \
                     patch.object(state_root, "_private_primary_group", return_value=private) as group:
                 self.assertEqual(trusted_directory(directory), private)
@@ -454,7 +465,7 @@ class TrustBoundaryTests(AttachFixture):
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
-        nested.mkdir(mode=0o700)
+        nested.mkdir(mode=private_dirs.directory_mode())
         nested.chmod(0o700)
         (nested / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         (nested / "control.json").chmod(0o600)
@@ -470,7 +481,7 @@ class TrustBoundaryTests(AttachFixture):
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777)
         nested = shared / "state"
-        nested.mkdir(mode=0o700)
+        nested.mkdir(mode=private_dirs.directory_mode())
         nested.chmod(0o700)
         (nested / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         (nested / "control.json").chmod(0o600)
@@ -485,7 +496,7 @@ class TrustBoundaryTests(AttachFixture):
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
-        nested.mkdir(mode=0o700)
+        nested.mkdir(mode=private_dirs.directory_mode())
         nested.chmod(0o700)
         real_lstat = os.lstat
 
@@ -504,7 +515,8 @@ class TrustBoundaryTests(AttachFixture):
     def test_symlinked_endpoint_file_is_not_trusted(self):
         real = self.directory / "real-control.json"
         real.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
-        real.chmod(0o600)
+        if os.name != 'nt':
+            real.chmod(0o600)
         self.endpoint_file.unlink()
         self.endpoint_file.symlink_to(real)
         self.assertFalse(stat.S_ISREG(self.endpoint_file.lstat().st_mode))
@@ -564,7 +576,8 @@ class TrustBoundaryTests(AttachFixture):
         for contents in ("not json", json.dumps([1, 2]), json.dumps({"address": "tcp://elsewhere", "token": "x"}), json.dumps({"address": "ipc://x", "token": ""})):
             with self.subTest(contents=contents):
                 self.endpoint_file.write_text(contents, encoding="utf-8", newline="\n")
-                self.endpoint_file.chmod(0o600)
+                if os.name != 'nt':
+                    self.endpoint_file.chmod(0o600)
                 self.assertIsNone(_read_endpoint(self.directory))
                 self.assertIsNone(_attach_read_only(self.directory))
         self.request.assert_not_called()
@@ -600,6 +613,11 @@ class ColdStartTests(unittest.TestCase):
             self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
             self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
             self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
+        else:
+            for path in (self.directory, self.directory / "control-start.lock", self.directory / "control.log"):
+                with self.subTest(path=path):
+                    assert_inherited_private_acl(self, path)
+            self.assertFalse((self.directory / 'ipc').exists())
         self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
 
     def test_windows_cold_start_uses_independent_service_flags(self):
@@ -623,7 +641,7 @@ class ColdStartTests(unittest.TestCase):
         self.spawn.assert_called_once()
 
     def test_orphan_upgrade_journal_without_startup_lock_refuses_without_preflight(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         with patch("hey_my_buddy.protocol.transport._cold_start_preflight") as preflight:
             with self.assertRaises(ServiceError) as refused:
@@ -635,7 +653,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertFalse((self.directory / "control-start.lock").exists(), "an orphan journal must not create a lock")
 
     def test_upgrade_journal_with_orphan_lock_refuses_control_and_wait_without_preflight(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         (self.directory / "upgrade.json").write_text("{}", encoding="utf-8", newline="\n")
         (self.directory / "control-start.lock").touch(mode=0o600)
         with patch.object(transport, '_attach_read_only') as attach, \
@@ -649,7 +667,7 @@ class ColdStartTests(unittest.TestCase):
         self.spawn.assert_not_called()
 
     def test_installer_finishes_before_an_existing_client_reattaches(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         marker = self.directory / "upgrade.json"
         marker.write_text("{}", encoding="utf-8", newline="\n")
 
@@ -667,7 +685,7 @@ class ColdStartTests(unittest.TestCase):
         self.spawn.assert_not_called()
 
     def test_installer_finishes_before_wait_client_reattaches(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         marker = self.directory / "upgrade.json"
         marker.write_text("{}", encoding="utf-8", newline="\n")
         (self.directory / "control-start.lock").touch(mode=0o600)
@@ -704,7 +722,7 @@ class ColdStartTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
-        directory.mkdir(mode=0o700)
+        directory.mkdir(mode=private_dirs.directory_mode())
         endpoint_file = directory / "control.json"
         endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         endpoint_file.chmod(0o600)
@@ -806,7 +824,7 @@ class ColdStartTests(unittest.TestCase):
                 self.assertEqual(caught.exception.payload(), expected)
 
     def test_cold_start_clears_the_previous_startup_error_before_spawning(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         from hey_my_buddy.blackboard.service.daemon import atomic_json
         # The record's pid equals the spawned child: only clearing the record
         # before the spawn keeps it from impersonating this start's failure.
@@ -824,7 +842,7 @@ class ColdStartTests(unittest.TestCase):
                          "the previous start's record must be cleared before the spawn")
 
     def test_cold_start_claims_a_startup_error_written_after_the_spawn(self):
-        self.directory.mkdir(mode=0o700)
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         from hey_my_buddy.blackboard.service.daemon import atomic_json
         child = Mock(pid=4242)
         child.poll.return_value = 2
@@ -851,8 +869,8 @@ class ColdStartTests(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
-        directory.mkdir(mode=0o700)
-        (directory / "ipc").mkdir(mode=0o700)
+        directory.mkdir(mode=private_dirs.directory_mode())
+        (directory / "ipc").mkdir(mode=private_dirs.directory_mode())
         endpoint_file = directory / "control.json"
         endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         endpoint_file.chmod(0o600)
@@ -866,18 +884,20 @@ if __name__ == "__main__":
     unittest.main()
 
 
-@unittest.skipIf(os.name == "nt", "POSIX IPC directories; Windows uses named pipes")
 class RpcReadOnlySetupTests(unittest.TestCase):
     """The real RPC setup boundary must preserve missing or unsafe IPC paths."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="rpc-readonly-")
         self.addCleanup(self.temp.cleanup)
-        self.directory = Path(self.temp.name).resolve()
+        self.directory = Path(self.temp.name).resolve() / "state"
+        self.directory.mkdir(mode=private_dirs.directory_mode())
         self.endpoint_file = self.directory / "control.json"
         self.endpoint_file.write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
-        self.endpoint_file.chmod(0o600)
+        if os.name != 'nt':
+            self.endpoint_file.chmod(0o600)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX IPC directory requirement')
     def test_missing_ipc_does_not_create_on_transport_or_board_client_attach(self):
         from hey_my_buddy.protocol.client import BoardClient
         with patch("hey_my_buddy.protocol.transport.cc.connect") as connect:
@@ -889,12 +909,23 @@ class RpcReadOnlySetupTests(unittest.TestCase):
             connect.assert_not_called()
         self.assertFalse((self.directory / "ipc").exists())
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows Named Pipe attachment')
+    def test_windows_attach_uses_existing_endpoint_without_an_ipc_directory(self):
+        with patch.object(transport, '_ping_endpoint', return_value=ENDPOINT) as ping, \
+                MutationRecorder() as recorder:
+            self.assertEqual(_attach_read_only(self.directory), ENDPOINT)
+        recorder.assert_no_mutation()
+        ping.assert_called_once_with(self.directory, ENDPOINT)
+        self.assertFalse((self.directory / 'ipc').exists())
+        assert_inherited_private_acl(self, self.directory)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory mode mutation')
     def test_read_only_state_with_private_ipc_reaches_rpc_without_mutation(self):
         from hey_my_buddy.protocol.client import BoardClient
         from support import shutdown_private_rpc
 
         ipc = self.directory / "ipc"
-        ipc.mkdir(mode=0o700)
+        ipc.mkdir(mode=private_dirs.directory_mode())
         before = snapshot(self.directory)
         self.directory.chmod(0o500)
         self.addCleanup(self.directory.chmod, 0o700)
@@ -918,7 +949,8 @@ class RpcReadOnlySetupTests(unittest.TestCase):
     def test_error_reply_details_reach_the_client_unchanged(self):
         # A direct WORKSPACE_GIT_ERROR reply keeps its recorded command facts:
         # the client envelope carries them instead of only the message.
-        (self.directory / "ipc").mkdir(mode=0o700)
+        if os.name != 'nt':
+            (self.directory / "ipc").mkdir(mode=private_dirs.directory_mode())
         proxy = Mock()
         proxy.__enter__ = Mock(return_value=proxy)
         proxy.__exit__ = Mock(return_value=False)
@@ -999,6 +1031,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         self.endpoint_file.write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         return endpoint, received
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX IPC directory mode')
     def test_group_readable_ipc_reaches_native_rpc_without_chmod(self):
         endpoint, received = self.native_ping_peer()
         ipc = self.directory / "ipc"
@@ -1011,6 +1044,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
                          [{"token": ENDPOINT["token"]}])
         self.assertEqual(stat.S_IMODE(ipc.stat().st_mode), 0o750)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX IPC directory mode')
     def test_unsafe_ipc_is_not_chmodded_or_connected(self):
         """Unsafe means group/world writable; the SDK refuses before the peer receives RPC."""
         from support import shutdown_private_rpc
@@ -1046,3 +1080,5 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(transport.rpc_config, "configure_client") as configure, patch.object(transport.cc, "connect", return_value=proxy), patch.object(transport, "_attach_read_only", return_value=ENDPOINT):
             self.assertEqual(BoardClient(self.directory, autostart=False).ping(), {"status": "ok"})
             configure.assert_called_once_with(self.directory, create=False)
+        if os.name == 'nt':
+            self.assertFalse((self.directory / 'ipc').exists())

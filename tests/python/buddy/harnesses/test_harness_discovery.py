@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
+from hey_my_buddy.protocol.process_start import process_start
 
 
 _REAL_LAUNCH_COMMAND = discovery._launch_command
@@ -396,7 +397,6 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", observed["keys"])
             self.assertEqual((daily / "probe-marker").read_text(encoding="utf-8"), "owned")
 
-    @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
     def test_dsh_version_probe_retains_its_directory_when_stop_is_unknown(self):
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 
@@ -417,10 +417,14 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual((code, output), ("shutdown-unverified", b""))
             self.assertFalse((private / "dsh-home").exists())
             self.assertIn(str(private), notes.output[0])
-            # The injected uncertainty retains the directory. The test itself
-            # verifies the actual group is gone before its fixture cleans up.
-            with self.assertRaises(ProcessLookupError):
-                os.killpg(int(pid_file.read_text(encoding="utf-8")), 0)
+            # Injected uncertainty retains evidence even though the owned
+            # process has actually ended before this fixture is cleaned up.
+            pid = int(pid_file.read_text(encoding="utf-8"))
+            if os.name == "nt":
+                self.assertIsNone(process_start(pid, include_exited=False))
+            else:
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(pid, 0)
 
     def test_partial_manager_defaults_match_installed_versions_and_direct_root(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -513,17 +517,28 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertFalse(marker.exists())
             self.assertNotIn("private detail", str(result))
 
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
     def test_probe_timeout_reaps_child_group_and_scan_has_total_deadline(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             child = 'import time; time.sleep(10)'
             cli = self.plain_file(home / "zcode", f'import subprocess, sys, time\nsubprocess.Popen([sys.executable, "-c", {child!r}], stdout=sys.stdout)\ntime.sleep(10)\n')
+            if os.name == "nt":
+                from hey_my_buddy.protocol.owned_process import OwnedJob
+                terminated = []
+                original_terminate = OwnedJob.terminate
+
+                def observe_job_stop(job):
+                    terminated.append(job)
+                    return original_terminate(job)
+
+                stop_observation = patch.object(OwnedJob, "terminate", observe_job_stop)
+            else:
+                stop_observation = patch.object(discovery.os, "killpg", wraps=os.killpg)
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
                 discovery, "_SCAN_TIMEOUT", 0.4
-            ), patch.object(discovery.os, "killpg", wraps=os.killpg) as kill_group:
+            ), stop_observation as observed_stop:
                 started = time.monotonic()
                 result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertLess(time.monotonic() - started, 2)
@@ -531,14 +546,17 @@ class HarnessDiscoveryTests(unittest.TestCase):
             # A slow OS reaper may not close the inherited pipe within the
             # cleanup budget. It must remain unavailable with honest evidence.
             self.assertIn(result["reason"]["code"], ("harness.scan-timeout", "harness.shutdown-unverified"))
-            self.assertIn(signal.SIGTERM, [call.args[1] for call in kill_group.call_args_list])
-            groups = {call.args[0] for call in kill_group.call_args_list}
-            self.assertTrue(groups)
-            for pgid in groups:
-                with self.assertRaises(ProcessLookupError):
-                    os.killpg(pgid, 0)
+            if os.name == "nt":
+                self.assertTrue(terminated, "the timed-out Job was not stopped")
+                self.assertTrue(all(job.active() == 0 for job in terminated))
+            else:
+                self.assertIn(signal.SIGTERM, [call.args[1] for call in observed_stop.call_args_list])
+                groups = {call.args[0] for call in observed_stop.call_args_list}
+                self.assertTrue(groups)
+                for pgid in groups:
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(pgid, 0)
 
-    @unittest.skipIf(os.name == "nt", "POSIX process-group assertion")
     def test_total_deadline_covers_multiple_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

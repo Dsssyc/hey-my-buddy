@@ -1,7 +1,8 @@
 """Private published C-Two 0.9.0 RPC, non-pool accounting and control capacity.
 
-Every native process configures an explicit test-owned state/ipc directory before
-local I/O. Memory statistics are C-Two accounting, never RSS.
+Every native process selects its endpoint before local I/O: a test-owned state/ipc
+directory on POSIX, the native user-scoped pipe domain on Windows. Memory
+statistics are C-Two accounting, never RSS.
 """
 from __future__ import annotations
 
@@ -19,9 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from support import stop_private_service, _child_environment, shutdown_private_rpc
+from support import stop_private_service, _child_environment, shutdown_private_rpc, remove_private_test_root
 
 from hey_my_buddy.protocol import rpc_config
+from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
@@ -62,7 +64,8 @@ else:
     rpc_config.configure_server(state)
 cc.register(ProbeContract, ProbeImpl(), name="hey-my-buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": cc.local_endpoint_context().root}), encoding="utf-8", newline="\\n")
+context = cc.local_endpoint_context()
+Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": context.root, "platform": context.platform, "namespace": context.namespace_id}), encoding="utf-8", newline="\\n")
 stop = sys.argv[2]
 while not os.path.exists(stop):
     time.sleep(0.05)
@@ -115,15 +118,19 @@ assert cc.shutdown()["completed"]
 
 def private_environment(root: Path, **overrides) -> dict:
     """Remove inherited credentials, runtime pins and native C-Two settings."""
-    fallback = root / "native-fallback"
-    fallback.mkdir(mode=0o700, exist_ok=True)
-    return _child_environment(root, {"C2_IPC_ROOT": str(fallback), **overrides})
+    native = {}
+    if os.name != "nt":
+        fallback = root / "native-fallback"
+        fallback.mkdir(mode=0o700, exist_ok=True)
+        native["C2_IPC_ROOT"] = str(fallback)
+    return _child_environment(root, {**native, **overrides})
 
 
 class ProbeServer:
     """One test-owned real C-Two server with the frozen profile (or a raw override)."""
 
-    def __init__(self, root: Path, *, mode: str = "profile", overrides: dict | None = None, name: str = "probe"):
+    def __init__(self, root: Path, *, mode: str = "profile", overrides: dict | None = None,
+                 name: str = "probe", environment: dict | None = None):
         self.root = Path(root)
         self.script = self.root / f"{name}-server.py"
         self.script.write_text(PROBE_SERVER, encoding="utf-8", newline="\n")
@@ -135,6 +142,7 @@ class ProbeServer:
             self.root,
             PROBE_SERVER_MODE=mode,
             PROBE_SERVER_OVERRIDES=json.dumps(overrides or {}),
+            **(environment or {}),
         )
         self.process = subprocess.Popen(
             [sys.executable, str(self.script), str(self.endpoint_path), str(self.stop_path)],
@@ -164,7 +172,8 @@ class ProbeServer:
     def pid(self) -> int:
         return self.process.pid
 
-    def call(self, operation: str, argument: str, *, client_mode: str = "profile", overrides: dict | None = None) -> dict:
+    def call(self, operation: str, argument: str, *, client_mode: str = "profile",
+             overrides: dict | None = None, environment: dict | None = None) -> dict:
         """One client subprocess that configures itself before connecting."""
         script = self.root / "probe-client.py"
         if not script.exists():
@@ -173,6 +182,7 @@ class ProbeServer:
             self.root,
             PROBE_CLIENT_MODE=client_mode,
             PROBE_CLIENT_OVERRIDES=json.dumps(overrides or {}),
+            **(environment or {}),
         )
         completed = subprocess.run(
             [sys.executable, str(script), self.address, operation, argument],
@@ -240,8 +250,12 @@ class ProfileTests(unittest.TestCase):
         first = rpc_config.configure_server(self.state)
         self.assertEqual(rpc_config.configure_server(self.state), first)
         self.assertEqual(rpc_config.configure_client(self.state)["role"], "client")
-        self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
-        self.assertEqual((self.state / "ipc").stat().st_mode & 0o777, 0o700)
+        if os.name == "nt":
+            self.assertIsNone(cc.local_endpoint_context().root)
+            self.assertFalse((self.state / "ipc").exists())
+        else:
+            self.assertEqual(Path(cc.local_endpoint_context().root), self.state / "ipc")
+            self.assertEqual((self.state / "ipc").stat().st_mode & 0o777, 0o700)
         self.assertEqual(dict(os.environ), before)
 
     def test_server_uses_the_shared_startup_budget(self):
@@ -251,11 +265,18 @@ class ProfileTests(unittest.TestCase):
         configure.assert_called_once_with(ipc_overrides=rpc_config.SERVER_OVERRIDES, startup_timeout=1.25)
 
     def test_windows_never_passes_root_override(self):
-        with mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), mock.patch.object(rpc_config.cc, "set_local_endpoint") as endpoint:
+        def select():
+            self.assertNotIn("C2_IPC_ROOT", os.environ)
+
+        with mock.patch.dict(os.environ, {"C2_IPC_ROOT": str(self.state / "inherited")}), \
+                mock.patch.object(rpc_config, "os", SimpleNamespace(name="nt", environ=os.environ)), \
+                mock.patch.object(rpc_config.cc, "set_local_endpoint", side_effect=select) as endpoint:
             rpc_config.configure_local_endpoint(self.state)
             endpoint.assert_called_once_with()
+            self.assertNotIn("C2_IPC_ROOT", os.environ)
         self.assertFalse((self.state / "ipc").exists())
 
+    @unittest.skipIf(os.name == "nt", "Unix IPC directory modes; Windows uses inherited profile ACLs")
     def test_0755_state_creates_0700_ipc_without_parent_repair(self):
         """R-02 setup boundary; the transport test separately verifies I/O."""
         from hey_my_buddy.errors import BoardError
@@ -275,11 +296,12 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), root)
         self.assertEqual(root.stat().st_mode & 0o777, 0o755)
 
+    @unittest.skipIf(os.name == "nt", "Unix endpoint filesystem guards; Windows has no IPC directory")
     def test_bad_state_or_ipc_is_refused_without_repair(self):
         """R-03: structural path guards keep their private-path refusal."""
         from hey_my_buddy.errors import BoardError
         ipc = self.state / "ipc"
-        ipc.mkdir(mode=0o700)
+        ipc.mkdir(mode=private_dirs.directory_mode())
         file_state = self.state / "file-state"
         file_state.write_text("ordinary file", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as refused:
@@ -336,13 +358,46 @@ class ProfileTests(unittest.TestCase):
     def test_read_only_setup_does_not_create_or_chmod_missing_directories(self):
         from hey_my_buddy.errors import BoardError
         missing = self.state / "missing"
-        with self.assertRaises(BoardError):
+        if os.name == "nt":
             rpc_config.configure_client(missing, create=False)
-        self.assertFalse(missing.exists())
-        with self.assertRaises(BoardError):
             rpc_config.configure_client(self.state, create=False)
+        else:
+            with self.assertRaises(BoardError):
+                rpc_config.configure_client(missing, create=False)
+            with self.assertRaises(BoardError):
+                rpc_config.configure_client(self.state, create=False)
+        self.assertFalse(missing.exists())
         self.assertFalse((self.state / "ipc").exists())
 
+    @unittest.skipUnless(os.name == "nt", "Native Windows user-scoped pipe domain")
+    def test_windows_state_paths_do_not_change_the_active_native_domain(self):
+        import c_two as cc
+        from c_two import crm
+
+        @crm(namespace="buddy.profile", version="1.0.0")
+        class ProfileProbe:
+            def echo(self, text: str) -> str: ...
+
+        class Echo:
+            def echo(self, text: str) -> str:
+                return text
+
+        rpc_config.configure_server(self.state)
+        cc.register(ProfileProbe, Echo(), name="hey-my-buddy-profile-probe")
+        context = cc.local_endpoint_context()
+        other = self.state / "other"
+        rpc_config.configure_client(other, create=False)
+        self.assertIsNone(context.root)
+        self.assertEqual(cc.local_endpoint_context().namespace_id, context.namespace_id)
+        with cc.connect(ProfileProbe, name="hey-my-buddy-profile-probe", address=cc.server_address()) as probe:
+            self.assertEqual(probe.echo("same-user"), "same-user")
+        self.assertFalse(other.exists())
+        self.assertTrue(cc.shutdown()["completed"])
+        rpc_config.configure_client(other, create=False)
+        self.assertEqual(cc.local_endpoint_context().namespace_id, context.namespace_id)
+        self.assertFalse(other.exists())
+
+    @unittest.skipIf(os.name == "nt", "Only Unix roots select distinct native endpoint domains")
     def test_active_root_is_fenced_and_complete_shutdown_allows_new_root(self):
         import c_two as cc
         from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
@@ -388,6 +443,7 @@ class IsolatedTransportTests(unittest.TestCase):
         self.probes.append(server)
         return server
 
+    @unittest.skipIf(os.name == "nt", "Unix IPC directory modes; Windows has a user-scoped pipe domain")
     def test_0755_state_creates_0700_ipc_and_round_trips(self):
         """R-02: a real published server/client uses an ordinary state parent."""
         self.work.chmod(0o755)
@@ -444,18 +500,24 @@ class IsolatedTransportTests(unittest.TestCase):
         self.assertEqual(cell["peak_bytes"], 8392704)
 
     def test_private_root_overrides_inherited_namespace(self):
-        # A mutation remains private: the deliberately conflicting native fallback
-        # is also a test-owned 0700 directory, never the default public namespace.
-        server = self.probe()
+        inherited = {"C2_IPC_ROOT": str(self.work / "inherited-unix-root")}
+        server = self.probe(environment=inherited)
         endpoint = json.loads(server.endpoint_path.read_text(encoding="utf-8"))
-        self.assertEqual(Path(endpoint["root"]), self.work / "ipc")
-        reply = server.call("echo", "private-root")
+        if os.name == "nt":
+            self.assertIsNone(endpoint["root"])
+            self.assertFalse((self.work / "ipc").exists())
+        else:
+            self.assertEqual(Path(endpoint["root"]), self.work / "ipc")
+        self.assertFalse((self.work / "inherited-unix-root").exists())
+        reply = server.call("echo", "private-root", environment=inherited)
         self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["sha256"], hashlib.sha256(b"private-root").hexdigest())
 
+    @unittest.skipIf(os.name == "nt", "Windows scopes pipes to the user, not the state root")
     def test_different_private_root_cannot_connect(self):
         server = self.probe()
         other = self.work / "other"
-        other.mkdir(mode=0o700)
+        other.mkdir(mode=private_dirs.directory_mode())
         script = other / "client.py"
         script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
         completed = subprocess.run([sys.executable, str(script), server.address, "echo", "unreachable"],
@@ -463,6 +525,29 @@ class IsolatedTransportTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertFalse(json.loads(completed.stdout.strip().splitlines()[-1])["ok"])
         self.assertTrue(server.call("echo", "still-here")["ok"])
+
+    @unittest.skipUnless(os.name == "nt", "Native Windows user-scoped pipe domain")
+    def test_windows_different_state_roots_share_the_same_user_pipe_domain(self):
+        import c_two as cc
+        server = self.probe()
+        endpoint = json.loads(server.endpoint_path.read_text(encoding="utf-8"))
+        other = self.work / "other"
+        other.mkdir()
+        script = other / "client.py"
+        script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
+        completed = subprocess.run([sys.executable, str(script), server.address, "echo", "same-user"],
+                                   env=private_environment(other), capture_output=True, text=True,
+                                   timeout=30, encoding="utf-8")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        reply = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["sha256"], hashlib.sha256(b"same-user").hexdigest())
+        rpc_config.configure_client(other)
+        self.addCleanup(shutdown_private_rpc)
+        self.assertIsNone(endpoint["root"])
+        self.assertEqual(endpoint["namespace"], cc.local_endpoint_context().namespace_id)
+        self.assertFalse((self.work / "ipc").exists())
+        self.assertFalse((other / "ipc").exists())
 
 
 class DaemonFixtureCleanupTests(unittest.TestCase):
@@ -472,14 +557,14 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix="rpc-daemon-cleanup-"))
         self.addCleanup(shutil.rmtree, work)
         state = work / "state"
-        state.mkdir(mode=0o700)
+        state.mkdir(mode=private_dirs.directory_mode())
         fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
         fixture.work, fixture.state = work, state
         child = mock.Mock()
         fixture.children = [child]
         with mock.patch(__name__ + ".stop_private_service") as stop, \
                 mock.patch(__name__ + ".shutdown_private_rpc") as shutdown, \
-                mock.patch(__name__ + ".shutil.rmtree") as remove:
+                mock.patch(__name__ + ".remove_private_test_root") as remove:
             order = mock.Mock()
             for name, operation in (("stop", stop), ("child", child.wait),
                                     ("shutdown", shutdown), ("remove", remove)):
@@ -494,11 +579,11 @@ class DaemonFixtureCleanupTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix="rpc-daemon-cleanup-"))
         self.addCleanup(shutil.rmtree, work)
         state = work / "state"
-        state.mkdir(mode=0o700)
+        state.mkdir(mode=private_dirs.directory_mode())
         fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
         fixture.work, fixture.state, fixture.children = work, state, [mock.Mock()]
         with mock.patch(__name__ + ".stop_private_service", side_effect=AssertionError("stop unconfirmed")), \
-                mock.patch(__name__ + ".shutil.rmtree") as remove:
+                mock.patch(__name__ + ".remove_private_test_root") as remove:
             with self.assertRaisesRegex(AssertionError, "stop unconfirmed"):
                 fixture._cleanup()
             remove.assert_not_called()
@@ -514,9 +599,10 @@ class RealDaemonControlTests(unittest.TestCase):
 
     def setUp(self):
         self.work = Path(tempfile.mkdtemp(prefix="hey-my-buddy-rpc-daemon-"))
-        os.chmod(self.work, 0o700)
+        if os.name != "nt":
+            os.chmod(self.work, 0o700)
         self.state = self.work / "state"
-        self.state.mkdir(mode=0o700)
+        self.state.mkdir(mode=private_dirs.directory_mode())
         self.children: list[subprocess.Popen] = []
         self.addCleanup(self._cleanup)
         self.endpoint = self._start_daemon()
@@ -528,7 +614,7 @@ class RealDaemonControlTests(unittest.TestCase):
         for child in self.children:
             child.wait(timeout=15)
         shutdown_private_rpc()
-        shutil.rmtree(self.work)
+        remove_private_test_root(self.work)
 
     def _start_daemon(self) -> dict:
         environment = private_environment(self.state, HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),

@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import http.cookiejar
 import json
+import os
 import select
 import signal
 import subprocess
@@ -17,6 +18,7 @@ from hey_my_buddy.console.console_sessions import MAX_ENTRIES, MAX_SESSIONS, ENT
 from hey_my_buddy.errors import BoardError
 from console.test_console import Browser, ConsoleTestCase, http_call
 from support import _child_environment, wait_for
+from private_acl import assert_private_path
 
 
 class ConsoleSessionTests(ConsoleTestCase):
@@ -119,7 +121,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         data = session_file.read_text(encoding="utf-8")
         self.assertNotIn(browser.cookie.split('=', 1)[1], data)
         self.assertNotIn(snapshot['csrfToken'], data)
-        self.assertEqual(os.stat(session_file).st_mode & 0o777, 0o600)
+        assert_private_path(self, session_file, 0o600)
         board.console.close()
         board.console = Console(board.store, board.service, port=browser.port)
         board.console.start(issue_ticket=False)
@@ -166,7 +168,7 @@ class ConsoleSessionTests(ConsoleTestCase):
             board.console=Console(board.store,board.service)
             board.console.start(issue_ticket=False)
             self.assertEqual(board.console.origin,f'http://127.0.0.1:{port}')
-            self.assertEqual((board.directory/'console-settings.json').stat().st_mode & 0o777,0o600)
+            assert_private_path(self, board.directory / 'console-settings.json', 0o600)
 
     def test_real_daemon_port_collision_reaches_the_cli_as_actionable_error(self):
         import socket

@@ -16,6 +16,7 @@ from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
+from private_acl import assert_private_path
 
 
 STATE_FILES = ('console-settings.json',)
@@ -67,7 +68,7 @@ class BackupTests(BoardTestCase):
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)})
-        self.assertEqual((current / 'state/console-settings.json').stat().st_mode & 0o777, 0o600)
+        assert_private_path(self, current / 'state/console-settings.json', 0o600)
         (board.directory / 'console-settings.json').write_text('{"generation":2}', encoding="utf-8", newline="\n")
         second = backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(first['path'], second['path'])

@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import BoardTestCase
+from private_acl import assert_private_path
 from hey_my_buddy.cli.checks import prepare_test_home
 from protocol.fixtures import native_turn
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -337,7 +338,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             sha256_text(canonical_json(context.turn_input)),
         )
         self.assertTrue(context.credential_file().is_file())
-        self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
+        assert_private_path(self, context.credential_file(), 0o600)
         self.assertFalse(context.turn_output_file().exists())
 
     def test_collect_imports_a_turn_only_with_confirmed_shutdown(self):

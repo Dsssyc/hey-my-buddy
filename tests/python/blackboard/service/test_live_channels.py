@@ -1,10 +1,7 @@
 """Private command channels survive waits and bounded service restarts."""
 from __future__ import annotations
 
-import os
-import signal
 import time
-import unittest
 
 from support import BoardTestCase, wait_for
 from blackboard.service import test_execution_recovery as recovery_fixture
@@ -18,6 +15,8 @@ class PrivateLiveChannelTests(BoardTestCase):
     restart = recovery_fixture.PrivateExecutionRecoveryTests.restart
     _finished = recovery_fixture.PrivateExecutionRecoveryTests._finished
     _live_bridge = recovery_fixture.PrivateExecutionRecoveryTests._live_bridge
+    freeze_execution = recovery_fixture.PrivateExecutionRecoveryTests.freeze_execution
+    resume_execution = recovery_fixture.PrivateExecutionRecoveryTests.resume_execution
 
     def test_task_wait_preserves_an_already_connected_command_channel(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
@@ -34,17 +33,16 @@ class PrivateLiveChannelTests(BoardTestCase):
             finally:
                 release.touch()
 
-    @unittest.skipUnless(hasattr(signal, "SIGSTOP") and hasattr(os, "killpg"),
-                         "frozen execution requires POSIX process signals")
     def test_restart_releases_owner_locks_with_a_frozen_execution(self):
         from hey_my_buddy.install.upgrade import OWNER_LOCK_TIMEOUT_SECONDS, file_lock
         identity = None
+        frozen_process = None
         try:
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as daemon:
                 run_id, release, before = self.command("frozen-restart")
                 identity = before["processIdentity"]
                 self.assertIsNotNone(wait_for(lambda: self._live_bridge(run_id), timeout=30))
-                os.kill(identity["pid"], signal.SIGSTOP)
+                frozen_process = self.freeze_execution(identity)
                 started = time.monotonic()
                 self.restart(daemon)
                 with file_lock(self.directory / "control-daemon.lock", timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
@@ -56,12 +54,12 @@ class PrivateLiveChannelTests(BoardTestCase):
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                 print(f"Frozen execution restart through replacement readiness: {time.monotonic() - started:.3f}s",
                       flush=True)
-                os.kill(identity["pid"], signal.SIGCONT)
+                self.resume_execution(identity, frozen_process)
                 release.touch()
                 self.assertIsNotNone(wait_for(lambda: self._finished(run_id), timeout=35))
         finally:
             if identity is not None and inspect_process_identity(identity) == "alive":
-                os.kill(identity["pid"], signal.SIGCONT)
+                self.resume_execution(identity, frozen_process)
                 release.touch()
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)

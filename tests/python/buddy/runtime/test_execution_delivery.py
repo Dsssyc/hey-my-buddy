@@ -17,7 +17,9 @@ from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
+from private_acl import assert_private_path
 
 
 CLAIM = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
@@ -148,7 +150,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertNotIn("nonce", raw)
         self.assertNotIn("workerId", raw)
         if os.name != "nt":
-            self.assertEqual((self.execution.directory / "result-receipt.json").stat().st_mode & 0o777, 0o600)
+            assert_private_path(self, self.execution.directory / "result-receipt.json", 0o600)
 
     def test_receipt_reader_refuses_foreign_binding_and_malformed_envelope(self):
         from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
@@ -584,7 +586,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         budget.write_text('{}')
         unlink = Path.unlink
         def fail_budget(path, **kwargs):
-            if path == budget:
+            if path == native_path(budget):
                 raise OSError('budget cleanup failed')
             return unlink(path, **kwargs)
         with mock.patch.object(self.execution, 'execute', return_value=receipt), \

@@ -319,8 +319,10 @@ class WindowsProcessTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
             handle = ProcessHandle(child, own_group=True, log_paths={})
         with mock.patch.object(signal, "CTRL_BREAK_EVENT", 1, create=True), \
-             mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=AssertionError("PID signaling")):
+             mock.patch("hey_my_buddy.protocol.process_handle.os.killpg",
+                        side_effect=AssertionError("PID signaling"), create=True) as kill_group:
             handle.terminate(grace_seconds=0)
+        kill_group.assert_not_called()
         self.assertEqual(process.signals, [1])
         self.assertIn(("terminate", 77), api.events)
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
