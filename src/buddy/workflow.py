@@ -1147,6 +1147,20 @@ class WorkflowCoordinator:
                                           "ownerGeneration": run["owner_generation"]})
         self.routing_settled(connection, decision_id=decision_id, now=now)
 
+    def routing_dispatched(self, connection, *, decision_id: str, task_id: str, now: str) -> None:
+        """Record that one pending route's internal dispatch task moved.
+
+        The route's internal task pointer is the decision request's current task,
+        which the dispatch step itself re-points; a pending route only records the
+        movement. The governed Goal keeps waiting for routing — no business Worker
+        turn opens here, and a link that does not exist yet (first routing of a
+        Goal) is not fabricated.
+        """
+        connection.execute(
+            "UPDATE workflow_routes SET updated_at=? WHERE decision_id=? AND state='pending'",
+            (now, decision_id),
+        )
+
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
         """Adopt a frozen recommendation with its result, under owner/lineage fencing."""
         from .router import selection_source

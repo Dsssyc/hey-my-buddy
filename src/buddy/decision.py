@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 from . import schemas, user_policy
-from . import selection_policy, router, tool_evidence
+from . import selection_policy, router, router_sequence, tool_evidence
 from .db import canonical_json, sha256_text
 from .errors import BoardError
 
@@ -146,32 +146,51 @@ class DecisionCoordinator:
             return DecisionAdapter().available()
 
     def selector_family(self, connection: sqlite3.Connection, spec: dict | None = None) -> tuple[str, str, str] | None:
-        """The model family the fixed decision profile will actually consume.
+        """The model family the current dispatch will actually consume.
 
-        Resolved inside the caller's claim transaction from the same configured
-        profile :meth:`claim` admits, so the store can quota-check the selector's
-        own family *before* the claim commits and before the selection reader is
-        granted, and freeze that exact tuple onto the routing attempt.
+        Read from the decision's current immutable dispatch — never a fresh
+        resolve — so the store can quota-check the family this request is frozen
+        to *before* the claim commits and before the selection reader is granted.
         """
         descriptor = decision_spec(spec or {})
         row = self._row(connection, descriptor["decisionId"]) if descriptor else None
         if row is None or row["status"] != "queued":
             return None
-        profile_row, _problem = self._refresh_route(connection, row)
-        if profile_row is None:
+        dispatch = (router_sequence.dispatch(connection, row["decision_task_id"])
+                    if row["decision_task_id"] else None)
+        if dispatch is None:
             return None
-        return (profile_row["adapter"], profile_row["provider"], profile_row["model"])
+        identity = dispatch["profile"]
+        return (identity["adapter"], identity["provider"], identity["model"])
 
     # -- request-time policy -------------------------------------------------
-    def _decision_profile(self, connection: sqlite3.Connection) -> tuple[sqlite3.Row | None, str | None]:
-        profile, _facts, problem = router.resolve(connection)
-        return profile, problem["reason"] if problem else None
+    def _decision_profile(self, connection: sqlite3.Connection) -> tuple[dict | None, str | None]:
+        """The current Router for read-only projections; resolving changes nothing."""
+        resolution = router.current_router(connection)
+        return resolution.profile, resolution.problem["reason"] if resolution.problem else None
 
     def _refresh_route(self, connection, row):
-        """Recheck only the admission snapshot; never change Router or mode."""
+        """Recheck only the current dispatch's item; never change Router or mode.
+
+        A publication-time recheck stays inside the request's frozen snapshot: it
+        refuses the current item when it no longer resolves there and never walks
+        to a later one — advancing belongs to the confirmed-stop failover path.
+        """
         request = json.loads(row["requested_json"])
-        profile, _facts, problem = router.resolve(connection, frozen=request)
-        return profile, problem
+        dispatch = router_sequence.dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None
+        if dispatch is None or "routerProfileIds" not in request:
+            return None, {"code": "router-request-unfrozen",
+                          "reason": "Router 不可用：该请求没有仍可复核的冻结路由事实"}
+        resolution = router.current_router(
+            connection, frozen=request, after_index=dispatch["routerIndex"] - 1)
+        if resolution.profile is not None and resolution.router_index == dispatch["routerIndex"]:
+            return resolution.profile, None
+        for entry in resolution.inspections:
+            if entry.get("index") == dispatch["routerIndex"] and entry.get("code"):
+                return None, {"code": entry["code"], "reason": entry["reason"]}
+        problem = resolution.problem or {"code": "router-unavailable",
+                                         "reason": "Router 不可用：当前 Router 项不再可用"}
+        return None, problem
 
     @staticmethod
     def _candidate_bounds(*, required_capabilities, constraints, coding_only: bool = True) -> tuple[list[str], list[Any]]:
@@ -420,12 +439,14 @@ class DecisionCoordinator:
         order = {evidence_id: index for index, evidence_id in enumerate(ids)}
         return sorted(rows, key=lambda row: order.get(row["evidence_id"], len(ids)))
 
-    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, revision: int, profile_row: sqlite3.Row, table: dict, task_text: str | None) -> tuple[dict | None, str | None]:
+    def _assemble_input(self, connection: sqlite3.Connection, *, kind: str, request_id: str, revision: int, profile_row: sqlite3.Row | None, table: dict, task_text: str | None) -> tuple[dict | None, str | None]:
         """Build the exact bounded document the model sees, or report why it cannot.
 
         Returns ``(document, oversized_reason)``. Nothing is dropped to make a
         document fit: exceeding a harness bound or the byte ceiling is an honest
-        ``needs-host`` outcome.
+        ``needs-host`` outcome. ``profile_row=None`` builds the request's common
+        packet without the current actor — the base input every dispatch copies,
+        where only the actor and its same-tier budget vary per item.
         """
         for name, limit in (
             ("profiles", MAX_DECISION_PROFILES),
@@ -443,14 +464,15 @@ class DecisionCoordinator:
         document: dict[str, Any] = {
             "operation": kind,
             "requestId": request_id,
-            "profile": {
+            "tableRevision": revision,
+        }
+        if profile_row is not None:
+            document["profile"] = {
                 "adapter": profile_row["adapter"],
                 "provider": profile_row["provider"],
                 "model": profile_row["model"],
                 "effort": profile_row["effort"],
-            },
-            "tableRevision": revision,
-        }
+            }
         if kind == "select":
             document["task"] = task_text
         document.update(table)
@@ -626,6 +648,8 @@ class DecisionCoordinator:
             task_text = request.get("task") or ""
             expected_revision = int(state["table_revision"])
             sole_candidate: sqlite3.Row | None = None
+            resolution = None
+            snapshot: dict | None = None
             facts = {"routerProfileId": None, "routingMode": None, "budget": None,
                      "configurationRevision": int(state["configuration_revision"])}
             if len(candidates) == 1:
@@ -640,66 +664,68 @@ class DecisionCoordinator:
                 request.update(facts)
                 status, reason = "needs-host", NEEDS_HOST_NO_CANDIDATE
             else:
-                profile_row, facts, problem = router.resolve(connection)
-                request.update(facts)
-                # Even an unavailable published Router has a fixed identity. It
-                # must not be replaced by another buddy when this request replays.
-                published = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
-                                               (facts["routerProfileId"],)).fetchone()
-                request["routerProfile"] = ({key: published[key] for key in schemas.CONFIGURATION_FIELDS}
-                                            if published is not None else None)
-                request["routerProblem"] = problem
-                if request["budget"] is not None:
-                    request["budget"] = dict(request["budget"])
-                    request["timeoutSeconds"] = (60 if facts["routingMode"] == "fast" else
-                                                 request.get("timeoutSeconds") or request["budget"]["timeoutSeconds"])
-                    request["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
-                    facts["budget"] = request["budget"]
-                if needs_host_reason is not None:
-                    status = "needs-host"
-                    reason = needs_host_reason
-                elif profile_row is None:
-                    status = "needs-host"
-                    reason = problem["reason"] if problem else NEEDS_HOST_NO_PROFILE
-            frozen_input = None
-            if status == "queued":
-                frozen_input, problem = self._select_input(
-                    connection, request_id=request_id, revision=expected_revision, profile_row=profile_row,
-                    task_text=task_text, candidates=candidates,
-                    hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"])
-                if frozen_input is None:
-                    status, reason = "needs-host", problem
-                else:
-                    frozen_input["budget"] = request["budget"]
-                    frozen_input.update(facts)
-                    frozen_input["routerProfile"] = request["routerProfile"]
-                    if facts["routingMode"] == "review":
-                        frozen_input["executionWorkspace"] = request.get("executionWorkspace")
+                # Admission freezes the complete common packet — candidates, cards,
+                # preferences, program facts, every Router identity, the candidate
+                # and Router account bindings and the input manifest — before the
+                # resolution selects an item, so even a fully unavailable list
+                # leaves the Host the same frozen packet, never only a reason.
+                resolution = router.current_router(connection, now=now)
+                facts = resolution.facts
+                if facts["routingMode"] is None:
+                    # Broken or unupgraded settings freeze no mode to route under;
+                    # the honest boundary is the settings problem itself.
+                    request.update(facts)
+                    if resolution.problem is not None:
+                        request["routerProblem"] = resolution.problem
+                    if needs_host_reason is not None:
+                        status, reason = "needs-host", needs_host_reason
                     else:
-                        frozen_input.pop("evidence", None)
-                    frozen_input["outputSchema"] = router.answer_schema([item["profileId"] for item in frozen_input["profiles"]], facts["routingMode"])
-            if frozen_input is not None:
-                from .accounts import identity, selection
-                names = {item['adapter'] for item in frozen_input.get('profiles', [])}
-                if frozen_input.get('profile', {}).get('adapter'):
-                    names.add(frozen_input['profile']['adapter'])
-                frozen_input['accounts'] = {name: identity(selection(connection, name)) for name in names}
-                input_bytes = len(canonical_json(frozen_input).encode("utf-8"))
-                if input_bytes > MAX_DECISION_INPUT_BYTES:
-                    status, reason = "needs-host", (
-                        f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
-                        f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or sent to a model.")
-                    frozen_input = None
+                        status, reason = "needs-host", (
+                            resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
+                else:
+                    request.update(facts)
+                    if resolution.problem is not None:
+                        request["routerProblem"] = resolution.problem
+                    request["timeoutSeconds"] = (60 if facts["routingMode"] == "fast" else
+                                                 request.get("timeoutSeconds") or facts["budget"]["timeoutSeconds"])
+                    facts["budget"] = dict(facts["budget"])
+                    facts["budget"]["timeoutSeconds"] = request["timeoutSeconds"]
+                    base_input, problem = self._select_input(
+                        connection, request_id=request_id, revision=expected_revision, profile_row=None,
+                        task_text=task_text, candidates=candidates,
+                        hard_constraints=request.get("constraints") or {}, routing_mode=facts["routingMode"])
+                    if base_input is None:
+                        status, reason = "needs-host", problem
+                    else:
+                        base_input["budget"] = facts["budget"]
+                        base_input.update(facts)
+                        if facts["routingMode"] == "review":
+                            base_input["executionWorkspace"] = request.get("executionWorkspace")
+                        else:
+                            base_input.pop("evidence", None)
+                        base_input["outputSchema"] = router.answer_schema(
+                            [item["profileId"] for item in base_input["profiles"]], facts["routingMode"])
+                        from .accounts import identity, selection
+                        names = {item["adapter"] for item in base_input.get("profiles", [])}
+                        for listed in facts["routerIdentities"]:
+                            if listed:
+                                names.add(listed["adapter"])
+                        base_input["accounts"] = {name: identity(selection(connection, name)) for name in names}
+                        input_bytes = len(canonical_json(base_input).encode("utf-8"))
+                        if input_bytes > MAX_DECISION_INPUT_BYTES:
+                            status, reason = "needs-host", (
+                                f"The complete frozen routing input contains {input_bytes} UTF-8 bytes, above the "
+                                f"{MAX_DECISION_INPUT_BYTES}-byte decision input ceiling; nothing was truncated or "
+                                "sent to a model.")
+                        else:
+                            snapshot = {"facts": facts, "baseInput": base_input,
+                                        "inspections": [dict(entry) for entry in resolution.inspections]}
+                            if needs_host_reason is not None:
+                                status, reason = "needs-host", needs_host_reason
+                            elif resolution.profile is None:
+                                status, reason = "needs-host", (
+                                    resolution.problem["reason"] if resolution.problem else NEEDS_HOST_NO_PROFILE)
             task_id = None
-            if status == "queued":
-                task_id = self._create_task(
-                    connection,
-                    decision_id=decision_id,
-                    request_id=request_id,
-                    kind=kind,
-                    timeout_seconds=request["timeoutSeconds"],
-                    now=now,
-                )
             connection.execute(
                 "INSERT INTO evaluation_decisions(decision_id, status, task, profile_id, table_revision, reason,"
                 " evidence_ids_json, created_at, error) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -725,7 +751,7 @@ class DecisionCoordinator:
                     kind,
                     fingerprint,
                     int(state["configuration_revision"]),
-                    task_id,
+                    None,
                     expected_revision,
                     canonical_json(request),
                     0,
@@ -733,9 +759,15 @@ class DecisionCoordinator:
                     now,
                 ),
             )
-            if frozen_input is not None:
-                connection.execute("UPDATE decision_requests SET input_json=?,input_sha256=? WHERE decision_id=?",
-                                   (canonical_json(frozen_input), sha256_text(canonical_json(frozen_input)), decision_id))
+            if snapshot is not None:
+                # The request row exists before its first dispatch is queued; the
+                # frozen snapshot and any admission preflight facts settle in this
+                # same transaction.
+                router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
+                self._record_preflight_walk(connection, request_id, resolution.inspections, now=now)
+            if status == "queued" and resolution is not None and resolution.profile is not None:
+                task_id = self._queue_router_dispatch(
+                    connection, self._row(connection, decision_id), resolution=resolution, now=now)
             self._append_event(
                 connection,
                 "decision.requested",
@@ -800,9 +832,15 @@ class DecisionCoordinator:
         return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection,
                             needs_host_reason=needs_host_reason)
 
-    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, kind: str, timeout_seconds: int, now: str) -> str:
-        """Admit one ordinary selection task, using the real queue and capacity."""
+    def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, kind: str, timeout_seconds: int, now: str, request_key: str | None = None) -> str:
+        """Admit one ordinary selection task, using the real queue and capacity.
+
+        Each dispatched Router item owns its own internal task; ``request_key``
+        keeps the per-task request identity unique when one request dispatches
+        more than once, while the decision's own requestId stays untouched.
+        """
         task_id = str(uuid.uuid4())
+        request_key = request_key or f"decision:{request_id}"
         spec = {
             "adapter": DECISION_ADAPTER,
             # A private per-decision directory the decision adapter creates; it never
@@ -823,7 +861,7 @@ class DecisionCoordinator:
             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
-                f"decision:{request_id}",
+                request_key,
                 "decision",
                 canonical_json(spec),
                 canonical_json(spec),
@@ -847,7 +885,7 @@ class DecisionCoordinator:
             task_id=task_id,
             revision=1,
             payload={
-                "requestId": f"decision:{request_id}",
+                "requestId": request_key,
                 "adapter": DECISION_ADAPTER,
                 "cwd": spec["cwd"],
                 "queueReason": blocker or "awaiting-worker",
@@ -856,6 +894,220 @@ class DecisionCoordinator:
             },
         )
         return task_id
+
+    def _record_preflight_walk(self, connection, request_id: str, inspections, *, now: str) -> None:
+        """Record the real preflight no-answers one resolution walk observed.
+
+        A skip-window observation is an existing window, not a new failure: it is
+        never recorded and never extends. The outcome receipts make repeated walks
+        over the same request and item idempotent, so a skip observed at admission
+        is not recorded again by a later advance.
+        """
+        from .router_history import record_outcome
+        for entry in inspections:
+            code = entry.get("code")
+            if not code or code == "router-skip-window":
+                continue
+            record_outcome(
+                connection,
+                profile_id=entry["profileId"],
+                plane="work",
+                request_id=request_id,
+                task_id=None,
+                attempt_id=None,
+                outcome="no_answer",
+                code=code,
+                phase="preflight",
+                facts={"routerIndex": entry["index"]},
+                now=now,
+            )
+
+    def _queue_router_dispatch(self, connection: sqlite3.Connection, row: sqlite3.Row, *, resolution, now: str) -> str:
+        """Advance one request to its next actual Router through a fresh internal task.
+
+        Reused at request creation, at pre-claim advancement and (once the
+        confirmed-stop failover consumes it) after a completed item: it always
+        copies the frozen base input, grafts only this item's actor identity and
+        same-tier budget, records the immutable dispatch under the new internal
+        task, and re-points the request — and its pending workflow route — at that
+        task while clearing the previous attempt, reader and output bindings. The
+        governed Goal keeps waiting for routing; no business Worker turn opens.
+        """
+        decision_id = row["decision_id"]
+        snapshot = router_sequence.request_snapshot(connection, decision_id)
+        if snapshot is None:
+            raise BoardError("INTERNAL_ERROR", "A dispatch requires a frozen request snapshot",
+                             decisionId=decision_id)
+        # Re-dispatching the same still-queued item must not mint a second task.
+        current_task = row["decision_task_id"]
+        if current_task is not None:
+            existing = router_sequence.dispatch(connection, current_task)
+            state = connection.execute("SELECT state FROM tasks WHERE task_id=?", (current_task,)).fetchone()
+            if (existing is not None and state is not None and state["state"] == "queued"
+                    and existing["routerIndex"] == resolution.router_index
+                    and existing["profileId"] == resolution.profile_id):
+                return current_task
+        identity_map = {key: resolution.profile[key] for key in schemas.CONFIGURATION_FIELDS}
+        document = {
+            **snapshot["baseInput"],
+            "profile": identity_map,
+            "routerProfileId": resolution.profile_id,
+            "routerProfile": identity_map,
+            "routerIndex": resolution.router_index,
+        }
+        request = json.loads(row["requested_json"])
+        timeout_seconds = int(request.get("timeoutSeconds") or snapshot["facts"]["budget"]["timeoutSeconds"])
+        task_id = self._create_task(
+            connection,
+            decision_id=decision_id,
+            request_id=row["request_id"],
+            kind=row["kind"],
+            timeout_seconds=timeout_seconds,
+            now=now,
+            request_key=f"decision:{row['request_id']}:{resolution.router_index}",
+        )
+        router_sequence.reserve_dispatch(
+            connection,
+            decision_id=decision_id,
+            task_id=task_id,
+            router_index=resolution.router_index,
+            profile={"profileId": resolution.profile_id, **identity_map},
+            document=document,
+            now=now,
+        )
+        fresh = self._row(connection, decision_id)
+        self._release_reader(connection, fresh, now)
+        digest = sha256_text(canonical_json(document))
+        connection.execute(
+            "UPDATE decision_requests SET task_id=?, attempt_id=NULL, generation=NULL, reader_id=NULL,"
+            " output_json=NULL, input_json=?, input_sha256=?, updated_at=? WHERE decision_id=?",
+            (task_id, canonical_json(document), digest, now, decision_id),
+        )
+        self.board.workflow.routing_dispatched(connection, decision_id=decision_id, task_id=task_id, now=now)
+        return task_id
+
+    def _frozen_circumstances_problem(self, connection, row: sqlite3.Row, snapshot: dict, dispatch: dict) -> dict | None:
+        """Why the frozen request's circumstances no longer hold; ``None`` when they do.
+
+        Settings, mode, budget, retry interval, revision, the frozen account
+        bindings, the dispatched buddy's complete identity and the request's reader
+        binding are checked against the live board. Any drift is a changed
+        boundary: the request never borrows a newer configuration and never treats
+        the drift as an ordinary no-answer that switches Router.
+        """
+        facts = snapshot["facts"]
+        revision = int(connection.execute(
+            "SELECT configuration_revision FROM evaluation_state WHERE id=1").fetchone()[0])
+        drifted = revision != int(facts["configurationRevision"])
+        if not drifted:
+            try:
+                settings = router.configuration(connection)
+            except BoardError:
+                drifted = True
+            else:
+                drifted = (
+                    list(settings["routerProfileIds"]) != list(facts["routerProfileIds"])
+                    or settings["defaultRoutingMode"] != facts["routingMode"]
+                    or settings["routingBudget"] != facts["routingBudget"]
+                    or settings["routerRetryIntervalSeconds"] != facts["routerRetryIntervalSeconds"]
+                )
+        if drifted:
+            return {"status": "stale", "code": "router-configuration-changed",
+                    "reason": "Router 不可用：请求冻结后的共享 Router 设置已变化；不借新配置执行老请求，请显式 reroute"}
+        from .accounts import identity, selection
+        bindings = snapshot["baseInput"].get("accounts") or {}
+        if any(account != identity(selection(connection, name)) for name, account in bindings.items()):
+            return {"status": "stale", "code": "ACCOUNT_BINDING_CHANGED",
+                    "reason": "The frozen routing accounts changed before claim"}
+        published = connection.execute(
+            "SELECT * FROM evaluation_profiles WHERE profile_id=?", (dispatch["profileId"],)).fetchone()
+        if router._identity(published) != dispatch["profile"]:
+            return {"status": "needs-host", "code": "router-profile-changed",
+                    "reason": "Router 不可用：buddy 的完整身份与请求冻结值不一致；这是情况变化，不能作为普通无答案切换"}
+        if row["reader_id"]:
+            reader = connection.execute(
+                "SELECT released_at FROM evaluation_readers WHERE reader_id=?", (row["reader_id"],)
+            ).fetchone()
+            if reader is None or reader["released_at"] is None:
+                return {"status": "stale", "code": "router-reader-open",
+                        "reason": "The request still holds an open selection reader from an earlier attempt"}
+        return None
+
+    def prepare_router_claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, now: str) -> str | None:
+        """Pre-claim preparation inside the claim transaction, before family capacity.
+
+        Verifies the task is this request's current dispatch inside its frozen
+        snapshot. Changed circumstances close the old queued task at an honest
+        boundary without switching Router; an eligibility loss of the current item
+        before any model call records its real preflight no-answer and queues the
+        next item's dispatch; writer-gate, retry-in-progress and unconfirmed-stop
+        observations only queue. Nothing here starts a process or fabricates an
+        attempt, and capacity is never bypassed with a spare task.
+        """
+        spec = json.loads(task["spec_json"])
+        descriptor = decision_spec(spec)
+        row = self._row(connection, descriptor["decisionId"]) if descriptor else None
+        if row is None:
+            return "decision-missing"
+        if row["status"] != "queued":
+            return "decision-closed"
+        if row["decision_task_id"] != task["task_id"]:
+            # A superseded dispatch never claims; its queued shell closes honestly.
+            self._cancel_queued_task(connection, task, now, "superseded by a newer Router dispatch")
+            return "decision-dispatch-superseded"
+        snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
+        dispatch = router_sequence.dispatch(connection, task["task_id"])
+        if snapshot is None or dispatch is None:
+            self._finish(connection, row, status="needs-host", now=now,
+                         reason="No frozen Router request snapshot is recorded for this dispatch")
+            self._cancel_queued_task(connection, task, now, "missing frozen Router request snapshot")
+            return "decision-closed"
+        facts = snapshot["facts"]
+        problem = self._frozen_circumstances_problem(connection, row, snapshot, dispatch)
+        if problem is not None:
+            self._finish(connection, row, status=problem["status"], now=now, reason=problem["reason"],
+                         error=problem["code"], output={"status": "error", "code": problem["code"]})
+            self._cancel_queued_task(connection, task, now, problem["reason"])
+            return "decision-closed"
+        waiting = connection.execute(
+            "SELECT COUNT(*) AS count FROM evaluation_writers WHERE state IN ('waiting','active')"
+        ).fetchone()
+        if int(waiting["count"]):
+            return "evaluation-writer-pending"
+        from .router_history import router_state
+        state = router_state(connection, profile_id=dispatch["profileId"],
+                             interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
+        if state["retryInProgress"]:
+            # One in-flight retry per buddy: this request queues behind it without
+            # consuming a slot and without recording anything about the item.
+            return "router-retry-in-progress"
+        recheck = router.current_router(
+            connection, frozen=facts, after_index=dispatch["routerIndex"] - 1, now=now)
+        if recheck.profile is not None and recheck.router_index == dispatch["routerIndex"]:
+            return None
+        started = connection.execute(
+            "SELECT 1 FROM attempts WHERE task_id=? LIMIT 1", (task["task_id"],)
+        ).fetchone()
+        if started is not None:
+            # An attempt exists for this dispatch, so only its own confirmed stop
+            # can move the request on; a preflight observation never may.
+            return "router-dispatch-unfinished"
+        for entry in recheck.inspections:
+            if entry.get("index") == dispatch["routerIndex"]:
+                # The item's real before-model failure is recorded once; a
+                # skip-window observation here is an existing window and stays
+                # unrecorded.
+                self._record_preflight_walk(connection, row["request_id"], [entry], now=now)
+        self._cancel_queued_task(connection, task, now, "the Router item is unavailable before the model call")
+        advance = router.current_router(connection, frozen=facts, after_index=dispatch["routerIndex"], now=now)
+        self._record_preflight_walk(connection, row["request_id"], advance.inspections, now=now)
+        if advance.profile is None:
+            self._finish(connection, row, status="needs-host", now=now,
+                         reason=advance.problem["reason"], error=advance.problem["code"],
+                         output={"status": "error", "code": advance.problem["code"]})
+            return "decision-closed"
+        self._queue_router_dispatch(connection, row, resolution=advance, now=now)
+        return "decision-dispatch-advanced"
 
     # -- worker lifecycle hooks ---------------------------------------------
     def claim(self, connection: sqlite3.Connection, *, task: sqlite3.Row, spec: dict, attempt_id: str, generation: int, now: str) -> tuple[str | None, dict | None]:
@@ -897,17 +1149,16 @@ class DecisionCoordinator:
         ).fetchone()
         if int(waiting["count"]):
             return "evaluation-writer-pending", None
-        profile_row, problem = self._refresh_route(connection, row)
-        if profile_row is None:
-            self._finish(connection, row, status="needs-host", reason=problem["reason"],
-                         error=problem["code"], output={"status": "error", **problem}, now=now)
-            self._cancel_queued_task(connection, task, now, problem["reason"])
+        if row["decision_task_id"] != task["task_id"]:
+            # A late claim of a superseded dispatch never runs; the pre-claim step
+            # has already closed its queued shell.
             return "decision-closed", None
-        document = json.loads(row["input_json"]) if row["input_json"] else None
-        if not document:
-            self._finish(connection, row, status="needs-host", reason="No frozen Router input is recorded", now=now)
-            self._cancel_queued_task(connection, task, now, "missing frozen Router input")
+        dispatch = router_sequence.dispatch(connection, task["task_id"])
+        if dispatch is None:
+            self._finish(connection, row, status="needs-host", reason="No frozen Router dispatch is recorded", now=now)
+            self._cancel_queued_task(connection, task, now, "missing frozen Router dispatch")
             return "decision-closed", None
+        document = dispatch["document"]
         from .accounts import identity, selection
         bindings = document.get('accounts') or {name: {'source': 'native', 'credentialRevision': 0}
             for name in {item['adapter'] for item in document.get('profiles', [])}}
@@ -915,8 +1166,9 @@ class DecisionCoordinator:
             self._finish(connection, row, status='stale', reason='The frozen candidate accounts changed before claim', now=now)
             self._cancel_queued_task(connection, task, now, 'Account selection changed')
             return 'decision-closed', None
-        requested_profile = document.get("profile") or {}
-        if any(profile_row[key] != requested_profile.get(key) for key in schemas.CONFIGURATION_FIELDS):
+        published = connection.execute("SELECT * FROM evaluation_profiles WHERE profile_id=?",
+                                       (dispatch["profileId"],)).fetchone()
+        if router._identity(published) != dispatch["profile"]:
             self._finish(connection, row, status="stale", reason="The configured Router changed before claim", now=now)
             self._cancel_queued_task(connection, task, now, "Router configuration changed")
             return "decision-closed", None
@@ -938,13 +1190,17 @@ class DecisionCoordinator:
             "INSERT INTO meta(key,value) VALUES(?,?)"
             " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             ("attempt-tool-policy:" + attempt_id,
-             canonical_json({"systemSandbox": bool(read_health(connection, profile_row["adapter"])["systemSandbox"])})),
+             canonical_json({"systemSandbox": bool(read_health(connection, dispatch["profile"]["adapter"])["systemSandbox"])})),
         )
         reader_id = self._admit_reader(connection, now, timeout_seconds=timeout)
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation, reader_id=reader_id,
             expected_revision=table_revision, document=document, now=now,
         )
+        # The attempt's Router binding and its ``router.claimed`` fact commit in
+        # this same claim transaction: one atomic dispatch-to-attempt binding.
+        router_sequence.record_claim(
+            connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
         return None, document
 
     def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, reader_id: str | None, expected_revision: int, document: dict, now: str, considered: int = 0, remaining: int | None = None) -> None:
