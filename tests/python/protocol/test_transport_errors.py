@@ -93,7 +93,7 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     preflight.assert_called_once_with(directory)
 
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
-        # C-Two 0.10.0 rejects a Windows peer's identity before sending bytes.
+        # C-Two rejects a Windows peer's identity before sending bytes.
         # That permission denial has no OS errno and is not an absent listener.
         failure = core_failure('permission_denied')
         failure.transport_phase = 'pre_dispatch'

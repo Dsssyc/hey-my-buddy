@@ -1,4 +1,4 @@
-"""Private published C-Two 0.10.0 RPC, non-pool accounting and control capacity.
+"""Private published C-Two RPC, non-pool accounting and control capacity.
 
 Every native process selects its endpoint before local I/O: a test-owned state/ipc
 directory on POSIX, the native user-scoped pipe domain on Windows. Memory
