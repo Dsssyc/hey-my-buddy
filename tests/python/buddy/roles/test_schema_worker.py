@@ -13,11 +13,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
-from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format, worker_permission
 from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.errors import BoardError
 from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
 
 
@@ -26,12 +27,28 @@ class CodexSchemaTests(unittest.TestCase):
         for harness in ("codex", "claude", "dsh", "zcode"):
             capabilities = set(adapter(harness).capabilities)
             self.assertIn("permission:write", capabilities)
-            self.assertEqual("permission:read" in capabilities, harness == "claude")
+            self.assertIn("permission:read", capabilities)
             self.assertNotIn("permission:full", capabilities)
+
+    def test_worker_levels_declare_native_scope_and_enforcement(self):
+        expected = {
+            "codex": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+            "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
+            "dsh": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+            "zcode": {"read": ("write", "agreed"), "write": ("write", "agreed")},
+        }
+        for harness, levels in expected.items():
+            for level, (scope, strength) in levels.items():
+                with self.subTest(harness=harness, level=level):
+                    permission = worker_permission(harness, level)
+                    self.assertEqual((permission.level, permission.tool_scope, permission.enforcement),
+                                     (level, scope, strength))
+            with self.subTest(harness=harness, level="full"), self.assertRaises(BoardError):
+                worker_permission(harness, "full")
 
     def test_every_worker_path_carries_the_frozen_workspace_access(self):
         for harness in ("codex", "claude", "dsh", "zcode"):
-            for access in ("read", "write", "full"):
+            for access in ("read", "write"):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
@@ -50,7 +67,9 @@ class CodexSchemaTests(unittest.TestCase):
                                "cwd": str(root), "timeoutSeconds": 10}
                     request, _services, _observer, error = run_execution.worker_request(control, module)
                     self.assertIsNone(error)
-                    self.assertEqual(request.tool_scope, access)
+                    declaration = worker_permission(harness, access)
+                    self.assertEqual(request.tool_scope, declaration.tool_scope)
+                    self.assertEqual(request.worker_permission, declaration)
 
     def test_every_codex_object_has_required_properties_and_rejects_additions(self):
         def check(node):
@@ -190,4 +209,4 @@ class SchemaWorkerTests(NativeRunCase):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
                 self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
-        self.assertEqual(worker_format("codex").tool_scope({"executionWorkspace": {"access": "read"}}), "read")
+        self.assertEqual(worker_permission("codex", "read").tool_scope, "write")

@@ -29,7 +29,7 @@ class PermissionLevelsTests(WorkflowTestCase):
 
     def test_submit_and_continue_reject_missing_harness_permission_without_mutation(self):
         board = self.board()
-        for access, reason in [('read', None), ('full', 'Need system writes')]:
+        for access, reason in [('full', 'Need system writes')]:
             with self.subTest(access=access):
                 kwargs = {'executionWorkspace': {'kind': 'existing', 'access': access}}
                 if reason:
@@ -43,7 +43,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         claim = self.claim(board, run_id=view['runId'])
         self.finish_turn(board, claim)
         view = board.call('workflow_get', {'runId': view['runId']})
-        for access, reason in [('read', None), ('full', 'Need system writes')]:
+        for access, reason in [('full', 'Need system writes')]:
             kwargs = {'access': access}
             if reason:
                 kwargs['accessReason'] = reason
@@ -53,6 +53,19 @@ class PermissionLevelsTests(WorkflowTestCase):
             after = board.call('workflow_get', {'runId': view['runId']})
             self.assertEqual(after['revision'], view['revision'])
             self.assertEqual(after['access'], 'write')
+
+    def test_explicit_read_remains_available_for_every_harness(self):
+        board = self.board()
+        for harness in ('codex', 'dsh', 'zcode', 'claude'):
+            with self.subTest(harness=harness):
+                view = self.submit(board, request_id='read-' + harness, adapter=harness,
+                                   provider='fixture', model='fixture', effort='high', access='read',
+                                   cwd=str(self.workdir('read-' + harness)))
+                self.assertEqual(view['access'], 'read')
+                self.assertEqual(view['executionConfiguration']['adapter'], harness)
+                self.assertEqual(governed_brief(view)['access'], 'read')
+                self.assertNotIn('enforcement', view)
+                self.assertNotIn('enforcement', governed_brief(view))
 
     def test_turns_freeze_access_and_full_reason_then_inherit(self):
         # Only the declaration is extended here to exercise future full storage;
@@ -123,7 +136,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
     def test_real_checkout_reprepares_permissions_without_rewriting_history(self):
         # Exercise storage and Git ownership against a synthetic future native
         # declaration; no native DSH process is started by these receipts.
-        self.enterContext(patch.object(DshAdapter, 'capabilities', (*DshAdapter.capabilities, 'permission:read', 'permission:full')))
+        self.enterContext(patch.object(DshAdapter, 'capabilities', (*DshAdapter.capabilities, 'permission:full')))
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {
@@ -188,7 +201,6 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             self.assertIsNone(problem)
 
     def test_permission_only_preparation_preserves_untracked_input_selectors(self):
-        self.enterContext(patch.object(DshAdapter, 'capabilities', (*DshAdapter.capabilities, 'permission:read')))
         (self.repo / 'input.txt').write_text('Explicit input\n')
         board = self.board()
         self.register(board)

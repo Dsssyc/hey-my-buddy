@@ -19,15 +19,12 @@ from hey_my_buddy.protocol.transport import _read_endpoint, _request
 class UpgradeServiceTests(BoardTestCase):
     def test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions(self):
         fixture = load_fixture(self.directory)
-        operation_id = fixture['accountOperation']['operationId']
-        with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as db:
-            original_operation = db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()[0]
         current = Path(backup.create(BoardStore(self.directory))['path'])
         verified = backup.verify(current)
         before = {**verified['databaseSnapshot'], 'schema':verified['schema']}
         migration, expected = upgrade.migrate_board(self.directory, before)
         identity, expected = migrate_workspace_identity(self.directory, expected)
-        self.assertEqual(migration['toSchema'], 17)
+        self.assertEqual(migration['toSchema'], 18)
         self.assertEqual(identity['mapped'], [])
         self.assertEqual(identity['kept'], {})
         self.assertEqual(upgrade.idle_snapshot(self.directory), {key:value for key,value in expected.items()
@@ -47,16 +44,13 @@ class UpgradeServiceTests(BoardTestCase):
 
         try:
             with self.daemon(env={'BUDDY_MAX_CONCURRENT':'1'}):
-                self.assertEqual(call('health', {})['schemaVersion'], 17)
-                with database.read() as db:
-                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone(),
-                                     None)
+                self.assertEqual(call('health', {})['schemaVersion'], 18)
                 snapshot = call('console_snapshot', {})
                 self.assertEqual(snapshot['configuration']['routerProfileIds'], fixture['routerProfileIds'])
                 models = call('model_profiles', {'includeUnavailable': True})['profiles']
                 self.assertTrue(models)
-                self.assertTrue(all(model['catalogState'] == 'unknown' for model in models))
-                self.assertTrue(all(model['catalogReason'] == 'ACCOUNT_STATUS_UNKNOWN' for model in models))
+                self.assertEqual({model['profileId'] for model in models},
+                                 set(fixture['routerProfileIds']))
                 delivered = call('workflow_get', {'runId':DELIVERED})
                 self.assertEqual(delivered['state'], 'delivered')
                 self.assertIsNone(delivered['hostConclusion'])
@@ -91,9 +85,6 @@ class UpgradeServiceTests(BoardTestCase):
                 self.assertEqual(sealed['kind'], 'host-output')
                 self.assertEqual(sealed['snapshotSha256'], artifact[0])
                 self.assertEqual(worker_file.read_bytes(), worker_bytes)
-                with database.read() as db:
-                    self.assertEqual(db.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone(),
-                                     None)
         finally:
             # The focused runner retains this raw child log after normal harness
             # teardown removes the private test state.

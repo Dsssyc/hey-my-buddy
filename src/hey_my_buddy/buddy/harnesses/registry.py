@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ...errors import BoardError
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
-from .run_contract import HARNESS_NAMES, HarnessRun
+from .run_contract import HARNESS_NAMES, HarnessRun, WorkerPermission
 from ..runtime.command import CommandAdapter
 from .claude.adapter import ClaudeAdapter
 from .codex.adapter import CodexAdapter
@@ -134,6 +134,28 @@ register_run_seam("dsh", dsh_run)
 #: advertise this capability.
 EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
 
+# Worker levels name the Host's chosen boundary. Native tool scope is a
+# separate harness fact: three current Worker paths require their existing
+# write execution path even for a read reservation, which the board seals.
+_WORKER_PERMISSIONS = {
+    "codex": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+    "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
+    "dsh": {"read": ("write", "agreed"), "write": ("write", "enforced")},
+    "zcode": {"read": ("write", "agreed"), "write": ("write", "agreed")},
+}
+
+
+def worker_permission(harness: str, level: str) -> WorkerPermission:
+    """Resolve a declared Worker level to its native scope and strength."""
+    declaration = _WORKER_PERMISSIONS.get(harness, {}).get(level)
+    if declaration is None:
+        raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not declare the Worker permission",
+                         adapter=harness, access=level,
+                         requiredCapability=f"permission:{level}",
+                         missingCapabilities=[f"permission:{level}"])
+    tool_scope, enforcement = declaration
+    return WorkerPermission(level=level, tool_scope=tool_scope, enforcement=enforcement)
+
 
 def adapters() -> dict[str, Adapter | ZcodeAdapter]:
     return {adapter.name: adapter() for adapter in BUILT_IN}
@@ -259,4 +281,5 @@ __all__ = [
     "require_permission",
     "run_seam",
     "supported_capabilities",
+    "worker_permission",
 ]

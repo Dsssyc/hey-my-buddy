@@ -9,7 +9,7 @@ class CodexAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "codex"
-    capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:write")
+    capabilities = ("codex", "workspace", "cancel", "artifacts", "deadline", "native-session", "permission:read", "permission:write")
     native_resume = True
     model_discovery = True
     read_only_structured = True

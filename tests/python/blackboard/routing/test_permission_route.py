@@ -39,5 +39,6 @@ class PermissionCandidateTests(BoardTestCase):
         with board.store.db.read() as connection:
             write, _ = DecisionCoordinator._scan_candidates(connection, ['permission:write'], coding_only=True)
             self.assertTrue(write)
-            self.assertEqual(DecisionCoordinator._scan_candidates(connection, ['permission:read'], coding_only=True)[0], [])
+            read, _ = DecisionCoordinator._scan_candidates(connection, ['permission:read'], coding_only=True)
+            self.assertEqual([row['profile_id'] for row in read], [row['profile_id'] for row in write])
             self.assertEqual(DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)[0], [])

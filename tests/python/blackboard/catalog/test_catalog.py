@@ -109,18 +109,21 @@ class CatalogTests(unittest.TestCase):
                                             if cap.startswith("permission:")} for profile in profiles}
         self.assertEqual(permissions, {
             "claude": {"permission:read", "permission:write"},
-            "codex": {"permission:write"},
-            "dsh": {"permission:write"},
-            "zcode": {"permission:write"},
+            "codex": {"permission:read", "permission:write"},
+            "dsh": {"permission:read", "permission:write"},
+            "zcode": {"permission:read", "permission:write"},
         })
 
     def test_explicit_permission_gate_uses_adapter_declaration(self):
         require_permission(None, "full")
         require_permission({"adapter": "claude"}, "read")
+        require_permission({"adapter": "codex"}, "read")
+        require_permission({"adapter": "dsh"}, "read")
+        require_permission({"adapter": "zcode"}, "read")
         require_permission({"adapter": "codex"}, "write")
         require_permission({"adapter": "external"}, "read")
         require_permission({"adapter": "command"}, "write")
-        for adapter, access in (("codex", "read"), ("claude", "full"), ("external", "full")):
+        for adapter, access in (("codex", "full"), ("claude", "full"), ("external", "full")):
             with self.subTest(adapter=adapter, access=access), self.assertRaises(BoardError) as caught:
                 require_permission({"adapter": adapter}, access)
             self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")

@@ -19,9 +19,9 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 #: The one earlier schema that ``upgrade`` migrates in place (see ``migrations``).
-PREVIOUS_SCHEMA_VERSION = 16
+PREVIOUS_SCHEMA_VERSION = 17
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CAPABILITY_VERSION = 1
@@ -628,8 +628,8 @@ CREATE TABLE IF NOT EXISTS family_preferences (
     # ``current`` row carries the extracted facts with their exact source, payload
     # hash and fetch date; an ``unknown`` row records a completed fetch with no
     # resolvable entry for this family. A failed fetch writes nothing, so the
-    # previous snapshot is retained untouched. Added to the shared pending schema 16;
-    # the explicit idle upgrade remains owned by the upgrade module.
+    # previous snapshot is retained untouched. Recorded by the schema-17 upgrade base; the explicit idle upgrade
+    # remains owned by the upgrade module.
     """
 CREATE TABLE IF NOT EXISTS model_facts (
     adapter          TEXT NOT NULL,

@@ -128,6 +128,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
 
 def _worker_facts(result) -> dict:
     from ..harnesses.registry import worker_format
+    from ..harnesses.run_contract import WorkerPermission
 
     format = worker_format(result.harness)
     payload = _base_result(result)
@@ -141,6 +142,15 @@ def _worker_facts(result) -> dict:
             and isinstance(check.get("selected"), dict):
         payload["selectedModelListed"] = False
         payload["selectedModel"] = check["selected"]
+    declaration = _evidence(result, "worker-permission")
+    if declaration is not None:
+        if (set(declaration) != {"source", "binding", "permission"}
+                or declaration["source"] != "harness-permission-declaration"
+                or declaration["binding"] != result.identity.to_payload()):
+            raise BoardError("INVALID_ARGUMENT", "The Worker permission declaration does not bind this run")
+        permission = WorkerPermission.from_payload(declaration["permission"])
+        payload.setdefault("nativeEvidence", {})["workerPermission"] = {
+            **declaration, "permission": permission.to_payload()}
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)
@@ -273,8 +283,9 @@ def worker_request(control: dict, module):
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
     task_text = Path(control["taskFile"]).read_text()
-    from ..harnesses.registry import worker_format
+    from ..harnesses.registry import worker_format, worker_permission
     format = worker_format(control["harness"])
+    permission = worker_permission(control["harness"], turn_input["executionWorkspace"].get("access", "write"))
     if format is None:
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
@@ -287,9 +298,9 @@ def worker_request(control: dict, module):
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
         services, descriptions = binding.services, (binding.description,)
-        schema, scope = worker_services.OUTCOME_SCHEMA, turn_input["executionWorkspace"].get("access", "write")
+        schema, scope = worker_services.OUTCOME_SCHEMA, permission.tool_scope
     else:
-        prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, format.tool_scope(turn_input)
+        prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, permission.tool_scope
         services = _native_services(control, module, scope)
         descriptions = ()
     mode = turn_input.get("resumeMode")
@@ -310,7 +321,7 @@ def worker_request(control: dict, module):
         cwd=control["cwd"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=prompt, tool_scope=scope,
+        input_text=prompt, tool_scope=scope, worker_permission=permission,
         output_schema=schema,
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
         continuation=continuation,

@@ -68,9 +68,6 @@ class NativeSchemaWorker:
     def prompt(self, task_text: str, turn_input: dict) -> str:
         return worker_prompt(task_text, turn_input, delivery=self.prefixes)
 
-    def tool_scope(self, turn_input: dict) -> str:
-        return turn_input["executionWorkspace"].get("access", "write")
-
     def parse_value(self, result) -> tuple[dict | None, str | None]:
         """Use the same outcome validator for the decision and its diagnostic."""
         outcome = None

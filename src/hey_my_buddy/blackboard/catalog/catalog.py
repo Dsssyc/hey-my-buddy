@@ -542,6 +542,13 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
     return selected
 
 
+def permission_capabilities(name: str) -> list[str]:
+    """The permission facts copied into catalog rows from this source's harness."""
+    from ...buddy.harnesses.registry import adapters
+    native = adapters().get(name)
+    return sorted(capability for capability in native.capabilities if capability.startswith("permission:")) if native else []
+
+
 class CatalogView:
     def __init__(self, payload: dict, *, discovery_id: str | None = None, recorded_at: str | None = None):
         self.payload, self.discovery_id, self.recorded_at = payload, discovery_id, recorded_at
@@ -589,8 +596,7 @@ class CatalogView:
                     if native is not None:
                         if review_eligible:
                             capabilities.append("decision")
-                        capabilities.extend(sorted(capability for capability in native.capabilities
-                                                   if capability.startswith("permission:")))
+                        capabilities.extend(permission_capabilities(entry["adapter"]))
                     proposals.append({
                         "profileId": profile_id, "label": f"{model['name']} · {effort}"[:200],
                         "adapter": entry["adapter"], "provider": entry["provider"], "model": model["id"], "effort": effort,

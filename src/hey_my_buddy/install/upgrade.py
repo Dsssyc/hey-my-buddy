@@ -304,7 +304,7 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
         raise BoardError('UPGRADE_MIGRATION_FAILED', 'Board no longer matches its verified backup',
                          tables=sorted(set(changed + inventory)))
     with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
-        summary = migrations.migrate_16_to_17(connection)
+        summary = migrations.migrate_17_to_18(connection)
     expected = idle_snapshot(state, event_head=before.get('eventHead'))
     expected['runtimeSettings'] = before.get('runtimeSettings', {})
     return summary, expected

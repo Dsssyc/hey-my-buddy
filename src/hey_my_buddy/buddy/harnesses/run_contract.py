@@ -170,6 +170,15 @@ class SessionService(InternalModel):
     tool_names: JsonTuple(Text(512), max_items=MAX_SERVICE_TOOL_NAMES) = ()
 
 
+
+class WorkerPermission(InternalModel):
+    """One chosen level and the harness declaration that carries it out."""
+
+    level: Literal["read", "write", "full"]
+    tool_scope: ToolScope
+    enforcement: Literal["enforced", "agreed"]
+
+
 class RunRequest(InternalModel):
     """One harness run request: values only, no role authority of any kind."""
 
@@ -182,6 +191,8 @@ class RunRequest(InternalModel):
     private_state: PrivateStatePaths
     input_text: NonEmptyInputText
     tool_scope: ToolScope
+    #: None for runs without a governed Worker permission choice.
+    worker_permission: Optional[WorkerPermission] = None
     #: None preserves the native default; () explicitly permits no domains.
     #: Kept separate from file-tool scope because Claude's two existing read
     #: callers have different network and session-wide tool restrictions.
@@ -192,6 +203,13 @@ class RunRequest(InternalModel):
     continuation: Optional[RunContinuation] = None
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
     capture_evidence: bool = False
+
+    @model_validator(mode="after")
+    def _permission_matches_native_scope(self) -> "RunRequest":
+        if self.worker_permission is not None and self.worker_permission.tool_scope != self.tool_scope:
+            raise fail("the Worker permission declaration does not match the native tool scope",
+                       field="workerPermission.toolScope")
+        return self
 
 
 class NativeIdentity(InternalModel):
@@ -606,7 +624,7 @@ __all__ = [
     "CompletionEvidence", "ContinuationFacts", "EffectivePolicy", "EvidenceRef",
     "InterruptEvidence", "NativeIdentity", "PrivateStatePaths",
     "ResumeCheckpoint", "RunBudget", "RunConfiguration", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
-    "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
+    "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
     "decode_run_request", "decode_run_result", "encode_run_request", "encode_run_result",
 ]

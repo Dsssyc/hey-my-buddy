@@ -70,10 +70,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         # Keep the base fixture's private board/environment/catalog lifecycle;
         # only its invariant initial Git construction moves to setUpClass.
         BoardTestCase.setUp(self)
-        # Ownership/history fixtures exercise a synthetic read-capable Worker;
-        # actual DSH eligibility is checked in the permission-level tests.
-        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
-        self.enterContext(mock.patch.object(DshAdapter, "capabilities", (*DshAdapter.capabilities, "permission:read")))
         private_environment(self)
         self.catalog_fixture()
         self.repo = self.directory / "repo"

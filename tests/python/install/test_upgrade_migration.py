@@ -1,4 +1,4 @@
-"""The fixed schema-16 board follows the install coordinator's migration/backup path."""
+"""The fixed schema-17 board follows the install coordinator's migration/backup path."""
 from contextlib import closing, ExitStack
 import json
 import os
@@ -33,46 +33,33 @@ class UpgradeMigrationTests(BoardTestCase):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             return rows(connection)
 
-    def account_operation(self):
-        operation_id = self.fixture['accountOperation']['operationId']
-        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
-            return connection.execute('SELECT value FROM meta WHERE key=?', (operation_id,)).fetchone()
-
-    def test_uncertain_base_operation_is_backed_up_then_retired_without_rewriting_history(self):
-        original = self.account_operation()
-        self.assertEqual(json.loads(original[0])['status'], 'uncertain')
+    def test_base_state_is_backed_up_then_migrated_without_rewriting_history(self):
+        original = self.all_rows()
         current, before = self.backed_up()
-        self.assertEqual(self.account_operation(), original)
+        self.assertEqual(self.all_rows(), original)
         migration, expected = upgrade.migrate_board(self.state, before)
-        self.assertEqual(migration['toSchema'], 17)
-        self.assertIsNone(self.account_operation())
+        self.assertEqual(migration['toSchema'], 18)
+        for table in original:
+            if table not in ('meta', 'workflow_turns', 'evaluation_profiles'):
+                self.assertEqual(self.all_rows()[table], original[table], table)
         _identity, expected = migrate_workspace_identity(self.state, expected)
         target = self.directory / 'private-runtime'
-        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': 17}
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': 18}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
             verified = upgrade.verify_started(self.state, target, health, expected)
         self.assertTrue(verified['retainedDataFingerprints'])
         upgrade.restore(self.state, current)
-        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 16)
-        self.assertEqual(self.account_operation(), original)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 17)
+        self.assertEqual(self.all_rows(), original)
 
-    def test_active_or_uncertain_account_reservations_do_not_assert_task_shutdown(self):
-        for status in ('active', 'uncertain'):
-            with self.subTest(status=status):
-                with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
-                    connection.execute("UPDATE meta SET value=json_set(value,'$.status',?) WHERE key LIKE 'account-operation:%' OR key LIKE 'account-mutation:%'", (status,))
-                original = self.all_rows()
-                self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 16)
-                self.assertEqual(self.all_rows(), original)
-
-    def test_backup_records_16_and_trials_the_same_migration_without_touching_the_source(self):
+    def test_backup_records_17_and_trials_the_same_migration_without_touching_the_source(self):
         old = self.all_rows()
-        original = migrations.migrate_16_to_17
-        with mock.patch.object(migrations, 'migrate_16_to_17', wraps=original) as migrated:
+        original = migrations.migrate_17_to_18
+        with mock.patch.object(migrations, 'migrate_17_to_18', wraps=original) as migrated:
             _current, before = self.backed_up()
         self.assertGreater(migrated.call_count, 0)
-        self.assertEqual(before['schema'], 16)
-        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 16)
+        self.assertEqual(before['schema'], 17)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 17)
         self.assertEqual(self.all_rows(), old)
 
     def test_migration_and_identity_path_preserve_history_and_bind_the_updated_snapshot(self):
@@ -81,17 +68,21 @@ class UpgradeMigrationTests(BoardTestCase):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             turn_columns = [row[1] for row in connection.execute('PRAGMA table_info(workflow_turns)')]
         summary, expected = upgrade.migrate_board(self.state, before)
-        self.assertEqual(summary['toSchema'], 17)
-        self.assertEqual(expected['schema'], 17)
+        self.assertEqual(summary['toSchema'], 18)
+        self.assertEqual(expected['schema'], 18)
         migrated = self.all_rows()
         for table in old:
-            if table not in ('meta', 'catalog_current', 'harness_health', 'catalog_pending', 'evaluation_profiles', 'workflow_turns'):
+            if table not in ('meta', 'workflow_turns', 'evaluation_profiles'):
                 self.assertEqual(migrated[table], old[table], table)
         # The new turn columns are added by the upgrade; every historical value
         # remains identical when projected through the original column list.
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             historical_turns = sorted(connection.execute('SELECT ' + ','.join(turn_columns) + ' FROM workflow_turns').fetchall(), key=repr)
             self.assertEqual(historical_turns, old['workflow_turns'])
+            cap_index = [row[1] for row in connection.execute('PRAGMA table_info(evaluation_profiles)')].index('capabilities_json')
+            for original_profile, migrated_profile in zip(old['evaluation_profiles'], migrated['evaluation_profiles']):
+                self.assertEqual(migrated_profile[:cap_index] + migrated_profile[cap_index + 1:], original_profile[:cap_index] + original_profile[cap_index + 1:])
+                self.assertEqual(set(json.loads(migrated_profile[cap_index])), set(json.loads(original_profile[cap_index])) | {'permission:read', 'permission:write'})
             self.assertTrue(all(row[0] in ('read', 'write') and row[1] is None
                                 for row in connection.execute('SELECT access,access_reason FROM workflow_turns')))
         identity, expected = migrate_workspace_identity(self.state, expected)
@@ -109,15 +100,15 @@ class UpgradeMigrationTests(BoardTestCase):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             self.assertEqual(schema_shape(connection), before_shape)
 
-    def test_schema_16_restore_is_exact_after_a_successful_migration(self):
+    def test_schema_17_restore_is_exact_after_a_successful_migration(self):
         current, before = self.backed_up()
         old = self.all_rows()
         upgrade.migrate_board(self.state, before)
-        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 17)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 18)
         upgrade.restore(self.state, current)
         self.assertEqual(self.all_rows(), old)
         self.assertEqual(upgrade.idle_snapshot(self.state)['fingerprints'], before['fingerprints'])
-        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 16)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 17)
 
     def test_public_reads_and_delivered_host_conclusion_are_successful_and_idempotent_after_identity_migration(self):
         _current, before = self.backed_up()
@@ -132,15 +123,12 @@ class UpgradeMigrationTests(BoardTestCase):
         self.assertEqual(snapshot['configuration']['routerProfileIds'], self.fixture['routerProfileIds'])
         models = board.call('model_profiles', {'includeUnavailable': True})['profiles']
         self.assertTrue(models)
-        self.assertTrue(all(model['catalogState'] == 'unknown' for model in models))
-        self.assertTrue(all(model['catalogReason'] == 'ACCOUNT_STATUS_UNKNOWN' for model in models))
+        self.assertEqual({model['profileId'] for model in models},
+                         set(self.fixture['routerProfileIds']))
         delivered = board.call('workflow_get', {'runId':DELIVERED})
         self.assertEqual(delivered['state'], 'delivered')
         self.assertIsNone(delivered['hostConclusion'])
         with board.store.db.read() as db:
-            for adapter in migration['catalogUnknown']:
-                self.assertIsNone(db.execute('SELECT value FROM meta WHERE key=?',
-                                            ('catalog-account-status:' + adapter,)).fetchone(), adapter)
             worker_output = db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
                                        (DELIVERED,)).fetchone()
         worker_manifest = json.loads(worker_output['manifest_json'])
@@ -186,7 +174,7 @@ class UpgradeMigrationTests(BoardTestCase):
         with self.assertRaises(BoardError) as caught:
             upgrade.migrate_board(self.state, before)
         self.assertIn('evaluation_profiles', caught.exception.details['tables'])
-        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 16)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], 17)
 
     def seed_router(self, status, *, active=False):
         with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
@@ -246,9 +234,9 @@ class UpgradeMigrationTests(BoardTestCase):
     def test_verification_reports_exact_inventory_and_retained_value_failures(self):
         _current, before = self.backed_up()
         target = self.directory / 'runtime-previous'
-        health = {'runtimeContentId':target.name, 'runtimeStable':True, 'schemaVersion':16}
+        health = {'runtimeContentId':target.name, 'runtimeStable':True, 'schemaVersion':17}
         with mock.patch('hey_my_buddy.install.upgrade.command', return_value={'leaks':[]}):
-            self.assertEqual(upgrade.verify_started(self.state, target, health, before)['schemaVersion'], 16)
+            self.assertEqual(upgrade.verify_started(self.state, target, health, before)['schemaVersion'], 17)
             with closing(sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)) as connection:
                 connection.execute('CREATE TABLE stray(value TEXT)')
             with self.assertRaises(BoardError) as caught:
@@ -291,8 +279,8 @@ class UpgradeMigrationTests(BoardTestCase):
         def failed_migration(*args):
             # Let backup trials succeed, then fail SQLite in the actual board
             # migration with context independent of the injected SQL text.
-            with mock.patch.object(migrations, '_NEW_DDL', migrations._NEW_DDL + (
-                    ('router_outcomes', 'CREATE INDEX broken ON no_such_table(value)'),)):
+            with mock.patch.object(migrations, 'WORKFLOW_TURNS_DDL',
+                                   migrations.WORKFLOW_TURNS_DDL.replace('CREATE TABLE', 'CREATE TABL', 1)):
                 return original(*args)
 
         with mock.patch.object(upgrade, 'migrate_board', side_effect=failed_migration):
@@ -302,8 +290,8 @@ class UpgradeMigrationTests(BoardTestCase):
         self.assertNotIn('failure', result)
         self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK')
         self.assertEqual(result['error']['details']['reason'], {
-            'code':'UPGRADE_MIGRATION_FAILED', 'message':'no such table: main.no_such_table',
-            'details':{'tables':['router_outcomes']},
+            'code':'UPGRADE_MIGRATION_FAILED', 'message':'near "TABL": syntax error',
+            'details':{'tables':['workflow_turns']},
         })
         self.assertEqual(journal['failure'], result['error']['details']['reason'])
         self.assertEqual(journal['phase'], 'rolled-back')
@@ -323,7 +311,7 @@ class UpgradeMigrationTests(BoardTestCase):
             # exception reaches the coordinator's rollback/error boundary.
             self.assertEqual(observed['schemaVersion'], upgrade.idle_snapshot(state)['schema'])
             if runtime_path.name == 'b' * 32:
-                self.assertEqual(upgrade.idle_snapshot(state)['schema'], 17)
+                self.assertEqual(upgrade.idle_snapshot(state)['schema'], 18)
                 raise RuntimeError('private target verification failure')
             return {'retainedDataFingerprints':True}
 
@@ -382,7 +370,7 @@ class UpgradeWorkspaceIdentityTests(identity_fixtures.WorkspaceIdentityFixture):
                     "pid": 123, "contractVersion": "private-fixture"}
         (self.directory / "control.json").write_text(json.dumps(endpoint))
         health = {**endpoint, "maxConcurrent": 2, "waitCapacity": 4}
-        started = {"runtimeContentId": target.name, "runtimeStable": True, "schemaVersion": 17,
+        started = {"runtimeContentId": target.name, "runtimeStable": True, "schemaVersion": 18,
                    "maxConcurrent": 2, "waitCapacity": 4}
         original_verify = upgrade.verify_started
 
@@ -415,7 +403,7 @@ class UpgradeWorkspaceIdentityTests(identity_fixtures.WorkspaceIdentityFixture):
         board, run, manifest, initial, result = self.private_upgrade()
         self.assertTrue(result["upgraded"], result)
         verified_backup = backup.verify(Path(result["backup"]["path"]))
-        self.assertEqual(verified_backup["schema"], 17)
+        self.assertEqual(verified_backup["schema"], 18)
         self.assertTrue(result["verification"]["retainedDataFingerprints"])
         current = self.all_rows(board)
         actual = self.workspace.inspect(manifest["path"])

@@ -1,22 +1,21 @@
-"""The public-operation schema-16 board guards the unique 16→17 conversion."""
+"""The released schema-17 board guards the single 17→18 conversion."""
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import sqlite3
 import re
+import sqlite3
 from unittest import mock
 
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
 from hey_my_buddy.blackboard.store import migrations
-from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION, Corruption
+from hey_my_buddy.blackboard.store.db import Database, Corruption
 from hey_my_buddy.errors import BoardError
 
-FIXTURE_ROOT = FIXTURE
 _METADATA = json.loads((FIXTURE / 'metadata.json').read_text())
 DELIVERED = _METADATA['stableIds']['delivered']
 CANCELLED = _METADATA['stableIds']['cancelled']
+
 
 def normalized_sql(sql):
     if sql is None:
@@ -28,7 +27,6 @@ def normalized_sql(sql):
 
 
 def schema_shape(connection) -> dict:
-    """Definitions plus column, FK and index mechanics, independent of row values."""
     objects = [tuple(row) for row in connection.execute(
         'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
     shape = {'master': [(kind, name, table, normalized_sql(sql)) for kind, name, table, sql in objects]}
@@ -52,7 +50,7 @@ def rows(connection) -> dict:
             for name in names}
 
 
-class Schema16UpgradeTests(BoardTestCase):
+class Schema17UpgradeTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.state = self.directory / 'base'
@@ -60,62 +58,52 @@ class Schema16UpgradeTests(BoardTestCase):
         self.connection = sqlite3.connect(self.state / 'board.sqlite3', isolation_level=None)
         self.addCleanup(self.connection.close)
 
-    def test_migration_has_the_complete_fresh_schema_and_empty_new_tables(self):
-        summary = migrations.migrate_16_to_17(self.connection)
+    def test_migration_has_the_complete_fresh_schema(self):
+        summary = migrations.migrate_17_to_18(self.connection)
         fresh = Database(self.directory / 'fresh')
         fresh.initialize()
         with fresh.read() as connection:
             self.assertEqual(schema_shape(self.connection), schema_shape(connection))
-        self.assertEqual(summary['fromSchema'], 16)
-        self.assertEqual(summary['toSchema'], 17)
-        self.assertEqual(summary['newTables'], sorted(migrations.NEW_TABLES))
-        for table in migrations.NEW_TABLES:
-            self.assertEqual(self.connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0)
-        self.assertNotIn('quota_json', [row[1] for row in self.connection.execute('PRAGMA table_info(harness_health)')])
-        quota_columns = {row[1] for row in self.connection.execute('PRAGMA table_info(quota_current)')}
-        self.assertFalse({'available', 'retry_basis'} & quota_columns)
-        self.assertEqual(
-            {row[1] for row in self.connection.execute('PRAGMA table_info(harness_quota_observations)')},
-            {'adapter', 'quota_json'},
-        )
-        turn_columns = {row[1] for row in self.connection.execute('PRAGMA table_info(workflow_turns)')}
-        self.assertTrue({'access', 'access_reason'} <= turn_columns)
+        self.assertEqual(summary, {'fromSchema': 17, 'toSchema': 18,
+                                   'migratedTurns': len(rows(self.connection)['workflow_turns']),
+                                   'migratedProfiles': len(rows(self.connection)['evaluation_profiles'])})
 
-    def test_all_retired_stock_is_deleted_and_every_historical_value_is_preserved(self):
+    def test_every_historical_value_is_preserved_and_turn_access_is_backfilled(self):
         old = rows(self.connection)
-        old_turn_columns = [row[1] for row in self.connection.execute('PRAGMA table_info(workflow_turns)')]
-        access_index = old_turn_columns.index('state')
+        old_columns = [row[1] for row in self.connection.execute('PRAGMA table_info(workflow_turns)')]
+        access_index = old_columns.index('state')
         run_access = {row[0]: json.loads(row[1])['access'] for row in self.connection.execute(
             'SELECT run_id,execution_workspace_json FROM workflow_runs')}
-        keys = dict(old['meta'])
-        for prefix in migrations.RETIRED_META_PREFIXES:
-            self.assertTrue(any(key.startswith(prefix) for key in keys), prefix)
-        migrations.migrate_16_to_17(self.connection)
+        migrations.migrate_17_to_18(self.connection)
         actual = rows(self.connection)
         for table, values in old.items():
-            if table not in ('meta', 'catalog_current', 'catalog_pending', 'harness_health', 'evaluation_profiles', 'workflow_turns'):
+            if table not in ('meta', 'workflow_turns', 'evaluation_profiles'):
                 self.assertEqual(actual[table], values, table)
+        cap_index = [row[1] for row in self.connection.execute('PRAGMA table_info(evaluation_profiles)')].index('capabilities_json')
+        for before, after in zip(old['evaluation_profiles'], actual['evaluation_profiles']):
+            self.assertEqual(after[:cap_index] + after[cap_index + 1:], before[:cap_index] + before[cap_index + 1:])
+            self.assertEqual(set(json.loads(after[cap_index])), set(json.loads(before[cap_index])) | {'permission:read', 'permission:write'})
         expected_turns = [row[:access_index] + (run_access[row[1]], None) + row[access_index:]
                           for row in old['workflow_turns']]
         self.assertEqual(actual['workflow_turns'], sorted(expected_turns, key=repr))
-        planned = {key: value for key, value in keys.items() if not migrations.retired_meta(key)}
-        planned['schema_version'] = '17'
-        self.assertEqual(dict(actual['meta']), planned)
-        self.assertEqual(actual['catalog_pending'], [])
-        self.assertTrue(old['catalog_pending'])
-        profile_columns = [row[1] for row in self.connection.execute('PRAGMA table_info(evaluation_profiles)')]
-        expected_profiles = [tuple(0 if column == 'available' else 'ACCOUNT_STATUS_UNKNOWN' if column == 'unavailable_reason' else value
-                                   for column, value in zip(profile_columns, row))
-                             for row in old['evaluation_profiles']]
-        self.assertEqual(actual['evaluation_profiles'], expected_profiles)
-        for row in self.connection.execute('SELECT * FROM catalog_current'):
-            self.assertEqual(row[1:5], (0, None, 'unknown', 'ACCOUNT_STATUS_UNKNOWN'))
-        for row in self.connection.execute('SELECT * FROM harness_health'):
-            original = next(item for item in old['harness_health'] if item[0] == row[0])
-            self.assertEqual(row[:3], original[:3])
-            self.assertEqual(row[3:], ('unknown', '{}', None, None, None))
+        self.assertEqual(dict(actual['meta']), {**dict(old['meta']), 'schema_version': '18'})
 
-    def test_historical_write_access_is_backfilled_from_owning_run(self):
+    def test_existing_published_profiles_remain_eligible_for_read_after_upgrade(self):
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        self.connection.row_factory = sqlite3.Row
+        original = self.connection.execute('SELECT profile_id,enabled,available FROM evaluation_profiles ORDER BY profile_id').fetchall()
+        migrations.migrate_17_to_18(self.connection)
+        self.assertEqual([tuple(row) for row in self.connection.execute('SELECT profile_id,enabled,available FROM evaluation_profiles ORDER BY profile_id')],
+                         [tuple(row) for row in original])
+        # Quota records remain real preserved stock. Clear only this private
+        # fixture's quota stop so the scan isolates permission eligibility.
+        self.connection.execute('DELETE FROM quota_current')
+        candidates, _ = DecisionCoordinator._scan_candidates(self.connection, ['permission:read'], coding_only=True)
+        self.assertTrue(candidates)
+        self.assertEqual({row['profile_id'] for row in candidates},
+                         {row['profile_id'] for row in original if row['enabled'] and row['available']})
+
+    def test_historical_write_access_uses_owning_run_without_changing_turn_evidence(self):
         run_id = DELIVERED
         self.connection.execute(
             "UPDATE workflow_runs SET execution_workspace_json=json_set(execution_workspace_json,'$.access','write')"
@@ -124,7 +112,7 @@ class Schema16UpgradeTests(BoardTestCase):
             'SELECT input_json,input_sha256,prompt_sha256,provenance_json FROM workflow_turns WHERE run_id=?',
             (run_id,),
         ).fetchone()
-        migrations.migrate_16_to_17(self.connection)
+        migrations.migrate_17_to_18(self.connection)
         after = self.connection.execute(
             'SELECT access,access_reason,input_json,input_sha256,prompt_sha256,provenance_json'
             ' FROM workflow_turns WHERE run_id=?', (run_id,),
@@ -134,50 +122,13 @@ class Schema16UpgradeTests(BoardTestCase):
             'SELECT access FROM workflow_turns WHERE run_id!=?', (run_id,))}, {'read'})
 
     def test_turn_access_and_reason_constraint(self):
-        migrations.migrate_16_to_17(self.connection)
+        migrations.migrate_17_to_18(self.connection)
         turn_id = self.connection.execute('SELECT turn_id FROM workflow_turns LIMIT 1').fetchone()[0]
         with self.assertRaises(sqlite3.IntegrityError):
             self.connection.execute("UPDATE workflow_turns SET access='full' WHERE turn_id=?", (turn_id,))
         self.connection.execute("UPDATE workflow_turns SET access='full',access_reason='Host choice' WHERE turn_id=?", (turn_id,))
         with self.assertRaises(sqlite3.IntegrityError):
             self.connection.execute("UPDATE workflow_turns SET access='read' WHERE turn_id=?", (turn_id,))
-
-    def test_health_recovery_cannot_route_old_profiles_without_a_new_trusted_catalog(self):
-        from hey_my_buddy.blackboard.catalog.catalog import restore_retained_availability
-        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
-        from hey_my_buddy.blackboard.service.harness_health import read_health
-
-        self.connection.row_factory = sqlite3.Row
-        self.assertTrue(self.connection.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available=1 AND enabled=1').fetchone()[0])
-        migrations.migrate_16_to_17(self.connection)
-        self.connection.execute("UPDATE harness_health SET status='ready' WHERE adapter='codex'")
-        self.assertTrue(read_health(self.connection, 'codex')['available'])
-        self.assertEqual(restore_retained_availability(self.connection, 'codex'), 0)
-        candidates, retried = DecisionCoordinator._scan_candidates(self.connection, [])
-        self.assertEqual((candidates, retried), ([], []))
-        self.assertEqual(self.connection.execute("SELECT status,discovery_id FROM catalog_current WHERE adapter='codex'").fetchone()[:], ('unknown', None))
-        self.assertEqual(self.connection.execute('SELECT COUNT(*) FROM evaluation_profiles WHERE available!=0').fetchone()[0], 0)
-        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM evaluation_profiles WHERE unavailable_reason!='ACCOUNT_STATUS_UNKNOWN'").fetchone()[0], 0)
-
-    def test_retired_read_alias_without_a_base_writer_is_deleted(self):
-        # The released base never writes this old read alias; synthesize only
-        # this boundary input, leaving the public-operation fixture untouched.
-        self.connection.execute("INSERT INTO meta(key,value) VALUES('codex_account_read_at','old')")
-        migrations.migrate_16_to_17(self.connection)
-        self.assertIsNone(self.connection.execute("SELECT key FROM meta WHERE key='codex_account_read_at'").fetchone())
-
-    def test_account_status_never_blocks_sql_retirement_or_claims_shutdown(self):
-        for status in ('active', 'uncertain'):
-            with self.subTest(status=status):
-                state = self.directory / f'status-{status}'
-                load_fixture(state)
-                connection = sqlite3.connect(state / 'board.sqlite3', isolation_level=None)
-                self.addCleanup(connection.close)
-                connection.execute("UPDATE meta SET value=json_set(value,'$.status',?) WHERE key LIKE 'account-operation:%' OR key LIKE 'account-mutation:%'", (status,))
-                before = rows(connection)
-                migrations.migrate_16_to_17(connection)
-                self.assertEqual(rows(connection)['attempts'], before['attempts'])
-                self.assertEqual(rows(connection)['events'], before['events'])
 
     def test_foreign_key_setting_is_restored_after_success_and_rollback(self):
         for setting in (0, 1):
@@ -192,12 +143,12 @@ class Schema16UpgradeTests(BoardTestCase):
                     trace = []
                     connection.set_trace_callback(trace.append)
                     if fail:
-                        with mock.patch.object(migrations, '_NEW_DDL', migrations._NEW_DDL + (('quota_current', 'CREATE INDEX broken ON absent(value)'),)):
+                        with mock.patch.object(migrations, 'WORKFLOW_TURNS_DDL', 'CREATE TABLE workflow_turns ('):
                             with self.assertRaises(BoardError):
-                                migrations.migrate_16_to_17(connection)
+                                migrations.migrate_17_to_18(connection)
                         self.assertEqual(rows(connection), before)
                     else:
-                        migrations.migrate_16_to_17(connection)
+                        migrations.migrate_17_to_18(connection)
                     self.assertFalse(connection.in_transaction)
                     self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], setting)
                     self.assertLess(trace.index('PRAGMA foreign_keys=OFF'), trace.index('BEGIN IMMEDIATE'))
@@ -215,59 +166,46 @@ class Schema16UpgradeTests(BoardTestCase):
         connection.execute('PRAGMA foreign_keys=ON')
         before = rows(connection)
         with self.assertRaisesRegex(sqlite3.OperationalError, 'private injected begin failure'):
-            migrations.migrate_16_to_17(connection)
+            migrations.migrate_17_to_18(connection)
         self.assertFalse(connection.in_transaction)
         self.assertEqual(connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
         self.assertEqual(rows(connection), before)
 
-    def test_late_ddl_failure_rolls_back_every_value_and_schema(self):
+    def test_late_ddl_failure_rolls_back_values_and_schema(self):
         before, shape = rows(self.connection), schema_shape(self.connection)
-        with mock.patch.object(migrations, '_NEW_DDL', migrations._NEW_DDL + (('quota_current', 'CREATE INDEX broken ON absent(value)'),)):
-            with self.assertRaises(BoardError) as caught:
-                migrations.migrate_16_to_17(self.connection)
-        self.assertEqual(caught.exception.code, 'UPGRADE_MIGRATION_FAILED')
-        self.assertEqual(caught.exception.details['tables'], ['quota_current'])
+        ddl = migrations.WORKFLOW_TURNS_DDL + '\nCREATE INDEX broken ON absent(value)'
+        with mock.patch.object(migrations, 'WORKFLOW_TURNS_DDL', ddl):
+            with self.assertRaises(BoardError):
+                migrations.migrate_17_to_18(self.connection)
         self.assertEqual(rows(self.connection), before)
         self.assertEqual(schema_shape(self.connection), shape)
         self.assertFalse(self.connection.in_transaction)
 
-    def test_failure_after_turn_rebuild_rolls_back_its_values_and_schema(self):
-        before, shape = rows(self.connection), schema_shape(self.connection)
-        with mock.patch.object(migrations, '_HEALTH_DDL', 'CREATE TABLE broken('):
-            with self.assertRaises(BoardError) as caught:
-                migrations.migrate_16_to_17(self.connection)
-        self.assertEqual(caught.exception.details['tables'], ['harness_health'])
-        self.assertEqual(rows(self.connection), before)
-        self.assertEqual(schema_shape(self.connection), shape)
-
-    def test_exact_fingerprints_reject_damage_to_retained_event_and_worker_rows(self):
+    def test_exact_fingerprints_reject_damage_to_retained_rows(self):
         for table, statement in (
             ('events', "UPDATE events SET payload_json='{}' WHERE seq=(SELECT MIN(seq) FROM events)"),
             ('workers', "UPDATE workers SET last_seen_at='damaged'"),
             ('sqlite_sequence', "UPDATE sqlite_sequence SET seq=seq+1 WHERE name='events'"),
         ):
             with self.subTest(table=table):
-                self.connection.execute(f'CREATE TRIGGER damage AFTER DELETE ON catalog_pending BEGIN {statement}; END')
+                self.connection.execute(f'CREATE TRIGGER damage AFTER UPDATE ON meta BEGIN {statement}; END')
                 before = rows(self.connection)
                 with self.assertRaises(BoardError) as caught:
-                    migrations.migrate_16_to_17(self.connection)
+                    migrations.migrate_17_to_18(self.connection)
                 self.assertIn(table, caught.exception.details['tables'])
                 self.assertEqual(rows(self.connection), before)
                 self.connection.execute('DROP TRIGGER damage')
 
-    def test_planned_current_and_meta_values_cannot_be_changed_by_triggers(self):
+    def test_planned_meta_and_turn_values_cannot_be_changed_by_triggers(self):
         for table, statement in (
             ('meta', "UPDATE meta SET value='damaged' WHERE key='capability_secret'"),
-            ('harness_health', "UPDATE harness_health SET revision=revision+1"),
-            ('catalog_current', "UPDATE catalog_current SET observation_id=42"),
-            ('evaluation_profiles', "UPDATE evaluation_profiles SET enabled=0"),
             ('workflow_turns', "UPDATE workflow_turns SET input_sha256='damaged'"),
         ):
             with self.subTest(table=table):
-                self.connection.execute(f'CREATE TRIGGER damage AFTER DELETE ON catalog_pending BEGIN {statement}; END')
+                self.connection.execute(f'CREATE TRIGGER damage AFTER UPDATE ON meta BEGIN {statement}; END')
                 before = rows(self.connection)
                 with self.assertRaises(BoardError) as caught:
-                    migrations.migrate_16_to_17(self.connection)
+                    migrations.migrate_17_to_18(self.connection)
                 self.assertIn(table, caught.exception.details['tables'])
                 self.assertEqual(rows(self.connection), before)
                 self.connection.execute('DROP TRIGGER damage')
@@ -277,21 +215,21 @@ class Schema16UpgradeTests(BoardTestCase):
         self.connection.execute('PRAGMA foreign_keys=ON')
         before = rows(self.connection)
         with self.assertRaises(BoardError) as caught:
-            migrations.migrate_16_to_17(self.connection)
+            migrations.migrate_17_to_18(self.connection)
         self.assertEqual(caught.exception.message, 'Foreign key check failed after migration')
         self.assertEqual(rows(self.connection), before)
         self.assertEqual(self.connection.execute('PRAGMA foreign_keys').fetchone()[0], 1)
 
-    def test_only_schema_16_is_upgrade_input_and_startup_cannot_upgrade_it(self):
+    def test_only_schema_17_is_upgrade_input_and_startup_cannot_upgrade_it(self):
         with self.assertRaises(Corruption):
             Database(self.state).initialize()
-        for version in (11, 12, 13, 14, 15, 17, 999):
+        for version in (11, 12, 13, 14, 15, 16, 18, 999):
             self.connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(version),))
             with self.assertRaises(BoardError) as caught:
-                migrations.migrate_16_to_17(self.connection)
+                migrations.migrate_17_to_18(self.connection)
             self.assertEqual(caught.exception.details['tables'], ['meta'])
-        self.connection.execute("UPDATE meta SET value='16' WHERE key='schema_version'")
-        migrations.migrate_16_to_17(self.connection)
+        self.connection.execute("UPDATE meta SET value='17' WHERE key='schema_version'")
+        migrations.migrate_17_to_18(self.connection)
         before = schema_shape(self.connection)
         Database(self.state).initialize()
         self.assertEqual(schema_shape(self.connection), before)

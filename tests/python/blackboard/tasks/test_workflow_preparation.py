@@ -35,10 +35,6 @@ class PreparationTests(WorkflowTestCase):
 
     def setUp(self):
         super().setUp()
-        # This ownership fixture models a read-capable Worker independently of
-        # the actual DSH permission declaration tested by permission levels.
-        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
-        self.enterContext(patch.object(DshAdapter, "capabilities", (*DshAdapter.capabilities, "permission:read")))
         self.workspace = workspace
         workflow_module._workspace_module = workspace
         self.repo = self.repository("repo")
