@@ -13,8 +13,9 @@ import psutil
 def _processes() -> tuple[list[psutil.Process], bool]:
     """One PID snapshot, scoped on POSIX to this effective user's processes.
 
-    Private state belongs to this user; other effective users, including root,
-    are outside the scope. An unreadable UID cannot establish that exclusion.
+    Private state belongs to this user; other effective users are outside the
+    scope. Creating (idle) processes have not run yet; zombies have ended.
+    An unreadable UID or status cannot establish either exclusion.
     """
     try:
         pids = psutil.pids()
@@ -26,7 +27,8 @@ def _processes() -> tuple[list[psutil.Process], bool]:
         try:
             process = psutil.Process(pid)
             if psutil.WINDOWS or process.uids().effective == effective_uid:
-                processes.append(process)
+                if process.status() not in (psutil.STATUS_IDLE, psutil.STATUS_ZOMBIE):
+                    processes.append(process)
         except psutil.NoSuchProcess:
             continue
         except (psutil.Error, OSError):
@@ -119,7 +121,7 @@ def observe_open_paths() -> tuple[dict[int, set[str]], str | None, bool]:
         if native_pids is None or process.pid not in paths or process.pid in native_pids:
             continue
         try:
-            if process.is_running() and process.status() != psutil.STATUS_ZOMBIE:
+            if process.is_running():
                 problems.append('lsof has no result for a live snapshot process')
             else:
                 paths.pop(process.pid)

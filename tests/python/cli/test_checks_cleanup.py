@@ -297,6 +297,7 @@ class ProcessObservationTests(unittest.TestCase):
         excluded = process(456, ['login'], uid=0, effective_uid=1)
         excluded.cmdline.side_effect = observation.psutil.AccessDenied(456)
         excluded.cwd.side_effect = observation.psutil.AccessDenied(456)
+        excluded.status.side_effect = observation.psutil.AccessDenied(456)
         with processes(included, excluded), native_references() as native:
             self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
             self.assertTrue(storage.process_inventory(Path('/private/checks-fixture'))[2])
@@ -305,6 +306,7 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertTrue(available)
         excluded.cmdline.assert_not_called()
         excluded.cwd.assert_not_called()
+        excluded.status.assert_not_called()
         command = native.call_args.args[0]
         self.assertEqual(command[command.index('-p') + 1], '123')
         self.assertNotIn('-u', command)  # The shared effective-UID selection is final.
@@ -319,6 +321,33 @@ class ProcessObservationTests(unittest.TestCase):
             _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNotNone(error)
         self.assertTrue(available)
+
+    def test_idle_process_is_excluded_but_running_denied_reads_are_unknown(self):
+        root = Path('/private/checks-fixture')
+        for status in (observation.psutil.STATUS_IDLE, observation.psutil.STATUS_RUNNING):
+            with self.subTest(status=status):
+                included = process(123, ['python'], uid=1, effective_uid=0)
+                target = process(456, uid=1, effective_uid=0, cwd=str(root))
+                target.status.return_value = status
+                target.cmdline.side_effect = observation.psutil.AccessDenied(456)
+                target.cwd.side_effect = observation.psutil.AccessDenied(456)
+                with processes(included, target), native_references() as native:
+                    table = checks._ps_argv_table()
+                    known = storage.process_inventory(root)[2]
+                    _, error, available = checks._open_file_pids(root)
+                self.assertTrue(available)
+                if status == observation.psutil.STATUS_IDLE:
+                    self.assertEqual(table, [(123, ['python'])])
+                    self.assertTrue(known)
+                    self.assertIsNone(error)
+                    target.cmdline.assert_not_called()
+                    target.cwd.assert_not_called()
+                    command = native.call_args.args[0]
+                    self.assertEqual(command[command.index('-p') + 1], '123')
+                else:
+                    self.assertIsNone(table)
+                    self.assertFalse(known)
+                    self.assertIsNotNone(error)
 
     def test_unreadable_uids_are_unknown_and_cannot_exclude_a_process(self):
         included = process(123, effective_uid=0)
@@ -337,6 +366,7 @@ class ProcessObservationTests(unittest.TestCase):
             _, error, _ = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNone(error)
         included.uids.assert_called_once_with()
+        included.status.assert_called_once_with()
 
     def test_native_argv_tokens_keep_spaces_and_chinese_without_matching_text(self):
         root = Path('/private/检查 fixture with spaces')
