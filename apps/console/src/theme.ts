@@ -11,15 +11,15 @@ const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 /**
  * Reads the stored display choice. Storage can be unavailable (private mode,
- * disabled cookies) or hold an unrelated value; both fall back to the light
- * theme instead of failing the page.
+ * disabled cookies) or hold an unrelated value; both fall back to following
+ * the system instead of failing the page.
  */
 function readStoredChoice(): ThemeChoice {
   try {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return stored === "dark" || stored === "system" ? stored : "light";
+    return stored === "light" || stored === "dark" ? stored : "system";
   } catch {
-    return "light";
+    return "system";
   }
 }
 

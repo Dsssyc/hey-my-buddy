@@ -24,7 +24,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
     <div data-slot="settings-page" className="min-w-0 text-sm">
       <Section title={t("theme")}>
         <Segmented value={theme} onValueChange={value => onTheme(value as ThemeChoice)} aria-label={t("theme")}>
-          {(["light", "dark", "system"] as const).map(choice => <SegmentedItem key={choice} value={choice}>{t(choice)}</SegmentedItem>)}
+          {(["system", "light", "dark"] as const).map(choice => <SegmentedItem key={choice} value={choice}>{t(choice)}</SegmentedItem>)}
         </Segmented>
       </Section>
       <Section title={t("language")}>
