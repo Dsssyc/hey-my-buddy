@@ -155,6 +155,23 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def stored_request(self, context):
         return json.loads((context_root(context, "claude") / "role-run-request.json").read_text())
 
+    def wait_for_native_user_turn(self, timeout=10):
+        """Block until the fixture has consumed the turn's user frame, bounded.
+
+        Cancelling before the controller installed its termination handler kills
+        the controller instead of interrupting the native child, so a
+        cancellation test must wait for the turn to reach the fixture. The
+        fixture records ``userTurns`` when it reads the user frame and only then
+        parks for the ``hang`` case.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if (self.root / "fixture.json").exists() and self.fixture_state().get("userTurns") == 1:
+                return
+            time.sleep(.05)
+        self.fail(f"the claude fixture never recorded one user turn within {timeout}s "
+                  f"(fixture state: {self.fixture_state() if (self.root / 'fixture.json').exists() else 'no fixture.json'})")
+
     def test_completed_turn_uses_the_preallocated_session_and_never_resumes(self):
         context = self.context()
         outcome = self.execute(context)
@@ -278,7 +295,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context = self.context("hang", timeout=12)
         handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
-        time.sleep(0.3)
+        self.wait_for_native_user_turn()
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
         outcome = self.executor.collect(handle, context)
@@ -301,11 +318,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context = self.context("interrupt-quota", timeout=12)
         handle = self.executor.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=.2) if handle.group_alive() else None)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if (self.root / "fixture.json").exists() and self.fixture_state().get("userTurns") == 1:
-                break
-            time.sleep(.05)
+        self.wait_for_native_user_turn()
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
         outcome = self.executor.collect(handle, context)
