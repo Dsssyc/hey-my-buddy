@@ -17,6 +17,7 @@ from support import (
 )
 from hey_my_buddy import locking
 from hey_my_buddy.protocol.transport import _read_endpoint
+import support
 
 
 def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
@@ -30,6 +31,30 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_windows_service_check_uses_lifecycle_locks(self):
+        with private_state_dir() as root:
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", return_value=False),
+                  patch("hey_my_buddy.cli.checks.observed_processes",
+                        side_effect=AssertionError("Windows cannot prove shutdown by scanning open files"))):
+                windows.name = "nt"
+                support.assert_private_processes_gone(root)
+                with patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"):
+                    with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                        support.assert_private_processes_gone(root)
+
+    def test_windows_released_locks_do_not_replace_an_unconfirmed_drain(self):
+        from hey_my_buddy.protocol.transport import ServiceError
+
+        with private_state_dir() as root:
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=[False, True, False, False, False]),
+                  patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=ServiceError("UNAVAILABLE", "fixture lost reply"))):
+                windows.name = "nt"
+                with self.assertRaisesRegex(AssertionError, "stop reply unconfirmed"):
+                    stop_private_service(root)
+
     def test_unconfirmed_shutdown_preserves_private_state(self):
         directory = None
         try:

@@ -96,6 +96,9 @@ class FocusedChecksTests(unittest.TestCase):
                                     "HMB_RUNTIME": "/fixture/pinned-runtime",
                                     "HMB_AGENT_CREDENTIAL_FD": "17", "HMB_NODE": node}),
             observer,
+            patch.object(checks, "_windows_owned_processes",
+                         return_value=([], ["fixture process observation incomplete"], []))
+            if os.name == "nt" and process_table is None else contextlib.nullcontext(),
             patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),
         ):
@@ -259,7 +262,7 @@ class FocusedChecksTests(unittest.TestCase):
         retained, = self.temporary.iterdir()
         self.assertEqual(int((retained / checks.CREATOR_FILE_NAME).read_text(encoding="utf-8")), os.getpid())
         evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("psutil process enumeration incomplete", evidence["observation"]["problems"][0])
+        self.assertIn("incomplete", evidence["observation"]["problems"][0])
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
@@ -300,6 +303,9 @@ class SweepTests(unittest.TestCase):
                     if table is None else processes(*(process(pid, argv) for pid, argv in table)))
         output = io.StringIO()
         with (observer,
+              patch.object(checks, "_windows_owned_processes",
+                           return_value=([], ["fixture process observation incomplete"], []))
+              if os.name == "nt" and table is None else contextlib.nullcontext(),
               patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
               patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.directory)}),
               contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO())):
@@ -361,7 +367,7 @@ class SweepTests(unittest.TestCase):
         code, output = self.sweep(None)
         self.assertEqual(code, 3, output)
         report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
-        self.assertIn("psutil process enumeration incomplete", report["observation"]["problems"][0])
+        self.assertIn("incomplete", report["observation"]["problems"][0])
 
     def test_unreadable_creator_record_is_retained(self):
         root = self.abandoned()

@@ -29,7 +29,11 @@ cooperative surfaces, then waits until every observed survivor has been confirme
 exit and asserts a clean root: no held hey-my-buddy lifetime lock, no live process tied to
 the root, and no failed observation. A clean teardown removes the private root; an
 incomplete or unobservable one preserves the root together with a written evidence
-report. Process observation is strictly read-only (psutil argv/cwd/mapping
+report. On Windows it holds each suite's creating process handle and a Job
+that allows explicit service breakaway, and confirms the root exited and the
+held Job is empty. Private services drain through their stop reply and lifetime
+locks. A later Windows sweep lacks those handles and preserves unknown roots.
+On POSIX process observation is strictly read-only (psutil argv/cwd/mapping
 observation plus the native file-reference channels psutil cannot fully cover): the teardown never signals or kills a process,
 never matches or touches a process outside its own private root, and never reads or
 prints environment content. Only an interrupted parallel run stops processes, and
@@ -57,6 +61,9 @@ from ..text import configure_utf8_output
 from .. import locking, private_dirs, state_root
 from ..errors import BoardError
 from ..process_observation import observe_open_paths, observe_process_argv
+from ..protocol.owned_process import owned_popen
+from ..protocol.process_handle import ProcessHandle
+from ..protocol.windows_process import WindowsAPI
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -68,6 +75,79 @@ SANITIZED_VARIABLES = (
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
 CREATOR_FILE_NAME = "creator.pid"
+
+# These handles belong to this runner, never to a later --sweep process. In
+# particular, reopening a vanished, non-kill-on-close Job proves nothing.
+_windows_suite_children: dict[Path, list[ProcessHandle]] = {}
+_windows_spawn_problems: dict[Path, list[str]] = {}
+
+
+class _SuiteWindowsAPI(WindowsAPI):
+    def create_job(self, name):
+        handle = super().create_job(name)
+        try:
+            limits = self._call(self.job.QueryInformationJobObject, handle,
+                                self.job.JobObjectExtendedLimitInformation)
+            # Private services explicitly break away and drain through their own
+            # lifecycle. Ordinary descendants, including venv forwarders, stay.
+            limits["BasicLimitInformation"]["LimitFlags"] = self.job.JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            self._call(self.job.SetInformationJobObject, handle,
+                       self.job.JobObjectExtendedLimitInformation, limits)
+            return handle
+        except BaseException:
+            self.close(handle)
+            raise
+
+
+def _suite_popen(root: Path, command: list[str], **kwargs):
+    if os.name != "nt":
+        return subprocess.Popen(command, **kwargs)
+    key = root.resolve()
+    children = _windows_suite_children.setdefault(key, [])
+    try:
+        process = owned_popen(command, windows_api=_SuiteWindowsAPI(), **kwargs)
+        handle = ProcessHandle(process, own_group=True, log_paths={})
+        children.append(handle)
+        handle.identity()  # Capture the exact FILETIME while the creating handle is held.
+        return process
+    except BaseException as error:
+        evidence = getattr(error, "owned_popen_evidence", None)
+        if evidence is None or not evidence.shutdown_confirmed:
+            _windows_spawn_problems.setdefault(key, []).append(
+                f"suite creation/shutdown unconfirmed: {type(error).__name__}: {error}")
+        raise
+
+
+def _windows_owned_processes(root: Path) -> tuple[list[dict], list[str], list[str]]:
+    key = root.resolve()
+    children = _windows_suite_children.get(key)
+    if children is None:
+        return [], ["owned suite process and Job handles unavailable"], []
+    findings = []
+    problems = list(_windows_spawn_problems.get(key, []))
+    for handle in children:
+        try:
+            identity = handle.identity()
+            # Only a count read on the original held Job can confirm shutdown.
+            # OwnedJob's reopen-by-name path is intentionally not used here.
+            if handle.job.handle is None:
+                raise OSError("creating Job handle is no longer held")
+            active = handle.job.active()
+            finished = handle.finished
+            if active is None:
+                raise OSError("owned Job membership is unknown")
+            if active or not finished:
+                findings.append({**identity, "source": "ownedJob", "activeProcesses": active,
+                                 "rootRunning": not finished})
+        except OSError as error:
+            problems.append(f"owned suite observation failed: {error}")
+    return findings, problems, []
+
+
+def _release_suite_handles(root: Path) -> None:
+    for handle in _windows_suite_children.pop(root.resolve(), []):
+        handle.job.close()
+    _windows_spawn_problems.pop(root.resolve(), None)
 
 
 def test_environment(root: Path) -> dict:
@@ -103,6 +183,8 @@ def create_private_root(*, directory: Path | None = None) -> Path:
     root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-checks-", directory=parent).resolve()
     (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
     (root / "tmp").mkdir(mode=private_dirs.directory_mode())
+    if os.name == "nt":
+        _windows_suite_children[root] = []
     return root
 
 
@@ -132,6 +214,8 @@ def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dic
         "APPDATA": str(home / "AppData/Roaming"), "LOCALAPPDATA": str(home / "AppData/Local"),
     })
     values["TMPDIR"] = str(private_root / "tmp")
+    if os.name == "nt":
+        values["TEMP"] = values["TMP"] = values["TMPDIR"]
     values["HMB_CHECKS_TMPDIR"] = str(private_root / "tmp")
     values['HMB_STATE_DIR'] = str(private_root / 'state')
     values['HMB_RUNTIME_ROOT'] = str(private_root / 'runtime')
@@ -271,7 +355,8 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
             # interrupted run either never starts this child or already sees it as live.
             if stop.is_set():
                 return None
-            process = subprocess.Popen(
+            process = _suite_popen(
+                private_root,
                 command,
                 cwd=str(root if cwd is None else cwd),
                 env=environment,
@@ -547,7 +632,7 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
 
 
 def observed_processes(root: Path) -> tuple[list[dict], list[str], list[str]]:
-    """Live processes observably tied to one private root, plus observation status.
+    """Owned Windows suite trees or POSIX root references, plus observation status.
 
     Only processes whose argv names a path under this private root or that hold a
     file under it open are findings — never a process outside the root — and a
@@ -555,6 +640,8 @@ def observed_processes(root: Path) -> tuple[list[dict], list[str], list[str]]:
     through the root is not residue. No environment content is read or printed and
     reported argv is bounded.
     """
+    if os.name == "nt":
+        return _windows_owned_processes(root)
     first, problems, notes = _observation_snapshot(root)
     if problems or not first:
         return sorted(first.values(), key=lambda item: item["pid"]), problems, notes
@@ -568,7 +655,7 @@ def observed_processes(root: Path) -> tuple[list[dict], list[str], list[str]]:
     return stable, problems, notes
 
 
-def _request_daemon_stop(state_dir: Path) -> None:
+def _request_daemon_stop(state_dir: Path) -> bool:
     """Ask one observed daemon to stop through its own authenticated endpoint."""
     from ..protocol.transport import ServiceError, _read_endpoint, _request
 
@@ -576,12 +663,15 @@ def _request_daemon_stop(state_dir: Path) -> None:
 
     endpoint = _read_endpoint(state_dir)
     if endpoint is None:
-        return
+        return False
     try:
-        _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10}, state_dir=state_dir)
+        reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 10}, state_dir=state_dir)
+        if os.name == "nt" and (not reply.get("stopped") or reply.get("unresolvedAttempts")):
+            raise RuntimeError(f"Private service shutdown unconfirmed: {reply}")
+        return True
     except ServiceError:
         # The endpoint may already be disappearing; the lifetime locks decide.
-        pass
+        return False
     finally:
         # This runner owns only this short stop RPC. End it before the next
         # observed state root is selected, without touching another native domain.
@@ -599,21 +689,38 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
     """
     prefixes = _root_prefixes(root)
     requested: set[Path] = set()
+    # A suite removes its private service state only after confirming its drain.
+    # Leftover daemon locks also cover a suite that lost the reply and then
+    # exited: released locks alone cannot prove its detached executions stopped.
+    unconfirmed: set[Path] = set()
     deadline = time.monotonic() + timeout
     while True:
-        table = _ps_argv_table()
-        if table is None:
-            return ["psutil process enumeration incomplete; residue status is unknown"]
-        live = any(pid != os.getpid() and _argv_tied(argv, prefixes) for pid, argv in table)
+        if os.name == "nt":
+            processes, problems, _ = _windows_owned_processes(root)
+            live = bool(processes)
+            unconfirmed.update(path.parent for path in root.rglob("control-daemon.lock")
+                               if path.parent not in requested)
+        else:
+            table = _ps_argv_table()
+            if table is None:
+                return ["psutil process enumeration incomplete; residue status is unknown"]
+            live = any(pid != os.getpid() and _argv_tied(argv, prefixes) for pid, argv in table)
+            problems = []
         residue = held_locks(root)
         if not live and not residue["daemon"]:
-            return []
+            return [*problems, *(f"private service stop reply unconfirmed: {state}" for state in sorted(unconfirmed))]
         for path in residue["daemon"]:
             if path.parent not in requested:
-                requested.add(path.parent)
-                _request_daemon_stop(path.parent)
+                if os.name == "nt":
+                    unconfirmed.add(path.parent)
+                    if _request_daemon_stop(path.parent):
+                        requested.add(path.parent)
+                        unconfirmed.discard(path.parent)
+                else:
+                    requested.add(path.parent)
+                    _request_daemon_stop(path.parent)
         if time.monotonic() >= deadline:
-            return []
+            return [*problems, *(f"private service stop reply unconfirmed: {state}" for state in sorted(unconfirmed))]
         time.sleep(0.1)
 
 
@@ -636,7 +743,7 @@ def _log_tail(path: Path, limit: int = 4000) -> str | None:
 
 
 def remove_private_test_root(directory: Path) -> None:
-    """Remove a stopped fixture, retrying only Windows READONLY regular files.
+    """Remove a stopped fixture without changing attributes shared by hardlinks.
 
     The caller must first close its resources and confirm its work has stopped.
     A sharing violation or any other deletion failure preserves the remaining tree.
@@ -659,10 +766,26 @@ def remove_private_test_root(directory: Path) -> None:
                 break
         else:
             raise error
-        os.chmod(path, stat.S_IWRITE)
-        operation(name)
+        _delete_readonly_test_leaf(path)
 
     shutil.rmtree(directory, onexc=readonly_file)
+
+
+def _delete_readonly_test_leaf(path: Path) -> None:
+    """Delete this private test link, preserving every other hardlink's attributes."""
+    import ctypes
+    from ctypes import wintypes
+    from ..windows_files import WindowsFileAPI, DELETE, FILE_READ_ATTRIBUTES, OPEN_EXISTING
+
+    api = WindowsFileAPI()
+    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
+    try:
+        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
+        flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
+        if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        api.close(handle)
 
 
 def _write_evidence(root: Path, evidence: dict) -> Path:
@@ -715,6 +838,7 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
     clean = not problems and not processes and not residue["daemon"]
     if clean:
         try:
+            _release_suite_handles(root)
             remove_private_test_root(root)
         except OSError as error:
             evidence["cleanupError"] = f"{type(error).__name__}: {error}"
@@ -737,7 +861,10 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
 
 def _safe_teardown(private_root: Path) -> dict | None:
     try:
-        return teardown_private_root(private_root)
+        try:
+            return teardown_private_root(private_root)
+        finally:
+            _release_suite_handles(private_root)
     except Exception as error:  # noqa: BLE001 - teardown must never mask the suite result
         print(f"hey_my_buddy.cli.checks: teardown itself failed ({type(error).__name__}: {error}); "
               f"preserved {private_root}", file=sys.stderr)

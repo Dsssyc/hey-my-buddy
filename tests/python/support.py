@@ -128,12 +128,16 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
     directory = Path(directory)
     deadline = time.monotonic() + timeout
     requested = False
+    observed_running = False
     while True:
         starting = _lock_held(directory / "control-start.lock")
         running = any(_lock_held(directory / name) for name in ("control-daemon.lock", "board-owner.lock"))
         if not starting and not running:
+            if os.name == "nt" and observed_running and not requested:
+                raise AssertionError(f"Test service stop reply unconfirmed; preserved {directory}")
             return
         if running and not requested:
+            observed_running = True
             endpoint = _read_endpoint(directory)
             if endpoint is not None:
                 try:
@@ -154,6 +158,15 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
 
 def assert_private_processes_gone(directory: Path) -> None:
     """Keep private evidence if a service or execution still uses this state root."""
+    if os.name == "nt":
+        # stop_private_service confirms the drain reply before these lifecycle
+        # locks are released. The enclosing runner owns ordinary suite descendants
+        # in its held Job; a whole-machine file scan cannot prove them stopped.
+        held = [name for name in ("control-start.lock", "control-daemon.lock", "board-owner.lock")
+                if _lock_held(Path(directory) / name)]
+        if held:
+            raise AssertionError(f"Private test service shutdown unconfirmed; preserved {directory}: {held}")
+        return
     if not any((directory / name).exists() for name in ('control-daemon.lock', 'control.json')):
         return
     from hey_my_buddy.cli.checks import observed_processes

@@ -1,4 +1,4 @@
-"""Private fixture cleanup reports owners and retries only READONLY file leaves."""
+"""Private fixture cleanup preserves owners, outside hardlinks and failure evidence."""
 from __future__ import annotations
 
 import os
@@ -15,20 +15,32 @@ from hey_my_buddy.cli import checks
 
 
 class PrivateRootCleanupTests(unittest.TestCase):
-    @unittest.skipUnless(os.name == 'nt', 'Windows READONLY file deletion')
-    def test_native_readonly_file_is_removed(self):
+    @unittest.skipUnless(os.name == 'nt', 'Windows READONLY hardlink deletion')
+    def test_native_readonly_hardlink_preserves_the_other_link(self):
         with private_state_dir() as root:
             objects = root / 'objects'
             objects.mkdir()
+            outside = root / 'uv-cache-object'
+            outside.write_bytes(b'git object fixture')
             path = objects / 'object'
-            path.write_bytes(b'git object fixture')
-            path.chmod(stat.S_IREAD)
-            remove_private_test_root(objects)
-            self.assertFalse(objects.exists())
+            os.link(outside, path)
+            outside.chmod(stat.S_IREAD)
+            before = outside.stat()
+            try:
+                remove_private_test_root(objects)
+                self.assertFalse(objects.exists())
+                after = outside.stat()
+                self.assertEqual(after.st_file_attributes, before.st_file_attributes)
+                self.assertEqual(after.st_ino, before.st_ino)
+                self.assertEqual(after.st_nlink, 1)
+                self.assertEqual(outside.read_bytes(), b'git object fixture')
+            finally:
+                # Exercise the same private-root deletion path on the last link.
+                checks._delete_readonly_test_leaf(outside)
 
     def windows_delete(self, root, path, error, *, attributes=stat.FILE_ATTRIBUTE_READONLY,
-                       mode=stat.S_IFREG, retry_error=None, ancestor_reparse=False):
-        unlink = Mock(side_effect=retry_error)
+                       mode=stat.S_IFREG, delete_error=None, ancestor_reparse=False):
+        unlink = Mock()
         actual_lstat = Path.lstat
 
         def information(part):
@@ -43,14 +55,17 @@ class PrivateRootCleanupTests(unittest.TestCase):
             self.assertEqual(directory, root)
             onexc(unlink, str(path), error)
 
-        with patch.object(checks, 'os', wraps=os) as windows, patch.object(checks.shutil, 'rmtree', side_effect=removal), patch.object(Path, 'lstat', information):
+        with (patch.object(checks, 'os', wraps=os) as windows,
+              patch.object(checks.shutil, 'rmtree', side_effect=removal),
+              patch.object(Path, 'lstat', information),
+              patch.object(checks, '_delete_readonly_test_leaf', side_effect=delete_error) as delete):
             windows.name = 'nt'
             windows.unlink = unlink
-            windows.chmod = Mock()
+            windows.chmod = Mock(side_effect=AssertionError('shared file attributes must never change'))
             try:
                 remove_private_test_root(root)
             finally:
-                self.chmod_calls = windows.chmod.call_args_list
+                self.delete_calls = delete.call_args_list
                 self.unlink_calls = unlink.call_args_list
 
     @staticmethod
@@ -59,17 +74,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
         error.winerror = code
         return error
 
-    def test_readonly_regular_file_retried_once(self):
-        with private_state_dir() as root:
-            path = root / 'object'
-            path.write_bytes(b'fixture')
-            self.windows_delete(root, path, self.failure(5))
-            self.assertEqual(len(self.chmod_calls), 1)
-            self.assertEqual(self.chmod_calls[0].args, (path, stat.S_IWRITE))
-            self.assertEqual(len(self.unlink_calls), 1)
-            self.assertEqual(self.unlink_calls[0].args, (str(path),))
-
-    def test_other_failures_preserve_the_file_without_chmod(self):
+    def test_other_failures_preserve_the_file_without_deleting_a_link_target(self):
         cases = [
             {'error': self.failure(32)},
             {'error': self.failure(5), 'attributes': 0},
@@ -86,20 +91,20 @@ class PrivateRootCleanupTests(unittest.TestCase):
                 with self.subTest(case=case), self.assertRaises(PermissionError) as raised:
                     self.windows_delete(root, path, **case)
                 self.assertIs(raised.exception, case['error'])
-                self.assertFalse(self.chmod_calls)
+                self.assertFalse(self.delete_calls)
                 self.assertFalse(self.unlink_calls)
                 self.assertEqual(path.read_bytes(), b'evidence')
 
-    def test_failed_retry_is_reported_without_another_attempt(self):
+    def test_handle_deletion_failure_is_reported_without_changing_attributes(self):
         with private_state_dir() as root:
             path = root / 'object'
             path.write_bytes(b'evidence')
-            retry_error = self.failure(32)
+            error = self.failure(32)
             with self.assertRaises(PermissionError) as raised:
-                self.windows_delete(root, path, self.failure(5), retry_error=retry_error)
-            self.assertIs(raised.exception, retry_error)
-            self.assertEqual(len(self.chmod_calls), 1)
-            self.assertEqual(len(self.unlink_calls), 1)
+                self.windows_delete(root, path, self.failure(5), delete_error=error)
+            self.assertIs(raised.exception, error)
+            self.assertEqual(len(self.delete_calls), 1)
+            self.assertFalse(self.unlink_calls)
             self.assertTrue(path.exists())
 
     def test_board_close_failure_is_reported_and_preserves_root(self):
