@@ -122,17 +122,26 @@ def _lock_held(path: Path) -> bool:
         os.close(fd)
 
 
-_confirmed_private_stops: set[Path] = set()
+_confirmed_private_stops: dict[Path, tuple[int, str, str]] = {}
+
+
+def _service_generation(endpoint: dict) -> tuple[int, str, str]:
+    return endpoint['pid'], endpoint['startedAt'], endpoint['serviceId']
 
 
 def request_private_service_stop(directory: Path, call, **params) -> dict:
     """Confirm one private service's stop reply for its later lock drain."""
+    from hey_my_buddy.protocol.transport import _read_endpoint
+
     directory = Path(directory).resolve()
-    _confirmed_private_stops.discard(directory)
+    _confirmed_private_stops.pop(directory, None)
+    endpoint = _read_endpoint(directory)
+    generation = _service_generation(endpoint) if endpoint is not None else None
     reply = call("service_control", {"action": "stop", **params})
     if not reply.get("stopped") or reply.get("unresolvedAttempts"):
         raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
-    _confirmed_private_stops.add(directory)
+    if generation is not None:
+        _confirmed_private_stops[directory] = generation
     return reply
 
 
@@ -142,7 +151,7 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
 
     directory = Path(directory).resolve()
     deadline = time.monotonic() + timeout
-    requested = directory in _confirmed_private_stops
+    requested = False
     observed_running = False
     while True:
         starting = _lock_held(directory / "control-start.lock")
@@ -150,12 +159,16 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
         if not starting and not running:
             if os.name == "nt" and observed_running and not requested:
                 raise AssertionError(f"Test service stop reply unconfirmed; preserved {directory}")
-            _confirmed_private_stops.discard(directory)
+            _confirmed_private_stops.pop(directory, None)
             return
-        if running and not requested:
+        if running:
             observed_running = True
             endpoint = _read_endpoint(directory)
-            if endpoint is not None:
+            confirmed = _confirmed_private_stops.get(directory)
+            # control.json can disappear just before the stopped generation
+            # releases its locks. A replacement publishes a different identity.
+            requested = confirmed is not None and (endpoint is None or confirmed == _service_generation(endpoint))
+            if endpoint is not None and not requested:
                 try:
                     request_private_service_stop(directory,
                         lambda operation, params: _request(endpoint, operation, params, state_dir=directory),
@@ -566,7 +579,7 @@ class BoardTestCase(unittest.TestCase):
 
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.directory)
-        _confirmed_private_stops.discard(self.directory.resolve())
+        _confirmed_private_stops.pop(self.directory.resolve(), None)
         environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']

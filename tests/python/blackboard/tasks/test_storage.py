@@ -92,6 +92,33 @@ class StorageTests(BoardTestCase):
         else:
             os.utime(path, (expired, expired), follow_symlinks=False)
 
+    @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
+    def test_storage_plan_records_denied_paths_without_blocking_an_unused_runtime(self):
+        board = self.board()
+        root = Path(os.environ['HMB_RUNTIME_ROOT'])
+        root.mkdir()
+        candidate = root / ('c' * 32)
+        candidate.mkdir()
+        (candidate / 'payload').write_bytes(b'private runtime')
+        self._age_runtime_entry(candidate)
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'a' * 32, 'previous': 'b' * 32,
+        }), encoding='utf-8')
+        target = process(104, ['agent'], name='kernel-hidden-agent', created=2345.6)
+        target.cwd.side_effect = storage.psutil.AccessDenied(104)
+        with (processes(target), mock.patch.object(observation, '_proc_fd_paths', return_value=set()),
+              mock.patch.object(observation.psutil, 'WINDOWS', False),
+              mock.patch.object(observation.psutil, 'LINUX', True),
+              mock.patch.object(observation.psutil, 'MACOS', False)):
+            plan = storage.plan(board.store, {})
+        row = next(row for row in plan['candidates'] if row['path'] == str(candidate))
+        self.assertTrue(row['eligible'])
+        self.assertEqual(len(row['reasons']), 1)
+        for detail in ('pid=104', 'createTime=2345.6', "name='kernel-hidden-agent'", 'read=cwd', 'AccessDenied'):
+            self.assertIn(detail, row['reasons'][0])
+        saved = json.loads((board.directory / 'storage' / (plan['planId'] + '.json')).read_text())
+        self.assertEqual(saved['candidates'], plan['candidates'])
+
     def test_runtime_leftovers_require_age_free_locks_and_unretained_real_paths(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
@@ -117,7 +144,7 @@ class StorageTests(BoardTestCase):
         linked = root / ('9' * 32)
         linked.symlink_to(outside, target_is_directory=True)
         with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-             mock.patch.object(storage, 'runtime_usage', side_effect=lambda path, *_: (
+             mock.patch.object(storage, 'runtime_usage', side_effect=lambda path, *_, **kwargs: (
                  ['runtime-in-use'] if path.name == '6' * 32 else [])):
             result = storage.prune_old_runtimes(board.store)
         self.assertTrue(result['complete'])
@@ -362,7 +389,7 @@ class StorageTests(BoardTestCase):
             'current': 'current', 'previous': 'previous',
         }), encoding="utf-8", newline="\n")
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
-             mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', side_effect=lambda path, *_: (
+             mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', side_effect=lambda path, *_, **kwargs: (
                  ['runtime-in-use'] if path.name == active else
                  ['process-inspection-unavailable'] if path.name == unknown else [])):
             result = storage.prune_old_runtimes(board.store)
@@ -832,10 +859,12 @@ class ProcessInventoryServiceTests(BoardTestCase):
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_incomplete_path_observation_never_releases_a_runtime(self):
-        for attribute in ('cwd', 'memory_maps', 'uids', 'status'):
+        for attribute in ('uids', 'status', 'create_time', 'name'):
             with self.subTest(attribute=attribute):
                 fixture = process(104)
                 getattr(fixture, attribute).side_effect = storage.psutil.AccessDenied(104)
+                if attribute == 'name':
+                    fixture.cwd.side_effect = storage.psutil.AccessDenied(104)
                 linux = attribute != 'status'
                 with (processes(fixture),
                       mock.patch.object(observation.psutil, 'WINDOWS', False),
