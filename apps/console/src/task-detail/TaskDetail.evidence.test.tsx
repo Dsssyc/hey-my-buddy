@@ -89,6 +89,25 @@ describe("the integration and the acceptance", () => {
 });
 
 describe("a route", () => {
+  it("shows a recorded domain and task type, including an unclassified domain, but leaves old routes clear", async () => {
+    open({ step: 2, replies: { routing: [routing({ domainNodeId: "domain-1", domainNodeName: "界面工程", taskType: "change" })] } });
+    await ready();
+    expect(pane().textContent).toContain("领域节点");
+    expect(pane().textContent).toContain("界面工程");
+    expect(pane().textContent).toContain("任务类型");
+    expect(pane().textContent).toContain("改造");
+    cleanup();
+    open({ step: 2, replies: { routing: [routing({ domainNodeId: null, domainNodeName: null, taskType: "review" })] } });
+    await ready();
+    expect(pane().textContent).toContain("未归类");
+    expect(pane().textContent).toContain("审查");
+    cleanup();
+    open({ step: 2 });
+    await ready();
+    expect(pane().textContent).not.toContain("领域节点");
+    expect(pane().textContent).not.toContain("任务类型");
+  });
+
   const two = () => {
     const found = timeline();
     found.spans.find(item => item.spanId === "r1")!.routing = { routingMode: "review", selectedBuddy: OPUS, reason: null, note: "审阅模式不可用之前的结论", usage: { elapsedMs: 9000, toolCalls: 4 } };

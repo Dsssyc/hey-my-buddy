@@ -15,13 +15,13 @@ function Value({ value }: { value: JsonValue }) {
 }
 function Fields({ entries, router = false }: { entries: [string, JsonValue][]; router?: boolean }) {
   const { t } = useTranslation("taskDetail");
-  return <dl data-slot="session-answer-fields" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-5 gap-y-2 sm:grid-cols-[auto_minmax(0,1fr)]">{entries.map(([key, value]) => <div key={key} className="contents"><dt className="text-xs text-ink3 wrap-anywhere">{router && ["buddyId", "note", "evidence"].includes(key) ? t(`sessionView.routerAnswer.${key as "buddyId" | "note" | "evidence"}`) : key}</dt><dd className="min-w-0 text-sm leading-relaxed"><Value value={value}/></dd></div>)}</dl>;
+  return <dl data-slot="session-answer-fields" className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-x-5 gap-y-2 sm:grid-cols-[auto_minmax(0,1fr)]">{entries.map(([key, value]) => <div key={key} className="contents"><dt className="text-xs text-ink3 wrap-anywhere">{router && ["domainNodeId", "taskType", "buddyId", "note", "evidence"].includes(key) ? t(`sessionView.routerAnswer.${key as "domainNodeId" | "taskType" | "buddyId" | "note" | "evidence"}`) : key}</dt><dd className="min-w-0 text-sm leading-relaxed"><Value value={value}/></dd></div>)}</dl>;
 }
 export function Answer({ content, copyText, id, routing }: { content: AnswerContent; copyText: string; id: string; routing: boolean }) {
   let entries: [string, JsonValue][] = [];
   if (content.format === "fields" && content.value !== null && typeof content.value === "object" && !Array.isArray(content.value)) {
     const all = Object.entries(content.value);
-    const order = ["buddyId", "note", "evidence"];
+    const order = ["domainNodeId", "taskType", "buddyId", "note", "evidence"];
     entries = routing ? [...order.flatMap(key => all.filter(([name]) => name === key)), ...all.filter(([key]) => !order.includes(key))] : all;
   }
   const { t } = useTranslation("taskDetail");

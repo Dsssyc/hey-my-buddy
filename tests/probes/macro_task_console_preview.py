@@ -459,7 +459,8 @@ ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed"
                      elapsed_ms=60000, tool_calls=0, bytes_read=0)
 ROUTING_A1.update(routerBuddyIds=["dsh:deepseek-official:deepseek-flash:max"],
                   routerIdentities=[CFG_FLASH], routerBuddyId="dsh:deepseek-official:deepseek-flash:max",
-                  routerBuddy=CFG_FLASH)
+                  routerBuddy=CFG_FLASH, domainNodeId="preview-domain-ui",
+                  domainNodeName="界面工程", taskType="change")
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
                      "合成预览：候选超出路由边界，等待 Host 选择配置。", {"harness": "claude"},
                      attempt_id="att-router-a2", program_reason=reason("router-out-of-bounds", bound="constraints"))
@@ -1528,7 +1529,7 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
         return [session_event(attempt_id, "user_message_chunk",
                               content=session_text("ROLE: Router buddy\n为合成任务选择执行 buddy。")),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text(json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": "dsh:deepseek-official:deepseek-flash:max",
+                              content=session_text(json.dumps({"domainNodeId": "preview-domain-ui", "taskType": "change", "buddyId": "dsh:deepseek-official:deepseek-flash:max",
                                                                "note": "合成任务由 DeepSeek Flash 执行。",
                                                                "evidence": ["符合本次合成路由约束。"]},
                                                               ensure_ascii=False)))]
@@ -1574,7 +1575,7 @@ def session_coverage(pair: tuple[str, str]) -> dict:
                 for kind in ("messages", "reasoning", "tool-input", "tool-output", "plan")}
     coverage["messages"] = {"status": "evidenced", "version": "fixture CLI 1"}
     if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW):
-        coverage["reasoning"] = {"status": "unavailable", "reason": reason("session.codex-internal-reasoning-omitted")}
+        coverage["reasoning"] = {"status": "unavailable", "reason": reason("session.not-recorded")}
     return coverage
 
 
@@ -2277,6 +2278,7 @@ def harness_rows(state: PreviewState | None = None) -> list[dict]:
     """Four synthetic harnesses with active, expired, and cleared provider rows."""
     rows = [
         {"harness": "dsh", "status": "ready", "revision": 3, "manualPath": None,
+         "permissions": {"none": "enforced", "read": "convention", "write": "convention", "full": "convention"},
          "executable": "/synthetic-preview/harnesses/dsh/dsh", "version": "synthetic-preview-1.0",
          "account": harness_account("dsh", "ready", account_type="apiKey"),
          "billingByProvider": {"deepseek-official": {"kind": "metered", "source": "synthetic-preview",
@@ -2353,6 +2355,35 @@ def router_records(buddies: list[dict]) -> list[dict]:
     ]
 
 
+def evaluation_statistics(samples: int, successes: int, first_passes: int,
+                          rework_rounds: int, failures: int) -> dict:
+    """Invented cumulative facts for exercising the domain matrix."""
+    return {"samples": samples, "successes": successes, "failures": failures,
+            "firstPasses": first_passes, "reworkRounds": rework_rounds,
+            "firstPassRate": first_passes / samples if samples else None,
+            "failureRate": failures / samples if samples else None,
+            "medianDeliverySeconds": 540 if samples else None,
+            "usage": {"samples": samples, "medianInputTokens": 2400 if samples else None,
+                      "medianCachedInputTokens": 600 if samples else None,
+                      "medianOutputTokens": 360 if samples else None}}
+
+
+def kind_evaluation_views() -> list[dict]:
+    overall = evaluation_statistics(4, 3, 2, 1, 1)
+    change = evaluation_statistics(3, 2, 1, 1, 1)
+    routing = evaluation_statistics(1, 1, 1, 0, 0)
+    return [{"harness": "dsh", "model": "deepseek-flash", "effort": "max",
+             "summary": {"text": "合成样例：界面改造有过一次返工，路由验证一次通过。",
+                         "citations": [{"runId": "preview-run-a1", "title": "合成预览任务 A1",
+                                        "macroTaskId": MACRO_A}]},
+             "statistics": {"overall": overall,
+                            "byDomain": {"preview-domain-ui": overall, "preview-domain-routing": routing},
+                            "byDomainTaskType": {"preview-domain-ui": {"change": change, "verify": routing},
+                                                 "preview-domain-routing": {"verify": routing}},
+                            "infrastructureFailures": [{"provider": "deepseek-official", "count": 1,
+                                                        "lastAt": instant(8, 36)}]}}]
+
+
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
     buddies = buddy_views()
     routers = router_records(buddies)
@@ -2365,6 +2396,8 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
+                          "maintenanceBuddyId": "dsh:deepseek-official:deepseek-flash:max",
+                          "maintenanceIntervalSeconds": 3600,
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
         "buddies": buddies,
@@ -2372,6 +2405,35 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
         "harnesses": harness_rows(state),
         "unavailableBuddyCount": sum(1 for buddy in buddies if not buddy["available"]),
         **policy_views(), "decisions": [],
+        "maintenance": {"pendingCount": 3, "runs": [{
+            "maintenanceRunId": "preview-maintenance-1", "triggerType": "manual",
+            "buddy": {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"},
+            "buddyId": "dsh:deepseek-official:deepseek-flash:max",
+            "taskId": "preview-run-maintenance-1", "state": "completed", "reason": None,
+            "startedAt": instant(6, 30), "finishedAt": instant(6, 32),
+            "usage": {"attempts": [{"attemptId": "preview-maintenance-attempt-1",
+                                    "elapsedMs": 120000, "toolCalls": 0,
+                                    "tokenUsage": {"inputTokens": 5200,
+                                                   "cachedInputTokens": 1200,
+                                                   "outputTokens": 800,
+                                                   "source": "synthetic-preview", "scope": "attempt",
+                                                   "inputBasis": "includes-cached"}}]},
+        }, {
+            "maintenanceRunId": "preview-maintenance-0", "triggerType": "interval",
+            "buddy": {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"},
+            "buddyId": "dsh:deepseek-official:deepseek-flash:max", "taskId": "preview-run-maintenance-0",
+            "state": "failed", "reason": {"code": "answer-shape", "params": {"errors": ["summary-citation-outside-batch"]}},
+            "startedAt": instant(5, 30), "finishedAt": instant(5, 32),
+            "usage": {"attempts": [{"attemptId": "preview-maintenance-attempt-0", "elapsedMs": 120000,
+                                    "toolCalls": 0, "tokenUsage": None}]},
+        }]},
+        "domainNodes": [
+            {"nodeId": "preview-domain-ui", "name": "界面工程", "definition": "构建和调整用户界面。",
+             "parentId": None, "mergedIntoId": None},
+            {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
+             "parentId": "preview-domain-ui", "mergedIntoId": None},
+        ],
+        "kindEvaluations": kind_evaluation_views(),
         "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,
                           "consecutiveFailures": 0, "abstentionCount": 1, "cancelledCount": 1,
                           "budgetExhaustedCount": 0, "boundsRejectedCount": 1, "inputChangedCount": 0,
@@ -2391,13 +2453,14 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
 def decision_view(router: dict) -> dict:
     """One compact decision record from this exact internal router row."""
     routing = router["routing"]
-    return {"domainNodeId": None, "taskType": "change", "decisionId": router["decisionId"], "requestId": router["requestId"],
+    return {"decisionId": router["decisionId"], "requestId": router["requestId"],
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
             "decisionModel": {"requested": ROUTER_BUDDY, "resolved": None},
             "reason": routing["reason"], "note": routing["note"], "evidence": [],
             "constraints": routing["constraints"], "requiredCapabilities": [], "routingBasis": routing.get("routingBasis"),
             "routerCalled": True,
+            **{key: routing[key] for key in ("domainNodeId", "domainNodeName", "taskType") if key in routing},
             **{key: routing[key] for key in ROUTING_FACT_KEYS},
             "policyCheck": routing["policyCheck"], "usage": routing["usage"],
             "nativeIdentity": None, "stopEvidence": decision_result(routing)["stopEvidence"],
@@ -2500,6 +2563,7 @@ def workflow_get(params: dict, state: PreviewState | None = None) -> dict:
                      "selectedBuddy": routing["selectedBuddy"], "reason": routing["reason"], "note": routing["note"],
                      "createdAt": router["createdAt"],
                      **{key: routing[key] for key in ROUTING_FACT_KEYS},
+                     **{key: routing[key] for key in ("domainNodeId", "domainNodeName", "taskType") if key in routing},
                      "source": "model-selection",
                      "ownerGeneration": 1, "current": routing["decisionId"] == entry["routing"]["decisionId"]})
         if entry["routing"] and entry["routing"]["source"] == "no-candidate":

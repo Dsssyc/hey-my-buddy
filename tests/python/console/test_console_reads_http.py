@@ -135,6 +135,60 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         for _status, _headers, body in replays:
             self.assertEqual(body, b"")
 
+    def test_maintenance_and_kind_evidence_reads_are_current_and_linkable(self):
+        board = self.board()
+        board.call("model_catalog_refresh", {"requestId": "catalog-maintenance-read"})
+        run = self.submit(board, request_id="maintenance-evidence", task="Repair parser",
+                          cwd=str(self.workdir("maintenance-evidence")))
+        self.finish_turn(board, self.claim(board, run_id=run["runId"]))
+        self.accept_run(board, board.call("workflow_get", {"runId": run["runId"]}))
+        task_id = board.submit_execution(
+            requestId="maintenance-read-task", task="Synthetic maintenance", adapter="command",
+            argv=["true"], cwd=str(self.workdir("maintenance-read-task")))["task"]["runId"]
+        with board.store.db.write() as db:
+            now = board.store.now()
+            db.execute("INSERT INTO maintenance_runs VALUES('maintenance-read','manual',?,?,'completed',NULL,NULL,?,?)",
+                       ("dsh:deepseek-official:deepseek-flash:off", task_id, now, now))
+            db.execute("INSERT INTO domain_nodes VALUES('software','Software','Software tasks',NULL,NULL,'maintenance-read')")
+            db.execute("INSERT INTO kind_summaries VALUES('dsh','deepseek-flash','off','Careful parser repairs','maintenance-read')")
+            db.execute("INSERT INTO kind_summary_evidence VALUES('dsh','deepseek-flash','off',?,1)", (run["runId"],))
+            db.execute("UPDATE kind_statistics SET samples=2,successes=1,first_passes=1,"
+                       "rework_rounds=0,failures=1 WHERE harness='dsh' AND model='deepseek-flash' AND effort='off'")
+            db.execute("INSERT INTO kind_cell_statistics VALUES('dsh','deepseek-flash','off','software','debug',1,1,1,0,0)")
+        browser = self.open(board)
+        snapshot = browser.bootstrap()
+        self.assertEqual(snapshot["maintenance"]["pendingCount"], 1)
+        maintenance = snapshot["maintenance"]["runs"][0]
+        self.assertEqual((maintenance["triggerType"], maintenance["state"]), ("manual", "completed"))
+        self.assertIsNone(maintenance["reason"])
+        self.assertEqual(maintenance["buddy"], {"harness": "dsh", "provider": "deepseek-official",
+                                               "model": "deepseek-flash", "effort": "off"})
+        self.assertEqual(maintenance["usage"], {"attempts": []})
+        self.assertEqual(snapshot["domainNodes"], [{
+            "nodeId": "software", "name": "Software", "definition": "Software tasks",
+            "parentId": None, "mergedIntoId": None,
+        }])
+        evaluation = next(item for item in snapshot["kindEvaluations"]
+                          if (item["harness"], item["model"], item["effort"])
+                          == ("dsh", "deepseek-flash", "off"))
+        self.assertEqual(evaluation["summary"], {
+            "text": "Careful parser repairs",
+            "citations": [{"runId": run["runId"], "title": run["title"], "macroTaskId": None}],
+        })
+        self.assertEqual(evaluation["statistics"]["overall"]["samples"], 2)
+        self.assertEqual(evaluation["statistics"]["byDomainTaskType"]["software"]["debug"]["samples"], 1)
+        with board.store.db.write() as db:
+            db.execute("INSERT INTO micro_task_classifications VALUES(?,'software','debug','maintenance-read')",
+                       (run["runId"],))
+        self.assertEqual(browser.bootstrap()["maintenance"]["pendingCount"], 0)
+        with board.store.db.write() as db:
+            db.execute("UPDATE maintenance_runs SET state='failed',reason_code='answer-shape',reason_params_json=?"
+                       " WHERE maintenance_run_id='maintenance-read'",
+                       (json.dumps({"errors": ["citation-outside-batch"]}),))
+        failed = browser.bootstrap()["maintenance"]["runs"][0]
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["reason"], {"code": "answer-shape", "params": {"errors": ["citation-outside-batch"]}})
+
     def test_pending_count_counts_distinct_roots_awaiting_their_host(self):
         board = self.board()
         self.register(board)

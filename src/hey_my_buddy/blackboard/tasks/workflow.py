@@ -2004,10 +2004,13 @@ class WorkflowCoordinator:
         query = (
             "SELECT r.rowid AS route_rowid, r.decision_id, r.owner_generation, r.state,"
             " r.created_at, d.status AS decision_status, d.reason_code, d.reason_params_json, d.note,"
-            " q.task_id AS decision_task_id, q.selected_json, q.requested_json"
+            " q.task_id AS decision_task_id, q.selected_json, q.requested_json,"
+            " j.domain_node_id, j.task_type, n.name AS domain_node_name"
             " FROM workflow_routes r"
             " JOIN evaluation_decisions d ON d.decision_id=r.decision_id"
             " JOIN decision_requests q ON q.decision_id=r.decision_id"
+            " LEFT JOIN routing_judgments j ON j.decision_id=r.decision_id"
+            " LEFT JOIN domain_nodes n ON n.node_id=j.domain_node_id"
             " WHERE r.run_id=?"
         )
         parameters: list[Any] = [run_id]
@@ -2041,6 +2044,8 @@ class WorkflowCoordinator:
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
                     "current": bool(current_id) and row["decision_id"] == current_id,
+                    **({"domainNodeId": row["domain_node_id"], "domainNodeName": row["domain_node_name"],
+                        "taskType": row["task_type"]} if row["task_type"] is not None else {}),
                     **routing_facts(routing_request, actor=dispatch(connection, row["decision_task_id"]) if row["decision_task_id"] else None),
                 }
             )

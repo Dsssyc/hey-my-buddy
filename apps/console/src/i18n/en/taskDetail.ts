@@ -36,7 +36,7 @@ export default {
     markerCount_one: "{{name}} {{count}} time", markerCount_other: "{{name}} {{count}} times",
     turnChanges: "Changes in this turn", nativeMarker: "Marker · {{type}}",
     routingTask: { fast: "Choose a buddy for this micro task", review: "Choose a buddy for this micro task (review mode)" },
-    routerAnswer: { buddyId: "Selected buddy", note: "Explanation", evidence: "Evidence" },
+    routerAnswer: { domainNodeId: "Domain node", taskType: "Task type", buddyId: "Selected buddy", note: "Explanation", evidence: "Evidence" },
     task: "Task", answer: "Answer", fullPrompt: "Expand full text sent to buddy (role and result format included) · {{count}} characters",
     moreLines: "Show remaining {{count}} lines", collapseOutput: "Collapse output", groupSeparator: " · ", failures_one: "{{count}} failure", failures_other: "{{count}} failures",
     scrollEnd: "Scroll to latest content", scrollStart: "Scroll to start",
@@ -95,6 +95,8 @@ export default {
   },
   routing: {
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",
+    domainNode: "Domain", unclassified: "Unclassified", taskType: "Task type",
+    taskTypes: { create: "Create", change: "Change", debug: "Debug", verify: "Verify", review: "Review", research: "Research", write: "Write" },
     mode: { fast: "Fast", review: "Review" },
     sources: {
       "single-candidate": "Chosen by the program: the only legal candidate; no Router was called",

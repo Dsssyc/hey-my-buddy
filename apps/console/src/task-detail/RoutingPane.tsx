@@ -50,6 +50,10 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
           <p className="text-xs text-ink3">{t("routing.chosen")}</p>
           <p className="font-mono text-xs wrap-anywhere">{quad(span.routing?.selectedBuddy) ?? unrecorded}</p>
           <div className="mt-1"><Fold text={[span.routing?.reason ? reasonText(span.routing.reason) : null, span.routing?.note].filter(Boolean).join("\n") || unrecorded} className="text-foreground" limit={240} /></div>
+          {entry?.taskType !== undefined && <div className="mt-2"><Facts items={[
+            [t("routing.domainNode"), entry.domainNodeId === null ? t("routing.unclassified") : entry.domainNodeName ?? entry.domainNodeId ?? unrecorded],
+            [t("routing.taskType"), t(`routing.taskTypes.${entry.taskType}`)],
+          ]} /></div>}
           {entry?.source && entry.source !== "model-selection" && <div className="mt-2"><Facts items={[[t("routing.source"), t(`routing.sources.${entry.source}`, { defaultValue: entry.source })]]} /></div>}
           {basis && <BasisFold basis={basis} />}
         </div>

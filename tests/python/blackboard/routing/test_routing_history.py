@@ -78,6 +78,33 @@ class RoutingHistoryTestCase(WorkflowTestCase):
 
 
 class WorkflowRoutingHistoryTests(RoutingHistoryTestCase):
+    def test_judgment_fields_are_present_only_for_recorded_router_answers(self):
+        board = self.board()
+        recorded = self.routed(board, request_id="judgment-present")
+        missing = self.routed(board, request_id="judgment-absent")
+        task_id = board.submit_execution(
+            requestId="judgment-domain-source", task="Synthetic maintenance", adapter="command",
+            argv=["true"], cwd=str(self.workdir("judgment-domain-source")))["task"]["runId"]
+        with board.store.db.write() as db:
+            now = board.store.now()
+            db.execute("INSERT INTO maintenance_runs VALUES('judgment-source','manual','fixture',?,'completed',NULL,NULL,?,?)",
+                       (task_id, now, now))
+            db.execute("INSERT INTO domain_nodes VALUES('software','Software','Software tasks',NULL,NULL,'judgment-source')")
+            db.execute("INSERT INTO routing_judgments VALUES(?,'software','debug')",
+                       (recorded["routing"]["decisionId"],))
+        entry = self.history(board, recorded["runId"])["entries"][0]
+        self.assertEqual((entry["domainNodeId"], entry["domainNodeName"], entry["taskType"]),
+                         ("software", "Software", "debug"))
+        absent = self.history(board, missing["runId"])["entries"][0]
+        self.assertNotIn("domainNodeId", absent)
+        self.assertNotIn("taskType", absent)
+        with board.store.db.write() as db:
+            db.execute("UPDATE routing_judgments SET domain_node_id=NULL WHERE decision_id=?",
+                       (recorded["routing"]["decisionId"],))
+        unclassified = self.history(board, recorded["runId"])["entries"][0]
+        self.assertIsNone(unclassified["domainNodeId"])
+        self.assertIsNone(unclassified["domainNodeName"])
+
     def test_history_pages_over_many_reroutes_and_isolates_one_run(self):
         board = self.board()
         submitted = self.routed(board)

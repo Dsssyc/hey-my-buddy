@@ -172,6 +172,15 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       message: i18n.t("console:retryIntervalMustBeAnIntegerFrom"),
     });
   }
+  if (draft.configuration?.maintenanceIntervalSeconds !== undefined && (!Number.isSafeInteger(draft.configuration.maintenanceIntervalSeconds) || draft.configuration.maintenanceIntervalSeconds < 1)) {
+    issues.push({ buddyId: "", label: i18n.t("buddies:maintenance.interval"), message: i18n.t("buddies:maintenance.intervalInvalid") });
+  }
+  if (draft.configuration && routerFieldChanged(baseline, draft, "maintenanceBuddyId") && draft.configuration.maintenanceBuddyId) {
+    const buddy = buddies.get(draft.configuration.maintenanceBuddyId);
+    if (!buddy || !buddy.enabled || !buddy.available) {
+      issues.push({ buddyId: draft.configuration.maintenanceBuddyId, label: i18n.t("buddies:maintenance.buddy"), message: i18n.t("buddies:maintenance.ineligible") });
+    }
+  }
   if (draft.configuration && routerFieldChanged(baseline, draft, "routerBuddyIds")) {
     // Settings name published complete identities. Runtime eligibility and
     // temporary availability belong to the shared current Router resolver.

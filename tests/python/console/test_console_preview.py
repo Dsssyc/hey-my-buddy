@@ -142,7 +142,7 @@ class SessionPreviewTests(unittest.TestCase):
         status, latest = self.get(pair)
         self.assertEqual(200, status)
         self.assertEqual(("ended", 100, True), (latest["state"], len(latest["events"]), latest["hasEarlier"]))
-        self.assertEqual({"status": "unavailable", "reason": {"code": "session.codex-internal-reasoning-omitted", "params": {}}}, latest["coverage"]["reasoning"])
+        self.assertEqual({"status": "unavailable", "reason": {"code": "session.not-recorded", "params": {}}}, latest["coverage"]["reasoning"])
         self.assertEqual({"status": "evidenced", "version": "fixture CLI 1"}, latest["coverage"]["messages"])
         status, earlier = self.get(pair, f'?before={latest["before"]}&limit=100')
         self.assertEqual(200, status)

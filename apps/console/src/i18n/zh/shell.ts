@@ -2,6 +2,7 @@
 export default {
   reasonFact: "{{name}}：{{value}}",
   reasonParam: {
+    "errors": "问题",
     "access": "权限",
     "adapter": "执行适配器",
     "bound": "边界",

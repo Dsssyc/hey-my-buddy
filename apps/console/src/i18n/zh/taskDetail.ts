@@ -35,7 +35,7 @@ export default {
     markerCount_one: "{{name}} {{count}} 次", markerCount_other: "{{name}} {{count}} 次",
     turnChanges: "本回合的改动", nativeMarker: "标记 · {{type}}",
     routingTask: { fast: "为这个微任务选择 buddy", review: "为这个微任务选择 buddy（审阅模式）" },
-    routerAnswer: { buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
+    routerAnswer: { domainNodeId: "领域节点", taskType: "任务类型", buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
     task: "任务", answer: "回答", fullPrompt: "展开发给 buddy 的全文（含角色说明与交回格式）· {{count}} 字",
     moreLines: "展开其余 {{count}} 行", collapseOutput: "收起输出", groupSeparator: " · ", failures_one: "{{count}} 次失败", failures_other: "{{count}} 次失败",
     scrollEnd: "滚动到最新内容", scrollStart: "滚动到开头",
@@ -94,6 +94,8 @@ export default {
   },
   routing: {
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",
+    domainNode: "领域节点", unclassified: "未归类", taskType: "任务类型",
+    taskTypes: { create: "新建", change: "改造", debug: "排错", verify: "验证", review: "审查", research: "调研", write: "撰写" },
     mode: { fast: "快速", review: "审阅" },
     sources: {
       "single-candidate": "程序直选，唯一的合法候选，没有调用 Router",

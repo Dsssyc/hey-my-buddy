@@ -1,8 +1,11 @@
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
+import evaluation from "./evaluation";
+import maintenance from "./maintenance";
 
 /** The Buddy page: the catalogue of buddies and the roles they hold. */
 export default {
+  maintenance,
   sections: {
     label: "Buddy 的分区",
     catalog: "目录",
@@ -95,4 +98,5 @@ export default {
   /** The two other views keep their texts in files of their own. */
   harness,
   roles,
+  evaluation,
 };

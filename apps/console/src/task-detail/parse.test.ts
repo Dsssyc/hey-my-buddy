@@ -161,6 +161,22 @@ describe("the audit", () => {
     expect(page.nextCursor).toBeNull();
     expect(() => parseRoutingPage({ runId: "other", routingHistory: { entries: [], nextCursor: null } }, "m1")).toThrow(ApiError);
   });
+
+  it("distinguishes an unclassified Router judgment from a historical route without one", () => {
+    const parse = (judgment: Record<string, unknown>) => parseRoutingPage({ runId: "m1", routingHistory: {
+      entries: [{ ...entry, ...judgment }], nextCursor: null,
+    } }, "m1").entries[0]!;
+    expect(parse({})).not.toHaveProperty("taskType");
+    expect(parse({ domainNodeId: null, domainNodeName: null, taskType: "review" })).toMatchObject({
+      domainNodeId: null, domainNodeName: null, taskType: "review",
+    });
+    expect(parse({ domainNodeId: "domain-1", domainNodeName: "界面工程", taskType: "change" })).toMatchObject({
+      domainNodeId: "domain-1", domainNodeName: "界面工程", taskType: "change",
+    });
+    for (const invalid of [{ domainNodeId: null, taskType: "review" }, { domainNodeId: null, domainNodeName: null, taskType: "other" }]) {
+      expect(() => parse(invalid)).toThrow(ApiError);
+    }
+  });
 });
 
 describe("what a decision was bound by", () => {

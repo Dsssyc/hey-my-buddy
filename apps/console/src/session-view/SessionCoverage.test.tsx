@@ -14,7 +14,7 @@ it("opens all five categories, distinguishes missing evidence and absence, and c
   expect(within(table).getAllByRole("row")).toHaveLength(5);
   expect(within(table).getByText("有证据 · fixture CLI 1")).not.toBeNull();
   expect(within(table).getAllByText("未核实")).toHaveLength(3);
-  expect(within(table).getByText(/不提供：Codex 内部推理/)).not.toBeNull();
+  expect(within(table).getByText(/不提供：未记录此执行的会话/)).not.toBeNull();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("table")).toBeNull();
   expect(document.activeElement).toBe(trigger);

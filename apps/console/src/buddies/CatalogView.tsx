@@ -220,7 +220,7 @@ export function CatalogView({ snapshot, editor, api, refresh, active, mutationsA
           {actions.retry && <Button variant="outline" size="sm" onClick={() => void actions.run(actions.retry!)}>{t("harness.retry")}</Button>}</p>}
         {actions.note && <p role="status">{actions.note}</p>}
       </div>}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" viewportProps={{ className: "[&>div]:!block" }}>
         <div className="space-y-3 p-3 sm:p-6">
           {sections.map(block => {
             const health = actions.rows.find(row => row.harness === block.harness);

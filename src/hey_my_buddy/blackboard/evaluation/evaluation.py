@@ -55,11 +55,14 @@ class EvaluationStore:
             decisions = [
                 self._decision_view(row)
                 for row in connection.execute(
-                    "SELECT d.*,"
+                    "SELECT d.*, j.domain_node_id, j.task_type, n.name AS domain_node_name,"
                     " r.task_id AS run_id, r.updated_at AS updated_at,"
                     " (SELECT snapshot_json FROM router_requests s WHERE s.decision_id=d.decision_id"
                     " ORDER BY round DESC LIMIT 1) AS snapshot_json"
-                    " FROM evaluation_decisions d LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
+                    " FROM evaluation_decisions d"
+                    " LEFT JOIN routing_judgments j ON j.decision_id=d.decision_id"
+                    " LEFT JOIN domain_nodes n ON n.node_id=j.domain_node_id"
+                    " LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
                     " ORDER BY d.created_at DESC, d.decision_id DESC LIMIT ?",
                     (MAX_DECISION_PAGE,),
                 )
@@ -173,6 +176,10 @@ class EvaluationStore:
         view["runId"] = row["run_id"]
         if row["updated_at"] is not None:
             view["updatedAt"] = row["updated_at"]
+        if row["task_type"] is not None:
+            view["domainNodeId"] = row["domain_node_id"]
+            view["domainNodeName"] = row["domain_node_name"]
+            view["taskType"] = row["task_type"]
         return view
 
     def user_policy_publish(self, params: dict) -> dict:
