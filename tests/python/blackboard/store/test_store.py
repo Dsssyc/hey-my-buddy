@@ -5,6 +5,7 @@ state directory. Micro-task tasks use the deterministic workspace double, so rea
 admission, claim, attempt and result transactions run without a model call.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import sqlite3
 import unittest
@@ -52,19 +53,13 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
 
     def claim_micro_task(self, board, worker_id: str, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off"):
         self.submit_micro_task(board, request_id, model_service, effort=effort)
-        return board.client().claim(worker_id, f"claim-{request_id}", "n" * 32)
+        return admit_execution(board.client(), "n" * 32)
 
     def register(self, board, worker_id: str, *, adapter: str = "dsh"):
-        board.client().register_worker(worker_id, adapter=adapter, capabilities=[adapter])
+        pass  # Admission is owned by the service.
 
     def finish(self, board, worker_id: str, claim: dict, *, shutdown: bool = True):
-        return board.client().submit_result(
-            worker_id,
-            claim["claim"]["attempt"]["attemptId"],
-            claim["claim"]["attempt"]["generation"],
-            "n" * 32,
-            {"status": "ok", "result": {"finalText": "done"}, "shutdownConfirmed": shutdown, "exitCode": 0},
-        )
+        return board.client().submit_result(claim["claim"]["attempt"]["attemptId"], claim["claim"]["attempt"]["generation"], "n" * 32, {"status": "ok", "result": {"finalText": "done"}, "shutdownConfirmed": shutdown, "exitCode": 0})
 
 
 class CurrentSchemaTests(BoardTestCase):
@@ -131,7 +126,7 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
         board = self.board(max_concurrent=2)
         client = board.client()
         for index in range(2):
-            client.register_worker(f"w-cmd{index}", adapter="command", capabilities=["command"])
+            pass  # Admission is owned by the service.
             submitted = client.submit(
                 requestId=f"cmd-{index}",
                 task="no model",
@@ -139,14 +134,14 @@ class FrozenModelServiceTests(StoreConcurrencyTestCase):
                 adapter="command",
                 argv=["/bin/true"],
             )
-            claim = client.claim(f"w-cmd{index}", f"claim-cmd-{index}", f"{index}" * 32, task_id=submitted["task"]["runId"])
+            claim = admit_execution(client, f"{index}" * 32, task_id=submitted["task"]["runId"])
         third = client.submit(
             requestId="cmd-2", task="no model either", cwd=str(self.workdir("cmd-2")),
             adapter="command", argv=["/bin/true"],
         )["task"]
         self.assertEqual(third["queueReason"], "capacity")
-        client.register_worker("w-cmd2", adapter="command", capabilities=["command"])
-        empty = client.claim("w-cmd2", "claim-cmd-2", "c" * 32)
+        pass  # Admission is owned by the service.
+        empty = admit_execution(client, "c" * 32)
         self.assertIsNone(empty["claim"])
         self.assertEqual(empty["reason"], "capacity")
 
@@ -303,10 +298,44 @@ class ExpectedDurationTests(BoardTestCase):
         board = self.board()
         task = self.submit(board, "duration-reason")
         client = board.client()
-        client.register_worker("duration-worker", adapter="command", capabilities=["command"])
-        claim = client.claim("duration-worker", "duration-claim", "n" * 32, task_id=task["runId"])["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
         with self.assertRaises(BoardError) as raised:
-            client.submit_result("duration-worker", claim["attempt"]["attemptId"], claim["attempt"]["generation"],
-                                 "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
+            client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
         self.assertIn("Router budget", raised.exception.message)
         self.assertFalse(client.get(runId=task["runId"])["shutdownConfirmed"])
+
+
+class ServiceAdmissionWindowTests(BoardTestCase):
+    def test_resource_blocked_early_candidates_do_not_hide_later_runnable_work(self):
+        from support import FakeClock
+        from admission import admit_execution
+        clock = FakeClock()
+        board = self.board(max_concurrent=2, clock=clock)
+        client = board.client()
+        held = self.workdir('held')
+        client.submit(requestId='held', task='hold', cwd=str(held), adapter='command',
+                      argv=['true'], exclusiveResources=['exclusive-fixture'])
+        admit_execution(client, 'held-nonce-0000000000000000000')
+        for index in range(board.store.CLAIM_CANDIDATE_LIMIT + 2):
+            clock.advance(1)
+            client.submit(requestId=f'blocked-{index}', task='blocked', cwd=str(self.workdir(f'blocked-{index}')),
+                          adapter='command', argv=['true'], exclusiveResources=['exclusive-fixture'])
+        clock.advance(1)
+        runnable = client.submit(requestId='runnable', task='free', cwd=str(self.workdir('free')),
+                                 adapter='command', argv=['true'])['task']
+        admitted = admit_execution(client, 'free-nonce-0000000000000000000')['claim']
+        self.assertIsNotNone(admitted)
+        self.assertEqual(admitted['task']['taskId'], runnable['taskId'])
+
+    def test_an_empty_admission_does_not_wake_the_scheduler_again(self):
+        from unittest.mock import Mock
+        board = self.board()
+        changed = Mock()
+        board.store.on_change = changed
+        for _ in range(3):
+            self.assertIsNone(board.service.admit_execution('empty-nonce-0000000000000')['claim'])
+        changed.assert_not_called()
+        board.client().submit(requestId='new-work', task='new', cwd=str(self.workdir()),
+                              adapter='command', argv=['true'])
+        changed.assert_called_once()

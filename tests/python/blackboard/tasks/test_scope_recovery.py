@@ -7,6 +7,7 @@ decision and the resealed handoff are all real. A failed site is never promoted
 to an authorized baseline, and a mechanical resolution never needs a model turn.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import os
@@ -36,7 +37,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
 
     # -- micro-task helpers ----------------------------------------------------
     def register(self, board, worker_id=None):
-        return board.call("worker_register", {"workerId": worker_id or self.worker, "capabilities": ["dsh"]})
+        return None
 
     def micro_task_submit(self, board, *, request_id="scope-run", scope=("src",), kind="existing", cwd=None):
         response = board.call("workflow_submit", {
@@ -63,9 +64,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         return json.loads(row["manifest_json"])
 
     def claim(self, board, run_id, *, request_id="claim-1", nonce="n" * 16, worker_id=None):
-        return board.call("worker_claim", {
-            "workerId": worker_id or self.worker, "claimRequestId": request_id, "nonce": nonce, "runId": run_id,
-        })
+        return admit_board(board, {'workerId': worker_id or self.worker, 'claimRequestId': request_id, 'nonce': nonce, 'runId': run_id})
 
     def scope_failure(self, board, claimed, *, native=None, worker_id=None):
         """The exact failed result a refused seal produces, with real evidence on disk.
@@ -85,17 +84,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         if native is not None:
             result["processState"] = {"shutdownConfirmed": True}
             result["turn"] = self.turn_record(claim, disposition=native)
-        return board.call("worker_result", {
-            "workerId": worker_id or self.worker,
-            "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"],
-            "nonce": "n" * 16,
-            "status": "failed",
-            "result": result,
-            "shutdownConfirmed": True,
-            "exitCode": 1,
-            "error": seal_error,
-        })
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'result': result, 'shutdownConfirmed': True, 'exitCode': 1, 'error': seal_error})
 
     def turn_record(self, claim, *, disposition="completed"):
         """A synthetic micro-task turn record in the current provenance format.
@@ -118,18 +107,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def finish_turn(self, board, claimed, seal, *, disposition="completed", worker_id=None):
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        return board.call("worker_result", {
-            "workerId": worker_id or self.worker,
-            "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"],
-            "nonce": "n" * 16,
-            "status": "ok",
-            "result": {"status": "ok", "processState": {"shutdownConfirmed": True},
-                       "turn": self.turn_record(claim, disposition=disposition),
-                       "turnResultPath": "/tmp/turn-result.json", "workspaceSeal": seal},
-            "shutdownConfirmed": True,
-            "exitCode": 0,
-        })
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0})
 
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})

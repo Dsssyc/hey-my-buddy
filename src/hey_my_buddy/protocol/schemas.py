@@ -36,7 +36,7 @@ MAX_CAPABILITIES = 32
 
 CODING_HARNESSES = ("dsh", "zcode", "codex", "claude")
 BUDDY_FIELDS = ("harness", "provider", "model", "effort")
-ADAPTERS = (*CODING_HARNESSES, "command", "external")
+ADAPTERS = (*CODING_HARNESSES, "command")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -521,7 +521,7 @@ def _reject_retired_spec_keys(params: dict) -> None:
     if "adapter" in params:
         raise BoardError("INVALID_ARGUMENT",
                          "Micro tasks do not accept adapter; name a buddy with harness, "
-                         "or use execution-submit for command and external execution records", field="adapter")
+                         "or use execution-submit for command execution records", field="adapter")
     if "argv" in params:
         raise BoardError("INVALID_ARGUMENT",
                          "Micro tasks do not accept argv; use execution-submit for command execution records", field="argv")
@@ -590,7 +590,7 @@ def normalize_workflow_spec(params: dict) -> dict:
     micro task preserves exactly the harness/provider/model/effort constraints the
     caller supplied, and ADR-021 decision 5 allows only the two complete
     expressions: the whole quadruple (delegated directly, no Router) or none of
-    it (the Router chooses). Command and external execution records use the
+    it (the Router chooses). Command execution records use the
     separate ordinary execution submission contract.
     """
     supplied = [key for key in BUDDY_FIELDS if params.get(key) is not None]

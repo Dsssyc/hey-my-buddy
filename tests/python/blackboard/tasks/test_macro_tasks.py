@@ -470,8 +470,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board, kind='worktree')
         claim = self.claim(board, run_id=run['runId'])
-        with patch.object(board.store, '_now_minus', return_value='9999-01-01T00:00:00.000Z'):
-            self.assertEqual(board.store.mark_expired_leases(), 1)
+        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
         # The worker reports after its lease expired: the recorded result and its
         # stop evidence settle the end even though ownership stayed uncertain.
         self.finish_turn(board, claim)
@@ -488,8 +487,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board, kind='worktree')
         claim = self.claim(board, run_id=run['runId'])
-        with patch.object(board.store, '_now_minus', return_value='9999-01-01T00:00:00.000Z'):
-            self.assertEqual(board.store.mark_expired_leases(), 1)
+        self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
         self.finish_turn(board, claim, disposition='attention', shutdown=False)
         timeline = board.call('macro_task_timeline', {'macroTaskId': f"run:{run['runId']}"})
         execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')

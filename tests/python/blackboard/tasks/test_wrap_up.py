@@ -13,26 +13,13 @@ class WrapUpStopTests(WorkflowTestCase):
         return board.call("task_get", {"runId": claim["claim"]["attempt"]["taskId"]})["task"]["selectedAttempt"]
 
     def result(self, board, claim, *, reason, status="cancelled", shutdown=True):
-        return board.call("worker_result", self.result_params(claim, reason=reason,
+        return board.call('execution_result', self.result_params(claim, reason=reason,
                                                               status=status, shutdown=shutdown))
 
     def result_params(self, claim, *, reason, status="cancelled", shutdown=True):
         attempt = claim["claim"]["attempt"]
         record = self.turn_record(claim)
-        payload = {
-            "workerId": "w1", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": "n" * 16, "status": status, "shutdownConfirmed": shutdown,
-            "terminationReason": reason,
-            "result": {
-                "status": status, "mode": "run", "processState": {"shutdownConfirmed": shutdown},
-                "logPaths": {"stdout": "/tmp/out", "stderr": "/tmp/err"},
-                "turn": record, "turnResultPath": "/tmp/turn-output.json",
-                "workspaceSeal": self.workspace.seal(
-                    self.directory, claim["claim"]["turn"]["input"]["executionWorkspace"],
-                    attempt["taskId"], attempt["attemptId"],
-                ),
-            },
-        }
+        payload = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': status, 'shutdownConfirmed': shutdown, 'terminationReason': reason, 'result': {'status': status, 'mode': 'run', 'processState': {'shutdownConfirmed': shutdown}, 'logPaths': {'stdout': '/tmp/out', 'stderr': '/tmp/err'}, 'turn': record, 'turnResultPath': '/tmp/turn-output.json', 'workspaceSeal': self.workspace.seal(self.directory, claim['claim']['turn']['input']['executionWorkspace'], attempt['taskId'], attempt['attemptId'])}}
         return payload
 
     def test_console_escalation_during_host_receipt_preserves_shutdown_and_replay(self):
@@ -43,7 +30,7 @@ class WrapUpStopTests(WorkflowTestCase):
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
         params = self.result_params(claim, reason="wrap-up")
         board.store.workflow.cancel({"runId": run["runId"]}, console_authority={"sessionId": "browser"})
-        receipt = board.call("worker_result", params)
+        receipt = board.call('execution_result', params)
         self.assertTrue(receipt["attempt"]["shutdownConfirmed"])
         self.assertEqual(receipt["attempt"]["stopInitiator"], "console")
         self.assertNotIn("stopInitiator", receipt["attempt"]["result"])
@@ -51,7 +38,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertIsNotNone(receipt["attempt"]["graceDeadline"])
         self.assertEqual(receipt["task"]["state"], "cancelled")
         self.assertEqual(receipt["task"]["terminationReason"], "wrap-up")
-        self.assertTrue(board.call("worker_result", params)["duplicate"])
+        self.assertTrue(board.call('execution_result', params)["duplicate"])
 
     def test_local_unattributed_worker_stop_records_unknown_without_host_intent(self):
         board = self.board()
@@ -72,7 +59,7 @@ class WrapUpStopTests(WorkflowTestCase):
         params["result"]["turn"]["generation"] += 1
         params["result"]["partialOutput"] = {"partial": True, "verified": False, "final": False,
                                                "reason": "wrap-up"}
-        receipt = board.call("worker_result", params)
+        receipt = board.call('execution_result', params)
         self.assertEqual(receipt["attempt"]["result"]["status"], "cancelled")
         self.assertEqual(receipt["attempt"]["result"]["terminationReason"], "forced-stop")
         self.assertEqual(receipt["attempt"]["result"]["result"]["partialOutput"]["reason"], "forced-stop")
@@ -216,7 +203,7 @@ class WrapUpStopTests(WorkflowTestCase):
                     self.result(board, claim, reason=reason, status=status, shutdown=shutdown)
                 self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as forbidden:
-            board.call("worker_result", {**self.result_params(claim, reason=None), "stopInitiator": "host"})
+            board.call('execution_result', {**self.result_params(claim, reason=None), "stopInitiator": "host"})
         self.assertEqual(forbidden.exception.code, "INVALID_ARGUMENT")
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
         with self.assertRaises(BoardError) as mismatch:
@@ -233,7 +220,7 @@ class WrapUpStopTests(WorkflowTestCase):
             with self.subTest(harness=name, interrupted_resume=supported):
                 self.executors[name].interrupted_resume = supported
                 worker_id = f"capability-worker-{index}"
-                board.call('worker_register', {'workerId': worker_id, 'capabilities': [name]})
+                pass  # Admission is owned by the service.
                 run = self.submit(board, request_id=f'capability-run-{index}', harness=name, kind='worktree')
                 claim = self.claim(board, worker_id=worker_id, claim_request_id=f'capability-claim-{index}',
                                    run_id=run['runId'])

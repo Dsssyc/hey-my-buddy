@@ -9,6 +9,7 @@ Host through the fixed get/result/artifact surfaces. A reading that fails is an
 honest unknown; a stash change never fails or blocks anything.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import unittest
@@ -67,10 +68,8 @@ class WorkflowStashTestCase(BoardTestCase):
             "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
         })
         self.run_id = submitted["runId"]
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh"]})
-        return board.call("worker_claim", {
-            "workerId": "w1", "claimRequestId": "claim-1", "nonce": NONCE, "runId": self.run_id,
-        })
+        pass  # Admission is owned by the service.
+        return admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': NONCE, 'runId': self.run_id})
 
     def finish(self, board, claimed, *, disposition="completed", result_extra=None):
         claim = claimed["claim"]
@@ -86,10 +85,7 @@ class WorkflowStashTestCase(BoardTestCase):
             self.directory, manifest, attempt["taskId"], attempt["attemptId"])
         if result_extra:
             result.update(result_extra)
-        return board.call("worker_result", {
-            "workerId": "w1", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": NONCE, "status": "ok", "result": result, "shutdownConfirmed": True, "exitCode": 0,
-        })
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
 
     def stored_turn_input(self, board):
         with board.store.db.read() as connection:
@@ -156,10 +152,8 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         # eventually starts must freeze the state at its own start, so the entry
         # never counts as disappearing during that turn.
         self.workspace.stash_inventories[repository] = observed([])
-        board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh"]})
-        claimed = board.call("worker_claim", {
-            "workerId": "w1", "claimRequestId": "claim-1", "nonce": NONCE, "runId": self.run_id,
-        })
+        pass  # Admission is owned by the service.
+        claimed = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': NONCE, 'runId': self.run_id})
         document = self.stored_turn_input(board)
         self.assertEqual(document["context"]["sharedStash"]["start"]["entries"], [])
         finished = self.finish(board, claimed)
@@ -176,12 +170,9 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         # The repository changes afterwards; a replay of the same committed claim
         # must return the stored turn verbatim, never a re-collected reading.
         self.workspace.stash_inventories[repository] = observed([entry("b" * 40, "later reading")])
-        replayed = board.call("worker_claim", {
-            "workerId": "w1", "claimRequestId": "claim-1", "nonce": NONCE, "runId": self.run_id,
-        })
-        self.assertTrue(replayed["replayed"])
-        self.assertEqual(replayed["claim"]["turn"]["inputSha256"], claimed["claim"]["turn"]["inputSha256"])
-        self.assertEqual(replayed["claim"]["turn"]["input"]["context"]["sharedStash"], frozen)
+        replayed = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': NONCE, 'runId': self.run_id})
+        self.assertIsNone(replayed["claim"])
+        self.assertEqual(self.stored_turn_input(board)["context"]["sharedStash"], frozen)
 
     def test_a_failed_collection_is_an_honest_unknown_and_never_blocks_the_claim(self):
         board = self.board()
@@ -352,10 +343,7 @@ class SealFactPinningTests(WorkflowStashTestCase):
                   "turnResultPath": "/tmp/turn.json",
                   "workspaceSeal": self.workspace.seal(self.directory, manifest, self.run_id,
                                                       claim["attempt"]["attemptId"])}
-        finished = board.call("worker_result", {
-            "workerId": "w1", "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
-            "nonce": NONCE, "status": "ok", "result": result, "shutdownConfirmed": True, "exitCode": 0,
-        })
+        finished = board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         self.assertEqual(finished["taskState"], "failed")
         self.assertIsNotNone(finished["workflow"]["sharedStash"])
         view = board.call("workflow_get", {"runId": self.run_id})
@@ -387,10 +375,7 @@ class SealFactPinningTests(WorkflowStashTestCase):
         self.workspace.stash_inventories[repository] = observed([])
         claimed = self.submit_and_claim(board)
         attempt = claimed["claim"]["attempt"]
-        released = board.call("worker_release", {
-            "workerId": "w1", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": NONCE, "evidence": {"spawnIntentWritten": False},
-        })
+        released = board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'evidence': {'spawnIntentWritten': False}})["attemptId"])
         self.assertTrue(released["released"])
         view = board.call("workflow_get", {"runId": self.run_id})
         artifact = next(row for row in view["artifacts"] if row["kind"] == "shared-refs")

@@ -10,6 +10,7 @@ claim freezes the actual model service, tool policy and Router binding onto the
 attempt inside one transaction. Old dispatch documents, hashes and receipts are
 never rewritten by a later dispatch of the same request.
 """
+from admission import admit_board, admit_execution, admit_store
 import json
 import unittest
 from unittest.mock import patch
@@ -35,7 +36,7 @@ class RouterDispatchTestCase(BoardTestCase):
         self.add_buddy(B, model="bravo")
         self.set_settings(ids=[A, B])
         client = self.board_.client()
-        client.register_worker("w-route", adapter="decision", capabilities=["decision"])
+        pass  # Admission is owned by the service.
         self.client = client
 
     # -- fixtures ------------------------------------------------------------
@@ -67,7 +68,7 @@ class RouterDispatchTestCase(BoardTestCase):
         return self.board_.call("selection_get", {"decisionId": decision_id})["decision"]
 
     def claim(self, suffix="1", *, task_id=None):
-        return self.client.claim("w-route", f"claim-{suffix}", NONCE + suffix, task_id=task_id)
+        return admit_execution(self.client, NONCE + suffix, task_id=task_id)
 
     def snapshot_of(self, decision_id):
         with self.board_.store.db.read() as db:
@@ -114,12 +115,8 @@ class AdmissionTests(RouterDispatchTestCase):
         # The claim receipt replays the same attempt rather than minting a second one.
         committed = self.claim("dup")
         self.assertIsNotNone(committed["claim"])
-        replayed = self.board_.call("worker_claim", {
-            "workerId": "w-route", "claimRequestId": "claim-dup", "nonce": NONCE + "dup",
-        })
-        self.assertTrue(replayed["replayed"])
-        self.assertEqual(replayed["claim"]["attempt"]["attemptId"],
-                         committed["claim"]["attempt"]["attemptId"])
+        replayed = admit_board(self.board_, {'workerId': 'w-route', 'claimRequestId': 'claim-dup', 'nonce': NONCE + 'dup'})
+        self.assertIsNone(replayed["claim"])
         self.assertEqual(len(self.attempts()), 1)
 
     def test_no_usable_router_still_freezes_the_complete_packet(self):
@@ -289,11 +286,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                     "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                     " VALUES(?,?,?,?,?,'digest',1,'dsh','/work',60,'running',1,?,?)",
                     (f"busy-{index}", f"busy-{index}", "host", "{}", "{}", T0, T0))
-                db.execute(
-                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                    " adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
-                    " VALUES(?,?,1,'nonce',?,'executing','dsh','dsh','other',?,?,?,?)",
-                    (f"att-busy-{index}", f"busy-{index}", f"claim-b{index}", f"model-{index}", T0, T0, T0))
+                db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'nonce','executing','dsh','dsh','other',?,?,?,?)", (f'att-busy-{index}', f'busy-{index}', f'model-{index}', T0, T0, T0))
         blocked = self.claim("cap")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "capacity")
@@ -315,11 +308,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
                 " VALUES('retry-1','retry','host','{}','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
                 (T0, T0))
-            db.execute(
-                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,execution_state,"
-                " adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at)"
-                " VALUES('att-retry','retry-1',1,'nonce','claim-r','executing','dsh','dsh','fixture','alpha',?,?,?)",
-                (T0, T0, T0))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="retry-1", attempt_id="att-retry",
                                             payload={"buddyId": A, "plane": "work", "requestId": "route-elsewhere",
                                                      "routerIndex": 0, "taskId": "retry-1", "attemptId": "att-retry",

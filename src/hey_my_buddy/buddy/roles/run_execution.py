@@ -41,13 +41,17 @@ from .turn_io import input_hash, private_json, validate_outcome, guard_private_p
 
 WORKER_STOP_GRACE_SECONDS = 8.0
 _DISCOVERY_CONTROL = "discovery-control.json"
-_execution_live_file: Path | None = None
+_execution_live_server = None
 
 
-def set_execution_live_file(path: Path) -> None:
-    """Set the private material path read by the separate Worker process."""
-    global _execution_live_file
-    _execution_live_file = path
+def set_execution_live_server(server) -> None:
+    """Bind the single execution endpoint before starting any native run."""
+    global _execution_live_server
+    _execution_live_server = server
+
+
+def execution_live_server():
+    return _execution_live_server
 
 
 class InlineRunHandle:
@@ -486,11 +490,7 @@ def _launch(control: dict, context: ExecutionContext, *, environment: dict,
     ensure_private_dir(Path(control["privateRoot"]))
     control.update(invocationId=identity.invocation_id,
                    taskId=identity.task_id, attemptId=identity.attempt_id,
-                   generation=identity.generation,
-                   live={"instanceId": uuid.uuid4().hex + uuid.uuid4().hex,
-                         "token": secrets.token_hex(32)})
-    control["executionLiveFile"] = str(_execution_live_file or
-                                       context_root(context, control["harness"]) / "execution-live.json")
+                   generation=identity.generation)
     handle = InlineRunHandle(control, identity, grace_seconds=grace_seconds)
     def run() -> None:
         from .inline_run import execute

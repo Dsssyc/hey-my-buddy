@@ -1,4 +1,5 @@
 """Only the current schema and named RPC surface are accepted; archives stay intact."""
+from admission import admit_execution
 import ast
 import contextlib
 import importlib.util
@@ -45,14 +46,14 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         self.assertEqual(CONTRACT_VERSION, "0.39.0")
-        self.assertEqual(SCHEMA_VERSION, 22)
+        self.assertEqual(SCHEMA_VERSION, 23)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(tasks)")}
         self.assertTrue({"input_fingerprint", "fingerprint_version", "selected_attempt_id"}.issubset(columns))
         self.assertFalse(any(name.startswith("legacy") for name in columns))
-        request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "external"}
+        request = {"requestId": "same-current-input", "task": "current task", "cwd": str(self.workdir()), "adapter": "command", "argv": ["/bin/true"]}
         first = board.call("task_submit", request)
         reopened = BoardStore(self.directory)
         reopened.initialize()
@@ -75,6 +76,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('created_at', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+            ("blackboard/store/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:
@@ -134,7 +136,7 @@ class CurrentCoreTests(BoardTestCase):
         for method, operation in (("legacy-import", "legacy_import"), ("dashboard", "dashboard"), ("migrate", "migrate")):
             with self.subTest(method=method):
                 self.assertNotIn(method, cli.METHODS)
-                self.assertNotIn(method, cli.LOCAL_METHODS)
+                self.assertNotIn(method, transport.METHOD_MAP)
                 self.assertNotIn(method, transport.METHOD_MAP)
                 self.assertNotIn(operation, CONTROL_OPERATIONS)
                 self.assertFalse(hasattr(BuddyControl, operation))
@@ -147,7 +149,7 @@ class CurrentCoreTests(BoardTestCase):
             self.assertIsNone(importlib.util.find_spec(module))
         self.assertFalse(hasattr(schemas, "FINGERPRINT_VERSION_LEGACY"))
         self.assertFalse(hasattr(schemas, "legacy_fingerprint"))
-        for operation in ("worker_claim", "worker_reconcile", "worker_result", "task_submit", "task_get", "console"):
+        for operation in ("execution_progress", 'execution_result', "task_submit", "task_get", "console"):
             self.assertIn(operation, CONTROL_OPERATIONS)
         with self.assertRaises(BoardError) as caught:
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
@@ -156,13 +158,12 @@ class CurrentCoreTests(BoardTestCase):
     def test_current_receipt_keeps_result_opaque_and_refuses_flat_old_format(self):
         board = self.board()
         client = board.client()
-        task = client.submit(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="external")["task"]
-        client.register_worker("external", adapter="external")
-        claim = client.claim("external", "claim-current", "n" * 32, task_id=task["taskId"])["claim"]
+        task = client.submit(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
         attempt = claim["attempt"]
         data = {"status": "arbitrary-data", "result": {"turn": {"outcome": {"disposition": "attention"}}}}
-        client.submit_result("external", attempt["attemptId"], attempt["generation"], "n" * 32,
-                             {"status": "ok", "result": data, "shutdownConfirmed": True})
+        client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {"status": "ok", "result": data, "shutdownConfirmed": True})
         result = client.result(runId=task["taskId"])
         self.assertEqual(result["result"], data)
         self.assertEqual(result["resultMeta"]["status"], "ok")

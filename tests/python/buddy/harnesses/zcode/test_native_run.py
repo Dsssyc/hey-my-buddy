@@ -54,7 +54,7 @@ from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
-from hey_my_buddy.buddy.runtime import windows_process
+from hey_my_buddy.protocol import owned_process as windows_process
 
 
 _FIXTURE_BRIDGES = weakref.WeakValueDictionary()

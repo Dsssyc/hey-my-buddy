@@ -18,7 +18,7 @@ from ...protocol.inquiry import (
 )
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
-from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveRequest
+from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveRequest, LiveReply, LiveSnapshot
 
 MAX_WAIT_MS = 30000
 MAX_JOURNAL_BYTES = 1024 * 1024
@@ -292,7 +292,6 @@ def observe(store: BoardStore, params: dict) -> dict:
             "attemptId": attempt.get("attemptId"),
             "attemptState": attempt.get("executionState"),
             "generation": attempt.get("generation"),
-            "workerId": attempt.get("workerId"),
         },
         **({"expectedSeconds": view["expectedSeconds"]} if view["adapter"] != "decision"
            else {"routerBudgetSeconds": view["routerBudgetSeconds"]}),
@@ -315,7 +314,21 @@ def observe(store: BoardStore, params: dict) -> dict:
 def _live_channel(store: BoardStore, view: dict):
     """Service restart leaves no live bindings until the same holder attaches again."""
     registry = getattr(store, "live_registry", None)
-    return registry.channel_for(view) if registry is not None else None
+    channel = registry.channel_for(view) if registry is not None else None
+    return _ExecutionChannel(channel) if channel is not None else None
+
+
+class _ExecutionChannel:
+    """Decode the execution endpoint's string reply at the existing live boundary."""
+    def __init__(self, channel):
+        self.channel = channel
+        self.identity = channel.identity
+
+    def request(self, request, **kwargs):
+        return LiveReply.from_payload(self.channel.request(request, **kwargs))
+
+    def observe(self, **kwargs):
+        return LiveSnapshot.from_payload(self.channel.observe(**kwargs))
 
 
 def _live_ask_value(reply) -> dict:

@@ -47,22 +47,12 @@ class RoutingHistoryTestCase(WorkflowTestCase):
         return board.call("workflow_get", {"runId": view["runId"]})
 
     def router_claim(self, board, view, *, claim_id="router-1"):
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        pass  # Admission is owned by the service.
         return self.claim(board, "router", run_id=view["routing"]["taskId"], claim_request_id=claim_id)
 
     def select(self, board, claim, *, buddy_id=BUDDY_ID, shutdown=True, status="ok"):
         owned = claim["claim"]
-        return board.call("worker_result", {
-            "workerId": "router", "attemptId": owned["attempt"]["attemptId"],
-            "generation": owned["attempt"]["generation"], "nonce": NONCE,
-            "status": status, "shutdownConfirmed": shutdown,
-            "result": {**claim_tool_receipt(owned), "status": "ok", "operation": "select",
-                       "usage": {"elapsedMs": 100, "toolCalls": 0},
-                       "zeroToolVerified": True,
-                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
-                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": owned["decisionInput"]["executionWorkspace"]["manifestSha256"]},
-                       "decision": self.valid_decision(owned["decisionInput"], buddy_id)},
-        })
+        return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'zeroToolVerified': True, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
     def history(self, board, run_id, **params):
         return board.call("workflow_get", {"runId": run_id, "routingHistory": params})["routingHistory"]
@@ -330,7 +320,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         before = self.state_fingerprint(board)
         head = board.store.head()
         with patch("hey_my_buddy.buddy.roles.router.DecisionAdapter.start") as adapter_start, patch(
-            "hey_my_buddy.buddy.runtime.worker.Worker.run_once"
+            "hey_my_buddy.protocol.execution.launch_execution"
         ) as worker_run:
             self.history(board, submitted["runId"], limit=5)
             board.call("selection_list", {"kind": "select", "limit": 5})

@@ -1,5 +1,6 @@
 """A Lead controls workspace decisions for its own real-Git micro tasks."""
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import os
 import subprocess
@@ -25,7 +26,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         other_buddy = {**BUDDY, "model": "deepseek-v4-pro"}
         enable_fixture_buddy(board.store, other_buddy)
         for worker in ("lead-worker", "other-lead-worker", "child-worker"):
-            board.call("worker_register", {"workerId": worker, "capabilities": ["dsh"]})
+            pass  # Admission is owned by the service.
         other_repo = self.directory / "other-repo"
         subprocess.run(["git", "clone", "-q", str(self.repo), str(other_repo)],
                        env={**os.environ, **GIT_ENV}, check=True)
@@ -40,10 +41,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             "submissionToken": request_id[0] * 32, "delegationAuthority": True,
             "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead review"},
         })
-        claimed = board.call("worker_claim", {
-            "workerId": worker, "claimRequestId": f"claim-{request_id}",
-            "nonce": worker[0] * 16, "runId": submitted["runId"],
-        })["claim"]
+        claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{request_id}', 'nonce': worker[0] * 16, 'runId': submitted['runId']})["claim"]
         self.assertIsNotNone(claimed)
         return {"runId": submitted["runId"], "turnId": claimed["turn"]["turnId"],
                 "credential": claimed["agentCredential"], "control": submitted["control"], "claim": claimed}
@@ -66,10 +64,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         return submitted
 
     def _claim_child(self, board, child: dict) -> tuple[dict, dict, Path]:
-        response = board.call("worker_claim", {
-            "workerId": "child-worker", "claimRequestId": f"claim-{child['runId']}",
-            "nonce": "c" * 16, "runId": child["runId"],
-        })
+        response = admit_board(board, {'workerId': 'child-worker', 'claimRequestId': f"claim-{child['runId']}", 'nonce': 'c' * 16, 'runId': child['runId']})
         claimed = response["claim"]
         self.assertIsNotNone(claimed, response)
         manifest = claimed["turn"]["input"]["executionWorkspace"]
@@ -87,13 +82,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
                               "disposition": "completed", "summary": "completed the child task",
                               "remaining": [], "decisions": [], "artifacts": [], "request": None,
                           }), workspaceSeal=seal)
-        board.call("worker_result", {
-            "workerId": "child-worker", "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"], "nonce": "c" * 16,
-            "status": "failed" if scope_failure else "ok", "result": result,
-            "shutdownConfirmed": True, "exitCode": 1 if scope_failure else 0,
-            **({"error": result["workspaceSealError"]} if scope_failure else {}),
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'c' * 16, 'status': 'failed' if scope_failure else 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 1 if scope_failure else 0, **({'error': result['workspaceSealError']} if scope_failure else {})})
 
     def _wrong_lead_refused(self, board, operation: str, params: dict, other: dict) -> None:
         with self.assertRaises(BoardError) as raised:
@@ -172,11 +161,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self._finish_child(board, child, claim, seal=seal)
         board.call("workflow_cancel", {"runId": lead["runId"], **lead["control"]})
         attempt = lead["claim"]["attempt"]
-        board.call("worker_result", {
-            "workerId": "lead-worker", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": "l" * 16, "status": "cancelled", "result": {"status": "cancelled"},
-            "shutdownConfirmed": True,
-        })
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'l' * 16, 'status': 'cancelled', 'result': {'status': 'cancelled'}, 'shutdownConfirmed': True})
         return board, lead, child, checkout
 
     def test_host_conclusion_of_lead_concludes_and_reclaims_owned_checkout(self):

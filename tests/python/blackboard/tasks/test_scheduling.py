@@ -29,9 +29,7 @@ class ModelServiceTests(unittest.TestCase):
     def test_partial_buddies_and_model_less_work_have_no_model_service(self):
         for spec in (
             {"adapter": "command", "cwd": "/tmp", "argv": ["/bin/true"]},
-            {"adapter": "external", "cwd": "/tmp"},
             {"adapter": "command", "provider": "p", "model": "incidental-metadata"},
-            {"adapter": "external", "provider": "p", "model": "incidental-metadata"},
             {"adapter": "decision", "provider": "p", "model": "not-the-frozen-selector"},
             {"harness": "dsh", "provider": "deepseek-official"},  # no model
             {"harness": "dsh", "model": "deepseek-flash"},  # no provider
@@ -68,25 +66,3 @@ class LimitBoundsTests(unittest.TestCase):
     def test_queue_reasons_name_the_limit_that_holds_work(self):
         self.assertEqual(scheduling.REASON_TOTAL_CAPACITY, "capacity")
         self.assertEqual(scheduling.REASON_MODEL_CAPACITY, "model-capacity")
-
-
-class PoolIdentityTests(unittest.TestCase):
-    def test_pool_ids_cover_the_whole_machine_ceiling_under_one_prefix(self):
-        self.assertEqual(scheduling.pool_worker_ids("local", 3), ["local", "local-2", "local-3"])
-        self.assertEqual(len(scheduling.pool_worker_ids("local", 8)), 8)
-        self.assertEqual(scheduling.pool_worker_ids("local", 1), ["local"])
-
-    def test_invalid_prefix_falls_back_to_the_default_worker_id(self):
-        self.assertEqual(scheduling.pool_worker_ids("..", 2), ["local", "local-2"])
-        self.assertEqual(scheduling.pool_worker_ids(42, 2), ["local", "local-2"])
-
-    def test_valid_worker_id_rejects_values_that_are_not_safe_directory_segments(self):
-        self.assertIsNone(scheduling.valid_worker_id("."))
-        self.assertIsNone(scheduling.valid_worker_id(".."))
-        self.assertIsNone(scheduling.valid_worker_id("a/b"))
-        self.assertIsNone(scheduling.valid_worker_id(7))
-        self.assertEqual(scheduling.valid_worker_id("local-2"), "local-2")
-
-
-if __name__ == "__main__":
-    unittest.main()

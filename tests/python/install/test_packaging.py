@@ -140,7 +140,7 @@ class CwdIndependentCliTests(unittest.TestCase):
 class CheckHarnessTests(unittest.TestCase):
     """The check entrypoint points at this layout and never inherits a production pin."""
 
-    def test_the_check_harness_sanitizes_inherited_runtime_and_worker_variables(self):
+    def test_the_check_harness_sanitizes_inherited_runtime_variables(self):
         from hey_my_buddy.cli import checks
 
         inherited = {key: "/production" for key in checks.SANITIZED_VARIABLES}

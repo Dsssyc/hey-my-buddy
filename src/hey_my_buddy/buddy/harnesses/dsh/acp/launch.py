@@ -17,7 +17,7 @@ from ..... import private_dirs
 from .....errors import BoardError
 from ... import discovery
 from ...base import ProcessHandle
-from ....runtime.windows_process import owned_popen
+from .....protocol.owned_process import owned_popen
 from .connection import group_observation
 
 #: Extra controls may never replace the inherited native homes.

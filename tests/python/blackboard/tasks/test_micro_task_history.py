@@ -7,6 +7,7 @@ tests, so a temporary execution worktree can be distinguished from the source
 project without running Git.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import json
 import os
@@ -594,15 +595,8 @@ class HistoryPagingTests(MicroTaskTestCase):
         run_id = created["runId"]
         self.assertEqual(self.history(board, filter="review")["total"], 0)
         client = board.client()
-        client.register_worker("worker-1", adapter="command", capabilities=["command"])
-        claim = client.claim("worker-1", "claim-1", "n" * 32, task_id=run_id)["claim"]
-        client.submit_result(
-            "worker-1",
-            claim["attempt"]["attemptId"],
-            claim["attempt"]["generation"],
-            "n" * 32,
-            {"status": "ok", "result": {"finalText": "done"}, "shutdownConfirmed": True, "exitCode": 0},
-        )
+        claim = admit_execution(client, "n" * 32, task_id=run_id)["claim"]
+        client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "ok", "result": {"finalText": "done"}, "shutdownConfirmed": True, "exitCode": 0})
         self.assertEqual([row["runId"] for row in self.history(board, filter="review")["runs"]], [run_id])
         board.call("task_acknowledge", {"runId": run_id, "verdict": "accepted", "note": "checked the real output"})
         self.assertEqual(self.history(board, filter="review")["total"], 0)
@@ -686,8 +680,7 @@ class ShutdownHistoryTests(MicroTaskTestCase):
         self.assertEqual(decorate.call_count, 1)
         self.assertEqual(page["total"], 1)
         self.assertEqual([row["runId"] for row in page["runs"]], [older["runId"]])
-        with patch.object(board.store, "_now_minus", return_value="9999-01-01T00:00:00.000Z"):
-            self.assertEqual(board.store.mark_expired_leases(), 1)
+        self.assertEqual(board.store.recover_executions(), [])
         self.assertEqual(self.history(board, filter="review", rootsOnly=True)["total"], 1)
         self.finish_turn(board, helper_claim)
         self.assertTrue(board.call("workflow_get", {"runId": parent["runId"]})["shutdown"]["descendantsConfirmed"])
@@ -703,7 +696,6 @@ class ShutdownHistoryTests(MicroTaskTestCase):
             parent, helper_id = self.parent_and_helper(board, routed=True)
         helper = board.call("workflow_get", {"runId": helper_id})
         router_id = helper["routing"]["taskId"]
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
         router = self.claim(board, "router", run_id=router_id, claim_request_id="router-active")["claim"]
         view = board.call("workflow_get", {"runId": parent["runId"]})
         self.take_over(board, view, "host-b", "fence-selection")
@@ -711,9 +703,7 @@ class ShutdownHistoryTests(MicroTaskTestCase):
         self.assertEqual(delivered["state"], "delivered")
         self.assertEqual(delivered["shutdown"]["unconfirmedRunIds"], [router_id])
         self.assertEqual(self.history(board, filter="review", rootsOnly=True)["total"], 0)
-        board.call("worker_result", {"workerId": "router", "attemptId": router["attempt"]["attemptId"],
-                   "generation": router["attempt"]["generation"], "nonce": NONCE, "status": "cancelled",
-                   "result": {}, "shutdownConfirmed": True, "exitCode": 0})
+        board.call('execution_result', {'attemptId': router['attempt']['attemptId'], 'generation': router['attempt']['generation'], 'nonce': NONCE, 'status': 'cancelled', 'result': {}, 'shutdownConfirmed': True, 'exitCode': 0})
         stopped = board.call("workflow_get", {"runId": parent["runId"]})
         self.assertEqual(stopped["state"], "delivered")
         self.assertEqual(stopped["shutdown"]["unconfirmedCount"], 0)
@@ -722,11 +712,8 @@ class ShutdownHistoryTests(MicroTaskTestCase):
     def test_active_filter_includes_execution_needing_reconciliation(self):
         board = self.board()
         task = self.execution_task(board, "uncertain-execution")
-        board.call("worker_register", {"workerId": "command-worker", "adapter": "command", "capabilities": ["command"]})
         claim = self.claim(board, "command-worker", run_id=task["runId"], claim_request_id="uncertain-claim")["claim"]
-        board.call("worker_result", {"workerId": "command-worker", "attemptId": claim["attempt"]["attemptId"],
-                   "generation": claim["attempt"]["generation"], "nonce": NONCE, "status": "cancelled",
-                   "result": {"error": "stop not observed"}, "shutdownConfirmed": False})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'cancelled', 'result': {'error': 'stop not observed'}, 'shutdownConfirmed': False})
         self.assertEqual(self.task_view(board, task["runId"])["state"], "reconciliation-needed")
         self.assertEqual([row["runId"] for row in self.history(board, filter="active", limit=1)["runs"]], [task["runId"]])
         self.assertEqual(self.history(board, filter="review")["total"], 0)

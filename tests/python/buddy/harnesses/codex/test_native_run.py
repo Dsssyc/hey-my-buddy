@@ -29,14 +29,14 @@ from hey_my_buddy.blackboard.routing.router import answer_schema
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-from hey_my_buddy.protocol.contracts import HarnessRunLive
+from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_permission, worker_format
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
-from hey_my_buddy.buddy.runtime import windows_process
+from hey_my_buddy.protocol import owned_process as windows_process
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
@@ -862,8 +862,7 @@ class WorkerSeamTests(CodexSeamCase):
                     update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
-                control.update(timeoutSeconds=30, live={"instanceId": "a" * 64, "token": "b" * 64},
-                               executionLiveFile=str(root / "execution-live.json"))
+                control.update(timeoutSeconds=30)
                 handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
                 with mock.patch.object(run_execution, "worker_request", return_value=(
                         request, self.worker_services(), lambda _facts: FEEDBACK_CONTINUE, None)):

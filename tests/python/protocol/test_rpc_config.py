@@ -5,7 +5,6 @@ local I/O. Memory statistics are C-Two accounting, never RSS.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -20,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from support import stop_private_service, stop_private_workers, _child_environment, shutdown_private_rpc
+from support import stop_private_service, _child_environment, shutdown_private_rpc
 
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
@@ -275,8 +274,12 @@ class ProfileTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
         from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
         import c_two as cc
+        @cc.crm(namespace="buddy.fixture.live", version="1.0.0")
+        class FixtureLive:
+            def request(self, request_json: str) -> str: ...
+            def observe(self, request_json: str) -> str: ...
+            def capabilities(self, request_json: str) -> str: ...
         run = RunIdentity(task_id="rpc-test", attempt_id="rpc-attempt", generation=1,
                           invocation_id="rpc-invocation", input_sha256="a" * 64)
         ipc = self.state / "ipc"
@@ -288,7 +291,7 @@ class ProfileTests(unittest.TestCase):
             with self.subTest(mode=oct(mode)):
                 ipc.chmod(mode)
                 target = CTwoLiveEndpoint(run, LiveCapabilities(inquiry_delivery="unsupported"),
-                                         HarnessRunLive, state_dir=self.state)
+                                         FixtureLive, state_dir=self.state)
                 # Selection alone succeeds; only real native I/O checks access.
                 rpc_config.configure_local_endpoint(self.state, create=False)
                 error = None
@@ -495,141 +498,48 @@ class IsolatedTransportTests(unittest.TestCase):
         self.assertTrue(server.call("echo", "still-here")["ok"])
 
 
-class DaemonFixtureTests(unittest.TestCase):
-    """Exercise the real fixture wiring without starting native IPC or workers."""
+class DaemonFixtureCleanupTests(unittest.TestCase):
+    """A failed private-service stop retains its evidence and owned process."""
 
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="rpc-daemon-fixture-")
-        self.addCleanup(self.temp.cleanup)
-        self.fixture = RealDaemonControlTests()
-        self.fixture.work = Path(self.temp.name)
-        self.fixture.state = self.fixture.work / "state"
-        self.fixture.state.mkdir(mode=0o700)
-        self.fixture.children = []
-        self.fixture.probe_claims = {}
-
-    def test_daemon_environment_health_and_cleanup_select_the_same_state(self):
-        fixture = self.fixture
-        endpoint = {"address": "ipc://fixture-only"}
-        with mock.patch(__name__ + ".subprocess.Popen") as spawn, \
-                mock.patch(__name__ + "._read_endpoint", return_value=endpoint) as read, \
-                mock.patch(__name__ + "._request", return_value={"managedWorkerIds": []}) as request:
-            self.assertEqual(fixture._start_daemon(), endpoint)
-        environment = spawn.call_args.kwargs["env"]
-        self.assertEqual(Path(environment["HMB_STATE_DIR"]), fixture.state)
-        self.assertEqual(Path(environment["HMB_RUNTIME_ROOT"]), fixture.state / "runtime-root")
-        self.assertEqual(Path(environment["C2_IPC_ROOT"]), fixture.state / "native-fallback")
-        self.assertEqual(read.call_args_list, [mock.call(fixture.state), mock.call(fixture.state)])
-        request.assert_called_once_with(endpoint, "health", {}, state_dir=fixture.state)
-        # No real child exists, but exercise cleanup with the actual environment
-        # passed to Popen rather than assuming an override reached the subprocess.
-        with mock.patch(__name__ + ".stop_private_service") as service, \
-                mock.patch(__name__ + ".stop_private_workers") as workers, \
-                mock.patch(__name__ + ".shutdown_private_rpc"), \
-                mock.patch(__name__ + ".shutil.rmtree"):
-            fixture._cleanup()
-        selected_state = Path(environment["HMB_STATE_DIR"])
-        service.assert_called_once_with(selected_state)
-        workers.assert_called_once_with(selected_state)
-
-    def test_environment_helper_keeps_its_state_and_runtime_boundary(self):
-        state = self.fixture.state
-        outside = self.fixture.work / "outside"
-        environment = private_environment(state, HMB_STATE_DIR=str(outside))
-        self.assertEqual(Path(environment["HMB_STATE_DIR"]), state)
-        with self.assertRaisesRegex(ValueError, "inside its private state"):
-            private_environment(state, HMB_RUNTIME_ROOT=str(outside))
-
-    def test_cleanup_confirms_only_its_service_workers_and_child_before_removal(self):
-        fixture = self.fixture
+    def test_cleanup_waits_for_owned_service_before_removing_private_root(self):
+        work = Path(tempfile.mkdtemp(prefix="rpc-daemon-cleanup-"))
+        self.addCleanup(shutil.rmtree, work)
+        state = work / "state"
+        state.mkdir(mode=0o700)
+        fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
+        fixture.work, fixture.state = work, state
         child = mock.Mock()
         fixture.children = [child]
-        with mock.patch(__name__ + ".stop_private_service") as service, \
-                mock.patch(__name__ + ".stop_private_workers") as workers, \
+        with mock.patch(__name__ + ".stop_private_service") as stop, \
                 mock.patch(__name__ + ".shutdown_private_rpc") as shutdown, \
                 mock.patch(__name__ + ".shutil.rmtree") as remove:
             order = mock.Mock()
-            for name, operation in (("service", service), ("workers", workers),
-                                    ("child", child), ("shutdown", shutdown), ("remove", remove)):
+            for name, operation in (("stop", stop), ("child", child.wait),
+                                    ("shutdown", shutdown), ("remove", remove)):
                 order.attach_mock(operation, name)
             fixture._cleanup()
-        self.assertEqual(order.mock_calls, [mock.call.service(fixture.state), mock.call.workers(fixture.state),
-                                           mock.call.child.wait(timeout=15), mock.call.shutdown(),
-                                           mock.call.remove(fixture.work)])
+        self.assertEqual(order.mock_calls, [mock.call.stop(state), mock.call.child(timeout=15),
+                                           mock.call.shutdown(), mock.call.remove(work)])
         child.terminate.assert_not_called()
         child.kill.assert_not_called()
 
-    def test_unconfirmed_cleanup_preserves_the_fixture(self):
-        fixture = self.fixture
-        for stage in ("service", "workers", "child", "shutdown"):
-            with self.subTest(stage=stage), \
-                    mock.patch(__name__ + ".stop_private_service") as service, \
-                    mock.patch(__name__ + ".stop_private_workers") as workers, \
-                    mock.patch(__name__ + ".shutdown_private_rpc") as shutdown, \
-                    mock.patch(__name__ + ".shutil.rmtree") as remove:
-                child = mock.Mock()
-                fixture.children = [child]
-                operation = {"service": service, "workers": workers, "child": child.wait, "shutdown": shutdown}[stage]
-                failure = subprocess.TimeoutExpired("fixture-daemon", 15) if stage == "child" else AssertionError(stage)
-                operation.side_effect = failure
-                with self.assertRaises(type(failure)):
-                    fixture._cleanup()
-                remove.assert_not_called()
-                child.terminate.assert_not_called()
-                child.kill.assert_not_called()
-                self.assertTrue(fixture.work.is_dir())
-
-    def test_cleanup_does_not_hide_directory_removal_errors(self):
-        with mock.patch(__name__ + ".stop_private_service"), \
-                mock.patch(__name__ + ".stop_private_workers"), \
-                mock.patch(__name__ + ".shutdown_private_rpc"), \
-                mock.patch(__name__ + ".shutil.rmtree", side_effect=OSError("fixture removal failed")) as remove:
-            with self.assertRaisesRegex(OSError, "fixture removal failed"):
-                self.fixture._cleanup()
-            remove.assert_called_once_with(self.fixture.work)
-
-    def test_cleanup_releases_only_its_synthetic_claims_before_service_stop(self):
-        fixture = self.fixture
-        fixture.endpoint = {"address": "ipc://fixture-only"}
-        claim = {"attemptId": "fixture-attempt", "generation": 7}
-        with mock.patch(__name__ + ".call_board", return_value={"claim": {"attempt": claim}}):
-            fixture._claim("fixture-worker", "fixture-claim", "fixture-nonce", "fixture-run")
-        with mock.patch(__name__ + ".call_board", return_value={"committed": True}) as result, \
-                mock.patch(__name__ + ".stop_private_service") as service, \
-                mock.patch(__name__ + ".stop_private_workers"), \
-                mock.patch(__name__ + ".shutdown_private_rpc"), \
-                mock.patch(__name__ + ".shutil.rmtree"):
-            order = mock.Mock()
-            order.attach_mock(result, "result")
-            order.attach_mock(service, "service")
-            fixture._cleanup()
-        self.assertEqual([call[0] for call in order.mock_calls], ["result", "service"])
-        operation, params = result.call_args.args
-        self.assertEqual(operation, "worker_result")
-        self.assertEqual({key: params[key] for key in ("workerId", "attemptId", "generation", "nonce")},
-                         {"workerId": "fixture-worker", "attemptId": "fixture-attempt", "generation": 7,
-                          "nonce": "fixture-nonce"})
-        self.assertIs(params["shutdownConfirmed"], True)
-        self.assertEqual(result.call_args.kwargs, {"endpoint": fixture.endpoint, "state_dir": fixture.state})
-        self.assertEqual(fixture.probe_claims, {})
-
-    def test_uncommitted_probe_receipt_preserves_claim_and_state(self):
-        fixture = self.fixture
-        fixture.endpoint = {"address": "ipc://fixture-only"}
-        fixture.probe_claims = {"fixture-attempt": {"attemptId": "fixture-attempt", "generation": 7,
-                                                  "workerId": "fixture-worker", "nonce": "fixture-nonce"}}
-        with mock.patch(__name__ + ".call_board", return_value={"committed": False}), \
-                mock.patch(__name__ + ".stop_private_service") as service, \
+    def test_unconfirmed_stop_retains_the_private_root(self):
+        work = Path(tempfile.mkdtemp(prefix="rpc-daemon-cleanup-"))
+        self.addCleanup(shutil.rmtree, work)
+        state = work / "state"
+        state.mkdir(mode=0o700)
+        fixture = RealDaemonControlTests.__new__(RealDaemonControlTests)
+        fixture.work, fixture.state, fixture.children = work, state, [mock.Mock()]
+        with mock.patch(__name__ + ".stop_private_service", side_effect=AssertionError("stop unconfirmed")), \
                 mock.patch(__name__ + ".shutil.rmtree") as remove:
-            with self.assertRaisesRegex(AssertionError, "probe receipt"):
+            with self.assertRaisesRegex(AssertionError, "stop unconfirmed"):
                 fixture._cleanup()
-            service.assert_not_called()
             remove.assert_not_called()
-        self.assertIn("fixture-attempt", fixture.probe_claims)
+        self.assertTrue(work.is_dir())
 
 
 class RealDaemonControlTests(unittest.TestCase):
-    """Admitted waits must never starve renew, result, cancel or health on the daemon."""
+    """Real command executions leave control RPC responsive while waits are admitted."""
 
     WAIT_CAPACITY = 6
     WAIT_MILLISECONDS = 3500
@@ -641,48 +551,26 @@ class RealDaemonControlTests(unittest.TestCase):
         self.state = self.work / "state"
         self.state.mkdir(mode=0o700)
         self.children: list[subprocess.Popen] = []
-        self.probe_claims: dict[str, dict] = {}
         self.addCleanup(self._cleanup)
         self.endpoint = self._start_daemon()
-        self.assertIs(call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)["rpcProfile"]["overrides"]["pool_enabled"], False)
+        health = call_board("health", {}, endpoint=self.endpoint, state_dir=self.state)
+        self.assertIs(health["rpcProfile"]["overrides"]["pool_enabled"], False)
 
     def _cleanup(self):
-        # These external probes never spawn a harness/child. End their own claims
-        # after the wait threads have joined, so cooperative service stop can drain.
-        for attempt_id, claim in list(self.probe_claims.items()):
-            reply = call_board(
-                "worker_result",
-                {**claim, "commandId": f"rpc-cleanup-{attempt_id}", "status": "ok",
-                 "result": {"note": "synthetic control probe finished; no harness child was started"},
-                 "shutdownConfirmed": True, "exitCode": 0},
-                endpoint=self.endpoint, state_dir=self.state,
-            )
-            self.assertTrue(reply["committed"], f"probe receipt was not committed: {reply}")
-            del self.probe_claims[attempt_id]
         stop_private_service(self.state)
-        stop_private_workers(self.state)
         for child in self.children:
             child.wait(timeout=15)
         shutdown_private_rpc()
         shutil.rmtree(self.work)
 
     def _start_daemon(self) -> dict:
-        environment = private_environment(
-            self.state,
-            HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
-            # Two total slots so the waited and the renewable attempt coexist.
-            HMB_MAX_CONCURRENT="2",
-        )
+        environment = private_environment(self.state, HMB_WAIT_CAPACITY=str(self.WAIT_CAPACITY),
+                                          HMB_MAX_CONCURRENT="2")
         log_path = self.work / "daemon.log"
         log = open(log_path, "ab")
-        process = subprocess.Popen(
-            [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
-        )
+        process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"],
+                                   env=environment, stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=log, start_new_session=True)
         self.children.append(process)
         deadline = time.monotonic() + 30
         health = None
@@ -701,56 +589,21 @@ class RealDaemonControlTests(unittest.TestCase):
         log.close()
         if health is None:
             raise AssertionError(f"daemon never became healthy: {log_path.read_text()[-2000:]}")
-        # A healthy endpoint can precede pool startup. Wait for every managed supervisor
-        # to hold its lock so teardown cannot delete a stop request before it exists.
-        for worker_id in health.get("managedWorkerIds", []):
-            lock = self.state / "workers" / worker_id / "supervisor.lock"
-            lock_deadline = time.monotonic() + 25
-            while time.monotonic() < lock_deadline:
-                if lock.exists():
-                    fd = os.open(lock, os.O_RDWR)
-                    try:
-                        try:
-                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        except BlockingIOError:
-                            break
-                        else:
-                            fcntl.flock(fd, fcntl.LOCK_UN)
-                    finally:
-                        os.close(fd)
-                time.sleep(0.05)
-            else:
-                raise AssertionError(f"managed supervisor did not start: {worker_id}")
         return _read_endpoint(self.state)
 
-    def _submit_external(self, request_id: str) -> str:
-        # One private cwd per task: two live attempts must not share a workspace
-        # reservation, or the second claim is refused with cwd-overlap before any
-        # control traffic is involved.
+    def _submit_command(self, request_id: str, *, sleep: float) -> str:
         cwd = self.work / request_id
         cwd.mkdir(parents=True, exist_ok=True)
-        reply = call_board(
-            "task_submit",
-            {"requestId": request_id, "task": "hold for control traffic", "cwd": str(cwd), "adapter": "external"},
-            endpoint=self.endpoint, state_dir=self.state,
-        )
+        reply = call_board("task_submit", {
+            "requestId": request_id, "task": "private command probe", "cwd": str(cwd),
+            "adapter": "command", "argv": [sys.executable, "-c", f"import time; time.sleep({sleep})"],
+            "expectedSeconds": 30,
+        }, endpoint=self.endpoint, state_dir=self.state)
         return reply["task"]["runId"]
 
-    def _claim(self, worker_id: str, claim_request_id: str, nonce: str, run_id: str) -> dict:
-        claim = call_board(
-            "worker_claim",
-            {"workerId": worker_id, "claimRequestId": claim_request_id, "nonce": nonce, "runId": run_id},
-            endpoint=self.endpoint, state_dir=self.state,
-        )
-        granted = (claim.get("claim") or {}).get("attempt")
-        self.assertTrue(granted, f"the probe worker must claim its attempt: {claim.get('reason')}")
-        self.probe_claims[granted["attemptId"]] = {
-            "workerId": worker_id, "attemptId": granted["attemptId"], "generation": granted["generation"], "nonce": nonce,
-        }
-        return granted
-
     def _admission(self) -> dict:
-        return call_board("wait_capacity", {}, endpoint=self.endpoint, state_dir=self.state, resource="wait")
+        return call_board("wait_capacity", {}, endpoint=self.endpoint,
+                          state_dir=self.state, resource="wait")
 
     def _await_admitted(self, expected: int) -> None:
         deadline = time.monotonic() + 10
@@ -763,93 +616,59 @@ class RealDaemonControlTests(unittest.TestCase):
         self.fail(f"every wait slot must be busy before control traffic; admitted={admitted}")
 
     def _wait(self, run_id: str) -> dict:
-        return call_board(
-            "task_wait",
-            {"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS},
-            endpoint=self.endpoint, state_dir=self.state,
-            resource="wait",
-        )
+        return call_board("task_wait", {"runId": run_id, "timeoutMs": self.WAIT_MILLISECONDS},
+                          endpoint=self.endpoint, state_dir=self.state, resource="wait")
 
-    def test_waits_and_control_operations_share_execution_capacity_without_starvation(self):
-        waited = self._submit_external("rpc-waited-1")
-        renewable = self._submit_external("rpc-renew-1")
-        cancellable = self._submit_external("rpc-cancel-1")
-        for worker_id in ("rpc-probe", "rpc-probe-2"):
-            call_board(
-                "worker_register",
-                {"workerId": worker_id, "adapter": "external", "capabilities": ["external"], "pid": os.getpid()},
-                endpoint=self.endpoint, state_dir=self.state,
-            )
-        first_nonce, second_nonce = "n" * 32, "m" * 32
-        waited_claim = self._claim("rpc-probe", "rpc-claim-1", first_nonce, waited)
-        renewable_claim = self._claim("rpc-probe-2", "rpc-claim-2", second_nonce, renewable)
-
+    def test_admitted_waits_do_not_starve_control_or_command_completion(self):
+        waited = self._submit_command("rpc-waited-1", sleep=15)
+        cancellable = self._submit_command("rpc-cancel-1", sleep=15)
+        deadline = time.monotonic() + 10
+        while call_board("task_get", {"runId": waited}, endpoint=self.endpoint,
+                         state_dir=self.state)["task"]["status"] == "queued":
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.WAIT_CAPACITY) as pool:
             waits = [pool.submit(self._wait, waited) for _ in range(self.WAIT_CAPACITY)]
             self._await_admitted(self.WAIT_CAPACITY)
-
             measured: dict[str, float] = {}
 
-            def control(name: str, operation: str, params: dict, resource: str = "control") -> dict:
+            def control(name: str, operation: str, params: dict) -> dict:
                 begin = time.monotonic()
-                reply = call_board(operation, params, endpoint=self.endpoint, state_dir=self.state, resource=resource)
+                reply = call_board(operation, params, endpoint=self.endpoint, state_dir=self.state)
                 measured[name] = round(time.monotonic() - begin, 3)
                 return reply
 
-            health_reply = control("health", "health", {})
-            self.assertEqual(health_reply["status"], "ok")
-            renewed = control(
-                "renew",
-                "worker_renew",
-                {
-                    "workerId": "rpc-probe-2",
-                    "attemptId": renewable_claim["attemptId"],
-                    "generation": renewable_claim["generation"],
-                    "nonce": second_nonce,
-                    "phase": "executing",
-                },
-            )
-            self.assertEqual(renewed["attempt"]["attemptId"], renewable_claim["attemptId"])
-            cancelled = control("cancel", "task_cancel", {"runId": cancellable, "reason": "rpc profile probe"})
-            self.assertEqual(cancelled["task"]["status"], "cancelled")
-            result = control(
-                "result",
-                "worker_result",
-                {
-                    "workerId": "rpc-probe-2",
-                    "attemptId": renewable_claim["attemptId"],
-                    "generation": renewable_claim["generation"],
-                    "nonce": second_nonce,
-                    "commandId": "rpc-result-1",
-                    "status": "ok",
-                    "result": {"note": "probe completed while waits were admitted"},
-                    "shutdownConfirmed": True,
-                    "exitCode": 0,
-                },
-            )
-            self.assertTrue(result["committed"])
-            del self.probe_claims[renewable_claim["attemptId"]]
-            # Every control operation above committed while all wait slots stayed busy:
-            # no admitted wait was ended, converted into an error or left behind.
+            self.assertEqual(control("health", "health", {})["status"], "ok")
+            self.assertIn("events", control("events", "events_read", {"after": 0}))
+            cancelled = control("cancel", "task_cancel", {"runId": cancellable,
+                                                           "reason": "rpc profile probe"})
+            self.assertTrue(cancelled["task"]["cancelRequested"])
+            quick = self._submit_command("rpc-quick", sleep=0)
             self.assertEqual(self._admission()["admitted"], self.WAIT_CAPACITY)
-            self.assertFalse(any(wait.done() for wait in waits), "control traffic must not end an admitted wait")
-            replies = [wait.result(timeout=self.WAIT_MILLISECONDS / 1000 + 60) for wait in waits]
+            self.assertFalse(any(wait.done() for wait in waits),
+                             "control traffic must not end an admitted wait")
+            replies = [wait.result(timeout=self.WAIT_MILLISECONDS / 1000 + 10) for wait in waits]
         elapsed = round(time.monotonic() - started, 3)
-        print("daemon control evidence: " + json.dumps({"controlSeconds": measured, "waitsSeconds": elapsed}))
+        print("daemon control evidence: " + json.dumps({"controlSeconds": measured,
+                                                         "waitsSeconds": elapsed}))
         self.assertEqual(len(replies), self.WAIT_CAPACITY)
         for reply in replies:
             self.assertNotIn("error", reply, reply)
-            self.assertEqual(reply["status"], "running")
         for name, seconds in measured.items():
-            self.assertLess(seconds, self.CONTROL_BUDGET_SECONDS, f"{name} was starved behind admitted waits")
-        self.assertGreaterEqual(
-            elapsed, self.WAIT_MILLISECONDS / 1000, "the waits must have been genuinely in flight for their whole window"
-        )
-        final = call_board("task_get", {"runId": renewable}, endpoint=self.endpoint, state_dir=self.state)
-        self.assertEqual(final["task"]["status"], "completed")
-        self.assertTrue(final["task"]["resultAvailable"])
+            self.assertLess(seconds, self.CONTROL_BUDGET_SECONDS,
+                            f"{name} was starved behind admitted waits")
+        self.assertGreaterEqual(elapsed, self.WAIT_MILLISECONDS / 1000)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            final = call_board("task_get", {"runId": quick}, endpoint=self.endpoint,
+                               state_dir=self.state)["task"]
+            if final["status"] == "completed":
+                break
+            time.sleep(0.05)
+        self.assertEqual(final["status"], "completed")
+        self.assertTrue(final["resultAvailable"])
 
 
-if __name__ == "__main__":  # pragma: no cover - manual focus
+if __name__ == "__main__":
     unittest.main()

@@ -127,11 +127,10 @@ class LauncherTests(unittest.TestCase):
             read.assert_called_once_with(credential)
             cli_main.assert_called_once_with(['get', '{"runId":"owned"}'], credential_document=document)
 
-    def test_host_scrubs_internal_identity_and_endpoints_but_worker_keeps_credential(self):
+    def test_host_scrubs_internal_identity_and_endpoints_but_attempt_keeps_credential(self):
         inherited = {'HMB_STATE_DIR': '/private/state', 'HMB_RUNTIME_ROOT': '/private/runtime',
                      'HMB_DEV_SOURCE': '1', 'HMB_RUNTIME': '/stale', 'HMB_RUNTIME_IDENTITY': 'stale',
-                     'HMB_PYTHON': '/stale/python', 'HMB_WORKER_STATE': '/stale/worker',
-                     'HMB_WORKER_ID': 'stale-worker', 'ANTHROPIC_BASE_URL': 'https://invalid.example',
+                     'HMB_PYTHON': '/stale/python', 'ANTHROPIC_BASE_URL': 'https://invalid.example',
                      'OPENAI_BASE_URL': 'https://invalid.example'}
         with mock.patch.dict(os.environ, inherited, clear=True):
             launcher.clean_host_environment()
@@ -142,7 +141,6 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(os.environ['HMB_DEV_SOURCE'], '1')
         with mock.patch.dict(os.environ, {**inherited, 'HMB_AGENT_CREDENTIAL_FILE': '/private/attempt'}, clear=True):
             launcher.clean_host_environment()
-            self.assertEqual(os.environ['HMB_WORKER_ID'], 'stale-worker')
             self.assertEqual(os.environ['HMB_AGENT_CREDENTIAL_FILE'], '/private/attempt')
 
     def test_missing_installed_pointer_has_repairable_error(self):

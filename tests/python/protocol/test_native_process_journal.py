@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses import discovery
-from hey_my_buddy.buddy.runtime.windows_process import owned_popen
+from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.protocol import process_identity as identity
 
 
@@ -42,7 +42,8 @@ class NativeProcessJournalTests(unittest.TestCase):
                 self.assertEqual({entry["pid"] for entry in evidence["identities"]},
                                  {handle.pid for handle in handles})
                 for entry in evidence["identities"]:
-                    self.assertEqual(entry["worker"]["pid"], os.getpid())
+                    self.assertEqual(set(entry), {"bootId", "pid", "startedAt",
+                                                  "processGroupId", "jobName"})
                     self.assertEqual(identity.inspect_process_identity(entry), "alive")
             finally:
                 for handle in handles:

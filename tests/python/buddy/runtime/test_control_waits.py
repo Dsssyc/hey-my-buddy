@@ -18,7 +18,7 @@ class ControlWaitTests(unittest.TestCase):
         self.claim = {'task': {'taskId': 'task', 'spec': {'adapter': 'codex'}},
                       'attempt': {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}}
         self.client = Mock()
-        self.execution = Execution(self.claim, self.root, 'fixture', 'nonce', client=self.client)
+        self.execution = Execution(self.claim, self.root, 'nonce', client=self.client)
         self.directory = self.execution.directory
         self.directory.mkdir(parents=True)
         self.execution.receipt = Mock(side_effect=lambda claim, report, directory: report)
@@ -119,8 +119,7 @@ class ControlWaitTests(unittest.TestCase):
             owned.cancel_requested = True
             stopped.set()
 
-        with patch('hey_my_buddy.buddy.runtime.execution.role_seam.worker_stop', side_effect=stop) as native_stop, \
-             patch('hey_my_buddy.buddy.roles.live.handle_live_binding', return_value=('unbound', None)):
+        with patch('hey_my_buddy.buddy.runtime.execution.role_seam.worker_stop', side_effect=stop) as native_stop:
             control.start()
             try:
                 control.attach(handle, object())

@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import discovery, version
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-from hey_my_buddy.buddy.runtime import windows_process
+from hey_my_buddy.protocol import owned_process as windows_process
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from buddy.harnesses.claude import test_native_run as claude_cases
 from buddy.harnesses.codex import test_native_run as codex_cases

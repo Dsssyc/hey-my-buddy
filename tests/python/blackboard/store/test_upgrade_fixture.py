@@ -13,6 +13,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store.upgrade import upgrade_database
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
@@ -83,6 +84,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
+        upgrade_database(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -228,7 +230,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         after = upgrade.idle_snapshot(state, event_head=before['eventHead'], exact=True)
         self.assertEqual(after['schema'], SCHEMA_VERSION)
         self.assertEqual(after['eventHead'], before['eventHead'])
-        self.assertEqual(after, before)
+        self.assertNotIn('workers', after['tables'])
+        self.assertEqual(after['tables']['attempts'], before['tables']['attempts'])
         self.assertEqual({relative: (state / relative).read_bytes() for relative in history}, history)
         self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], fixture['schemaVersion'])
 
@@ -293,6 +296,50 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(upgraded.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
             self.assertEqual(upgraded.execute('PRAGMA foreign_key_check').fetchall(), [])
 
+    def test_upgrade_converts_only_service_owned_fields_and_preserves_opaque_results(self):
+        fixture, connection = self.restored('opaque-upgrade')
+        attempt = connection.execute('SELECT attempt_id FROM attempts LIMIT 1').fetchone()[0]
+        opaque = {'status': 'ok', 'result': {'workerId': 'user-data', 'leaseSeconds': 7,
+                  'nested': ['worker-stopped', 'awaiting-worker'], 'processIdentity': {'worker': 'user-value'}},
+                  'shutdownConfirmed': True}
+        raw = json.dumps(opaque, ensure_ascii=False, separators=(',', ':'))
+        connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (raw, attempt))
+        connection.execute("INSERT INTO attempt_interruptions VALUES(?,'worker-stopped',?,'settled',NULL)",
+                           (attempt, '2026-01-01T00:00:00Z'))
+        response = {'task': {'taskId': 'fixture', 'requestId': 'fixture', 'spec': {}, 'state': 'completed',
+                            'workerId': 'retired', 'selectedAttempt': {'attemptId': attempt, 'generation': 1,
+                            'executionState': 'finished', 'ownership': 'owned', 'workerId': 'retired',
+                            'leaseSeconds': 120, 'result': opaque}}}
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES(?,?,?,?,?)',
+                           ('projected-old-view', 'task.cancel', 'hash', json.dumps(response), '2026-01-01T00:00:00Z'))
+        connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
+                           ('worker.registered', json.dumps({'workerId': 'history', 'message': 'worker-stopped'}),
+                            '2026-01-01T00:00:00Z'))
+        connection.commit()
+        upgrade_database(fixture['state'])
+        self.assertEqual(json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                                       (attempt,)).fetchone()[0]), opaque)
+        self.assertEqual(connection.execute('SELECT evidence_kind FROM attempt_interruptions WHERE attempt_id=?',
+                                            (attempt,)).fetchone()[0], 'orphan-stopped')
+        projected = json.loads(connection.execute("SELECT response_json FROM commands WHERE command_id='projected-old-view'").fetchone()[0])
+        self.assertNotIn('workerId', projected['task'])
+        self.assertNotIn('leaseSeconds', projected['task']['selectedAttempt'])
+        self.assertEqual(projected['task']['selectedAttempt']['result'], opaque)
+        history = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='worker.registered' ORDER BY seq DESC LIMIT 1").fetchone()[0])
+        self.assertEqual(history, {'workerId': 'history', 'message': 'worker-stopped'})
+
+    def test_upgrade_failure_rolls_back_every_table_replacement(self):
+        fixture, connection = self.restored('rollback-conversion')
+        connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES('task.failed','{broken','2026-01-01T00:00:00Z')")
+        connection.commit()
+        schema = [tuple(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
+        counts = connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]
+        with self.assertRaises(BoardError):
+            upgrade_database(fixture['state'])
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')], schema)
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], counts)
+        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '22')
+
     def insert_stop_receipt(self, fixture, connection):
         response = {'macroTaskId': 'run:' + fixture['stableIds']['cancelled'],
                     'results': [{'runId': fixture['stableIds']['cancelled'], 'state': 'cancelled', 'stopped': True},
@@ -310,6 +357,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_started_verification_preserves_command_fingerprints_and_rejects_tampering(self):
         fixture, connection = self.restored('started-stop')
         self.insert_stop_receipt(fixture, connection)
+        upgrade_database(fixture['state'])
         before = upgrade.idle_snapshot(fixture['state'], exact=True)
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
@@ -334,6 +382,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         connection.execute('UPDATE workflow_runs SET request_fingerprint=NULL')
         connection.commit()
         connection.close()
+        upgrade_database(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)

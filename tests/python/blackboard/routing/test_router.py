@@ -98,7 +98,7 @@ class RouterPublicationTests(WorkflowTestCase):
         board = self.board()
         self.seed(board, preferences=preferences)
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
-        board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
+        pass  # Admission is owned by the service.
         claim = self.claim(board, 'router', run_id=request['runId'])['claim']
         result = {**claim_tool_receipt(claim), 'status': 'error' if code else 'ok', 'operation': 'select',
 
@@ -109,9 +109,7 @@ class RouterPublicationTests(WorkflowTestCase):
                                'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
-        board.call('worker_result', {'workerId': 'router', 'attemptId': claim['attempt']['attemptId'],
-                                    'generation': claim['attempt']['generation'], 'nonce': NONCE,
-                                    'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
         return board, board.call('selection_get', {'decisionId': request['decisionId']})['decision']
 
     def test_publication_accepts_alternative_with_advisory_reference(self):

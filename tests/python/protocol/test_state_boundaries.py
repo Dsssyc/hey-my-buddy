@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import ast
-from contextlib import redirect_stderr
-import io
 import os
 from pathlib import Path
 import subprocess
@@ -28,10 +26,9 @@ class StateBoundaryTests(unittest.TestCase):
     def test_internal_parameters_are_required_path_without_another_resolver(self):
         import inspect
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
-        from hey_my_buddy.buddy.roles.live import handle_live_binding
         from hey_my_buddy.buddy.roles.run_controller import execute
         from hey_my_buddy.buddy.roles.inline_run import _inline_live
-        from hey_my_buddy.buddy.runtime.live import WorkerLiveRuntime
+        from hey_my_buddy.buddy.runtime.execution import Execution
         from hey_my_buddy.cli.blocking import await_run
         from hey_my_buddy.cli.console_cli import run
         from hey_my_buddy.blackboard.catalog.catalog import discover
@@ -41,7 +38,7 @@ class StateBoundaryTests(unittest.TestCase):
                 (rpc_config.configure_local_endpoint, "state_dir"), (rpc_config.configure_client, "state_dir"),
                 (rpc_config.configure_server, "state_dir"), (rpc_config._apply, "state_dir"),
                 (CTwoLiveEndpoint, "state_dir"), (CTwoLiveChannel, "state_dir"),
-                (handle_live_binding, "state_dir"), (WorkerLiveRuntime, "state_dir"),
+                (Execution, "state_dir"),
                 (execute, "state_dir"), (_inline_live, "state_dir"),
                 (await_run, "state_dir"), (run, "state_dir"), (discover, "directory")):
             with self.subTest(function=function):
@@ -50,7 +47,7 @@ class StateBoundaryTests(unittest.TestCase):
                 self.assertEqual(parameter.annotation, "Path")
         self.assertFalse(hasattr(rpc_config, "resolve_state_dir"))
         source = Path(transport.__file__).parents[1]
-        for name in ("protocol/rpc_config.py", "buddy/roles/live.py", "buddy/runtime/live.py",
+        for name in ("protocol/rpc_config.py", "buddy/runtime/execution.py",
                      "buddy/harnesses/c_two_live.py"):
             tree = ast.parse((source / name).read_text())
             for node in ast.walk(tree):
@@ -146,48 +143,14 @@ class StateBoundaryTests(unittest.TestCase):
         home = self.root / "home"
         home.mkdir(mode=0o700)
         environment.update(HOME=str(home), USERPROFILE=str(home))
-        for module, arguments in (("blackboard.service.daemon", []), ("buddy.runtime.supervisor", []),
+        for module, arguments in (("blackboard.service.daemon", []),
+                                  ("buddy.runtime.execution", []),
                                   ("buddy.roles.run_controller", ["--control", str(self.root / "absent-control")])):
             with self.subTest(module=module):
                 child = subprocess.Popen([sys.executable, "-m", "hey_my_buddy." + module, *arguments],
                                          env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 stdout, stderr = child.communicate(timeout=15)
                 self.assertEqual(child.returncode, 2, (stdout, stderr))
-                self.assertIn("the following arguments are required: --state-dir" if module == "buddy.runtime.supervisor"
+                self.assertIn("the following arguments are required: --startup" if module == "buddy.runtime.execution"
                               else "HMB_STATE_DIR is required", stderr)
                 self.assertEqual(list(home.iterdir()), [], "internal process selected default state")
-
-    def test_supervisor_requires_argument_even_with_valid_environment_state(self):
-        from hey_my_buddy.buddy.runtime import supervisor
-        home = self.root / "supervisor-home"
-        home.mkdir(mode=0o700)
-        before = sorted(self.root.rglob("*"))
-        stderr = io.StringIO()
-        with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.state), "HOME": str(home),
-                                     "USERPROFILE": str(home)}), \
-                patch.object(supervisor, "Supervisor") as construct, redirect_stderr(stderr):
-            with self.assertRaises(SystemExit) as refused:
-                supervisor.main([])
-        self.assertEqual(refused.exception.code, 2)
-        self.assertIn("the following arguments are required: --state-dir", stderr.getvalue())
-        construct.assert_not_called()
-        self.assertEqual(sorted(self.root.rglob("*")), before)
-        self.assertEqual(list(home.iterdir()), [], "supervisor selected default HOME state")
-
-    def test_supervisor_uses_explicit_argument_as_the_only_state_root(self):
-        from hey_my_buddy.buddy.runtime import supervisor
-        foreign = self.root / "environment-state"
-        foreign.mkdir(mode=0o700)
-        before = sorted(self.root.rglob("*"))
-        with patch.dict(os.environ, {"HMB_STATE_DIR": str(foreign)}), \
-                patch.object(supervisor, "Supervisor") as construct, \
-                patch.object(supervisor.signal, "signal"):
-            construct.return_value.serve.return_value = 17
-            result = supervisor.main(["--state-dir", str(self.state), "--worker-id", "private-worker",
-                                      "--lease-seconds", "43", "--max-restarts", "2",
-                                      "--capabilities", "one, two"])
-        self.assertEqual(result, 17)
-        construct.assert_called_once_with("private-worker", self.state, lease_seconds=43,
-                                          capabilities=("one", "two"))
-        construct.return_value.serve.assert_called_once_with(max_restarts=2)
-        self.assertEqual(sorted(self.root.rglob("*")), before)

@@ -1,14 +1,10 @@
 """The ADR-025 step 5-A live backend: one C-Two endpoint behind the live seam.
 
-One :class:`CTwoLiveEndpoint` runs inside a run's controller process. It
-registers exactly one random-person-name C-Two resource whose contract exposes
-the three named live operations — ``request``, ``observe`` and
-``capabilities`` — and nothing else: there is no arbitrary method-name
-dispatch. One :class:`CTwoLiveChannel` is the :class:`LiveChannel` client the
-holding side connects to that endpoint with. The contract class is a trusted
-constructor parameter on both sides; the production ``HarnessRunLive`` /
-``WorkerRuntimeLive`` contracts are declared by the Host under ``protocol/``
-and tests use their own CRM declared beside the peer fixture.
+The native run uses :class:`CTwoLiveEndpoint` as an in-process channel. The
+execution process owns the single registered C-Two ``ExecutionLive`` resource;
+the outer resource forwards authenticated requests into the active native
+channel. The generic endpoint can also register a test CRM for transport
+checks, with its contract supplied by the test fixture.
 
 The transport facts follow the accepted F-C1 evidence: routing is by the
 address read back through ``cc.server_address()`` after registration, the
@@ -406,18 +402,19 @@ class CTwoLiveEndpoint:
     C-Two server down — which is what makes this run's socket file disappear.
     """
 
-    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type, *,
+    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type | None, *,
                  name: str | None = None, instance_id: str | None = None,
                  token: str | None = None, state_dir: Path):
         if not isinstance(identity, RunIdentity):
             raise fail("identity must be a RunIdentity")
         if not isinstance(capabilities, LiveCapabilities):
             raise fail("capabilities must be a LiveCapabilities value")
-        if not isinstance(contract, type):
-            raise fail("contract must be a CRM class")
-        for operation in ("capabilities", "request", "observe"):
-            if not callable(getattr(contract, operation, None)):
-                raise fail(f"the live contract must declare a {operation} operation")
+        if contract is not None:
+            if not isinstance(contract, type):
+                raise fail("contract must be a CRM class")
+            for operation in ("capabilities", "request", "observe"):
+                if not callable(getattr(contract, operation, None)):
+                    raise fail(f"the live contract must declare a {operation} operation")
         self._state_dir = state_dir
         self._identity = identity
         self._capabilities = capabilities
@@ -477,6 +474,8 @@ class CTwoLiveEndpoint:
         descriptor carries the address read back through
         ``cc.server_address()``; it never carries the token.
         """
+        if self._contract is None:
+            raise fail("an in-process live channel has no C-Two endpoint")
         if self._descriptor is not None:
             raise fail("the live endpoint was already started")
         rpc_config.configure_server(self._state_dir)
@@ -1057,7 +1056,7 @@ class CTwoLiveChannel:
                              deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
 
     def _request(self, request: LiveRequest, *, timeout_ms: int, deadline_monotonic: float) -> LiveReply:
-        """Forward an authenticated Worker hop without renewing its original window."""
+        """Send the authenticated request without renewing its original window."""
         if self._closed_reason is not None:
             return LiveReply(status="unavailable", reason_code="channel-closed")
         if request.identity != self._identity:

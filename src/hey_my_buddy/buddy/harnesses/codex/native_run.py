@@ -48,7 +48,7 @@ from ....protocol.activity import ActivityPublisher
 from ..c_two_live import CTwoLiveEndpoint
 from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
-from ...runtime.windows_process import owned_popen
+from ....protocol.owned_process import owned_popen
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
 from ..native_support import (

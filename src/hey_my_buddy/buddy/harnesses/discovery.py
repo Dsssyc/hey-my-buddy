@@ -472,7 +472,7 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     journalled = native_process_journal_active()
     try:
         if journalled:
-            from ..runtime.windows_process import owned_popen
+            from ...protocol.owned_process import owned_popen
             process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, env=environment, cwd=cwd,
                                   start_new_session=os.name != "nt")

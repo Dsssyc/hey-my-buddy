@@ -54,13 +54,15 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False,
+                  schema_version: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or str(schema[0]) != str(SCHEMA_VERSION):
+        supported = (schema_version,) if schema_version is not None else (22, SCHEMA_VERSION)
+        if schema is None or int(schema[0]) not in supported:
             raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {SCHEMA_VERSION} only')
+                             f'Upgrade accepts schema {supported} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -89,7 +91,7 @@ def _environment(state: Path, target: Path) -> dict:
     # A service started by the upgrade coordinator inherits only the explicit
     # service allowlist; the journal carries forward the operator's launch settings.
     env = service_environment()
-    for key in ('HMB_DEV_SOURCE', 'HMB_WORKER_STATE', 'HMB_WORKER_ID'):
+    for key in ('HMB_DEV_SOURCE',):
         env.pop(key, None)
     marker = state / 'upgrade.json'
     if marker.exists():
@@ -142,16 +144,15 @@ def probe(state: Path, target: Path) -> dict | None:
 
 
 def retire_workers(state: Path, *, timeout: float = 35) -> None:
-    from ..buddy.runtime.worker import RETIRE_REQUEST_NAME
-    # Exact private worker directories, including explicitly started supervisors;
-    # retirement is cooperative and cannot interrupt a running child.
+    # This is the one-time 0.39.0/schema-22 retirement protocol. The new runtime
+    # contains no Worker module, so the old request filename lives here.
     if (state / 'workers').is_symlink():
         raise BoardError('UPGRADE_UNSAFE', 'Worker root cannot be linked')
     locks = sorted((state / 'workers').glob('*/supervisor.lock'))
     for lock in locks:
         if lock.parent.is_symlink() or lock.is_symlink():
             raise BoardError('UPGRADE_UNSAFE', 'Worker identity is linked')
-        write_journal(lock.parent / RETIRE_REQUEST_NAME, {'requestedAt': utc_now(), 'reason': 'idle upgrade'})
+        write_journal(lock.parent / 'retire.request', {'requestedAt': utc_now(), 'reason': 'idle upgrade'})
     deadline = time.monotonic() + timeout
     with ExitStack() as stack:
         for lock in locks:
@@ -170,6 +171,17 @@ def detach(state: Path, target: Path) -> None:
         # detached. The caller then restores that runtime without touching work.
         idle_snapshot(state)
         retire_workers(state)
+
+
+def remove_legacy_worker_state(state: Path) -> None:
+    """Remove retired 0.39.0 Worker state after the upgrade can no longer roll back."""
+    workers = state / 'workers'
+    if workers.is_symlink():
+        raise BoardError('UPGRADE_UNSAFE', 'Worker root cannot be linked')
+    if workers.exists():
+        shutil.rmtree(workers)
+    (state / 'worker-pool.json').unlink(missing_ok=True)
+    backup.sync_dir(state)
 
 
 def start(state: Path, target: Path) -> dict:
@@ -489,7 +501,13 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal['before'] = before
                 journal.update(phase='backed-up', backup=backed_up)
                 write_journal(marker, journal)
-                expected = before
+                if before['schema'] == 22:
+                    from ..blackboard.store.upgrade import upgrade_database
+                    upgrade_database(state)
+                expected = idle_snapshot(state, event_head=before['eventHead'], schema_version=SCHEMA_VERSION)
+                expected['runtimeSettings'] = runtime_settings
+                journal.update(phase='migrated', expected=expected)
+                write_journal(marker, journal)
             active = target
             health = start(state, target)
             evidence = verify_started(state, target, health, expected)
@@ -508,6 +526,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 clear_journal(marker)
             except OSError as error:
                 journal_error = str(error)
+            legacy_cleanup_error = None
+            if journal_error is None:
+                try:
+                    remove_legacy_worker_state(state)
+                except (BoardError, OSError) as error:
+                    legacy_cleanup_error = str(error)
             try:
                 from ..blackboard.tasks.storage import prune_old_runtimes
                 write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
@@ -516,7 +540,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 pruning = {'complete':False, 'error':getattr(cleanup_error, 'code', type(cleanup_error).__name__), 'note':'Upgrade verified; cleanup can be retried independently'}
             return {'upgraded':True, 'backup':backed_up, 'verification':evidence, 'previousRuntime':previous.name,
                     'rollback':None, 'runtimePruning':pruning,
-                    **({'journalError':journal_error} if journal_error is not None else {})}
+                    **({'journalError':journal_error} if journal_error is not None else {}),
+                    **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
         except Exception as failure:
             reason = _failure_reason(failure)
             try:
@@ -579,15 +604,22 @@ def recover(state: Path, root: Path) -> dict:
             clear_journal(marker)
         except OSError as error:
             journal_error = str(error)
+        legacy_cleanup_error = None
+        if journal_error is None:
+            try:
+                remove_legacy_worker_state(state)
+            except (BoardError, OSError) as error:
+                legacy_cleanup_error = str(error)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence,
-                **({'journalError':journal_error} if journal_error is not None else {})}
+                **({'journalError':journal_error} if journal_error is not None else {}),
+                **({'legacyCleanupError':legacy_cleanup_error} if legacy_cleanup_error is not None else {})}
     if journal.get('phase') == 'preflight':
         if target_health is not None:
             raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Unexpected target owner during preflight recovery')
         if previous_health is None:
             with file_lock(state / 'control-daemon.lock', timeout=30), file_lock(state / 'board-owner.lock', timeout=30):
                 pass
-            # No backup/cutover happened: preserve live workers and any work that
+            # No backup/cutover happened: preserve old workers and any work that
             # raced the old-version preflight rather than attempting to retire it.
             previous_health = start(state, previous)
         write_active_runtime(state, previous, journal.get('environment'))
@@ -608,7 +640,7 @@ def recover(state: Path, root: Path) -> dict:
             if Path(saved['path']) != current:
                 raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
             restore(state, current)
-        before = idle_snapshot(state)
+        before = idle_snapshot(state, schema_version=journal['before']['schema'])
     health = start(state, previous)
     evidence = verify_started(state, previous, health, before)
     write_active_runtime(state, previous, journal.get('environment'))

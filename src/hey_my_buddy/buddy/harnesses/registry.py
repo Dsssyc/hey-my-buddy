@@ -127,13 +127,6 @@ register_run_seam("codex", codex_run)
 register_run_seam("claude", claude_run)
 register_run_seam("dsh", dsh_run)
 
-#: ``external`` is a first-class adapter whose execution is owned by the caller's
-#: own agent, not by a built-in worker. That agent claims the task through the
-#: public C-Two contract, does the work itself and reports the result. No argv, no
-#: shell and no dsh pretence are involved, and a local built-in worker does not
-#: advertise this capability.
-EXTERNAL_CAPABILITIES = ("external", "artifacts", "task-text")
-
 # Worker levels name the Host's chosen boundary; each harness declares the
 # native tool scope and enforcement it provides for that level.
 _WORKER_PERMISSIONS = {
@@ -167,22 +160,13 @@ def adapters() -> dict[str, Adapter | ZcodeAdapter]:
 
 
 def adapter(name: str) -> Adapter | ZcodeAdapter:
-    """The built-in description or unextracted executor for one adapter name.
-
-    ``external`` has no built-in executor by design: the caller's agent is the
-    executor. The error says exactly that instead of failing obscurely later.
-    """
+    """The built-in description or unextracted executor for one adapter name."""
     registry = adapters()
     if name not in registry:
-        detail = (
-            "; an 'external' task is executed by the caller-owned agent that claims it"
-            if name == "external"
-            else ""
-        )
         raise BoardError(
             "UNSUPPORTED_ADAPTER",
             f"Adapter {name!r} is not executable by a built-in worker; this build runs "
-            f"{', '.join(sorted(registry))} locally{detail}",
+            f"{', '.join(sorted(registry))} locally",
             adapter=name,
         )
     return registry[name]
@@ -204,18 +188,6 @@ def capability_report() -> dict:
             },
             "noToolStructured": {"implemented": instance.no_tool_structured},
         }
-    report["external"] = {
-        "adapter": "external",
-        "available": True,
-        "reason": None,
-        "capabilities": list(EXTERNAL_CAPABILITIES),
-        "executedBy": "caller-owned-agent",
-        "note": (
-            "A caller-owned agent claims these tasks through the public C-Two contract (hey_my_buddy.protocol.client "
-            "BoardClient or the same named operations) and reports the result itself. This service never "
-            "spawns anything for an external task."
-        ),
-    }
     return report
 
 
@@ -271,7 +243,6 @@ __all__ = [
     "ZcodeAdapter",
     "ExecutionContext",
     "NoToolStructuredRequest",
-    "EXTERNAL_CAPABILITIES",
     "ProcessHandle",
     "RUN_SEAMS",
     "adapter",

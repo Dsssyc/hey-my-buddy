@@ -257,16 +257,19 @@ class WorkerRegisteredRunTests(DshRoleCase):
         request = holder[0].request
         control = holder[0].role_run_control
         from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
         channel = None
         while time_module.monotonic() < deadline:
             endpoint = holder[0].live_endpoint if holder else None
             if endpoint is not None:
+                if endpoint._descriptor is None:
+                    register_test_endpoint(endpoint)
+                    self.addCleanup(endpoint.stop)
                 descriptor = endpoint._descriptor
                 channel = live_binding("dsh")(
                     request.identity, HarnessRunLive, name=descriptor.name,
                     address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=control["live"]["token"],
+                    token=endpoint._token,
                     state_dir=Path(self.environment["HMB_STATE_DIR"]))
                 self.addCleanup(channel.close, reason="fixture-complete")
                 break

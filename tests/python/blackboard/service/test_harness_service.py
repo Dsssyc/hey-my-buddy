@@ -11,13 +11,11 @@ class HarnessServiceTests(BoardTestCase):
     def test_unknown_preflight_wait_reason_is_visible_in_get_and_clears_when_ready(self):
         task = self.board.task_submit({'requestId': 'preflight-wait', 'task': 'fixture',
                                       'cwd': str(self.directory), 'adapter': 'command', 'argv': ['/bin/true']})['task']
-        self.board.worker_register({'workerId': 'fixture', 'adapter': 'command', 'capabilities': ['command']})
-        claim = self.board.worker_claim({'workerId': 'fixture', 'claimRequestId': 'wait-claim',
-                                         'nonce': 'n' * 32})['claim']
+        claim = self.board.admit_execution('n' * 32)['claim']
         attempt = claim['attempt']
         with self.board.db.write() as db:
             db.execute("UPDATE attempts SET model_harness='codex' WHERE attempt_id=?", (attempt['attemptId'],))
-        params = {'workerId': 'fixture', 'attemptId': attempt['attemptId'],
+        params = {'attemptId': attempt['attemptId'],
                   'generation': attempt['generation'], 'nonce': 'n' * 32}
         unknown = {'harness': 'codex', 'status': 'unknown', 'available': False,
                    'lastProbe': {'status': 'unknown', 'reasonCode': 'timeout'}}
@@ -28,10 +26,10 @@ class HarnessServiceTests(BoardTestCase):
             view = self.board.task_get({'runId': task['runId']})['task']
             self.assertEqual(view['queueReason'], 'harness-probe-unknown')
             self.assertEqual(view['status'], 'running')
-            self.assertNotIn('error', self.call('worker_progress', **params,
+            self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': 'router-input-unknown'}))
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'], 'router-input-unknown')
-            self.assertNotIn('error', self.call('worker_progress', **params, data={'waitingReason': None}))
+            self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='ready-read'))
             self.assertIsNone(self.board.task_get({'runId': task['runId']})['task']['queueReason'])
 

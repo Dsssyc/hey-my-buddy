@@ -14,34 +14,27 @@ import sys
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
 
 from support import BoardTestCase, _child_environment
-from hey_my_buddy.cli.checks import lock_is_held
-from hey_my_buddy.errors import BoardError
 
 from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from hey_my_buddy.protocol.transport import _read_endpoint
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.protocol.client import BoardClient
-from hey_my_buddy.protocol import transport
 
 
 class TestNamedContract(BoardTestCase):
     def test_idle_waits_reuse_one_named_connection_across_timeouts(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "1"}):
             client = BoardClient(self.directory, autostart=False)
-            client.register_worker("wait-fixture", adapter="external", capabilities=[])
-            # A future cursor isolates the timeouts from supervisor startup events.
-            with patch.object(transport.cc, "connect", wraps=transport.cc.connect) as connect:
-                with client.event_waiter(worker_id="wait-fixture") as wait:
-                    for _ in range(3):
-                        self.assertTrue(wait(after=2**62, timeout_ms=50)["timedOut"])
-                    self.assertEqual(connect.call_count, 2, "attach ping and one persistent wait connection")
-                    # A Worker wait must not take the configured public wait slot.
-                    capacity = client.call("wait_capacity", resource="wait")
-                    self.assertEqual(capacity["admitted"], 0)
-                    self.assertEqual(capacity["available"], 1)
+            endpoint = self._endpoint()
+            with self.rpc_connection(BuddyWait, name=WAIT_NAME, address=endpoint["address"]) as peer:
+                for _ in range(3):
+                    frame = json.dumps({"token": endpoint["token"], "after": 2**62, "timeoutMs": 50})
+                    self.assertTrue(json.loads(peer.events_wait(frame))["timedOut"])
+            capacity = client.call("wait_capacity", resource="wait")
+            self.assertEqual(capacity["admitted"], 0)
+            self.assertEqual(capacity["available"], 1)
 
     def test_service_stop_wakes_the_remote_wait_resource(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
@@ -53,34 +46,12 @@ class TestNamedContract(BoardTestCase):
                 deadline = time.monotonic() + 3
                 while True:
                     capacity = client.call("wait_capacity", resource="wait")
-                    if capacity["admitted"] == 1 and capacity["workerAdmitted"] == 1:
+                    if capacity["admitted"] == 1:
                         break
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(.02)
-                with self.assertRaises(BoardError) as duplicate:
-                    client.wait_events(after=2**62, timeout_ms=0, workerId="local")
-                self.assertEqual(duplicate.exception.code, "WAIT_OVERLOAD")
-                deadline = time.monotonic() + 3
                 client.call("service_control", {"action": "stop", "drainSeconds": 0})
                 self.assertEqual(holder.result(timeout=2)["error"]["code"], "SERVICE_STOPPING")
-                while lock_is_held(self.directory / "workers/local/supervisor.lock"):
-                    self.assertLess(time.monotonic(), deadline, "waiting Worker did not stop within three seconds")
-                    time.sleep(.02)
-
-    def test_retirement_releases_the_waiting_worker_process_within_three_seconds(self):
-        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
-            client = BoardClient(self.directory, autostart=False)
-            deadline = time.monotonic() + 3
-            while client.call("wait_capacity", resource="wait")["workerAdmitted"] != 1:
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(.02)
-            worker_dir = self.directory / "workers/local"
-            (worker_dir / "retire.request").touch()
-            deadline = time.monotonic() + 3
-            while lock_is_held(worker_dir / "supervisor.lock"):
-                self.assertLess(time.monotonic(), deadline, "waiting Worker did not retire within three seconds")
-                time.sleep(.02)
-            self.assertEqual(json.loads((worker_dir / "supervisor.json").read_text())["state"], "retired")
 
     def _endpoint(self):
         endpoint = _read_endpoint(self.directory)
@@ -104,7 +75,8 @@ class TestNamedContract(BoardTestCase):
                 self.assertEqual(health["contractVersion"], CONTRACT_VERSION)
                 self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertIn("runtimeIdentity", health)
-                self.assertTrue(hasattr(board, "worker_claim"))
+                self.assertTrue(hasattr(board, "execution_result"))
+                self.assertFalse(hasattr(board, "worker_claim"))
                 self.assertTrue(hasattr(board, "events_read"))
                 self.assertFalse(hasattr(board, "dispatch"), "no generic dispatch facade may exist")
                 denied = json.loads(board.task_list(json.dumps({"token": "wrong"})))
@@ -128,16 +100,22 @@ class TestNamedContract(BoardTestCase):
                                 "requestId": "wait-route",
                                 "task": "do",
                                 "cwd": str(self.workdir()),
-                                "adapter": "external",
+                                "adapter": "command",
+                                "argv": [sys.executable, "-c", "import time; time.sleep(30)"],
+                                "expectedSeconds": 60,
                             }
                         )
                     )
                 )
                 self.assertEqual(reply["task"]["status"], "queued")
                 task_id = reply["task"]["runId"]
+                deadline = time.monotonic() + 5
+                while json.loads(board.task_get(json.dumps({"token": endpoint["token"],
+                                                           "runId": task_id})))["task"]["status"] == "queued":
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
                 cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
-                # Startup can still register a worker after the cursor read. Scope
-                # this wait to an external task that only this test can change.
+                # Scope the wait to this task; unrelated events cannot release it.
                 params = {"after": cursor, "taskId": task_id, "timeoutMs": 10000}
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
@@ -150,10 +128,12 @@ class TestNamedContract(BoardTestCase):
                         time.sleep(0.02)
 
                     # An unrelated event must not release the scoped wait slot.
-                    registration = json.loads(board.worker_register(json.dumps({
-                        "token": endpoint["token"], "workerId": "unrelated", "adapter": "external",
+                    unrelated = json.loads(board.task_submit(json.dumps({
+                        "token": endpoint["token"], "requestId": "wait-route-unrelated",
+                        "task": "unrelated", "cwd": str(self.workdir()),
+                        "adapter": "command", "argv": [sys.executable, "-c", "pass"],
                     })))
-                    self.assertNotIn("error", registration)
+                    self.assertNotIn("error", unrelated)
                     overloaded = self._wait_call(endpoint, "events_wait", {**params, "timeoutMs": 100})
                     self.assertIn("error", overloaded, overloaded)
                     self.assertEqual(overloaded["error"]["code"], "WAIT_OVERLOAD")
@@ -165,18 +145,19 @@ class TestNamedContract(BoardTestCase):
                     cancelled = json.loads(board.task_cancel(json.dumps({
                         "token": endpoint["token"], "runId": task_id,
                     })))
-                    self.assertEqual(cancelled["task"]["status"], "cancelled")
+                    self.assertTrue(cancelled["task"]["cancelRequested"])
                     self.assertLess(time.monotonic() - started, 5, "a mutation must not wait for the wait route")
                     held = holder.result(timeout=5)
                     self.assertFalse(held["timedOut"])
-                    self.assertEqual([event["kind"] for event in held["events"]], ["task.cancelled"])
-                    self.assertEqual(held["events"][0]["taskId"], task_id)
+                    self.assertTrue(held["events"])
+                    self.assertTrue(all(event["taskId"] == task_id for event in held["events"]))
 
     def test_multiple_clients_share_one_authoritative_task(self):
         with self.daemon():
             endpoint = self._endpoint()
             payload = json.dumps(
-                {"token": endpoint["token"], "requestId": "shared", "task": "do", "cwd": str(self.workdir()), "adapter": "external"}
+                {"token": endpoint["token"], "requestId": "shared", "task": "do", "cwd": str(self.workdir()),
+                 "adapter": "command", "argv": [sys.executable, "-c", "pass"]}
             )
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as first:
                 with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as second:

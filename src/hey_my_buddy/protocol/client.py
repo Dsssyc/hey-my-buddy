@@ -1,35 +1,13 @@
-"""Public board client: the supported way for an external worker to participate.
-
-A third-party agent imports this module (or speaks the same C-Two contract) and can
-register, claim, renew, report progress, submit a result and ask/answer questions
-without importing service internals, touching SQLite or reading the daemon's token.
-
-Example::
-
-    from hey_my_buddy.protocol.client import BoardClient
-
-    board = BoardClient()
-    board.register_worker("my-agent", adapter="command", capabilities=["command", "argv"])
-    claim = board.claim("my-agent", claim_request_id, nonce)
-    ...
-    board.submit_result("my-agent", attempt["attemptId"], generation, nonce, report)
-"""
+"""Client for one execution to report progress and results to the board."""
 from __future__ import annotations
 
-from contextlib import contextmanager
-import os
-import socket
 import secrets
 import uuid
-from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
 from . import transport
 from ..errors import BoardError
-
-DEFAULT_LEASE_SECONDS = 120
-
 
 def new_nonce() -> str:
     return secrets.token_hex(32)
@@ -97,108 +75,15 @@ class BoardClient:
     def wait_task(self, timeout_ms: int = 30000, **selector: Any) -> dict:
         return self.call("task_wait", {**selector, "timeoutMs": timeout_ms}, resource="wait")
 
-    # -- workers ------------------------------------------------------------
-    def register_worker(
-        self,
-        worker_id: str,
-        *,
-        adapter: str = "dsh",
-        capabilities: list[str] | None = None,
-        identity: str | None = None,
-        pid: int | None = None,
-        command_id: str | None = None,
-    ) -> dict:
-        return self.call(
-            "worker_register",
-            {
-                "workerId": worker_id,
-                "identity": identity or f"{adapter}:{worker_id}",
-                "adapter": adapter,
-                "capabilities": capabilities if capabilities is not None else [adapter],
-                "pid": pid if pid is not None else os.getpid(),
-                "host": socket.gethostname(),
-                "commandId": command_id,
-            },
-        )
-
-    def claim(
-        self,
-        worker_id: str,
-        claim_request_id: str,
-        nonce: str,
-        *,
-        task_id: str | None = None,
-        worker_instance: str | None = None,
-    ) -> dict:
-        return self.call(
-            "worker_claim",
-            {
-                "workerId": worker_id,
-                "claimRequestId": claim_request_id,
-                "nonce": nonce,
-                "taskId": task_id,
-                "workerInstance": worker_instance,
-            },
-        )
-
-    def reconcile(
-        self,
-        worker_id: str,
-        attempt_id: str,
-        generation: int,
-        nonce: str,
-        *,
-        claim_request_id: str | None = None,
-        worker_instance: str | None = None,
-    ) -> dict:
-        return self.call(
-            "worker_reconcile",
-            {
-                "workerId": worker_id,
-                "attemptId": attempt_id,
-                "generation": generation,
-                "nonce": nonce,
-                "claimRequestId": claim_request_id,
-                "workerInstance": worker_instance,
-            },
-        )
-
-    def renew(self, worker_id: str, attempt_id: str, generation: int, nonce: str, *, phase: str | None = None) -> dict:
-        return self.call(
-            "worker_renew",
-            {
-                "workerId": worker_id,
-                "attemptId": attempt_id,
-                "generation": generation,
-                "nonce": nonce,
-                "phase": phase,
-            },
-        )
-
-    def live_attach(self, attachment) -> dict:
-        """Register only this holder's live endpoint, with its attempt actor."""
-        from .worker_live import WorkerLiveAttach
-
-        if not isinstance(attachment, WorkerLiveAttach):
-            attachment = WorkerLiveAttach.from_payload(attachment)
-        return self.call("worker_live_attach", attachment.to_payload())
-
-    def live_detach(self, attachment) -> dict:
-        """Release one exact live binding; this is not a result or stop receipt."""
-        from .worker_live import WorkerLiveDetach
-
-        if not isinstance(attachment, WorkerLiveDetach):
-            attachment = WorkerLiveDetach.from_payload(attachment)
-        return self.call("worker_live_detach", attachment.to_payload())
-
+    # -- executions ---------------------------------------------------------
     def progress(
         self,
-        worker_id: str,
         attempt_id: str,
         generation: int,
         nonce: str,
         message: str | None = None,
         *,
+        process_identity: dict | None = None,
         phase: str | None = None,
         data: dict | None = None,
     ) -> dict:
@@ -210,56 +95,29 @@ class BoardClient:
         observation with no prose ``message`` records no prose progress event.
         """
         params: dict = {
-            "workerId": worker_id,
             "attemptId": attempt_id,
             "generation": generation,
             "nonce": nonce,
             "phase": phase,
         }
+        if process_identity is not None:
+            params["processIdentity"] = process_identity
         if message is not None:
             params["message"] = message
         if data is not None:
             params["data"] = data
-        return self.call("worker_progress", params)
+        return self.call("execution_progress", params)
 
-    def submit_result(self, worker_id: str, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
+    def submit_result(self, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
         return self.call(
-            "worker_result",
+            "execution_result",
             {
-                "workerId": worker_id,
                 "attemptId": attempt_id,
                 "generation": generation,
                 "nonce": nonce,
                 **report,
             },
         )
-
-    def release(
-        self,
-        worker_id: str,
-        attempt_id: str,
-        generation: int,
-        nonce: str,
-        reason: str = "",
-        *,
-        evidence: dict | None = None,
-        worker_instance: str | None = None,
-    ) -> dict:
-        return self.call(
-            "worker_release",
-            {
-                "workerId": worker_id,
-                "attemptId": attempt_id,
-                "generation": generation,
-                "nonce": nonce,
-                "reason": reason or None,
-                "evidence": evidence,
-                "workerInstance": worker_instance,
-            },
-        )
-
-    def workers(self, **params: Any) -> dict:
-        return self.call("worker_list", params)
 
     # -- messages -----------------------------------------------------------
     def post_question(self, inquiry_id: str, question: str, *, author: str = "external", **selector: Any) -> dict:
@@ -293,17 +151,6 @@ class BoardClient:
         )
 
     # -- events -------------------------------------------------------------
-    @contextmanager
-    def event_waiter(self, *, worker_id: str):
-        """One existing-service attachment for consecutive bounded event waits."""
-        if self._call is not None:
-            yield partial(self.wait_events, workerId=worker_id)
-        else:
-            directory = transport.get_state_dir(self.state_dir)
-            with transport._event_waiter(directory) as request:
-                yield partial(BoardClient(directory, call=lambda operation, params: request(params)).wait_events,
-                              workerId=worker_id)
-
     def read_events(self, after: int = 0, limit: int = 100, **selector: Any) -> dict:
         return self.call("events_read", {**selector, "after": after, "limit": limit})
 
@@ -357,4 +204,4 @@ class BoardClient:
         return self.call("workflow_suggest", {"runId": run_id, "body": body})
 
 
-__all__ = ["BoardClient", "BoardError", "new_command_id", "new_nonce", "DEFAULT_LEASE_SECONDS"]
+__all__ = ["BoardClient", "BoardError", "new_command_id", "new_nonce"]

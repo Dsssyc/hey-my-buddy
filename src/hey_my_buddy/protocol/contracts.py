@@ -97,38 +97,11 @@ class BuddyControl:
     def task_wait(self, request_json: str) -> str:
         ...
 
-    # -- workers ------------------------------------------------------------
-    def worker_register(self, request_json: str) -> str:
+    # -- executions ---------------------------------------------------------
+    def execution_progress(self, request_json: str) -> str:
         ...
 
-    def worker_claim(self, request_json: str) -> str:
-        ...
-
-    def worker_reconcile(self, request_json: str) -> str:
-        ...
-
-    def worker_recover(self, request_json: str) -> str:
-        ...
-
-    def worker_live_attach(self, request_json: str) -> str:
-        ...
-
-    def worker_live_detach(self, request_json: str) -> str:
-        ...
-
-    def worker_renew(self, request_json: str) -> str:
-        ...
-
-    def worker_progress(self, request_json: str) -> str:
-        ...
-
-    def worker_result(self, request_json: str) -> str:
-        ...
-
-    def worker_release(self, request_json: str) -> str:
-        ...
-
-    def worker_list(self, request_json: str) -> str:
+    def execution_result(self, request_json: str) -> str:
         ...
 
     # -- messages and artifacts --------------------------------------------
@@ -241,10 +214,10 @@ class BuddyWait:
 
 
 @cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
-class HarnessRunLive:
-    """One controller's bounded live facts and owner-loop request queue."""
+class ExecutionLive:
+    """One execution's authenticated control, inquiry and liveness surface."""
 
-    def request(self, request_json: str) -> str:
+    def send(self, request_json: str) -> str:
         ...
 
     def observe(self, request_json: str) -> str:
@@ -253,16 +226,11 @@ class HarnessRunLive:
     def capabilities(self, request_json: str) -> str:
         ...
 
-
-@cc.crm(namespace="hey.my.buddy", version=CONTRACT_VERSION)
-class WorkerRuntimeLive:
-    """The holding Worker's narrow forwarding surface, for every role."""
-
-    def request(self, request_json: str) -> str:
+    def close(self, request_json: str) -> str:
         ...
 
-    def observe(self, request_json: str) -> str:
+    def stop(self, request_json: str) -> str:
         ...
 
-    def capabilities(self, request_json: str) -> str:
+    def wait(self, request_json: str) -> str:
         ...

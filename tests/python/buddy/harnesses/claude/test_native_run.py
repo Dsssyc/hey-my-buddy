@@ -36,7 +36,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-from hey_my_buddy.protocol.contracts import HarnessRunLive
+from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"

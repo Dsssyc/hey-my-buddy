@@ -1,5 +1,6 @@
 """A stopped orphan's deterministic seal failure follows the ordinary failed-turn path."""
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 from pathlib import Path
@@ -11,12 +12,11 @@ from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import interruption, workflow, workspace
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as processes
+from hey_my_buddy.private_dirs import attempt_root
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-            "startedAt": 123250000, "processGroupId": 123, "jobName": None,
-            "worker": {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 122,
-                       "startedAt": 120500000}}
+            "startedAt": 123250000, "processGroupId": 123, "jobName": None}
 
 
 class InterruptedSealTests(RealWorkspaceTestCase):
@@ -26,7 +26,6 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
     def claimed(self, *, access="write", scope=None):
         board = self.board()
-        board.call("worker_register", {"workerId": "orphan-worker", "capabilities": ["dsh"]})
         submitted = board.call("workflow_submit", {
             **BUDDY, "requestId": f"interrupted-seal-{access}", "hostId": "host-1",
             "task": "recover stopped workspace", "cwd": str(self.repo),
@@ -34,27 +33,22 @@ class InterruptedSealTests(RealWorkspaceTestCase):
             "executionWorkspace": {"kind": "existing", "access": access,
                                    **({"writeScope": scope} if scope is not None else {})},
         })
-        claim = board.call("worker_claim", {
-            "workerId": "orphan-worker", "claimRequestId": "claim-orphan", "nonce": "n" * 16,
-            "runId": submitted["runId"],
-        })["claim"]
+        claim = admit_board(board, {'workerId': 'orphan-worker', 'claimRequestId': 'claim-orphan', 'nonce': 'n' * 16, 'runId': submitted['runId']})["claim"]
         attempt_id = claim["attempt"]["attemptId"]
-        board.call("worker_progress", {
-            "workerId": "orphan-worker", "attemptId": attempt_id,
-            "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
-            "processIdentity": IDENTITY,
-        })
+        board.call('execution_progress', {'attemptId': attempt_id, 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'processIdentity': IDENTITY})
         with board.store.db.read() as connection:
             attempt = dict(board.store._attempt_row(connection, attempt_id))
-        journal = interruption._native_journal(board.store, attempt, IDENTITY)
+        journal = {"path": processes.native_process_journal_path(
+            attempt_root(board.store.directory, attempt["adapter"], attempt["task_id"], attempt_id), IDENTITY),
+            "binding": {"taskId": attempt["task_id"], "attemptId": attempt_id,
+                        "generation": attempt["generation"]}}
         journal_path = Path(journal["path"])
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         processes.NativeProcessJournal(journal_path, journal["binding"])
         return board, submitted, claim, Path(claim["turn"]["input"]["executionWorkspace"]["path"])
 
     def recover(self, board):
-        with patch.object(interruption.processes, "worker_identity_alive", return_value=False), \
-             patch.object(interruption.processes, "inspect_process_identity", return_value="identity-absent"):
+        with patch.object(interruption.processes, "inspect_process_identity", return_value="identity-absent"):
             return board.store.reconcile_startup()
 
     def assert_stopped_receipt(self, board, attempt_id, code):
@@ -131,20 +125,20 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 class CommandJournalTests(BoardTestCase):
     def test_stopped_command_controller_waits_for_its_recorded_child(self):
         native = {**IDENTITY, "pid": 124, "startedAt": 123260000,
-                  "processGroupId": 124,
-                  "worker": {"bootId": IDENTITY["bootId"], "pid": IDENTITY["pid"],
-                             "startedAt": IDENTITY["startedAt"]}}
+                  "processGroupId": 124}
         attempt = {"adapter": "command", "model_harness": None, "task_id": "task-command",
                    "attempt_id": "attempt-command", "generation": 1}
         board = SimpleNamespace(directory=self.directory)
-        journal = interruption._native_journal(board, attempt, IDENTITY)
-        path = Path(journal["path"])
+        binding = {"taskId": attempt["task_id"], "attemptId": attempt["attempt_id"],
+                   "generation": attempt["generation"]}
+        path = processes.native_process_journal_path(
+            attempt_root(self.directory, "command", attempt["task_id"], attempt["attempt_id"]), IDENTITY)
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"binding": journal["binding"], "pending": [],
+        path.write_text(json.dumps({"binding": binding, "pending": [],
                                     "identities": [native]}))
-        with patch.object(processes, "inspect_process_identity",
-                          side_effect=["identity-absent", "alive"]):
-            self.assertEqual(interruption._evidence(board, attempt, IDENTITY), "alive")
-        with patch.object(processes, "inspect_process_identity",
-                          side_effect=["identity-absent", "identity-absent"]):
-            self.assertEqual(interruption._evidence(board, attempt, IDENTITY), "identity-absent")
+        with patch.object(processes, "stop_orphan_process", return_value="unknown"):
+            self.assertEqual(interruption._stop_native(board, attempt, IDENTITY, "identity-absent"),
+                             (False, None))
+        with patch.object(processes, "stop_orphan_process", return_value="orphan-stopped"):
+            self.assertEqual(interruption._stop_native(board, attempt, IDENTITY, "identity-absent"),
+                             (True, "orphan-stopped"))

@@ -4,6 +4,7 @@ Every test uses a private state directory. Groups that require the real transpor
 a real child process or a restart use the real daemon and the real CLI.
 """
 from __future__ import annotations
+from admission import admit_execution, release_before_spawn, run_next
 
 import json
 import os
@@ -21,13 +22,12 @@ from unittest import mock
 
 # ``support`` puts the project's own ``src`` directory first on sys.path, so the
 # tests exercise this checkout rather than any installed copy of the package.
-from support import BoardTestCase, run_claim_in_process, wait_for
+from support import BoardTestCase, wait_for
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.private_dirs import attempt_root, ensure_private_dir
 from hey_my_buddy.blackboard.store.store import ATTEMPT_TRANSITIONS, TASK_TRANSITIONS
-from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.buddy.runtime.execution import Execution
 
 
@@ -84,23 +84,15 @@ class TestAtomicity(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="atomic-4", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        worker = Worker("w-atomic", self.directory, client=client)
-        worker.register()
-        claim = client.claim("w-atomic", "claim-atomic-4", "n" * 32)
+        claim = admit_execution(client, "n" * 32)
         attempt = claim["claim"]["attempt"]
         with self.assertRaises(BoardError) as caught:
-            client.submit_result(
-                "w-atomic",
-                attempt["attemptId"],
-                attempt["generation"],
-                "n" * 32,
-                {
+            client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {
                     "status": "ok",
                     "result": {"status": "ok"},
                     "shutdownConfirmed": True,
                     "artifacts": [{"location": str(cwd / "missing.bin"), "kind": "file"}],
-                },
-            )
+                })
         self.assertEqual(caught.exception.code, "ARTIFACT_MISSING")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertNotIn("task.completed", kinds)
@@ -143,58 +135,23 @@ class TestConcurrency(BoardTestCase):
                                    "adapter": "command", "argv": ["/bin/true"]})
         self.assertEqual(caught.exception.code, "CONFLICT")
 
-    def test_duplicate_claim_with_the_same_command_replays_one_generation(self):
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        client.submit(requestId="claim-dup", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("w1", adapter="command", capabilities=["command"])
-        first = client.claim("w1", "claim-dup-1", "a" * 32)
-        second = client.claim("w1", "claim-dup-1", "a" * 32)
-        self.assertTrue(second["replayed"])
-        self.assertEqual(first["claim"]["attempt"]["attemptId"], second["claim"]["attempt"]["attemptId"])
-        self.assertEqual(first["claim"]["capability"], second["claim"]["capability"])
-        self.assertEqual(len(client.list_tasks()["tasks"]), 1)
-        self.assertEqual(client.get(runId=first["claim"]["task"]["runId"])["attemptGeneration"], 1)
 
-    def test_a_different_worker_cannot_replay_another_workers_claim_receipt(self):
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        client.submit(requestId="claim-owner", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("owner", adapter="command", capabilities=["command"])
-        client.register_worker("thief", adapter="command", capabilities=["command"])
-        client.claim("owner", "claim-owner-1", "a" * 32)
-        with self.assertRaises(BoardError) as caught:
-            client.claim("thief", "claim-owner-1", "b" * 32)
-        self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
-    def test_one_worker_runs_one_attempt_at_a_time(self):
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        client.submit(requestId="busy-1", task="one", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.submit(requestId="busy-2", task="two", cwd=str(self.workdir("other")), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-busy", adapter="command", capabilities=["command"])
-        client.claim("w-busy", "claim-busy-1", "a" * 32)
-        with self.assertRaises(BoardError) as caught:
-            client.claim("w-busy", "claim-busy-2", "a" * 32)
-        self.assertEqual(caught.exception.code, "WORKER_BUSY")
 
     def test_capacity_queues_instead_of_rejecting(self):
         board = self.board(max_concurrent=1)
         client = board.client()
         first_cwd = self.workdir("a")
         second_cwd = self.workdir("b")
-        client.register_worker("w-cap", adapter="command", capabilities=["command"])
-        client.register_worker("w-cap2", adapter="command", capabilities=["command"])
+        pass  # Admission is owned by the service.
+        pass  # Admission is owned by the service.
         client.submit(requestId="cap-1", task="one", cwd=str(first_cwd), adapter="command", argv=["/bin/true"])
-        client.claim("w-cap", "claim-cap-1", "a" * 32)
+        admit_execution(client, "a" * 32)
         # Queued admission, not BUSY: the second task is accepted and says why it waits.
         second = client.submit(requestId="cap-2", task="two", cwd=str(second_cwd), adapter="command", argv=["/bin/true"])["task"]
         self.assertEqual(second["status"], "queued")
         self.assertEqual(second["queueReason"], "capacity")
-        empty = client.claim("w-cap2", "claim-cap-2", "c" * 32)
+        empty = admit_execution(client, "c" * 32)
         self.assertIsNone(empty["claim"])
         self.assertEqual(empty["reason"], "capacity")
 
@@ -204,23 +161,23 @@ class TestConcurrency(BoardTestCase):
         parent = self.workdir("repo")
         child = parent / "nested"
         child.mkdir()
-        client.register_worker("w-cwd", adapter="command", capabilities=["command"])
-        client.register_worker("w-cwd2", adapter="command", capabilities=["command"])
+        pass  # Admission is owned by the service.
+        pass  # Admission is owned by the service.
         client.submit(requestId="cwd-1", task="one", cwd=str(parent), adapter="command", argv=["/bin/true"])
-        client.claim("w-cwd", "claim-cwd-1", "a" * 32)
+        admit_execution(client, "a" * 32)
         other = client.submit(requestId="cwd-2", task="two", cwd=str(child), adapter="command", argv=["/bin/true"])["task"]
         self.assertEqual(other["queueReason"], "cwd-overlap")
-        self.assertIsNone(client.claim("w-cwd2", "claim-cwd-2", "c" * 32)["claim"])
+        self.assertIsNone(admit_execution(client, "c" * 32)["claim"])
 
     def test_exclusive_resources_reserve(self):
         board = self.board(max_concurrent=4)
         client = board.client()
-        client.register_worker("w-res", adapter="command", capabilities=["command"])
+        pass  # Admission is owned by the service.
         client.submit(
             requestId="res-1", task="one", cwd=str(self.workdir("r1")), adapter="command", argv=["/bin/true"],
             exclusiveResources=["gpu:0"],
         )
-        client.claim("w-res", "claim-res-1", "a" * 32)
+        admit_execution(client, "a" * 32)
         second = client.submit(
             requestId="res-2", task="two", cwd=str(self.workdir("r2")), adapter="command", argv=["/bin/true"],
             exclusiveResources=["gpu:0"],
@@ -232,13 +189,13 @@ class TestConcurrency(BoardTestCase):
         client = board.client()
         cwd = self.workdir("retry-res")
         task = client.submit(requestId="retry-res", task="one", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-retry", adapter="command", capabilities=["command"])
-        claim = client.claim("w-retry", "claim-retry-res-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        client.release("w-retry", attempt["attemptId"], attempt["generation"], "a" * 32, "test release")
+        release_before_spawn(client, attempt["attemptId"], reason="test release")
         self.assertEqual(board.store.resource_claims(), [], "a released attempt frees its reservation")
         client.retry(runId=task["runId"], reason="test retry")
-        claim_two = client.claim("w-retry", "claim-retry-res-2", "a" * 32)
+        claim_two = admit_execution(client, "a" * 32)
         self.assertIsNotNone(claim_two["claim"])
         self.assertEqual(claim_two["claim"]["attempt"]["generation"], 2)
         # The retried attempt holds the same reservation again: a released claim row
@@ -259,22 +216,16 @@ class TestConcurrency(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="rev", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-rev", adapter="command", capabilities=["command"])
-        claim = client.claim("w-rev", "claim-rev-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        client.submit_result(
-            "w-rev", attempt["attemptId"], attempt["generation"], "a" * 32,
-            {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True, "error": "boom"},
-        )
+        client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True, "error": "boom"})
         client.retry(runId=task["runId"], reason="again")
-        client.register_worker("w-rev2", adapter="command", capabilities=["command"])
-        second = client.claim("w-rev2", "claim-rev-2", "b" * 32)["claim"]["attempt"]
+        pass  # Admission is owned by the service.
+        second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
         with self.assertRaises(BoardError) as caught:
-            client.submit_result(
-                "w-rev", attempt["attemptId"], attempt["generation"], "a" * 32,
-                {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True},
-            )
+            client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         self.assertEqual(caught.exception.code, "STALE_GENERATION")
 
     def test_rejected_execution_review_is_archived_before_retry_and_new_acceptance(self):
@@ -282,10 +233,9 @@ class TestConcurrency(BoardTestCase):
         client = board.client()
         task = client.submit(requestId="review-retry", task="do", cwd=str(self.workdir()),
                              adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-review", adapter="command", capabilities=["command"])
-        first = client.claim("w-review", "claim-review-1", "a" * 32)["claim"]["attempt"]
-        client.submit_result("w-review", first["attemptId"], first["generation"], "a" * 32,
-                             {"status": "failed", "result": {"status": "nonzero"},
+        pass  # Admission is owned by the service.
+        first = admit_execution(client, "a" * 32)["claim"]["attempt"]
+        client.submit_result(first["attemptId"], first["generation"], "a" * 32, {"status": "failed", "result": {"status": "nonzero"},
                               "shutdownConfirmed": True, "error": "needs revision"})
 
         params = {"runId": task["runId"], "note": "output needs revision", "verdict": "rejected"}
@@ -310,9 +260,8 @@ class TestConcurrency(BoardTestCase):
         self.assertEqual(archived[0]["payload"]["reviewRejectedAt"], rejected["task"]["reviewRejectedAt"])
         self.assertEqual(archived[0]["payload"]["note"], "output needs revision")
 
-        second = client.claim("w-review", "claim-review-2", "b" * 32)["claim"]["attempt"]
-        client.submit_result("w-review", second["attemptId"], second["generation"], "b" * 32,
-                             {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
+        second = admit_execution(client, "b" * 32)["claim"]["attempt"]
+        client.submit_result(second["attemptId"], second["generation"], "b" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         accepted = board.call("task_acknowledge", {"runId": task["runId"], "note": "revised output"})["task"]
         self.assertEqual(accepted["acceptanceVerdict"], "accepted")
         self.assertIsNotNone(accepted["acceptedAt"])
@@ -340,7 +289,7 @@ class TestCrashWindows(BoardTestCase):
             "decisionInput": {"routingMode": "fast", "buddy": {"harness": "codex"}}
             if adapter == "decision" else None,
         }
-        execution = Execution(claim, self.directory, f"w-{adapter}", "a" * 32,
+        execution = Execution(claim, self.directory, "a" * 32,
                               client=client, log=lambda _message: None)
         return execution, claim
 
@@ -353,8 +302,7 @@ class TestCrashWindows(BoardTestCase):
         handle.identity = lambda: {
             'bootId': 'macos:00000000-0000-4000-8000-000000000001', 'pid': 123,
             'startedAt': 10, 'processGroupId': 123, 'jobName': None,
-            'worker': {'bootId': 'macos:00000000-0000-4000-8000-000000000001',
-                       'pid': 122, 'startedAt': 8}}
+}
         return handle
 
     def test_crash_before_spawn_releases_the_attempt_honestly(self):
@@ -362,24 +310,9 @@ class TestCrashWindows(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         client.submit(requestId="crash-pre", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-pre", adapter="command", capabilities=["command"])
-        claim = client.claim("w-pre", "claim-crash-pre-1", "a" * 32)
-        worker = Worker("w-pre", self.directory, client=client)
-        worker.spool.ensure()
-        worker.spool.write_startup(
-            {
-                "workerId": "w-pre",
-                "taskId": claim["claim"]["attempt"]["taskId"],
-                "privateAdapter": "command",
-                "nonce": "a" * 32,
-                "claimRequestId": "claim-crash-pre-1",
-                "attemptId": claim["claim"]["attempt"]["attemptId"],
-                "generation": 1,
-                "createdAt": "2026-01-01T00:00:00.000Z",
-            }
-        )
-        # No spawn.intent was ever written: the worker never reached the boundary.
-        worker.reattach()
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
+        board.store.release_execution(claim["claim"]["attempt"]["attemptId"])
         task = client.get(runId=claim["claim"]["task"]["runId"])
         self.assertEqual(task["status"], "failed")
         self.assertEqual(task["attemptState"], "finished")
@@ -391,7 +324,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_native_controller_exit_does_not_prove_native_stop_after_collect_failure(self):
         """A gone outer controller cannot release credentials for an unseen native child."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         for adapter in ("codex", "zcode", "claude", "dsh", "decision"):
             with self.subTest(adapter=adapter):
@@ -424,7 +357,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_native_collect_proof_survives_later_receipt_failure(self):
         """A durable receipt error cannot erase a completed native stop proof."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -461,7 +394,7 @@ class TestCrashWindows(BoardTestCase):
         self.assertFalse(credential.exists(), "native stop proof permits credential cleanup")
 
     def test_persistent_cleanup_error_cannot_erase_native_stop_or_prevent_receipt(self):
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("claude")
         private_root = ensure_private_dir(attempt_root(
@@ -485,7 +418,7 @@ class TestCrashWindows(BoardTestCase):
         self.assertTrue(credential.exists(), "cleanup failed, so credentials must remain for diagnosis")
 
     def test_virtual_adapter_receipt_retains_evidence_failure_paths(self):
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("decision")
         handle = self._finished_fake_handle()
@@ -510,7 +443,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_retry_start_discounts_previous_stop_proof_and_keeps_credentials(self):
         """The next start can spawn before raising without returning a handle."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -547,7 +480,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_start_error_without_handle_does_not_retry_unknown_child(self):
         """A matching executable error cannot prove start failed before spawn."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         private_root = ensure_private_dir(attempt_root(
@@ -578,7 +511,7 @@ class TestCrashWindows(BoardTestCase):
 
     def test_retry_preparation_failure_preserves_previous_stop_proof(self):
         """A failed validation before the next start leaves the prior proof intact."""
-        import hey_my_buddy.buddy.runtime.worker as worker_module
+        import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("codex")
         prepared = 0
@@ -616,8 +549,8 @@ class TestCrashWindows(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         client.submit(requestId="crash-reply", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-reply", adapter="command", capabilities=["command"])
-        claim = client.claim("w-reply", "claim-crash-reply-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         report = {
             "status": "ok",
@@ -625,8 +558,8 @@ class TestCrashWindows(BoardTestCase):
             "shutdownConfirmed": True,
             "commandId": f"result:{attempt['attemptId']}",
         }
-        first = client.submit_result("w-reply", attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
-        second = client.submit_result("w-reply", attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
+        first = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
+        second = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
         self.assertTrue(second.get("duplicate") or second.get("replayed"))
         completed = [event for event in board.store.events_read({"after": 0})["events"] if event["kind"] == "task.completed"]
         self.assertEqual(len(completed), 1, "a replayed result must not append a second completion event")
@@ -636,18 +569,12 @@ class TestCrashWindows(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         client.submit(requestId="crash-conflict", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-conf", adapter="command", capabilities=["command"])
-        claim = client.claim("w-conf", "claim-crash-conflict-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        client.submit_result(
-            "w-conf", attempt["attemptId"], attempt["generation"], "a" * 32,
-            {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True},
-        )
+        client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         with self.assertRaises(BoardError) as caught:
-            client.submit_result(
-                "w-conf", attempt["attemptId"], attempt["generation"], "a" * 32,
-                {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True},
-            )
+            client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True})
         self.assertEqual(caught.exception.code, "CONFLICT")
 
 
@@ -678,7 +605,6 @@ class TestLifecycle(BoardTestCase):
             self.assertTrue(started, "the worker must claim the task")
             before = self.cli("status", json.dumps({"runId": run_id}))[1]
             attempt_id = before["selectedAttemptId"]
-            worker_id = before["workerId"]
             generation = before["attemptGeneration"]
             # Interrupt the waiting client: it observes the same task and never cancels it.
             waiting = subprocess.Popen(
@@ -728,13 +654,11 @@ class TestLifecycle(BoardTestCase):
             code, restart = self.cli("restart")
             self.assertEqual(code, 0, restart)
             self.assertTrue(restart["restarting"])
-            self.assertTrue(restart["workersPreserved"])
             first.wait(timeout=25)
         with self.daemon() as second:
             self.assertIsNotNone(second.pid)
             status = self.cli("status", json.dumps({"runId": run_id}))[1]
             self.assertEqual(status["selectedAttemptId"], attempt_id, "the same attempt must survive the restart")
-            self.assertEqual(status["workerId"], worker_id)
             self.assertEqual(status["attemptGeneration"], generation)
             self.assertEqual(status["expectedSeconds"], 120, "the expected duration must survive the restart")
             completed = wait_for(
@@ -760,8 +684,8 @@ class TestLifecycle(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         client.submit(requestId="life-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-life", adapter="command", capabilities=["command"])
-        claim = client.claim("w-life", "claim-life-2", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         summary = board.store.reconcile_startup()
         self.assertEqual(summary["uncertain"], 1)
         self.assertEqual(summary["retained"], 1)
@@ -775,11 +699,11 @@ class TestIdentity(BoardTestCase):
         board = self.board()
         client = board.client()
         client.submit(requestId="id-1", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])
-        client.register_worker("w-id", adapter="command", capabilities=["command"])
-        claim = client.claim("w-id", "claim-id-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         with self.assertRaises(BoardError) as caught:
-            client.renew("w-id", attempt["attemptId"], attempt["generation"], "b" * 32)
+            client.progress(attempt["attemptId"], attempt["generation"], "b" * 32)
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
 
     def test_stale_generation_is_rejected_and_cannot_mutate(self):
@@ -787,65 +711,23 @@ class TestIdentity(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="id-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-id2", adapter="command", capabilities=["command"])
-        first = client.claim("w-id2", "claim-id-2a", "a" * 32)["claim"]["attempt"]
-        client.release("w-id2", first["attemptId"], first["generation"], "a" * 32, "test")
+        pass  # Admission is owned by the service.
+        first = admit_execution(client, "a" * 32)["claim"]["attempt"]
+        release_before_spawn(client, first["attemptId"], reason="test")
         client.retry(runId=task["runId"], reason="test")
-        client.register_worker("w-id3", adapter="command", capabilities=["command"])
-        second = client.claim("w-id3", "claim-id-2b", "b" * 32)["claim"]["attempt"]
+        pass  # Admission is owned by the service.
+        second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
         for call in (
-            lambda: client.renew("w-id2", first["attemptId"], first["generation"], "a" * 32),
-            lambda: client.reconcile("w-id2", first["attemptId"], first["generation"], "a" * 32),
-            lambda: client.submit_result(
-                "w-id2", first["attemptId"], first["generation"], "a" * 32,
-                {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True},
-            ),
+            lambda: client.progress(first["attemptId"], first["generation"], "a" * 32),
+            lambda: client.submit_result(first["attemptId"], first["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True}),
         ):
             with self.assertRaises(BoardError) as caught:
                 call()
             self.assertIn(caught.exception.code, ("STALE_GENERATION", "UNAUTHORIZED", "ATTEMPT_FINISHED"))
         self.assertEqual(client.get(runId=task["runId"])["attemptGeneration"], 2)
 
-    def test_a_stored_pid_is_never_used_to_signal_a_process(self):
-        """A sentinel PID recorded as a worker PID must survive cancel and stop."""
-        sentinel = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
-        self.addCleanup(lambda: (sentinel.terminate(), sentinel.wait(timeout=10)))
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        task = client.submit(requestId="id-3", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-sentinel", adapter="command", capabilities=["command"])
-        claim = client.claim("w-sentinel", "claim-id-3", "a" * 32)
-        # The service stores PIDs as diagnostics only.
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE workers SET pid=? WHERE worker_id='w-sentinel'", (sentinel.pid,))
-            connection.execute(
-                "UPDATE attempts SET log_paths=? WHERE attempt_id=?",
-                (json.dumps({"sentinelPid": sentinel.pid}), claim["claim"]["attempt"]["attemptId"]),
-            )
-        client.cancel(runId=task["runId"], reason="test cancel")
-        board.call("service_control", {"action": "stop", "drainSeconds": 0})
-        board.store.reconcile_startup()
-        self.assertIsNone(sentinel.poll(), "no stored PID may ever be signalled")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "cancelling")
 
-    def test_lease_expiry_is_uncertain_not_stopped(self):
-        board = self.board()
-        client = board.client()
-        task = client.submit(
-            requestId="id-4", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
-        )["task"]
-        client.register_worker("w-lease", adapter="command", capabilities=["command"])
-        claim = client.claim("w-lease", "claim-id-4", "a" * 32)
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET lease_expires_at='2000-01-01T00:00:00.000Z'")
-        self.assertEqual(board.store.mark_expired_leases(), 1)
-        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "uncertain")
-        self.assertEqual(client.get(runId=task["runId"])["status"], "running")
-        self.assertTrue(board.store.active_work()["attempts"])
-        with self.assertRaises(BoardError):
-            client.retry(runId=task["runId"], reason="unsafe")
 
 
 class TestDelivery(BoardTestCase):
@@ -879,8 +761,8 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="load", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-load", adapter="command", capabilities=["command"])
-        claim = client.claim("w-load", "claim-load-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         cursor = board.store.head()
         results: list[str] = []
@@ -902,12 +784,9 @@ class TestDelivery(BoardTestCase):
                                  and board.admission.stats()["rejected"] >= 1, 10),
                         "two waits must occupy capacity and an overflow must be observed")
         # Mutations must stay responsive: renew, cancel and the result commit.
-        client.renew("w-load", attempt["attemptId"], attempt["generation"], "a" * 32)
+        client.progress(attempt["attemptId"], attempt["generation"], "a" * 32)
         client.cancel(runId=task["runId"], reason="race")
-        client.submit_result(
-            "w-load", attempt["attemptId"], attempt["generation"], "a" * 32,
-            {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True},
-        )
+        client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         for thread in threads:
             thread.join(timeout=30)
         self.assertEqual(len(results), 8)
@@ -920,14 +799,11 @@ class TestDelivery(BoardTestCase):
         task = client.submit(
             requestId="race", task="do", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"]
         )["task"]
-        client.register_worker("w-race", adapter="command", capabilities=["command"])
-        claim = client.claim("w-race", "claim-race-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         client.cancel(runId=task["runId"], reason="cancel then complete")
-        completed = client.submit_result(
-            "w-race", attempt["attemptId"], attempt["generation"], "a" * 32,
-            {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True},
-        )
+        completed = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         self.assertEqual(completed["taskState"], "completed", "a confirmed completion is the one durable outcome")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertIn("task.cancel_requested", kinds)
@@ -939,13 +815,10 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="cancel-unconf", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
-        client.register_worker("w-cu", adapter="command", capabilities=["command"])
-        claim = client.claim("w-cu", "claim-cancel-unconf", "a" * 32)
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
-        result = client.submit_result(
-            "w-cu", attempt["attemptId"], attempt["generation"], "a" * 32,
-            {"status": "cancelled", "result": {"status": "cancelled"}, "shutdownConfirmed": False},
-        )
+        result = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "cancelled", "result": {"status": "cancelled"}, "shutdownConfirmed": False})
         self.assertEqual(result["taskState"], "reconciliation-needed")
         claims = board.store.resource_claims()
         self.assertEqual(len(claims), 1, "an unconfirmed cancellation must retain its reservation")
@@ -964,8 +837,8 @@ class TestDelivery(BoardTestCase):
         task = client.submit(
             requestId="q-1", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"]
         )["task"]
-        client.register_worker("w-q", adapter="command", capabilities=["command"])
-        client.claim("w-q", "claim-q-1", "a" * 32)
+        pass  # Admission is owned by the service.
+        admit_execution(client, "a" * 32)
         first = client.post_question("q1", "what is blocking you?", runId=task["runId"])
         again = client.post_question("q1", "what is blocking you?", runId=task["runId"])
         self.assertFalse(first["duplicate"])
@@ -1020,8 +893,8 @@ class TestDelivery(BoardTestCase):
         client = board.client()
         cwd = self.workdir()
         task = client.submit(requestId="inq-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"])["task"]
-        client.register_worker("w-inq2", adapter="command", capabilities=["command"])
-        client.claim("w-inq2", "claim-inq-2", "a" * 32)
+        pass  # Admission is owned by the service.
+        admit_execution(client, "a" * 32)
         client.post_question("q-known", "hello?", runId=task["runId"])
         with self.assertRaises(BoardError):
             board.call("message_update", {"runId": task["runId"], "inquiryId": "q-unknown", "answer": {"text": "hi"}})
@@ -1033,7 +906,6 @@ class TestDelivery(BoardTestCase):
 class TestExtensibility(BoardTestCase):
     def setUp(self):
         super().setUp()
-        self.enterContext(run_claim_in_process())
 
     """Group 7: built-in adapters plus a real external worker over the public API."""
 
@@ -1042,7 +914,7 @@ class TestExtensibility(BoardTestCase):
         report = board.call("capabilities", {})
         self.assertIn("dsh", report["adapters"])
         self.assertIn("command", report["adapters"])
-        self.assertEqual(report["adapters"]["external"]["executedBy"], "caller-owned-agent")
+        self.assertNotIn("external", report["adapters"])
         self.assertNotIn("external", report["localCapabilities"])
         self.assertIn("steer", report["limitations"])
 
@@ -1058,9 +930,7 @@ class TestExtensibility(BoardTestCase):
             adapter="command",
             argv=["/bin/sh", "-c", f"echo one > {marker}; echo two"],
         )["task"]
-        worker = Worker("w-cmd", self.directory, client=client)
-        worker.register()
-        worker.run_once()
+        run_next(client)
         result = client.result(runId=task["runId"])
         self.assertEqual(result["result"]["status"], "ok")
         self.assertEqual(result["result"]["argv"][0], "/bin/sh")
@@ -1079,9 +949,7 @@ class TestExtensibility(BoardTestCase):
             adapter="command",
             argv=["/nonexistent/binary-xyz", "arg"],
         )["task"]
-        worker = Worker("w-missing", self.directory, client=client)
-        worker.register()
-        worker.run_once()
+        run_next(client)
         result = client.result(runId=task["runId"])
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result['result']['code'], 'ADAPTER_UNAVAILABLE')
@@ -1091,84 +959,7 @@ class TestExtensibility(BoardTestCase):
         self.assertTrue(result["shutdownConfirmed"], "no process was ever created, so shutdown is confirmed")
         self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
 
-    def test_external_task_is_not_claimed_by_a_built_in_worker(self):
-        board = self.board()
-        client = board.client()
-        cwd = self.workdir()
-        task = client.submit(requestId="ext-1", task="produce a report", cwd=str(cwd), adapter="external")["task"]
-        worker = Worker("w-builtin", self.directory, client=client)
-        worker.register()
-        worker.run_once()
-        self.assertEqual(client.get(runId=task["runId"])["status"], "queued")
 
-    def test_an_external_agent_completes_a_real_task_through_the_public_api(self):
-        """The external worker is a separate process using only the public client."""
-        scenario = self.directory / "external_scenario.json"
-        runner = self.directory / "external_worker.py"
-        artifact = self.directory / "external-report.txt"
-        runner.write_text(
-            "import json, sys\n"
-            "from pathlib import Path\n"
-            "sys.path.insert(0, %r)\n"
-            "from hey_my_buddy.protocol.client import BoardClient, new_nonce\n"
-            "from hey_my_buddy.buddy.runtime.worker import fsync_json\n"
-            "state = Path(%r)\n"
-            "board = BoardClient(state)\n"
-            "board.register_worker('external-agent', adapter='external', capabilities=['external', 'artifacts', 'task-text'])\n"
-            "nonce = new_nonce()\n"
-            "intent = {'workerId': 'external-agent', 'nonce': nonce, 'claimRequestId': 'claim-external-1'}\n"
-            "fsync_json(state / 'workers' / 'external-agent' / 'startup.json', intent)\n"
-            "claim = board.claim('external-agent', 'claim-external-1', nonce)\n"
-            "assert claim['claim'], claim\n"
-            "attempt = claim['claim']['attempt']\n"
-            "text = claim['claim']['task']['task']\n"
-            "body = 'external agent executed: ' + text\n"
-            "target = Path(%r)\n"
-            "target.write_text(body)\n"
-            "board.progress('external-agent', attempt['attemptId'], attempt['generation'], nonce, 'agent finished reasoning', phase='executing')\n"
-            "import hashlib\n"
-            "report = {'status': 'ok', 'result': {'status': 'ok', 'mode': 'external', 'finalText': body},\n"
-            "          'shutdownConfirmed': True,\n"
-            "          'artifacts': [{'kind': 'result', 'location': str(target),\n"
-            "                         'contentHash': hashlib.sha256(target.read_bytes()).hexdigest(),\n"
-            "                         'sizeBytes': target.stat().st_size}]}\n"
-            "answer = board.submit_result('external-agent', attempt['attemptId'], attempt['generation'], nonce, report)\n"
-            "json.dump(answer, open(%r, 'w'))\n" % (str((Path(__file__).resolve().parents[4] / "src")), str(self.directory), str(artifact), str(scenario))
-        )
-        with self.daemon() as process:
-            code, submitted = self.cli(
-                "execution-submit",
-                json.dumps({"requestId": "ext-real", "task": "summarize the repository", "cwd": str(self.workdir()), "adapter": "external"}),
-            )
-            self.assertEqual(code, 0, submitted)
-            self.assertEqual(submitted["status"], "queued")
-            completed = subprocess.run(
-                [sys.executable, str(runner)],
-                env={
-                    **os.environ,
-                    "HMB_STATE_DIR": str(self.directory),
-                    "PYTHONPATH": str(Path(__file__).resolve().parents[4] / "src"),
-                    "HMB_DEV_SOURCE": "1",
-                    "HMB_RUNTIME_ROOT": str(self.directory / "runtime-root"),
-                },
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertTrue(scenario.is_file(), completed.stderr)
-            self.assertEqual(artifact.read_text(), "external agent executed: summarize the repository")
-            code, task = self.cli("status", json.dumps({"runId": submitted["runId"]}))
-            self.assertEqual(task["status"], "completed")
-            self.assertEqual(task["workerId"], "external-agent")
-            code, acknowledged = self.cli(
-                "execution-acknowledge",
-                json.dumps({"runId": submitted["runId"], "note": "verified the artifact bytes", "verdict": "accepted"}),
-            )
-            self.assertEqual(code, 0, acknowledged)
-            self.assertEqual(acknowledged["acceptedAt"] is not None, True)
-            self.assertEqual(acknowledged["acceptanceVerdict"], "accepted")
-            self.assertIsNone(process.poll())
 
 
 class TestPackaging(BoardTestCase):
@@ -1346,7 +1137,7 @@ class TestTaskHistory(BoardTestCase):
         self.assertEqual(len(first["runs"]), 2)
         self.assertIsNotNone(first["nextCursor"])
         self.assertEqual(board.call("task_list", {"state": "cancelled"})["total"], 1)
-        self.assertEqual(board.call("task_list", {"adapter": "external"})["total"], 0)
+        self.assertEqual(board.call("task_list", {"adapter": "claude"})["total"], 0)
         rest = board.call(
             "task_list", {"limit": 2, "before": first["nextCursor"], "state": "queued", "adapter": "command"}
         )

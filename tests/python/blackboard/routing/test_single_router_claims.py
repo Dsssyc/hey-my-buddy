@@ -1,5 +1,6 @@
 """L4-G2 frozen claims, publication evidence and no automatic replacement calls."""
 from __future__ import annotations
+from admission import admit_execution
 
 import json
 import os
@@ -36,13 +37,11 @@ class SingleRouterClaimTests(DecisionTestCase):
         return board
 
     def claim_route(self, board, request, *, worker='router', command='claim'):
-        board.call('worker_register', {'workerId': worker, 'adapter': 'decision', 'capabilities': ['decision']})
-        return board.client().claim(worker, command, NONCE, task_id=request['runId'])
+        pass  # Admission is owned by the service.
+        return admit_execution(board.client(), NONCE, task_id=request['runId'])
 
     def report(self, board, claim, output, *, shutdown=True, status='ok', worker='router'):
-        return board.call('worker_result', {'workerId': worker, 'attemptId': claim['attempt']['attemptId'],
-            'generation': claim['attempt']['generation'], 'nonce': NONCE,
-            'status': status, 'shutdownConfirmed': shutdown, 'result': output})
+        return board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': output})
 
     def assert_unclaimed(self, board, request, code, frozen):
         response = self.claim_route(board, request)

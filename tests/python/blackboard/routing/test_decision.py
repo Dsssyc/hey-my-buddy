@@ -7,6 +7,7 @@ the read-only structured envelope, so the adapter, the owned process, the durabl
 the publication transaction are exercised for real without a model call.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import json
 import threading
@@ -23,7 +24,8 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing import router
 from protocol.fixtures import mock_readonly
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
-from hey_my_buddy.buddy.runtime.worker import Worker
+from admission import run_next, admit_execution
+from hey_my_buddy.buddy.runtime.execution import Execution
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 CATALOG_BUDDY = {
@@ -103,13 +105,9 @@ class DecisionTestCase(BoardTestCase):
 
 
 
-    def run_worker(self, board, worker_id: str = "w-decision", iterations: int = 1) -> Worker:
-        client = board.client()
-        worker = Worker(worker_id, self.directory, client=client)
-        worker.register()
+    def run_worker(self, board, worker_id: str = "test", iterations: int = 1):
         for _ in range(iterations):
-            worker.run_once()
-        return worker
+            run_next(board.client())
 
     def request(self, board, *, request_id: str = "pick-1", task: str = "fix the failing parser test") -> dict:
         return board.call("selection_request", {"requestId": request_id, "task": task})
@@ -328,8 +326,8 @@ class SelectionRequestTests(DecisionTestCase):
                                          "task": "bounded selection", **constraints})
                 client = board.client()
                 worker = f"w-freeze-{name}"
-                client.register_worker(worker, adapter="decision", capabilities=["decision"])
-                claim = client.claim(worker, f"claim-{name}", "n" * 32, task_id=request["runId"])["claim"]
+                pass  # Admission is owned by the service.
+                claim = admit_execution(client, "n" * 32, task_id=request["runId"])["claim"]
                 with board.store.db.write() as connection:
                     before = connection.execute(f"SELECT {field} FROM buddies WHERE buddy_id=?", (SECOND_BUDDY_ID,)).fetchone()[0]
                     connection.execute(f"UPDATE buddies SET {field}=? WHERE buddy_id=?", (replacement, SECOND_BUDDY_ID))
@@ -338,8 +336,7 @@ class SelectionRequestTests(DecisionTestCase):
                           "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest", "manifestSha256": None},
                           "usage": {"elapsedMs": 100, "toolCalls": 0},
                           "decision": self.valid_decision(claim["decisionInput"], SECOND_BUDDY_ID)}
-                client.submit_result(worker, claim["attempt"]["attemptId"], claim["attempt"]["generation"],
-                                     "n" * 32, {"status": "ok", "shutdownConfirmed": True, "result": output})
+                client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "ok", "shutdownConfirmed": True, "result": output})
                 decision = self.decision(board, request["decisionId"])
                 self.assertTrue(decision["requested"].get("selectionRetry"), decision)
                 self.assertIn(decision["status"], ("queued", "completed"))
@@ -658,12 +655,13 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         self.use_helper(mode="sleep", sleep="30")
         request = self.request(board, request_id="pick-cancel")
-        worker = Worker("w-cancel", self.directory, client=board.client())
-        worker.register()
-        thread = threading.Thread(target=worker.run_once, daemon=True)
+        claim = admit_execution(board.client(), 'n' * 32)['claim']
+        execution = Execution(claim, self.directory, 'n' * 32, client=board.client())
+        thread = threading.Thread(target=execution.run, daemon=True)
         thread.start()
         self.assertTrue(wait_for(lambda: self.readonly_start.called, timeout=20))
         board.call("task_cancel", {"runId": request["runId"], "reason": "operator stopped it"})
+        execution.request_stop("unknown")
         thread.join(timeout=40)
         self.assertFalse(thread.is_alive(), "the worker did not observe the cancel")
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
@@ -689,8 +687,8 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         first = self.request(board, request_id="pick-restart")
         client = board.client()
-        client.register_worker("w-restart", adapter="dsh", capabilities=["dsh", "decision"])
-        claim = client.claim("w-restart", "claim-restart", "n" * 32, task_id=first["runId"])["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "n" * 32, task_id=first["runId"])["claim"]
         self.assertIsNotNone(claim)
 
         # A fresh store over the same state directory is exactly what a daemon restart
@@ -712,13 +710,7 @@ class DecisionFailureTests(DecisionTestCase):
             "inputVerification": {"unchanged": True, "manifestSha256": None, "snapshotSha256": "fixture-digest"},
             "decision": self.valid_decision(claim["decisionInput"], BUDDY_ID, reason="too late"),
         }
-        restarted.client().submit_result(
-            "w-restart",
-            claim["attempt"]["attemptId"],
-            claim["attempt"]["generation"],
-            "n" * 32,
-            {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0},
-        )
+        restarted.client().submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0})
         late = self.decision(restarted, first["decisionId"])
         self.assertEqual(late["status"], "failed")
         self.assertIsNone(late["buddyId"])
@@ -733,8 +725,8 @@ class DecisionFailureTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board, request_id="pick-replay")
         client = board.client()
-        client.register_worker("w-replay", adapter="dsh", capabilities=["dsh", "decision"])
-        claim = client.claim("w-replay", "claim-replay", "n" * 32, task_id=request["runId"])["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(client, "n" * 32, task_id=request["runId"])["claim"]
         document = claim["decisionInput"]
         envelope = {
             **claim_tool_receipt(claim),
@@ -749,13 +741,9 @@ class DecisionFailureTests(DecisionTestCase):
             "decision": self.valid_decision(document, BUDDY_ID, reason="replayed once"),
         }
         report = {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0}
-        first = client.submit_result(
-            "w-replay", claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report
-        )
+        first = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
         revisions = board.call("console_snapshot", {})["decisions"]
-        replay = client.submit_result(
-            "w-replay", claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report
-        )
+        replay = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
         self.assertTrue(first["committed"])
         # The identical result is replayed idempotently: no second execution, no new
         # publication, and the decision history is byte-identical.

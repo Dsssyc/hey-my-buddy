@@ -7,8 +7,6 @@ class RefusedResumeTests(WorkflowTestCase):
     def native_turn(self, harness="zcode", *, suffix="", continuation_kind="manual"):
         self.executors[harness].native_resume = True
         board = self.board()
-        board.call("worker_register", {"workerId": "w1", "capabilities": [harness]})
-        board.call("worker_register", {"workerId": "w2", "capabilities": [harness]})
         submitted = self.submit(board, request_id="submit-" + suffix, cwd=str(self.workdir("work-" + suffix)),
                                 harness=harness, provider="fixture", model="fixture", effort="high")
         first = self.claim(board, claim_request_id="first-" + suffix)
@@ -66,8 +64,7 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertEqual(document["context"]["resumeDetail"], recovery["detail"])
         self.assertEqual(document["context"]["continuation"], original["context"]["continuation"])
         self.assertEqual(document["executionWorkspace"], original["executionWorkspace"])
-        self.assertEqual(self.claim(board, claim_request_id="rebuild")["claim"]["attempt"]["attemptId"],
-                         third["claim"]["attempt"]["attemptId"])
+        self.assertIsNone(self.claim(board, claim_request_id="rebuild")["claim"])
         self.assertIsNone(self.claim(board, "w2", claim_request_id="competing", run_id=run_id)["claim"])
         with board.store.db.read() as connection:
             attempts = connection.execute("SELECT execution_state FROM attempts WHERE task_id=?", (run_id,)).fetchall()

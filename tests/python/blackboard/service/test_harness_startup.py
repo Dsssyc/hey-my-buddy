@@ -31,7 +31,7 @@ class HarnessStartupTests(BoardTestCase):
         self.attempt = {'attemptId': 'attempt-1', 'generation': 1}
         self.claim = {'attempt': self.attempt,
                       'task': {'taskId': 'task-1', 'spec': {'adapter': 'codex', 'harness': 'codex'}}}
-        self.execution = Execution(self.claim, self.directory / 'state', 'fixture',
+        self.execution = Execution(self.claim, self.directory / 'state',
                                    'fixture-owned-nonce', client=self.client)
         self.assertEqual(self.client.state_dir, self.execution.state_dir,
                          'Injected client must carry the private execution state path')

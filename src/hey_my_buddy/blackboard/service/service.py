@@ -18,7 +18,7 @@ from typing import Any, Callable
 import re
 
 from ...install import runtime
-from ...protocol import rpc_config, schemas
+from ...protocol import schemas
 from ..tasks import micro_task, workflow as workflow_module
 from ...buddy.harnesses.registry import capability_report
 from ...protocol.contracts import CONTRACT_VERSION
@@ -26,7 +26,6 @@ from ..store.db import SCHEMA_VERSION, utc_now
 from ...errors import BoardError
 from ..evaluation.evaluation import EvaluationStore
 from ..store.store import BoardStore
-from .worker_status import supervisor_status
 
 PROTOCOL_VERSION = 2
 WAIT_CAPACITY_DEFAULT = 32
@@ -58,17 +57,8 @@ CONTROL_OPERATIONS = (
     "task_retry",
     "task_acknowledge",
     "task_wait",
-    "worker_register",
-    "worker_claim",
-    "worker_reconcile",
-    "worker_recover",
-    "worker_renew",
-    "worker_progress",
-    "worker_live_attach",
-    "worker_live_detach",
-    "worker_result",
-    "worker_release",
-    "worker_list",
+    "execution_progress",
+    "execution_result",
     "message_post",
     "message_update",
     "message_get",
@@ -112,40 +102,25 @@ class WaitAdmission:
     def __init__(self, capacity: int = WAIT_CAPACITY_DEFAULT):
         self.capacity = max(1, int(capacity))
         self.admitted = 0
-        self._workers: set[str] = set()
         self.rejected = 0
         self._lock = threading.Lock()
 
-    def acquire(self, *, worker_id: str | None = None) -> bool:
+    def acquire(self) -> bool:
         with self._lock:
-            if (self.admitted + len(self._workers) >= rpc_config.MAX_WAIT_CAPACITY
-                    or (worker_id is None and self.admitted >= self.capacity)
-                    or (worker_id is not None and worker_id in self._workers)):
+            if self.admitted >= self.capacity:
                 self.rejected += 1
                 return False
-            if worker_id is not None:
-                self._workers.add(worker_id)
-            else:
-                self.admitted += 1
+            self.admitted += 1
         return True
 
-    def release(self, *, worker_id: str | None = None) -> None:
+    def release(self) -> None:
         with self._lock:
-            if worker_id is not None:
-                self._workers.remove(worker_id)
-            else:
-                self.admitted -= 1
+            self.admitted -= 1
 
     def stats(self) -> dict:
         with self._lock:
-            return {
-                "capacity": self.capacity,
-                "admitted": self.admitted,
-                "workerAdmitted": len(self._workers),
-                "rejected": self.rejected,
-                "available": min(self.capacity - self.admitted,
-                                 rpc_config.MAX_WAIT_CAPACITY - self.admitted - len(self._workers)),
-            }
+            return {"capacity": self.capacity, "admitted": self.admitted,
+                    "rejected": self.rejected, "available": self.capacity - self.admitted}
 
 
 class _BaseResource:
@@ -285,6 +260,7 @@ class BoardService(_BaseResource):
         on_accepted: Callable[[str], None] | None = None,
         evaluation: EvaluationStore | None = None,
         automatic_discovery: bool = False,
+        admission_lock: threading.RLock | None = None,
     ):
         super().__init__(store)
         self.token = token
@@ -300,6 +276,7 @@ class BoardService(_BaseResource):
         self.decisions = store.decisions
         from .harness_health import HarnessHealth
         self.automatic_discovery = automatic_discovery
+        self._admission_lock = admission_lock or threading.RLock()
         self.harnesses = HarnessHealth(store, catalog_refresh=self._refresh_harness_catalog)
         # ADR-027 rule 3: explicit-buddy validation borrows this service's
         # own bounded native refresh for its single re-read of one harness.
@@ -318,13 +295,8 @@ class BoardService(_BaseResource):
             # cancel, recovery) and this resource must fence the same gate.
             store.decisions.evaluation = evaluation
         from .live_registry import LiveRegistry
-        from ...buddy.harnesses.c_two_live import CTwoLiveChannel
-        from ...protocol.contracts import WorkerRuntimeLive
-        def worker_channel(attachment):
-            return CTwoLiveChannel(attachment.identity, WorkerRuntimeLive, name=attachment.name,
-                                   address=attachment.address, instance_id=attachment.instance_id,
-                                   token=attachment.live_token, state_dir=store.directory)
-        store.live_registry = LiveRegistry(store, channel_factory=worker_channel)
+        store.live_registry = LiveRegistry()
+        self.execution_scheduler = None
         self.started_at = utc_now()
 
     # -- service ------------------------------------------------------------
@@ -349,7 +321,6 @@ class BoardService(_BaseResource):
             from ..store.backup import preflight
             schemas.reject_unknown(params, set(), "health")
             identity = runtime.resolve_runtime()
-            pool = self.control.get("worker_pool") or {}
             return {
                 "status": "ok",
                 "protocol": PROTOCOL_VERSION,
@@ -370,13 +341,6 @@ class BoardService(_BaseResource):
                 "capacity": self.store.capacity_report(),
                 "routingHealth": self.decisions.health_summary(),
                 "backupPreflight": preflight(self.store.directory),
-                "managedWorkerIds": list(pool.get("workerIds") or []),
-                "workerSupervisors": self._worker_supervisors(),
-                "unstartedWorkerIds": list(pool.get("unstartedWorkerIds") or []),
-                "stoppedWorkerIds": list(pool.get("stoppedWorkerIds") or []),
-                "surplusWorkerIds": list(pool.get("surplusWorkerIds") or []),
-                "surplusDraining": list(pool.get("surplusDraining") or []),
-                "surplusRetained": [dict(row) for row in pool.get("surplusRetained") or []],
                 "waitCapacity": self.control.get("wait_capacity"),
                 "rpcProfile": self.control.get("rpc_profile"),
                 "persistenceError": self.store.persistence_error,
@@ -609,7 +573,7 @@ class BoardService(_BaseResource):
 
     def harness_prepare(self, request_json: str) -> str:
         def handler(params):
-            schemas.reject_unknown(params, {'workerId', 'attemptId', 'generation', 'nonce', 'commandId', 'retry', 'failedOnly', 'healthRevision'}, 'harness.prepare')
+            schemas.reject_unknown(params, {'attemptId', 'generation', 'nonce', 'commandId', 'retry', 'failedOnly', 'healthRevision'}, 'harness.prepare')
             command_id = schemas.required_string(params, 'commandId', max_length=128)
             retry = schemas.optional_bool(params, 'retry', False)
             failed_only = schemas.optional_bool(params, 'failedOnly', False)
@@ -618,14 +582,14 @@ class BoardService(_BaseResource):
             if (retry or failed_only) and type(params.get('healthRevision')) is not int:
                 raise BoardError('INVALID_ARGUMENT', 'A pre-start failure must identify the selected health revision')
             with self.store.db.read() as db:
-                attempt, _worker = self.store._verify_attempt_actor(db, params)
+                attempt = self.store._verify_attempt_actor(db, params)
                 if attempt['execution_state'] == 'finished' or attempt['cancel_requested_at']:
                     raise BoardError('ATTEMPT_FINISHED', 'This attempt cannot start a harness')
                 name = attempt['model_harness'] or attempt['adapter']
                 if name not in ('dsh', 'zcode', 'codex', 'claude'):
                     return {'harness': None}
                 request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
-                subject = self.store._subject(params['workerId'], params['nonce'], attempt['attempt_id'])
+                subject = self.store._subject(params['nonce'], attempt['attempt_id'])
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
                 if receipt is not None:
                     return receipt
@@ -635,7 +599,7 @@ class BoardService(_BaseResource):
                 self.harnesses.invalidate(name, params.get('healthRevision'))
             record = self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True)
             with self.store.db.write() as db:
-                attempt, _worker = self.store._verify_attempt_actor(db, params)
+                attempt = self.store._verify_attempt_actor(db, params)
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
                 if receipt is not None:
                     return receipt
@@ -964,72 +928,35 @@ class BoardService(_BaseResource):
                 }
             )
 
-    # -- workers ------------------------------------------------------------
-    def worker_register(self, request_json: str) -> str:
-        return self._guard("worker.register", request_json, self.store.worker_register)
-
-    def worker_claim(self, request_json: str) -> str:
-        def handler(params: dict) -> dict:
+    # -- executions ---------------------------------------------------------
+    def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:
+        with self._admission_lock:
+            if self.control.get("stopping") or self.control.get("restart_requested"):
+                return {"claim": None, "reason": "service-stopping"}
             if self.automatic_discovery:
-                # No scan for an empty queue. Changed binaries/default records are
-                # rechecked before the transaction freezes a continuation's mode.
+                # Refresh the queued harness before admission freezes its continuation.
                 with self.store.db.read() as db:
-                    names = {row[0] for row in db.execute("SELECT DISTINCT adapter FROM tasks WHERE state='queued' AND queue_reason IN ('awaiting-worker','capacity','awaiting-buddy-validation')")}
+                    names = {row[0] for row in db.execute(
+                        "SELECT DISTINCT adapter FROM tasks WHERE state='queued' "
+                        "AND queue_reason IN ('awaiting-execution','capacity','awaiting-buddy-validation')")}
                     if 'decision' in names:
-                        row = db.execute('SELECT p.harness FROM evaluation_state e JOIN buddies p ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
+                        row = db.execute('SELECT p.harness FROM evaluation_state e JOIN buddies p '
+                                         'ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
                         if row:
                             names.add(row[0])
                 for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):
                     self.harnesses.refresh(name, preflight=True)
-            # A continuation's effective workspace is prepared here, outside the claim
-            # transaction, so the canonical turn input already carries the resolved
-            # manifest and its hash is exactly what the adapter writes to disk.
-            self.store.workflow.prepare_continuation_workspace(params)
-            return self.store.worker_claim(params)
+            self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})
+            return self.store.admit_execution(nonce, task_id=task_id)
 
-        return self._guard("worker.claim", request_json, handler)
-
-    def worker_reconcile(self, request_json: str) -> str:
-        return self._guard("worker.reconcile", request_json, self.store.worker_reconcile)
-
-    def worker_recover(self, request_json: str) -> str:
-        return self._guard("worker.recover", request_json, self.store.worker_recover)
-
-    def worker_renew(self, request_json: str) -> str:
-        return self._guard("worker.renew", request_json, self.store.worker_renew)
-
-    def worker_live_attach(self, request_json: str) -> str:
-        return self._guard("worker.live_attach", request_json, self.store.live_registry.attach)
-
-    def worker_live_detach(self, request_json: str) -> str:
-        return self._guard("worker.live_detach", request_json, self.store.live_registry.detach)
-
-    def worker_progress(self, request_json: str) -> str:
-        return self._guard("worker.progress", request_json, self.store.worker_progress)
-
-    def worker_result(self, request_json: str) -> str:
-        return self._guard("worker.result", request_json, self.store.worker_result)
-
-    def worker_release(self, request_json: str) -> str:
-        return self._guard("worker.release", request_json, self.store.worker_release)
-
-    def worker_list(self, request_json: str) -> str:
+    def execution_progress(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            result = self.store.worker_list(params)
-            supervisors = self._worker_supervisors()
-            statuses = {row["workerId"]: row["supervisor"] for row in supervisors}
-            for worker in result["workers"]:
-                worker_id = worker["workerId"]
-                worker["supervisor"] = (statuses[worker_id] if worker_id in statuses
-                                        else supervisor_status(self.store.directory, worker_id))
-            return {**result, "workerSupervisors": supervisors}
+            verify = self.execution_scheduler.verify_identity if self.execution_scheduler is not None else None
+            return self.store.execution_progress(params, verify_identity=verify)
+        return self._guard("execution.progress", request_json, handler)
 
-        return self._guard("worker.list", request_json, handler)
-
-    def _worker_supervisors(self) -> list[dict]:
-        pool = self.control.get("worker_pool") or {}
-        return [{"workerId": worker_id, "supervisor": supervisor_status(self.store.directory, worker_id)}
-                for worker_id in pool.get("supervisedWorkerIds", [])]
+    def execution_result(self, request_json: str) -> str:
+        return self._guard("execution.result", request_json, self.store.execution_result)
 
     # -- messages -----------------------------------------------------------
     def message_post(self, request_json: str) -> str:
@@ -1073,36 +1000,17 @@ class WaitService(_BaseResource):
 
     def _bounded(self, operation: str, request_json: str, handler: Callable[[dict], dict]) -> str:
         def admitted(params: dict) -> dict:
-            worker_id = None
-            if operation == "events.wait" and "workerId" in params:
-                worker_id = schemas.required_string(params, "workerId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
-                params.pop("workerId")
-                with self.store.db.read() as connection:
-                    if connection.execute("SELECT 1 FROM workers WHERE worker_id=?", (worker_id,)).fetchone() is None:
-                        raise BoardError("NOT_REGISTERED", "Register this worker before waiting", workerId=worker_id)
-            # Worker waits share the existing aggregate bound (and its control
-            # reserve), without occupying the caller-configured public wait slots.
-            if not self.admission.acquire(worker_id=worker_id):
+            if not self.admission.acquire():
                 raise BoardError(
                     "WAIT_OVERLOAD",
                     "Every admitted wait slot is busy; no task state changed. Retry with the same cursor.",
-                    cursor=params.get("after", self.store.head()), retryAfterMs=250, capacity=self.admission.capacity,
+                    cursor=params.get("after", self.store.head()), retryAfterMs=250,
+                    capacity=self.admission.capacity,
                 )
             try:
-                result = handler(params)
-                if worker_id is not None:
-                    # Worker waits need only one event to wake for claiming, but
-                    # must see uncertainty anywhere through the advertised head.
-                    result["recoveryNeeded"] = False
-                    if result["events"]:
-                        with self.store.db.read() as connection:
-                            result["recoveryNeeded"] = connection.execute(
-                                "SELECT 1 FROM events WHERE seq>? AND seq<=?"
-                                " AND kind IN ('attempt.uncertain','attempt.lease_expired') LIMIT 1",
-                                (params.get("after", 0), result["head"])).fetchone() is not None
-                return result
+                return handler(params)
             finally:
-                self.admission.release(worker_id=worker_id)
+                self.admission.release()
 
         return self._guard(operation, request_json, admitted)
 

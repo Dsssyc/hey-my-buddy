@@ -958,8 +958,8 @@ class DecisionCoordinator:
             "SELECT payload_json FROM events WHERE kind='attempt.released' AND task_id=? AND attempt_id=?"
             " ORDER BY seq DESC LIMIT 1", (task["task_id"], attempt["attempt_id"])).fetchone()
         proof = json.loads(event[0]) if event else {}
-        # worker_release writes shutdown_confirmed even without never-spawned
-        # proof. That generic fact alone cannot authorize a new native execution.
+        # Only the service's explicit pre-spawn release evidence authorizes the
+        # next Router; a generic shutdown flag alone does not.
         stopped = (proof.get("releaseEvidence") == "spawnIntentWritten=false"
                    and attempt["shutdown_confirmed"] == 1 and attempt["execution_state"] == "finished")
         return self._complete(connection, row=row, task=task, attempt=attempt, status="failed",

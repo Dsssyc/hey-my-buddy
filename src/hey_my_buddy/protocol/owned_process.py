@@ -1,8 +1,8 @@
-"""Owned Windows process trees for adapter children.
+"""Owned Windows process trees for service and adapter children.
 
 The child starts suspended and joins a uniquely named Job before its primary
-thread runs. A replacement Worker may reopen that Job by its persisted name,
-but only after checking the complete saved execution and Worker identity.
+thread runs. A replacement service may reopen that Job by its persisted name,
+but only after checking the complete saved execution identity.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import os
 import subprocess
 import uuid
 
-from ...protocol.windows_process import WindowsAPI
+from .windows_process import WindowsAPI
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -52,7 +52,7 @@ class ProcessCreationEvidence:
     exit_code: int | None
 
 
-def owned_popen(*args, windows_api=None, **kwargs):
+def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
     """Create a process with tree ownership before any user code can run.
 
     Every failure carries ``owned_popen_evidence`` (ProcessCreationEvidence).
@@ -63,7 +63,7 @@ def owned_popen(*args, windows_api=None, **kwargs):
     evidence and the original failure as its cause. Consumers use the evidence,
     never exception text or type, to judge shutdown.
     """
-    from ...protocol.process_identity import begin_native_process_spawn, discard_confirmed_native_spawn
+    from .process_identity import begin_native_process_spawn, discard_confirmed_native_spawn
 
     intent = begin_native_process_spawn()
     process = None
@@ -71,11 +71,13 @@ def owned_popen(*args, windows_api=None, **kwargs):
     assigned = False
     try:
         if os.name != "nt" and windows_api is None:
+            if job_name is not None:
+                raise ValueError("a Job name requires Windows process ownership")
             process = subprocess.Popen(*args, **kwargs)
             process._buddy_native_intent = intent
             return process
         api = windows_api if windows_api is not None else WindowsAPI()
-        name = f"Local\\HeyMyBuddy-{uuid.uuid4()}"
+        name = job_name if job_name is not None else f"Local\\HeyMyBuddy-{uuid.uuid4()}"
         job = OwnedJob(api, api.create_job(name), name)
         kwargs = {**kwargs, "creationflags": kwargs.get("creationflags", 0) |
                   CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP, "start_new_session": False}

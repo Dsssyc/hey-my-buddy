@@ -9,7 +9,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -78,8 +77,6 @@ class ChecksEnvironmentTests(unittest.TestCase):
             "HMB_RUNTIME_ROOT": "/wrong-runtime",
             "HMB_RUNTIME": "/pinned-runtime",
             "HMB_RUNTIME_IDENTITY": "pinned",
-            "HMB_WORKER_STATE": "/wrong-worker",
-            "HMB_WORKER_ID": "wrong-worker",
             "HMB_AGENT_CREDENTIAL_FILE": "/secret-file",
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",
@@ -155,19 +152,16 @@ class ResidueObservationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             root = Path(raw)
             state = root / "hey-my-buddy-test-state"
-            (state / "workers/local").mkdir(parents=True)
+            state.mkdir(parents=True)
             for name in ("control-daemon.lock", "board-owner.lock"):
                 (state / name).write_text("")
-            supervisor = state / "workers/local/supervisor.lock"
-            supervisor.write_text("")
             unrelated = state / "unrelated.lock"
             unrelated.write_text("")
             bystander = hold_lock(unrelated)
-            fd = hold_lock(supervisor)
+            fd = hold_lock(state / "board-owner.lock")
             try:
                 residue = checks.held_locks(root)
-                self.assertEqual(residue["daemon"], [])
-                self.assertEqual(residue["supervisor"], [supervisor])
+                self.assertEqual(residue["daemon"], [state / "board-owner.lock"])
             finally:
                 release_lock(fd)
                 release_lock(bystander)
@@ -177,36 +171,10 @@ class PrivateRootTeardownTests(unittest.TestCase):
     def test_teardown_removes_a_clean_private_root(self):
         root = checks.create_private_root()
         state = root / "tmp" / "hey-my-buddy-test-clean"
-        (state / "workers/local").mkdir(parents=True)
+        state.mkdir(parents=True)
         (state / "control-daemon.lock").write_text("")
-        (state / "workers/local/supervisor.lock").write_text("")
         self.assertIsNone(checks.teardown_private_root(root, drain_seconds=0.5))
         self.assertFalse(root.exists())
-
-    def test_teardown_preserves_evidence_when_a_supervisor_survives(self):
-        root = checks.create_private_root()
-        state = root / "tmp" / "hey-my-buddy-test-supervisor"
-        worker = state / "workers/local"
-        worker.mkdir(parents=True)
-        (worker / "supervisor.lock").write_text("")
-        (state / "worker.log").write_text("supervisor startup\n" + "noise " * 400
-                                          + "\nfinal supervisor evidence line\n")
-        fd = hold_lock(worker / "supervisor.lock")
-        try:
-            evidence = checks.teardown_private_root(root, drain_seconds=0.2)
-            self.assertIsNotNone(evidence)
-            self.assertTrue(root.exists())
-            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
-            entry = report["held"]["supervisor"][0]
-            self.assertEqual(entry["path"], str(worker / "supervisor.lock"))
-            self.assertEqual(entry["directory"], str(worker))
-            self.assertIn("stop.request", entry["directoryFiles"])
-            state_entry = report["stateDirectories"][str(state)]
-            self.assertIn("workers", state_entry["files"])
-            self.assertIn("final supervisor evidence line", state_entry["workerLogTail"])
-        finally:
-            release_lock(fd)
-            shutil.rmtree(root, ignore_errors=True)
 
     def test_teardown_preserves_evidence_when_a_daemon_survives(self):
         root = checks.create_private_root()
@@ -228,64 +196,24 @@ class PrivateRootTeardownTests(unittest.TestCase):
             release_lock(fd)
             shutil.rmtree(root, ignore_errors=True)
 
-    def test_drain_reaches_worker_dirs_with_no_visible_lock(self):
-        # A racing cleanup can unlink a live supervisor's lock file, leaving its
-        # worker directory as the only cooperative surface still observable.
-        root = checks.create_private_root()
-        worker = root / "tmp" / "hey-my-buddy-test-orphan" / "workers" / "local"
-        worker.mkdir(parents=True)
-        checks.request_cooperative_stop(root, timeout=0.1)
-        try:
-            self.assertTrue((worker / "stop.request").exists())
-        finally:
-            shutil.rmtree(root, ignore_errors=True)
-
-    def test_teardown_drains_a_cooperative_supervisor(self):
-        root = checks.create_private_root()
-        worker = root / "tmp" / "hey-my-buddy-test-drain" / "workers/local"
-        worker.mkdir(parents=True)
-        lock = worker / "supervisor.lock"
-        lock.write_text("")
-        observed = threading.Event()
-
-        def supervise() -> None:
-            fd = hold_lock(lock)
-            while not (worker / "stop.request").exists():
-                time.sleep(0.01)
-            observed.set()
-            release_lock(fd)
-
-        thread = threading.Thread(target=supervise)
-        thread.start()
-        try:
-            self.assertTrue(wait_until(lambda: checks.lock_is_held(lock)), "supervisor never took its lock")
-            self.assertIsNone(checks.teardown_private_root(root, drain_seconds=10))
-            self.assertFalse(root.exists())
-            self.assertTrue(observed.is_set(), "the drain never wrote the cooperative stop request")
-        finally:
-            thread.join(timeout=5)
-            shutil.rmtree(root, ignore_errors=True)
-
     def test_teardown_waits_out_a_live_process_with_unlinked_lock(self):
         # A racing cleanup unlinks the lock file while its holder still runs; a clean
         # teardown may only return after that holder observably exited.
         root = checks.create_private_root()
-        worker = root / "tmp" / "hey-my-buddy-test-unlinked" / "workers" / "local"
-        worker.mkdir(parents=True)
-        lock = worker / "supervisor.lock"
+        execution = root / "tmp" / "hey-my-buddy-test-unlinked" / "executions" / "fixture"
+        execution.mkdir(parents=True)
+        lock = execution / "execution.lock"
         lock.write_text("")
         script = (
             "import fcntl, os, sys, time\n"
-            "worker = sys.argv[1]\n"
-            "fd = os.open(os.path.join(worker, 'supervisor.lock'), os.O_RDWR)\n"
+            "execution = sys.argv[1]\n"
+            "fd = os.open(os.path.join(execution, 'execution.lock'), os.O_RDWR)\n"
             "fcntl.flock(fd, fcntl.LOCK_EX)\n"
             "print('LOCKED', flush=True)\n"
-            "while not os.path.exists(os.path.join(worker, 'stop.request')):\n"
-            "    time.sleep(0.02)\n"
-            "time.sleep(0.4)\n"  # still alive, still holding the unlinked lock, after the stop request
+            "time.sleep(0.4)\n"
         )
         process = subprocess.Popen(
-            [sys.executable, "-c", script, str(worker)],
+            [sys.executable, "-c", script, str(execution)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -311,9 +239,9 @@ class PrivateRootTeardownTests(unittest.TestCase):
         # No held lock is visible after the unlink, so only live-process observation
         # separates residue from a clean root; it must fail closed, not report clean.
         root = checks.create_private_root()
-        worker = root / "tmp" / "hey-my-buddy-test-stuck" / "workers" / "local"
-        worker.mkdir(parents=True)
-        lock = worker / "supervisor.lock"
+        execution = root / "tmp" / "hey-my-buddy-test-stuck" / "executions" / "fixture"
+        execution.mkdir(parents=True)
+        lock = execution / "execution.lock"
         lock.write_text("")
         script = (
             "import fcntl, os, sys, time\n"

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
-    stop_private_service, stop_private_workers, wait_for, write_catalog_fixture,
+    stop_private_service, wait_for, write_catalog_fixture,
 )
 from hey_my_buddy.protocol.transport import _read_endpoint
 
@@ -25,7 +25,7 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            test.fail("A test daemon or supervisor still holds its lifetime lock")
+            test.fail("A test daemon still holds its lifetime lock")
         else:
             fcntl.flock(fd, fcntl.LOCK_UN)
 
@@ -49,8 +49,6 @@ class FixtureCleanupTests(unittest.TestCase):
             "HMB_RUNTIME_ROOT": "/wrong-runtime",
             "HMB_RUNTIME": "/pinned-runtime",
             "HMB_RUNTIME_IDENTITY": "pinned",
-            "HMB_WORKER_STATE": "/wrong-worker",
-            "HMB_WORKER_ID": "wrong-worker",
             "HMB_AGENT_CREDENTIAL_FILE": "/secret-file",
             "VIRTUAL_ENV": "/wrong-venv",
             "UV_PROJECT_ENVIRONMENT": "/wrong-uv",
@@ -107,8 +105,6 @@ class FixtureCleanupTests(unittest.TestCase):
                 "HMB_RUNTIME": "inherited-runtime",
                 "HMB_RUNTIME_IDENTITY": "inherited-identity",
                 "HMB_AGENT_CREDENTIAL_FILE": str(directory / "inherited-credential"),
-                "HMB_WORKER_ID": "inherited-worker",
-                "HMB_WORKER_STATE": str(directory / "inherited-worker"),
                 "HMB_UNKNOWN_PIN": "inherited-pin",
                 "ANTHROPIC_API_KEY": "synthetic-secret",
                 "ANTHROPIC_BASE_URL": "https://gateway.invalid",
@@ -204,7 +200,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 self.assertEqual(run.call_args.kwargs["env"]["HMB_MODEL_CATALOG_FILE"], str(path))
                 with patch("support.subprocess.Popen") as launch, patch(
                     "hey_my_buddy.protocol.transport._read_endpoint", return_value={"address": "fixture"},
-                ), patch("hey_my_buddy.protocol.transport._request", return_value={"managedWorkerIds": []}):
+                ), patch("hey_my_buddy.protocol.transport._request", return_value={}):
                     launch.return_value.poll.return_value = 0
                     with fixture.daemon():
                         pass
@@ -270,8 +266,8 @@ class FixtureCleanupTests(unittest.TestCase):
             code, health = fixture.cli("health", env={"HMB_MAX_CONCURRENT": "1"})
             self.assertEqual(code, 0, health)
             self.assertNotEqual(_read_endpoint(directory)["serviceId"], original_id)
-            self.assertTrue(wait_for(lambda: _lock_held(directory / "workers/local/supervisor.lock")))
-            for path in ("control-daemon.lock", "board-owner.lock", "workers/local/supervisor.lock"):
+            self.assertTrue(wait_for(lambda: _lock_held(directory / "control-daemon.lock")))
+            for path in ("control-daemon.lock", "board-owner.lock"):
                 handles.append(os.open(directory / path, os.O_RDWR))
 
             # Leave the directory available for a protocol cleanup if the assertion
@@ -283,7 +279,6 @@ class FixtureCleanupTests(unittest.TestCase):
         finally:
             if directory.exists():
                 stop_private_service(directory)
-                stop_private_workers(directory)
                 shutil.rmtree(directory)
             for fd in handles:
                 os.close(fd)
@@ -303,15 +298,14 @@ class FixtureCleanupTests(unittest.TestCase):
                         capture_output=True, text=True, timeout=60,
                     )
                     self.assertEqual(completed.returncode, 0, completed.stderr)
-                    self.assertTrue(wait_for(lambda: _lock_held(directory / "workers/local/supervisor.lock")))
-                    for path in ("control-daemon.lock", "board-owner.lock", "workers/local/supervisor.lock"):
+                    self.assertTrue(wait_for(lambda: _lock_held(directory / "control-daemon.lock")))
+                    for path in ("control-daemon.lock", "board-owner.lock"):
                         handles.append(os.open(directory / path, os.O_RDWR))
             remove.assert_called_once_with(directory)
             assert_released(self, handles)
         finally:
             if directory is not None and directory.exists():
                 stop_private_service(directory)
-                stop_private_workers(directory)
                 shutil.rmtree(directory)
             for fd in handles:
                 os.close(fd)

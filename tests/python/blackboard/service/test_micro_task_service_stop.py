@@ -81,7 +81,8 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
             board.call("service_control", {"action": "stop", "credential": claim["claim"]["agentCredential"]})
         self.assertEqual(raised.exception.code, "FORBIDDEN")
         ordinary = board.call("task_submit", {
-            "requestId": "ordinary", "adapter": "external", "task": "plain", "cwd": str(self.workdir("ordinary")),
+            "requestId": "ordinary", "adapter": "command", "task": "plain",
+            "cwd": str(self.workdir("ordinary")), "argv": ["/bin/true"],
         })
         self.assertEqual(board.call("task_cancel", {"runId": ordinary["task"]["runId"]})["task"]["state"],
                          "cancelled")

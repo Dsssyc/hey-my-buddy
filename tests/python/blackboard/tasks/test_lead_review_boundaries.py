@@ -92,7 +92,7 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         })
         self.assertEqual(child["routing"]["status"], "queued")
         route_id = child["routing"]["taskId"]
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
+        pass  # Admission is owned by the service.
         route_claim = self.claim(board, "router", claim_request_id="owned-route", run_id=route_id)["claim"]
         self.assertEqual(route_claim["attempt"]["taskId"], route_id)
         before = board.call("task_get", {"runId": route_id})["task"]

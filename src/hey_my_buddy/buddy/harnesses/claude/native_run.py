@@ -66,7 +66,7 @@ from ..native_support import (
     identity_or_none,
     utc_now,
 )
-from ...runtime.windows_process import owned_popen
+from ....protocol.owned_process import owned_popen
 from ..run_contract import (
     CheckedBuddy,
     CheckedValue,

@@ -5,6 +5,8 @@ import json
 import time
 from pathlib import Path
 
+from ...protocol.execution import fsync_json
+
 from ...errors import BoardError
 
 STARTUP = "execution-start.json"
@@ -28,14 +30,12 @@ def read_receipt(directory: Path) -> dict | None:
 
 
 def write_receipt(directory: Path, receipt: dict) -> None:
-    from .worker import fsync_json
     fsync_json(directory / RECEIPT, receipt)
 
 
 def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=lambda message: None,
                     flush_hints=None) -> bool:
     """Keep the execution alive until its result is confirmed or explicitly refused."""
-    from .worker import fsync_json
     delay = 0.25
     while True:
         if flush_hints is not None:
@@ -45,7 +45,7 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
             except Exception as error:
                 log(f"hint delivery unavailable: {error!r}")
         try:
-            client.submit_result(receipt["workerId"], receipt["attemptId"], receipt["generation"],
+            client.submit_result(receipt["attemptId"], receipt["generation"],
                                  nonce, {**receipt["report"], "commandId": receipt["commandId"]})
         except BoardError as error:
             if error.code not in RETRYABLE:

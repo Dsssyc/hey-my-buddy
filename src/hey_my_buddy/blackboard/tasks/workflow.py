@@ -6517,7 +6517,7 @@ class WorkflowCoordinator:
     def prepare_continuation_workspace(self, params: dict) -> None:
         """Resolve a pending continuation's workspace outside every transaction.
 
-        Called by the service before ``worker_claim`` so the exact canonical turn
+        Called by the service before execution admission so the exact canonical turn
         input already contains the resolved manifest; preparation is idempotent by
         the continuation identity, so concurrent workers cannot double-prepare.
         """

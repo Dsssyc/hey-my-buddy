@@ -9,6 +9,7 @@ interact with prepare/seal/verify. Every repository is a private fixture created
 by the test; no shared or daily board is touched.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import os
@@ -313,7 +314,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         workflow_module._workspace_module = self._previous_workspace
 
     def register(self, board):
-        return board.call("worker_register", {"workerId": self.worker, "capabilities": ["dsh"]})
+        return None
 
     def turn_record(self, claim):
         from protocol.fixtures import native_turn
@@ -344,9 +345,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         self.stash("separating entry")
         self.git("stash", "store", "-m", description, oid)
         self.git("stash", "drop", "stash@{1}")
-        claimed = board.call("worker_claim", {
-            "workerId": self.worker, "claimRequestId": "claim-real-stash", "nonce": "n" * 16, "runId": run_id,
-        })
+        claimed = admit_board(board, {'workerId': self.worker, 'claimRequestId': 'claim-real-stash', 'nonce': 'n' * 16, 'runId': run_id})
         claim = claimed["claim"]
         manifest = claim["turn"]["input"]["executionWorkspace"]
         frozen = claim["turn"]["input"]["context"]["sharedStash"]
@@ -365,11 +364,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
             "status": "ok", "processState": {"shutdownConfirmed": True},
             "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn.json", "workspaceSeal": seal,
         }
-        board.call("worker_result", {
-            "workerId": self.worker, "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": "n" * 16,
-            "status": "ok", "result": result, "shutdownConfirmed": True, "exitCode": 0,
-        })
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["state"], "delivered")
         facts = next(row["sharedStash"] for row in view["artifacts"] if row["kind"] == "shared-refs")

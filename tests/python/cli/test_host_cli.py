@@ -523,7 +523,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         for method, path in (
             ("takeover", "expectedRevision"),
             ("await", "requestId"),
-            ("worker-result", "result"),
+            ("execution-result", "result"),
         ):
             with self.subTest(method=method, path=path):
                 self.assertFalse(self.parameter(method, path).required)
@@ -549,7 +549,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
             ("takeover", "expectedOwnerGeneration"),
             ("takeover", "newHostId"),
             ("scope-amend", "expectedScopeVersion"),
-            ("worker-result", "workerId"),
+            ("execution-result", "attemptId"),
         ):
             with self.subTest(method=method, path=path):
                 self.assertTrue(self.parameter(method, path).required)

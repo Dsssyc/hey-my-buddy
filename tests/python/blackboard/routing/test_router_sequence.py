@@ -92,10 +92,7 @@ class RouterSequenceTestCase(BoardTestCase):
 
     def seed_attempt(self, db, attempt_id, task_id, generation):
         if isinstance(generation, int) and not isinstance(generation, bool) and generation >= 1:
-            db.execute("INSERT OR IGNORE INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                       "execution_state,adapter,shutdown_confirmed,created_at,updated_at)"
-                       " VALUES(?,?,?,'nonce',?,'finished','decision',1,?,?)",
-                       (attempt_id, task_id, generation, attempt_id, T0, T0))
+            db.execute("INSERT OR IGNORE INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,?,'nonce','finished','decision',1,?,?)", (attempt_id, task_id, generation, T0, T0))
 
     def events(self, kind: str = "router.claimed") -> list[dict]:
         with self.board_.store.db.read() as db:

@@ -1,13 +1,14 @@
-"""Real cross-process micro-task workflow: daemon, worker, workspace and CLI routes.
+"""Real cross-process micro-task workflow: daemon, execution, workspace and CLI routes.
 
 The DSH harness runs through its registered run module against an offline
 Python micro-task ACP agent (``buddy/harnesses/dsh/fixtures/workflow_agent.py``,
 selected as a direct executable command through ``HMB_DSH_CLI``); everything
-else is the real service: real daemon, real supervisor/worker, the merged
+else is the real service: real daemon, execution process, the merged
 Git-backed workspace module, the real C-Two/CLI path and the real console
 command route.
 """
 from __future__ import annotations
+from admission import admit_board, admit_store
 
 import json
 import os
@@ -17,7 +18,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from support import BoardTestCase, enable_fixture_buddy, wait_for, stop_private_workers
+from support import BoardTestCase, enable_fixture_buddy, wait_for
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -268,10 +269,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             **BUDDY, "requestId": "ordinary-launcher", "hostId": "host-1", "task": "run the mock turn",
             "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"},
         })
-        board.call("worker_register", {"workerId": "ordinary-worker", "capabilities": ["dsh"]})
-        response = board.call("worker_claim", {"workerId": "ordinary-worker",
-                                               "claimRequestId": "ordinary-claim",
-                                               "runId": submitted["runId"], "nonce": "o" * 16})
+        response = admit_board(board, {'workerId': 'ordinary-worker', 'claimRequestId': 'ordinary-claim', 'runId': submitted['runId'], 'nonce': 'o' * 16})
         credential = self.directory / "ordinary-credential.json"
         credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
         credential.chmod(0o600)
@@ -282,14 +280,16 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", child)
 
     def test_lead_harness_launcher_reaches_the_private_issuing_board(self):
+        from unittest import mock
         from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import child_environment
         from hey_my_buddy.buddy.roles.prompts import worker_prompt
-        enable_fixture_buddy(self.board().store, BUDDY)
+        from hey_my_buddy.protocol import execution as execution_protocol
+        board = self.board()
+        enable_fixture_buddy(board.store, BUDDY)
         with self.daemon(env=self.env()):
-            # The manual claimant is this test's actor; observe idle automatic
-            # supervisors relinquishing their locks before submitting its task.
-            stop_private_workers(self.directory)
+            # The extra capability leaves this test's Lead turn queued for the
+            # in-process admission while the daemon serves its CLI calls.
             code, submitted = self.cli("submit", json.dumps({
                 **BUDDY, "requestId": "launcher-private", "hostId": "host-1", "task": "run the mock turn",
                 "cwd": str(self.repo), "submissionToken": "l" * 32, "delegationAuthority": True,
@@ -297,16 +297,10 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 "executionWorkspace": {"kind": "existing", "access": "full", "accessReason": "Lead tasks"},
             }), env=self.env())
             self.assertEqual(code, 0, submitted)
-            code, registered = self.cli("worker-register", json.dumps({"workerId": "launcher-worker", "capabilities": ["dsh", "launcher-private"]}), env=self.env())
-            self.assertEqual(code, 0, registered)
-            response = None
-            def claim_when_ready():
-                nonlocal response
-                code, response = self.cli("worker-claim", json.dumps({"workerId": "launcher-worker", "claimRequestId": "launcher-claim",
-                                                                      "runId": submitted["runId"], "nonce": "n" * 16}), env=self.env())
-                self.assertEqual(code, 0, response)
-                return response['claim'] is not None
-            self.assertTrue(wait_for(claim_when_ready, timeout=30), response)
+            with mock.patch.object(execution_protocol, "EXECUTION_CAPABILITIES",
+                                   (*execution_protocol.EXECUTION_CAPABILITIES, "launcher-private")):
+                response = admit_board(board, {'runId': submitted['runId'], 'nonce': 'n' * 16})
+            self.assertIsNotNone(response["claim"], response)
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"],
                                               "stateDir": str(self.directory)}))

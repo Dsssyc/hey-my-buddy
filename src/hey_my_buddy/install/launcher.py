@@ -18,12 +18,11 @@ import uuid
 LAUNCH_KEYS = {'HMB_MAX_CONCURRENT': (1, 32), 'HMB_WAIT_CAPACITY': (1, 1024)}
 HOST_INTERNAL_KEYS = frozenset({
     'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
-    'HMB_WORKER_STATE', 'HMB_WORKER_ID',
     'HMB_SUPERVISOR_START_ID', 'HMB_TASK_ID', 'HMB_ATTEMPT_ID', 'HMB_HARNESS_RECORD_FILE',
 })
 
 #: The environment a long-lived hey-my-buddy service process may inherit. The daemon, an
-#: upgrade-started daemon and every worker supervisor are built from this explicit
+#: upgrade-started daemon and every execution process are built from this explicit
 #: allowlist instead of the Host session: Claude Code ``CLAUDE_CODE_*`` session
 #: variables and tokens, Codex session identity, Host identity, provider routing
 #: overrides and attempt credentials never reach a service. Native harness
@@ -49,8 +48,7 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'ZCODE_DATA_BASE_DIR', 'DSH_HOME',
     # This program's private roots, interpreter selection and launch settings.
     'HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
-    'HMB_WORKER_ID', 'HMB_WORKER_STATE',
-    'HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY', 'HMB_CONSOLE_PORT', 'HMB_LEASE_SECONDS',
+    'HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY', 'HMB_CONSOLE_PORT',
     'HMB_MODEL_CATALOG_FILE', 'HMB_DEBUG',
     'HMB_AGENT_SKILLS_DIR', 'HMB_CLAUDE_SKILLS_DIR', 'UV_BIN',
 })
@@ -316,11 +314,10 @@ def service_environment(overrides: dict[str, str] | None = None) -> dict[str, st
 
 
 def runtime_environment(target: Path) -> dict[str, str]:
-    # This is the CLI invocation path, not a service start: preserve scoped Worker
-    # credentials. Dropping them would turn a Worker into a service-token Host when
-    # the selected CLI builds its request. The service allowlist above applies only
-    # where a daemon or worker supervisor is created.
-    env = {k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','VIRTUAL_ENV','UV_PROJECT_ENVIRONMENT'}}
+    # This is the CLI invocation path: preserve the scoped attempt credential
+    # while discarding interpreter pins and retired Worker identity variables.
+    env = {k:v for k,v in os.environ.items()
+           if k not in {'PYTHONPATH', 'VIRTUAL_ENV', 'UV_PROJECT_ENVIRONMENT'}}
     env.update(HMB_RUNTIME=str(target), HMB_RUNTIME_IDENTITY='runtime:' + target.name)
     return env
 

@@ -268,8 +268,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         board, _, parent, child = self.parent_and_child()
         helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
         with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET lease_expires_at='1900-01-01T00:00:00Z' WHERE task_id=?", (child,))
-            connection.execute("UPDATE workers SET pid=NULL WHERE worker_id='w1'")
+            connection.execute("UPDATE attempts SET execution_state='uncertain',ownership='uncertain' WHERE task_id=?", (child,))
         self.cancel(board, parent)
         self.finish_turn(board, helper, runner_status="cancelled", shutdown=False, seal=False)
         self.assertEqual(self.summary(board, parent["runId"])["unconfirmedRunIds"], [child])
@@ -317,8 +316,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         helper = self.claim(board, claim_request_id="helper-claim", run_id=child)
         attempt = helper["claim"]["attempt"]
         self.cancel(board, parent)
-        board.call("worker_release", {"workerId": "w1", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-                                      "nonce": "n" * 16, "evidence": {"spawnIntentWritten": False}, "reason": "no process spawned"})
+        board.store.release_execution(({'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'evidence': {'spawnIntentWritten': False}, 'reason': 'no process spawned'})["attemptId"])
         with board.store.db.write() as connection:
             task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child,)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()
@@ -339,10 +337,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
                     "workspace_intent_json,created_at,updated_at) VALUES(?,?,?,'summary-fixture','active','{}',?,?)",
                     (run_id, parent["runId"], child["requestId"], now, now),
                 )
-                connection.execute(
-                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,adapter,execution_state,"
-                    "created_at,updated_at) VALUES(?,?,1,'fixture','fixture','dsh','uncertain',?,?)", (attempt_id, run_id, now, now),
-                )
+                connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,created_at,updated_at) VALUES(?,?,1,'fixture','dsh','uncertain',?,?)", (attempt_id, run_id, now, now))
                 connection.execute("UPDATE tasks SET selected_attempt_id=? WHERE task_id=?", (attempt_id, run_id))
         summary = self.summary(board, parent["runId"])
         self.assertTrue(summary["selfConfirmed"])
@@ -354,11 +349,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
     def test_shutdown_summary_does_not_hide_unresolved_attempt_behind_old_selected_result(self):
         board, _, parent, _ = self.parent_and_child()
         with board.store.db.write() as connection:
-            connection.execute(
-                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,adapter,execution_state,"
-                "created_at,updated_at) VALUES(?,?,2,'fixture','fixture','dsh','uncertain',?,?)",
-                (str(uuid.uuid4()), parent["runId"], board.store.now(), board.store.now()),
-            )
+            connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,created_at,updated_at) VALUES(?,?,2,'fixture','dsh','uncertain',?,?)", (str(uuid.uuid4()), parent['runId'], board.store.now(), board.store.now()))
         summary = self.summary(board, parent["runId"])
         self.assertFalse(summary["selfConfirmed"])
         self.assertTrue(summary["descendantsConfirmed"])

@@ -11,11 +11,11 @@ from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
-    def test_runtime_environment_uses_current_names_and_excludes_worker_state(self):
+    def test_runtime_environment_uses_pinned_runtime_and_excludes_dev_source(self):
         state = self.directory / 'state'
         target = self.directory / 'runtimes' / ('a' * 32)
         target.mkdir(parents=True)
-        base = {'HMB_DEV_SOURCE': '1', 'HMB_WORKER_STATE': 'untrusted',
+        base = {'HMB_DEV_SOURCE': '1',
                 'HMB_MAX_CONCURRENT': '99', 'HMB_WAIT_CAPACITY': '99'}
         with mock.patch('hey_my_buddy.install.launcher.service_environment', return_value=base):
             environment = upgrade._environment(state, target)
@@ -25,7 +25,7 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(environment['HMB_RUNTIME_IDENTITY'], 'runtime:' + target.name)
         self.assertEqual(environment['HMB_MAX_CONCURRENT'], '99')
         self.assertEqual(environment['HMB_WAIT_CAPACITY'], '99')
-        self.assertNotIn('HMB_WORKER_STATE', environment)
+        self.assertNotIn('HMB_DEV_SOURCE', environment)
 
     def test_runtime_switch_preserves_current_launch_settings(self):
         state = self.directory / 'state'
@@ -247,15 +247,13 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
         self.assertEqual(board.call('task_get', {'runId':run})['task']['state'], 'queued')
 
-    def test_upgrade_journal_fences_admission_and_worker_claim_without_cancellation(self):
+    def test_upgrade_journal_fences_admission_without_cancellation(self):
         board=self.board()
         marker=board.directory/'upgrade.json';marker.write_text('{}')
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
             board.call('task_submit', {'requestId':'blocked', 'task':'work', 'cwd':str(self.workdir()), 'adapter':'command', 'argv':['/bin/echo','ok']})
         self.assertEqual(caught.exception.code,'UPGRADE_IN_PROGRESS')
-        with self.assertRaises(BoardError):
-            board.call('worker_claim', {'workerId':'local','claimRequestId':'x','nonce':'x'*16})
         self.assertEqual(board.store.count_tasks(),0)
 
     def test_restore_verified_backup_preserves_regenerable_directories(self):

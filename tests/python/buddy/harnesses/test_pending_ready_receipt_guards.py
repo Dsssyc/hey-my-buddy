@@ -29,12 +29,9 @@ from buddy.harnesses.test_c_two_live import (
 )
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt, verify_receipt
 from hey_my_buddy.buddy.harnesses import live as lv
-from hey_my_buddy.buddy.roles.live import _private_regular_bytes
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 from hey_my_buddy.errors import BoardError
-
-READINESS_BOUND = 16384
 
 FINISH_IDENTITY = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"}
 FINISH_KEY = "b" * 64
@@ -211,95 +208,3 @@ class FinishReceiptDigestBindingTests(unittest.TestCase):
     def test_the_untampered_receipt_verifies_against_its_own_bridge(self):
         raw, bridge = minted_finish_receipt("a" * 64)
         self.assertEqual(verify_receipt(raw, bridge, validate_outcome)["outcome"], FINISH_OUTCOME)
-
-
-class ReadinessMaterialBarrierTests(unittest.TestCase):
-    """V-C8 and V-C9: the holder's readiness-material reader, called directly.
-
-    ``_private_regular_bytes`` is the one reader both readiness materials go
-    through, and these tests call it directly so a refusal is attributable to
-    its own guards rather than swallowed into an unavailable binding. The
-    non-regular-file case uses a real writer-less FIFO under the real open
-    flags: ``O_RDONLY|O_NOFOLLOW|O_NONBLOCK`` opens a FIFO immediately, so the
-    open mode rejects nothing here and the function's own regular-file judgment
-    is demonstrably the refusing layer — no open-primitive isolation is used,
-    and the isolation boundary is exactly this: everything below the path guard
-    (open, fstat, read, close) runs unisolated against real descriptors. The
-    two size layers each carry their own independent witness: an over-bound
-    file is refused by the metadata layer before any read (its own refusal
-    text), and a file that grows after its size check is refused by the
-    read-length layer (its own refusal text), so each layer's single-point
-    removal turns exactly its own test red.
-    """
-
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-c2-readiness-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
-        self.addCleanup(self.temp.cleanup)
-        self.directory = Path(self.temp.name).resolve()
-
-    def test_readiness_material_that_is_not_a_regular_file_is_refused(self):
-        fifo = self.directory / "live-ready.fifo"
-        os.mkfifo(fifo)
-        with self.assertRaises(BoardError) as caught:
-            _private_regular_bytes(fifo, READINESS_BOUND)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(caught.exception.message,
-                         "Live readiness material is not a bounded regular file")
-
-    def test_readiness_material_over_its_frame_bound_is_refused(self):
-        path = self.directory / "live-ready.json"
-        path.write_bytes(b"x" * (READINESS_BOUND + 1))
-        with self.assertRaises(BoardError) as caught:
-            _private_regular_bytes(path, READINESS_BOUND)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        # The metadata layer's own witness: an over-bound regular file is
-        # refused by its size before anything is read, under the refusal text
-        # only that layer raises. When the fstat size bound is removed the
-        # read-length layer still rejects the same bytes, but with the other
-        # message — so this exact text is what makes the metadata layer's
-        # single-point removal red.
-        self.assertEqual(caught.exception.message,
-                         "Live readiness material is not a bounded regular file")
-
-    def test_readiness_material_that_grows_after_its_size_check_is_refused_at_the_read_bound(self):
-        """The read-length layer's own witness: the bound holds across growth.
-
-        Isolation boundary: exactly one low-level primitive, the ``os.fstat``
-        call inside the function under test, is wrapped for this one call, and
-        the wrapper is honest at both ends. It takes the real stat snapshot of
-        the real regular file first (initial length within the bound, so the
-        metadata layer genuinely passes it), then appends the extra byte
-        through a real second descriptor on that same real file, then returns
-        the pre-growth snapshot — the between-check growth the read-length
-        guard exists for, coordinated at one boundary instead of a racing
-        writer thread. Nothing else is patched: the open, the metadata guard,
-        the buffered read and the whole function run real, and the bytes the
-        read returns are the file's actual grown content, so removing
-        ``len(raw) > maximum`` alone turns this red while the metadata guard
-        stays intact.
-        """
-        path = self.directory / "growing-ready.json"
-        path.write_bytes(b"x" * READINESS_BOUND)
-        real_fstat = os.fstat
-
-        def grow_after_snapshot(descriptor):
-            snapshot = real_fstat(descriptor)
-            append = os.open(path, os.O_WRONLY | os.O_APPEND)
-            try:
-                os.write(append, b"y")
-            finally:
-                os.close(append)
-            return snapshot
-
-        with mock.patch("hey_my_buddy.buddy.roles.live.os.fstat",
-                        side_effect=grow_after_snapshot):
-            with self.assertRaises(BoardError) as caught:
-                _private_regular_bytes(path, READINESS_BOUND)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(caught.exception.message,
-                         "Live readiness material exceeds its frame bound")
-
-
-if __name__ == "__main__":
-    unittest.main()

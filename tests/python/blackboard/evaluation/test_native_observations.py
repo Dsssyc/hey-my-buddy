@@ -223,7 +223,7 @@ class NativeReceiptTests(WorkflowTestCase):
                 config = {} if harness == "dsh" else {"harness": harness, "provider": "openai", "model": "fixture-model", "effort": "low"}
                 submitted = self.submit(board, request_id=harness, cwd=str(self.workdir(harness)), **config)
                 worker = "worker-" + harness
-                board.call("worker_register", {"workerId": worker, "adapter": harness, "capabilities": [harness]})
+                pass  # Admission is owned by the service.
                 claim = self.claim(board, worker_id=worker, claim_request_id=harness, run_id=submitted["runId"])
                 captured = {}
                 def native_result(result):
@@ -233,9 +233,7 @@ class NativeReceiptTests(WorkflowTestCase):
                 attempt = claim["claim"]["attempt"]
                 with board.store.db.read() as db:
                     count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                board.call("worker_result", {"workerId": worker, "attemptId": attempt["attemptId"],
-                    "generation": attempt["generation"], "nonce": NONCE, "status": "ok", "result": captured,
-                    "shutdownConfirmed": True, "exitCode": 0})
+                board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': captured, 'shutdownConfirmed': True, 'exitCode': 0})
                 view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
                 expected = normalize_token_usage(raw_usage)
                 self.assertEqual(view["currentTurn"]["tokenUsage"], expected)

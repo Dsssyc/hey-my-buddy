@@ -1,3 +1,4 @@
+from admission import admit_execution
 import uuid
 """Single Router mode, pure legacy conversion and durable routing tests; no native model calls."""
 from unittest.mock import patch
@@ -87,11 +88,11 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         result = board.call('selection_request', {'requestId': 'later-ineligible', 'task': 'choose'})
-        board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
+        pass  # Admission is owned by the service.
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
                 'eligible': False, 'reasonCode': 'readonly-unavailable', 'reason': 'changed local resource',
                 'systemSandbox': False, 'sameAttemptContinuation': False}):
-            claim = board.client().claim('router', 'mode-claim', 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
+            claim = admit_execution(board.client(), 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
         self.assertIsNone(claim)
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(decision['status'], 'needs-host')
@@ -118,15 +119,12 @@ class RoutingModesTests(BoardTestCase):
         board = self.board()
         self.seed(board)
         result = board.call('selection_request', {'requestId': 'preflight', 'task': 'choose'})
-        board.call('worker_register', {'workerId': 'router', 'adapter': 'decision', 'capabilities': ['decision']})
+        pass  # Admission is owned by the service.
         nonce = 'nonce-abcdefghijklmnop'
-        first = board.client().claim('router', 'preflight-claim', nonce, task_id=result['runId'])['claim']
-        response = board.call('worker_result', {
-            'workerId': 'router', 'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'],
-            'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True,
-            'result': {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False}})
+        first = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']
+        response = board.call('execution_result', {'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': nonce, 'status': 'failed', 'shutdownConfirmed': True, 'result': {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False}})
         self.assertEqual(response['taskState'], 'failed')
-        self.assertIsNone(board.client().claim('router', 'second-claim', nonce, task_id=result['runId'])['claim'])
+        self.assertIsNone(admit_execution(board.client(), nonce, task_id=result['runId'])['claim'])
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
         self.assertEqual(decision['status'], 'needs-host')
         self.assertEqual(decision['routingMode'], 'review')
@@ -149,17 +147,12 @@ class RoutingModesTests(BoardTestCase):
             clock.advance(601)
             result = board.call('selection_request', {'requestId': f'proof-{index}', 'task': 'choose'})
             worker = f'router-{index}'
-            board.call('worker_register', {'workerId': worker, 'adapter': 'decision', 'capabilities': ['decision']})
-            claim = board.client().claim(worker, f'proof-claim-{index}', nonce, task_id=result['runId'])['claim']
+            pass  # Admission is owned by the service.
+            claim = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']
             facts = claim_tool_receipt(claim, count if type(count) is int else 0)
             if proof is None:
                 facts.pop('toolEvidence')
-            board.call('worker_result', {'workerId': worker, 'attemptId': claim['attempt']['attemptId'],
-                'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True,
-                'result': {**facts, 'status': 'ok', 'operation': 'select',
-                    'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
-                    'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count},
-                    'decision': {'buddyId': BUDDY_ID, 'reason': 'candidate match', 'evidence': []}}})
+            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'reason': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':

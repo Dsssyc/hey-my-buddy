@@ -211,27 +211,16 @@ class SyntheticBoard:
 
     def _select(self, view):
         from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
-        response = self.call("worker_claim", {"workerId": "synthetic-router", "claimRequestId": f"route-{view['runId']}",
-                                               "nonce": NONCE, "runId": view["routing"]["taskId"]})
+        response = self.board.service.admit_execution(NONCE, task_id=view['routing']['taskId'])
         if response.get("claim") is None:
             raise AssertionError({"syntheticRouterClaim": response, "routing": view.get("routing"), "waitReason": view.get("waitReason")})
         claim = response["claim"]
         attempt, document = claim["attempt"], claim["decisionInput"]
-        self.call("worker_result", {
-            "workerId": "synthetic-router", "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-            "nonce": NONCE, "status": "ok", "shutdownConfirmed": True,
-            "result": {**claim_tool_receipt(claim), "status": "ok", "operation": "select",
-                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
-                       "usage": {"elapsedMs": 0, "toolCalls": 0},
-                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
-                                             "manifestSha256": document["executionWorkspace"]["manifestSha256"]},
-                       "decision": {"buddyId": BUDDY_ID, "reason": "Fictional fixture selection", "evidence": []}},
-        })
+        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 0, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'reason': 'Fictional fixture selection', 'evidence': []}}})
 
     def _finish(self, run_id, *, disposition="completed"):
         from protocol.fixtures.native_turn import claim_record
-        claim = self.call("worker_claim", {"workerId": "synthetic-worker", "claimRequestId": f"execute-{run_id}",
-                                           "nonce": NONCE, "runId": run_id})["claim"]
+        claim = self.board.service.admit_execution(NONCE, task_id=run_id)["claim"]
         attempt = claim["attempt"]
         outcome = {"disposition": disposition, "summary": "Fictional short display summary.",
                    "decisions": [], "remaining": [], "artifacts": [], "request": None}
@@ -248,9 +237,7 @@ class SyntheticBoard:
                   "logPaths": {}, "turn": record, "turnResultPath": str(evidence / "turn-output.json"),
                   "workspaceSeal": self.workspace.seal(self.state, claim["turn"]["input"]["executionWorkspace"],
                                                        run_id, attempt["attemptId"])}
-        self.call("worker_result", {"workerId": "synthetic-worker", "attemptId": attempt["attemptId"],
-                                    "generation": attempt["generation"], "nonce": NONCE, "status": "ok",
-                                    "result": result, "shutdownConfirmed": True, "exitCode": 0})
+        self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         if disposition == "completed":
             self.completed_attempts.append(attempt["attemptId"])
 
@@ -279,8 +266,8 @@ class SyntheticBoard:
                                 (BUDDY_ID, "dsh:deepseek-official:deepseek-v4-pro:high")],
             "configuration": {"defaultRoutingMode": "review", "routerBuddyIds": [BUDDY_ID]},
         })
-        self.call("worker_register", {"workerId": "synthetic-worker", "capabilities": ["dsh", "command"]})
-        self.call("worker_register", {"workerId": "synthetic-router", "adapter": "decision", "capabilities": ["decision"]})
+        None
+        None
         pending, accepted = 0, 0
         for macro in range(r.macros):
             macro_task_id = None

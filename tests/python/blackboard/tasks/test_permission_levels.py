@@ -24,7 +24,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         return self.submit(board, harness='claude', provider='fixture', model='fixture', effort='high', **extra)
 
     def register_claude(self, board):
-        return board.call('worker_register', {'workerId': 'w1', 'capabilities': ['claude']})
+        return None
 
     def test_submit_and_continue_reject_missing_harness_permission_without_mutation(self):
         self.enterContext(patch.dict(_WORKER_PERMISSIONS, {'dsh': {

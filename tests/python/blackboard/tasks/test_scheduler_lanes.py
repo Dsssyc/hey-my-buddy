@@ -8,6 +8,7 @@ eligible work, and no backlog of blocked tasks — however deep — can hide unr
 runnable work.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import unittest
 
@@ -38,7 +39,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         # rows is exhausted long before row 102 otherwise.
         self.submit_micro_task(board, "runnable-b", model_service=MODEL_SERVICE_B)
         self.register(board, "w-free")
-        claim = board.client().claim("w-free", "claim-free", "n" * 32)
+        claim = admit_execution(board.client(), "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
         self.assertEqual(claim["claim"]["task"]["requestId"], "runnable-b")
 
@@ -47,7 +48,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         for index in range(BACKLOG):
             self.submit_micro_task(board, f"cmd-backlog-{index}")
         client = board.client()
-        client.register_worker("w-command", adapter="command", capabilities=["command"])
+        pass  # Admission is owned by the service.
         submitted = client.submit(
             requestId="command-runnable",
             task="no model at all",
@@ -55,7 +56,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
             adapter="command",
             argv=["/bin/true"],
         )
-        claim = client.claim("w-command", "claim-command", "n" * 32)
+        claim = admit_execution(client, "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
         self.assertEqual(claim["claim"]["task"]["runId"], submitted["task"]["runId"])
 
@@ -77,7 +78,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         for index in range(BACKLOG):
             self.submit_micro_task(board, f"idle-{index}")
         self.register(board, "w-empty")
-        empty = board.client().claim("w-empty", "claim-empty", "n" * 32)
+        empty = admit_execution(board.client(), "n" * 32)
         self.assertIsNone(empty["claim"])
         self.assertEqual(empty["reason"], "model-capacity")
 
@@ -96,7 +97,7 @@ class ArrivalOrderTests(StoreConcurrencyTestCase):
         self.submit_micro_task(board, "order-3", model_service=MODEL_SERVICE_A)
         self.submit_micro_task(board, "order-4", model_service=MODEL_SERVICE_B)
         self.register(board, "w3")
-        third = board.client().claim("w3", "claim-order-3", "n" * 32)["claim"]
+        third = admit_execution(board.client(), "n" * 32)["claim"]
         self.assertEqual(third["task"]["requestId"], "order-4")
 
     def test_the_machine_ceiling_is_shared_by_routing_and_business_attempts(self):

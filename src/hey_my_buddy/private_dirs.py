@@ -16,7 +16,7 @@ ADAPTERS = frozenset({'codex', 'claude', 'zcode', 'dsh', 'command'})
 _ATTEMPT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
 _REPARSE_POINT = 0x400
 _CREDENTIAL_FILES = frozenset({
-    'agent-credential.json', 'execution-start.json', 'execution-live.json',
+    'agent-credential.json', 'execution-start.json',
     'inquiry.json', 'finish-bridge.json',
     'zcode-control.json', 'builtin-provider.json', 'personal-provider.json',
     'auth.json', 'patch.json', 'settings.json', 'inquiry.sock',

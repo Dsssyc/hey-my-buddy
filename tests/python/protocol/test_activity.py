@@ -5,6 +5,7 @@ Buddy runtime, worker and credential variables are removed before any test
 subprocess starts, as AGENTS.md requires.
 """
 from __future__ import annotations
+from admission import admit_execution
 
 import json
 import os
@@ -19,10 +20,8 @@ from hey_my_buddy.protocol.activity import ActivityPublisher, is_newer, normaliz
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-from hey_my_buddy.protocol.contracts import HarnessRunLive
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.runtime.worker import Worker
 from hey_my_buddy.buddy.runtime.execution import Execution
 
 #: Inherited variables that would otherwise point a test subprocess at a production
@@ -166,14 +165,7 @@ class ActivityProjection(BoardTestCase):
 
     @staticmethod
     def post_activity(client, identity: dict, data: dict | None = None, *, message: str = "native activity") -> dict:
-        return client.progress(
-            identity["workerId"],
-            identity["attemptId"],
-            identity["generation"],
-            identity["nonce"],
-            message,
-            data=data,
-        )
+        return client.progress(identity["attemptId"], identity["generation"], identity["nonce"], message, data=data)
 
     def claimed_attempt(self, board, *, request_id: str = "activity-1", argv=("/bin/sleep", "20")):
         client = board.client()
@@ -186,21 +178,15 @@ class ActivityProjection(BoardTestCase):
             argv=list(argv),
             expectedSeconds=120,
         )["task"]
-        client.register_worker("w-activity", adapter="command", capabilities=["command"])
         nonce = "a" * 32
-        claim = client.claim("w-activity", f"claim-{request_id}", nonce, worker_instance="instance-activity")
+        claim = admit_execution(client, nonce)
         return client, task, claim["claim"], nonce
 
     def test_progress_stores_one_monotone_idempotent_projection(self):
         board = self.board()
         client, task, claim, nonce = self.claimed_attempt(board)
         attempt = claim["attempt"]
-        identity = {
-            "workerId": "w-activity",
-            "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"],
-            "nonce": nonce,
-        }
+        identity = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce}
         current = {"phase": "starting", "observedAt": "2026-01-01T00:00:00.000Z", "eventSeq": 1}
         first = self.post_activity(client, identity, {"activity": current})
         self.assertEqual(first["activity"], "recorded")
@@ -222,12 +208,7 @@ class ActivityProjection(BoardTestCase):
         board = self.board()
         client, task, claim, nonce = self.claimed_attempt(board, request_id="activity-2")
         attempt = claim["attempt"]
-        identity = {
-            "workerId": "w-activity",
-            "attemptId": attempt["attemptId"],
-            "generation": attempt["generation"],
-            "nonce": nonce,
-        }
+        identity = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce}
         for name, data in {
             "unknown data key": {"activity": {"phase": "starting", "eventSeq": 1}, "text": "hello"},
             "unknown activity key": {"activity": {"phase": "starting", "eventSeq": 1, "prompt": "secret"}},
@@ -253,12 +234,10 @@ class ActivityProjection(BoardTestCase):
         client, task, claim, nonce = self.claimed_attempt(board, request_id="activity-3")
         attempt = claim["attempt"]
         for _ in range(2):
-            client.renew("w-activity", attempt["attemptId"], attempt["generation"], nonce)
-        client.progress(
-            "w-activity", attempt["attemptId"], attempt["generation"], nonce, "the worker is still supervising"
-        )
+            client.progress(attempt["attemptId"], attempt["generation"], nonce)
+        client.progress(attempt["attemptId"], attempt["generation"], nonce, "the worker is still supervising")
         view = client.get(runId=task["runId"])
-        self.assertIsNone(view["activity"], "a renewal or prose heartbeat is not native activity")
+        self.assertIsNone(view["activity"], "a prose heartbeat is not native activity")
         self.assertNotIn("activity.json", json.dumps(view, ensure_ascii=False))
         self.assertEqual(
             [event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"], []
@@ -271,31 +250,19 @@ class ActivityProjection(BoardTestCase):
         activity = {"phase": "finishing", "observedAt": "2026-01-01T00:00:05.000Z", "eventSeq": 5}
         self.post_activity(
             client,
-            {
-                "workerId": "w-activity",
-                "attemptId": attempt["attemptId"],
-                "generation": attempt["generation"],
-                "nonce": nonce,
-            },
+            {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce},
             {"activity": activity},
         )
-        client.submit_result(
-            "w-activity",
-            attempt["attemptId"],
-            attempt["generation"],
-            nonce,
-            {
+        client.submit_result(attempt["attemptId"], attempt["generation"], nonce, {
                 "status": "failed",
                 "result": {"status": "nonzero"},
                 "error": "boom",
                 "shutdownConfirmed": True,
                 "terminationReason": "harness-error",
-            },
-        )
+            })
         self.assertEqual(client.get(runId=task["runId"])["status"], "failed")
         client.retry(runId=task["runId"], reason="second generation")
-        client.register_worker("w-activity-2", adapter="command", capabilities=["command"])
-        second = client.claim("w-activity-2", "claim-activity-4b", "b" * 32, worker_instance="instance-2")["claim"]["attempt"]
+        second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         self.assertEqual(second["generation"], 2)
         self.assertNotEqual(second["attemptId"], attempt["attemptId"])
         self.assertIsNone(
@@ -313,8 +280,6 @@ class ExecutionActivityForwarding(BoardTestCase):
     def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), expected_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
         client = board.client()
-        worker = Worker("w-forward", self.directory, client=client, lease_seconds=lease_seconds, log=lambda _m: None)
-        worker.register()
         cwd = self.workdir()
         task = client.submit(
             requestId="forward-1",
@@ -325,9 +290,9 @@ class ExecutionActivityForwarding(BoardTestCase):
             expectedSeconds=expected_seconds,
         )["task"]
         nonce = "c" * 32
-        claim = client.claim("w-forward", "claim-forward-1", nonce, worker_instance=worker.instance_id)["claim"]
+        claim = admit_execution(client, nonce)["claim"]
         attempt = claim["attempt"]
-        execution = Execution(claim, self.directory, "w-forward", nonce, client=client)
+        execution = Execution(claim, self.directory, nonce, client=client)
         directory = execution.directory
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         context = ExecutionContext(
@@ -355,7 +320,7 @@ class ExecutionActivityForwarding(BoardTestCase):
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
         endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-            HarnessRunLive, instance_id="a" * 64, token="b" * 64,
+            None, instance_id="a" * 64, token="b" * 64,
             state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.addCleanup(endpoint.close, reason="fixture-finished")
         control.handle.live_endpoint = endpoint
@@ -427,13 +392,10 @@ class ExecutionActivityForwarding(BoardTestCase):
         control.implementation.cancel(control.handle)
         control.handle.wait(15)
         self.assertIsNotNone(control.handle.process.poll())
-        client.submit_result("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
-                             {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
+        client.submit_result(attempt["attemptId"], attempt["generation"], "c" * 32, {"status": "failed", "result": {"status": "nonzero"}, "error": "fixture-stopped",
                               "shutdownConfirmed": True, "terminationReason": "harness-error"})
         client.retry(runId=attempt["taskId"], reason="replacement generation")
-        client.register_worker("w-forward-2", adapter="command", capabilities=["command"])
-        replacement = client.claim("w-forward-2", "claim-forward-2", "e" * 32,
-                                   worker_instance="instance-forward-2")["claim"]["attempt"]
+        replacement = admit_execution(client, "e" * 32)["claim"]["attempt"]
         self.assertEqual(replacement["generation"], attempt["generation"] + 1)
         second = {"phase": "tool-running", "eventSeq": 2}
         endpoint.publish_activity(second)
@@ -444,8 +406,7 @@ class ExecutionActivityForwarding(BoardTestCase):
     def test_unextracted_command_never_reads_an_activity_sidecar(self):
         board, client, execution, attempt, directory, control = self.live_attempt()
         existing = {"phase": "unknown", "eventSeq": 1}
-        client.progress("w-forward", attempt["attemptId"], attempt["generation"], "c" * 32,
-                        data={"activity": existing})
+        client.progress(attempt["attemptId"], attempt["generation"], "c" * 32, data={"activity": existing})
         path = directory / "activity.json"
         path.write_text("retired activity file")
         with mock.patch.object(os, "open", wraps=os.open) as opened:

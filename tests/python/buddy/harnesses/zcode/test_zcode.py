@@ -74,13 +74,13 @@ class ZcodeFixtureCase(unittest.TestCase):
     # checkpoint and refusal flow suites) -----------------------------------
 
     def own_handle(self, handle):
-        """Own a live controller: stop its group, then release only its endpoint."""
-        from hey_my_buddy.buddy.roles.live import release_live_binding
+        """Own the native run and any test-only live endpoint it registered."""
 
         def release():
-            release_live_binding(handle)
-            descriptor = getattr(handle, "role_live_descriptor", None)
+            endpoint = getattr(handle, "test_live_endpoint", None)
+            descriptor = endpoint._descriptor if endpoint is not None else None
             if descriptor is not None:
+                endpoint.stop()
                 self.assertEqual(cc.inspect_endpoint(descriptor.address)["status"], "absent",
                                  "the owned endpoint was left behind")
         # LIFO: stop the actual held group before cleaning its captured endpoint.
@@ -90,18 +90,21 @@ class ZcodeFixtureCase(unittest.TestCase):
     def live_channel(self, handle):
         """Bind a fixture client to this inline run's published endpoint."""
         from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from hey_my_buddy.protocol.contracts import HarnessRunLive
+        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
 
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             endpoint = handle.live_endpoint
             if endpoint is not None:
+                if endpoint._descriptor is None:
+                    register_test_endpoint(endpoint)
+                handle.test_live_endpoint = endpoint
                 descriptor = endpoint._descriptor
                 handle.role_live_descriptor = descriptor
                 channel = live_binding(handle.role_run_control["harness"])(
                     endpoint.identity, HarnessRunLive, name=descriptor.name,
                     address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=handle.role_run_control["live"]["token"],
+                    token=endpoint._token,
                     state_dir=Path(self.environment["HMB_STATE_DIR"]))
                 self.addCleanup(channel.close, reason="fixture-complete")
                 self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
@@ -236,13 +239,8 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
         self.assertTrue(native["bindingPresent"])
         self.assertTrue(native["resumable"])
-        # The integrated inquiry entry: the role's control record is the only
-        # carrier of the durable journal path — the retired socket credentials
-        # (token, socket, errorPath) and the retired per-turn inquiry.json no
-        # longer exist on disk. Live access is the holder's own control.live
-        # material plus the ready descriptor its controller published; the
-        # narrow token stays in the holder-held material and never reaches the
-        # descriptor or the report.
+        # The role retains its durable inquiry journal without publishing a
+        # separate per-turn endpoint or token into the control record.
         from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, "zcode")
         control = handle.role_run_control
@@ -250,19 +248,9 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(control, handle.role_run_control)
         self.assertFalse((private_root / "inquiry.json").exists(),
                          "the retired per-turn inquiry.json must not be written")
-        material = control["live"]
-        self.assertEqual(set(material), {"instanceId", "token"}, material)
-        self.assertEqual(len(material["instanceId"]), 64)
-        self.assertEqual(len(material["token"]), 64)
-        ready = Path(control["executionLiveFile"])
-        self.assertEqual(ready.parent, context_root(context, "zcode"))
-        self.assertEqual(oct(ready.stat().st_mode & 0o777), "0o600")
-        descriptor = json.loads(ready.read_text())["descriptor"]
-        self.assertEqual(set(descriptor), {"address", "name", "instanceId", "hostPid", "endpointCredential"}, descriptor)
-        self.assertEqual(descriptor["instanceId"], material["instanceId"])
-        self.assertEqual(descriptor["hostPid"], handle.pid)
-        self.assertNotIn(material["token"], json.dumps(descriptor))
-        self.assertNotIn(material["token"], json.dumps(outcome.to_report()))
+        self.assertNotIn("live", control)
+        self.assertNotIn("executionLiveFile", control)
+        self.assertFalse((private_root / "execution-live.json").exists())
 
     def test_child_finish_does_not_replace_or_disable_root_finish(self):
         _, outcome = self.execute(self.context("child-first"))
@@ -300,7 +288,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
-        from hey_my_buddy.buddy.runtime.worker import classify_termination
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
 
         for index, case in enumerate(("turn-failed-quota", "turn-failed-quiet"), 1):
             with self.subTest(case=case):

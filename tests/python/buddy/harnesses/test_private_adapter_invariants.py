@@ -26,8 +26,7 @@ from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
-from hey_my_buddy.blackboard.tasks import interruption
-from hey_my_buddy.protocol.process_identity import read_native_process_journal
+from hey_my_buddy.protocol.process_identity import read_native_process_journal, native_process_journal_path
 from hey_my_buddy.buddy.runtime.receipts import receipt_directory
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
@@ -421,18 +420,24 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 startup = receipt_directory(state, harness, task_id, attempt_id) / "execution-start.json"
                 startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
-                    "workerId": "fixture-worker", "nonce": "n" * 64, "leaseSeconds": 120}))
+                    "nonce": "n" * 64}))
                 entry = fixture.root / f"execution-entry-{harness}.py"
                 entry.write_text(
                     "import json, os, runpy\n"
                     "from pathlib import Path\n"
                     "from hey_my_buddy.protocol import client, process_identity\n"
+                    "from hey_my_buddy.protocol.execution import fsync_json\n"
                     "from hey_my_buddy.blackboard.service import harness_health\n"
                     f"state = Path({str(state)!r})\n"
                     f"identity_file = Path({str(fixture.root / 'execution-identity.json')!r})\n"
                     f"delivery = Path({str(fixture.root / 'execution-result.json')!r})\n"
                     "identity_file.write_text(json.dumps({'pid': os.getpid(), "
                     "'startedAt': process_identity.process_start(os.getpid(), include_exited=True)}))\n"
+                    f"marker = state / 'attempts' / {task_id!r} / {attempt_id!r} / 'spawn.marker'\n"
+                    f"fsync_json(marker, {{'taskId': {task_id!r}, 'attemptId': {attempt_id!r}, "
+                    "'generation': 1, 'processIdentity': {'bootId': process_identity.boot_id(), "
+                    "'pid': os.getpid(), 'startedAt': process_identity.process_start(os.getpid(), include_exited=True), "
+                    "'processGroupId': os.getpgrp(), 'jobName': None}})\n"
                     "harness_health.HARNESSES = ()\n"
                     "class OfflineClient:\n"
                     "    def __init__(self, *args, **kwargs): pass\n"
@@ -443,18 +448,19 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     "runpy.run_module('hey_my_buddy.buddy.runtime.execution', run_name='__main__')\n"
                 )
                 completed = subprocess.run([sys.executable, str(entry), "--startup", str(startup)],
-                    env=env, cwd=evidence, capture_output=True, text=True, timeout=35)
+                    env=env, cwd=evidence, capture_output=True, text=True, timeout=35,
+                    start_new_session=True)
                 self.assertEqual(completed.returncode, 0, completed.stderr[-4000:])
                 delivery = fixture.root / "execution-result.json"
                 self.assertTrue(delivery.is_file(), completed.stdout[-4000:])
                 report = json.loads(delivery.read_text())
                 self.assertIs(report["shutdownConfirmed"], True, report)
                 root_identity = json.loads((fixture.root / "execution-identity.json").read_text())
-                stored_attempt = {"adapter": "decision", "model_harness": harness,
-                                  "task_id": task_id, "attempt_id": attempt_id, "generation": 1}
-                journal = interruption._native_journal(SimpleNamespace(directory=state), stored_attempt, root_identity)
-                self.assertTrue(Path(journal["path"]).is_file(), journal)
-                native = read_native_process_journal(Path(journal["path"]), journal["binding"])
+                journal_path = native_process_journal_path(
+                    receipt_directory(state, harness, task_id, attempt_id), root_identity)
+                binding = {"taskId": task_id, "attemptId": attempt_id, "generation": 1}
+                self.assertTrue(journal_path.is_file(), journal_path)
+                native = read_native_process_journal(journal_path, binding)
                 self.assertIsNotNone(native)
                 self.assertEqual(native["pending"], 0, native)
                 self.assertTrue(native["identities"], native)
@@ -477,7 +483,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = handle.role_run_control
                 self.assertEqual(set(control["inquiry"]), {"resultsPath"})
-                self.assertEqual(Path(control["executionLiveFile"]), context_root(context, "dsh") / "execution-live.json")
+                self.assertNotIn("executionLiveFile", control)
                 self.assertIsNone(handle.live_endpoint)
                 self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
                 self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())

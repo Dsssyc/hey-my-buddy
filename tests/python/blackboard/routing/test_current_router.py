@@ -80,13 +80,7 @@ class CurrentRouterTestCase(BoardTestCase):
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):
         with self.board_.store.db.write() as db:
-            db.execute(
-                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                "execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at)"
-                " VALUES(?,?,0,'nonce',?,?,'decision',?,?,?,?,?)",
-                (attempt_id, task_id, f"claim-{attempt_id}", state,
-                 canonical_json(receipt) if receipt is not None else None,
-                 1 if state == "finished" else 0, at, at, at))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce',?,'decision',?,?,?,?,?)", (attempt_id, task_id, state, canonical_json(receipt) if receipt is not None else None, 1 if state == 'finished' else 0, at, at, at))
 
     def add_routing_record(self, *, decision, request, kind, buddy_id=None, code=None, at=T0,
                            attempt_state=None, receipt=None, output=None, called=None, candidates=3):
@@ -433,9 +427,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
     def test_task_and_attempt_bind_onto_the_event(self):
         self.add_task("task-1", state="queued")
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                       "execution_state,adapter,created_at,updated_at)"
-                       " VALUES('att-1','task-1',1,'nonce','claim','executing','decision',?,?)", (T0, T0))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,created_at,updated_at) VALUES('att-1','task-1',1,'nonce','executing','decision',?,?)", (T0, T0))
         result = self.record(A, request="route-1", task="task-1", attempt="att-1", now=T0)
         with self.board_.store.db.read() as db:
             row = db.execute("SELECT task_id,attempt_id,payload_json FROM events WHERE seq=?",
@@ -606,10 +598,7 @@ class HistoryProjectionTests(CurrentRouterTestCase):
         self.add_buddy(A, model="alpha")
         self.add_task("task-claim", state="queued")
         with self.board_.store.db.write() as db:
-            db.execute(
-                "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,claim_request_id,"
-                "execution_state,adapter,created_at,updated_at)"
-                " VALUES('att-claim','task-claim',0,'nonce','claim-1','executing','decision',?,?)", (T0, T0))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,created_at,updated_at) VALUES('att-claim','task-claim',0,'nonce','executing','decision',?,?)", (T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="task-claim", attempt_id="att-claim",
                                             payload={"buddyId": A, "routerIndex": 0})
         self.record(A, request="route-recorded", phase="preflight", now=T0)

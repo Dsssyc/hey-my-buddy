@@ -1,4 +1,5 @@
 """Current selected-buddy bounds through real claim and publication transactions."""
+from admission import admit_execution
 import json
 
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C
@@ -150,15 +151,13 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
     def begin(self, board):
         self.seed(board)
         request = self.request(board)
-        board.call("worker_register", {"workerId": "router", "adapter": "decision", "capabilities": ["decision"]})
-        claim = board.client().claim("router", "first", "n" * 32, task_id=request["runId"])["claim"]
+        pass  # Admission is owned by the service.
+        claim = admit_execution(board.client(), "n" * 32, task_id=request["runId"])["claim"]
         self.assertIsNotNone(claim)
         return request, claim
 
     def finish(self, board, request, claim):
-        board.call("worker_result", {"workerId": "router", "attemptId": claim["attempt"]["attemptId"],
-            "generation": claim["attempt"]["generation"], "nonce": "n" * 32,
-            "status": "ok", "shutdownConfirmed": True, "result": stopped_answer(claim)})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True, 'result': stopped_answer(claim)})
         view = self.decision(board, request["decisionId"])
         self.assertEqual((view["status"], view["buddyId"]), ("completed", BUDDY_ID))
         self.assertEqual(view["input"], claim["decisionInput"])

@@ -17,7 +17,6 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
 
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
 DELEGATE_ROOT = PYTHON_ROOT.parent
@@ -75,24 +74,6 @@ def write_catalog_fixture(directory: Path, payload: dict | None = None) -> Path:
     return path
 
 
-@contextmanager
-def run_claim_in_process():
-    """Drive a claimed attempt against an in-process board without starting an RPC-only child."""
-    from hey_my_buddy.buddy.runtime.execution import Execution
-    from hey_my_buddy.buddy.runtime.worker import Worker
-
-    active = []
-
-    def execute(worker, claim):
-        execution = Execution(claim, worker.state_dir, worker.worker_id, worker._nonce(),
-                              client=worker.client, lease_seconds=worker.lease_seconds, log=worker._log)
-        active.append(execution)
-        execution.run()
-
-    with patch.object(Worker, "execute", execute):
-        yield active
-
-
 class FakeClock:
     """Deterministic wall clock so lease and expiry fences are exercisable."""
 
@@ -115,42 +96,6 @@ def shutdown_private_rpc() -> None:
     import c_two as cc
     if not cc.shutdown().get("completed"):
         raise AssertionError("Private test RPC shutdown is unconfirmed; preserve its state")
-
-
-def stop_private_workers(directory: Path, timeout: float = 35.0) -> None:
-    """Keep this test's state until its detached supervisors release ownership.
-
-    Deleting the stop file with TemporaryDirectory while a worker is still exiting
-    can make it miss the request and recreate the directory in its retry loop.
-    The supervisor's lifetime lock is the completion boundary; no stored PID is
-    used to signal or adopt a process.
-    """
-    locks = list((Path(directory) / "workers").glob("*/supervisor.lock"))
-    for lock in locks:
-        (lock.parent / "stop.request").touch(mode=0o600, exist_ok=True)
-    deadline = time.monotonic() + timeout
-    while locks:
-        pending = []
-        for path in locks:
-            try:
-                fd = os.open(path, os.O_RDWR)
-            except FileNotFoundError:
-                continue
-            try:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    pending.append(path)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-            finally:
-                os.close(fd)
-        if not pending:
-            return
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"Test supervisors still own state; preserved {directory}")
-        locks = pending
-        time.sleep(0.05)
 
 
 def _lock_held(path: Path) -> bool:
@@ -200,9 +145,20 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
         time.sleep(0.05)
 
 
+def assert_private_processes_gone(directory: Path) -> None:
+    """Keep private evidence if a service or execution still uses this state root."""
+    if not any((directory / name).exists() for name in ('control-daemon.lock', 'control.json')):
+        return
+    from hey_my_buddy.cli.checks import observed_processes
+
+    processes, problems, _ = observed_processes(Path(directory))
+    if processes or problems:
+        raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
+                             f"{len(processes)} process(es), {problems}")
+
+
 _INHERITED_CHILD_KEYS = {
     "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
-    "HMB_WORKER_STATE", "HMB_WORKER_ID",
     "HMB_AGENT_CREDENTIAL_FILE", "HMB_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
     "HMB_SUPERVISOR_START_ID",
     "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
@@ -288,8 +244,8 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
     finally:
         restore_facts_source()
         stop_private_service(directory)
-        stop_private_workers(directory)
         shutdown_private_rpc()
+        assert_private_processes_gone(directory)
         shutil.rmtree(directory)
 
 
@@ -306,7 +262,6 @@ class InProcessBoard:
         self.store = BoardStore(
             self.directory,
             max_concurrent=options.get("max_concurrent", 2),
-            lease_seconds=options.get("lease_seconds", 60),
             wait_capacity=options.get("wait_capacity", 4),
             **({"clock": clock} if clock is not None else {}),
         )
@@ -399,7 +354,6 @@ class BoardTestCase(unittest.TestCase):
 
     def _cleanup(self) -> None:
         stop_private_service(self.directory)
-        stop_private_workers(self.directory)
         for board in getattr(self, "_stack", []):
             try:
                 board.close()
@@ -414,6 +368,7 @@ class BoardTestCase(unittest.TestCase):
                     handle.kill()
                     handle.wait(timeout=5)
         shutdown_private_rpc()
+        assert_private_processes_gone(self.directory)
         shutil.rmtree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
@@ -507,30 +462,6 @@ class BoardTestCase(unittest.TestCase):
                 raise AssertionError(
                     f"daemon did not become healthy: {(self.directory / 'test-daemon.log').read_text()[-2000:]}"
                 )
-            # A healthy endpoint can precede pool startup. Observe each managed
-            # supervisor taking its lifetime lock before a short test can finish;
-            # otherwise cleanup may delete stop requests before late children boot.
-            for worker_id in health.get("managedWorkerIds", []):
-                lock = self.directory / "workers" / worker_id / "supervisor.lock"
-                deadline = time.monotonic() + 20
-                while True:
-                    held = False
-                    if lock.exists():
-                        fd = os.open(lock, os.O_RDWR)
-                        try:
-                            try:
-                                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            except BlockingIOError:
-                                held = True
-                            else:
-                                fcntl.flock(fd, fcntl.LOCK_UN)
-                        finally:
-                            os.close(fd)
-                    if held:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise AssertionError(f"Managed test worker did not start: {worker_id}")
-                    time.sleep(0.05)
             yield process
         finally:
             if process.poll() is None:

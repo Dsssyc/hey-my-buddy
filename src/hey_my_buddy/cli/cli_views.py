@@ -395,7 +395,7 @@ def submit_receipt(response: dict) -> dict:
 
 _TASK_BRIEF = (
     "runId",
-    # Execution records address the same identity as taskId; external callers use it.
+    # Execution records address the same identity as taskId.
     "taskId",
     "requestId",
     "adapter",
@@ -407,7 +407,6 @@ _TASK_BRIEF = (
     "expectedSeconds",
     "routerBudgetSeconds",
     "selectedAttemptId",
-    "workerId",
     "attemptGeneration",
     "attemptState",
     "resultAvailable",
@@ -533,7 +532,7 @@ def _await_result(result: Any) -> Any:
     if isinstance(turn, dict):
         brief["turn"] = {key: value for key, value in turn.items() if value is not None and value != []}
         if turn.get("summary"):
-            # The structured turn summary is the Worker's report; the runner's stdout
+            # The structured turn summary is the execution's report; the runner's stdout
             # head repeats it and stays readable through the result command.
             brief.pop("finalText", None)
             brief.pop("finalTextTruncated", None)

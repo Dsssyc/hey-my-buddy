@@ -17,8 +17,9 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import base, controller
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.runtime import windows_process
-from hey_my_buddy.buddy.runtime.windows_process import ProcessCreationEvidence
+from hey_my_buddy.protocol import owned_process as windows_process
+from hey_my_buddy.protocol.owned_process import ProcessCreationEvidence
+from hey_my_buddy.protocol import process_controller, process_handle
 from hey_my_buddy.buddy.harnesses.controller import (
     ControllerCollection,
     collect_controller,
@@ -60,7 +61,7 @@ def partial_log_open_failure(*, close_error=False):
                 raise state["close_error"]
 
     try:
-        with mock.patch.object(base.os, "open", open_file), mock.patch.object(base.os, "close", close):
+        with mock.patch.object(process_handle.os, "open", open_file), mock.patch.object(process_handle.os, "close", close):
             yield state
     finally:
         if state["stdout"] is not None:
@@ -80,8 +81,8 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
     """A real private controller writes its receipt before one post-spawn FD fault."""
     state = {"error": OSError(errno.EIO, "fixture controller log close failed"),
              "process": None, "descriptors": [], "closed": [], "observations": 0}
-    original_open = controller.open_logs
-    original_spawn = controller.owned_popen
+    original_open = process_controller.open_logs
+    original_spawn = process_controller.owned_popen
     original_close = os.close
     original_killpg = os.killpg
     original_observe = ProcessHandle.shutdown_confirmed
@@ -125,12 +126,12 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
         return original_killpg(pgid, sig)
 
     try:
-        with mock.patch.object(controller, "open_logs", open_logs), \
-             mock.patch.object(controller, "owned_popen", spawn), \
-             mock.patch.object(controller.os, "close", close), \
+        with mock.patch.object(process_controller, "open_logs", open_logs), \
+             mock.patch.object(process_controller, "owned_popen", spawn), \
+             mock.patch.object(process_controller.os, "close", close), \
              mock.patch.object(ProcessHandle, "shutdown_confirmed", observe):
             if observation_blocked:
-                with mock.patch.object(controller.os, "killpg", killpg):
+                with mock.patch.object(process_controller.os, "killpg", killpg):
                     yield state
             else:
                 yield state
@@ -200,7 +201,7 @@ class PartialLogOpenTests(unittest.TestCase):
 
     def test_partial_open_failure_never_spawns_and_carries_no_child_receipt(self):
         with partial_log_open_failure() as state, \
-             mock.patch.object(controller, "owned_popen", wraps=controller.owned_popen) as spawn:
+             mock.patch.object(process_controller, "owned_popen", wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"], str(self.root), {}),
                                   log_paths=self.paths)
@@ -252,14 +253,14 @@ class LaunchControllerTests(unittest.TestCase):
             trace.append("prepare")
             return (["fixture"], str(self.root), {"FIXTURE": "1"})
 
-        original_open_logs = controller.open_logs
+        original_open_logs = process_controller.open_logs
 
         def traced_open_logs(paths):
             trace.append("logs")
             return original_open_logs(paths)
 
-        with mock.patch.object(controller, "open_logs", traced_open_logs), \
-                mock.patch.object(controller, "owned_popen", return_value=process) as spawn:
+        with mock.patch.object(process_controller, "open_logs", traced_open_logs), \
+                mock.patch.object(process_controller, "owned_popen", return_value=process) as spawn:
             handle = launch_controller(prepare=prepare, log_paths=self.log_paths)
         self.assertEqual(trace, ["logs", "prepare"])
         arguments, keyword = spawn.call_args
@@ -277,13 +278,13 @@ class LaunchControllerTests(unittest.TestCase):
         self.assertEqual(handle.log_paths, self.log_paths)
 
     def test_positive_timeout_stamps_now_plus_timeout_and_grace(self):
-        with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()):
+        with mock.patch.object(process_controller, "owned_popen", return_value=FakeProcess()):
             handle = launch_controller(prepare=lambda: (["fixture"], None, {}),
                                        log_paths=self.log_paths, timeout_seconds=5, grace_seconds=10)
         self.assertAlmostEqual(handle.deadline, time.monotonic() + 15, delta=1.0)
 
     def test_discovery_launch_without_timeout_stamps_no_deadline(self):
-        with mock.patch.object(controller, "owned_popen", return_value=FakeProcess()) as spawn:
+        with mock.patch.object(process_controller, "owned_popen", return_value=FakeProcess()) as spawn:
             handle = launch_controller(prepare=lambda: (["fixture"], None, {}), log_paths=self.log_paths)
         self.assertFalse(hasattr(handle, "deadline"))
         self.assertIsNone(spawn.call_args.kwargs["cwd"])
@@ -305,8 +306,8 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def test_log_open_emfile_proves_spawn_was_never_called(self):
         error = OSError(errno.EMFILE, "fixture logs exhausted")
-        with mock.patch.object(controller, "open_logs", side_effect=error), \
-             mock.patch.object(controller, "owned_popen", wraps=controller.owned_popen) as spawn:
+        with mock.patch.object(process_controller, "open_logs", side_effect=error), \
+             mock.patch.object(process_controller, "owned_popen", wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 self.launch()
         spawn.assert_not_called()
@@ -316,15 +317,15 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
     def test_prepare_failure_proves_no_child_and_closes_both_logs(self):
         error = ValueError("fixture command preparation failed")
         opened = []
-        original_open = controller.open_logs
+        original_open = process_controller.open_logs
 
         def open_logs(paths):
             pair = original_open(paths)
             opened.extend(pair)
             return pair
 
-        with mock.patch.object(controller, "open_logs", open_logs), \
-             mock.patch.object(controller, "owned_popen", wraps=controller.owned_popen) as spawn:
+        with mock.patch.object(process_controller, "open_logs", open_logs), \
+             mock.patch.object(process_controller, "owned_popen", wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(ValueError) as caught:
                 launch_controller(prepare=mock.Mock(side_effect=error), log_paths=self.paths)
         spawn.assert_not_called()
@@ -352,7 +353,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
         if not stopped:
             process.kill = mock.Mock(side_effect=OSError("fixture held child cannot be killed"))
         original_spawn = windows_process.owned_popen
-        original_open = controller.open_logs
+        original_open = process_controller.open_logs
         original_close = os.close
         seen = []
         opened = []
@@ -375,9 +376,9 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
                 raise
 
         with mock.patch.object(windows_process.subprocess, "Popen", return_value=process), \
-             mock.patch.object(controller, "owned_popen", spawn), \
-             mock.patch.object(controller, "open_logs", open_logs), \
-             mock.patch.object(controller.os, "close", close):
+             mock.patch.object(process_controller, "owned_popen", spawn), \
+             mock.patch.object(process_controller, "open_logs", open_logs), \
+             mock.patch.object(process_controller.os, "close", close):
             with self.assertRaises((RuntimeError, OSError)) as caught:
                 self.launch()
         evidence = caught.exception.owned_popen_evidence
@@ -433,7 +434,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
     def test_handle_registration_failure_retains_actual_creation_fact(self):
         error = ValueError("fixture handle registration failed")
         with controller_log_close_failure(log=None) as state, \
-             mock.patch.object(controller, "ProcessHandle", side_effect=error):
+             mock.patch.object(process_controller, "ProcessHandle", side_effect=error):
             with self.assertRaises(ValueError) as caught:
                 self.launch()
             self.assertIs(caught.exception, error)
@@ -589,7 +590,7 @@ class ObservationErrorStopTests(unittest.TestCase):
             for error in (PermissionError("the group belongs to another user"),
                           OSError("the group cannot be observed")):
                 with self.subTest(error=type(error).__name__), \
-                        mock.patch("hey_my_buddy.buddy.harnesses.base.os.killpg", side_effect=error):
+                        mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
                     self.assertTrue(handle.group_alive())
                     self.assertIs(handle.shutdown_confirmed(settle_seconds=0), False)
                     collection = collect_controller(handle, read=lambda _path: None, stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))

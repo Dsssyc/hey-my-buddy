@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ..harnesses.base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
-from .windows_process import owned_popen
+from ...protocol.owned_process import owned_popen
 
 TERMINATE_GRACE_SECONDS = 3.0
 
