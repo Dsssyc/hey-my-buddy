@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSteps, defaultStep, recordSteps, stepForItem } from "./steps";
+import { buildSteps, defaultStep, stepForItem } from "./steps";
 import { OPUS, at, event, row, span, timeline } from "./task-detail.fixtures";
 
 const NOW = Date.parse(at("11:30"));
@@ -97,10 +97,6 @@ describe("the steps of a micro task", () => {
     expect(buildSteps(null, "m1", NOW).complete).toBe(false);
   });
 
-  it("has one step for a run with no collaboration record", () => {
-    expect(kinds(recordSteps("record"))).toEqual(["record"]);
-    expect(kinds(recordSteps("calculation"))).toEqual(["calculation"]);
-  });
 });
 
 describe("which step opens", () => {

@@ -3,12 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiError, createApi, errorText, parseRoutingHealth, readVerificationText, validRoutingConfiguration } from "./api";
 import { macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 
-function recordRow(runId: string) {
-  return { runId, revision: 1, task: runId, status: "completed", createdAt: "2026-10-17T00:00:00Z", updatedAt: "2001-01-01T00:00:00Z",
-    lineage: { kind: "execution", sourceHostId: null, currentHostId: null, parentRunId: null, rootRunId: null, rootLeadRunId: null, project: null, buddy: null, routingTask: null } };
-}
-
-
 describe("L4 ordered Router list configuration", () => {
   const current = { routerBuddyIds: [], routerRetryIntervalSeconds: 600,
     defaultRoutingMode: "fast", routingBudget: "brief" };
@@ -133,57 +127,24 @@ describe("command receipts", () => {
   });
 });
 
-describe("microTask history reads", () => {
-  it("sends filters and the opaque cursor through GET with the caller's abort signal", async () => {
-    const page = { runs: [], total: 120, nextCursor: "next-page" };
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(page)));
-    const api = createApi("/private/", fetcher);
-    const controller = new AbortController();
-    await expect(api.tasks({ rootsOnly: false, before: "time+id/==", limit: 50, query: "项目 A",
-      projectId: "repository:a", hostId: "Host B", filter: "host" }, controller.signal)).resolves.toEqual(page);
-    const [location, init] = fetcher.mock.calls[0];
-    const url = new URL(String(location), "http://localhost");
-    expect(url.pathname).toBe("/private/api/tasks");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ rootsOnly: "false", before: "time+id/==", limit: "50",
-      query: "项目 A", projectId: "repository:a", hostId: "Host B", filter: "host" });
-    expect(init).toMatchObject({ credentials: "same-origin", cache: "no-store", signal: controller.signal });
-    expect(init?.method || "GET").toBe("GET");
-    expect(init?.body).toBeUndefined();
-  });
-
-  it("rejects incomplete history envelopes rather than treating them as an empty page", async () => {
-    for (const page of [{ runs: [], total: 0 }, { runs: {}, total: 0, nextCursor: null },
-      { runs: [], total: "0", nextCursor: null }, { runs: [], total: 0, nextCursor: 1 }]) {
-      const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(page))) as typeof fetch);
-      await expect(api.tasks({ rootsOnly: true })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
-    }
-  });
-
-  it("preserves an aborted read instead of reporting a connection failure", async () => {
-    const cancelled = new DOMException("cancelled", "AbortError");
-    const api = createApi("/private", vi.fn(async () => { throw cancelled; }) as typeof fetch);
-    await expect(api.tasks({ rootsOnly: true }, new AbortController().signal)).rejects.toBe(cancelled);
-  });
-});
-
 describe("local read verification evidence", () => {
   const early = "Fri, 09 Oct 2026 18:00:00 GMT";
   const later = "Fri, 09 Oct 2026 18:05:00 GMT";
-  const page = { runs: [recordRow("raw")], total: 1, nextCursor: null };
+  const details = { task: { runId: "raw", updatedAt: "2001-01-01T00:00:00Z" }, attempts: [], turns: [] };
   const response = (body: unknown, date?: string, etag = '"read"') => new Response(JSON.stringify(body), {
     headers: { ETag: etag, ...(date === undefined ? {} : { Date: date }) },
   });
 
-  it("keeps history DTOs unchanged and binds fresh 200/304 dates to each displayed read", async () => {
+  it("keeps task details unchanged and binds fresh 200/304 dates to each displayed read", async () => {
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response(page, early))
+      .mockResolvedValueOnce(response(details, early))
       .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }));
     const api = createApi("/private", fetcher);
-    const first = await api.tasks({ limit: 50, before: "bounded" });
-    const second = await api.tasks({ limit: 50, before: "bounded" });
-    expect(first).toEqual(page);
-    expect(second).toEqual(page);
-    expect(Object.keys(second)).toEqual(["runs", "total", "nextCursor"]);
+    const first = await api.task("raw");
+    const second = await api.task("raw");
+    expect(first).toEqual(details);
+    expect(second).toEqual(details);
+    expect(Object.keys(second as object)).toEqual(["task", "attempts", "turns"]);
     expect(api.readVerifiedAt(first)).toBe(Date.parse(early));
     expect(api.readVerifiedAt(second)).toBe(Date.parse(later));
     expect(fetcher.mock.calls[1][1]?.headers).toEqual({ "If-None-Match": '"read"' });
@@ -193,8 +154,8 @@ describe("local read verification evidence", () => {
     const clientClock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2030-01-01T00:00:00Z"));
     try {
       for (const date of [undefined, "not a server date"]) {
-        const api = createApi("", vi.fn<typeof fetch>().mockResolvedValue(response(page, date)));
-        const data = await api.tasks({ limit: 50 });
+        const api = createApi("", vi.fn<typeof fetch>().mockResolvedValue(response(details, date)));
+        const data = await api.task("raw");
         expect(api.readVerifiedAt(data)).toBeNull();
         expect(readVerificationText(api.readVerifiedAt(data))).toBe("核对时间未记录");
       }
@@ -210,20 +171,20 @@ describe("local read verification evidence", () => {
     let release!: (reply: Response) => void;
     const pending = new Promise<Response>(resolve => { release = resolve; });
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response(page, early))
+      .mockResolvedValueOnce(response(details, early))
       .mockImplementationOnce(() => pending)
       .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }))
       .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: later } }));
     const api = createApi("", fetcher);
-    const first = await api.tasks({});
-    const oldRead = api.tasks({});
-    const newest = await api.tasks({});
+    const first = await api.task("raw");
+    const oldRead = api.task("raw");
+    const newest = await api.task("raw");
     release(new Response(null, { status: 304, headers: { Date: early } }));
     const older = await oldRead;
     expect(api.readVerifiedAt(newest)).toBe(Date.parse(later));
     expect(api.readVerifiedAt(older)).toBe(Date.parse(early));
     expect(api.readVerifiedAt(first)).toBe(Date.parse(early));
-    expect(api.readVerifiedAt(await api.tasks({}))).toBe(Date.parse(later));
+    expect(api.readVerifiedAt(await api.task("raw"))).toBe(Date.parse(later));
   });
 
   it("uses bounded conditional task details with an abort signal and a separate response clock", async () => {
@@ -290,24 +251,23 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     expect(fetcher.mock.calls[1][1]?.headers).toMatchObject({ "If-None-Match": '"etag-1"' });
   });
 
-  it("caches per full URL, so different filters and pages revalidate separately", async () => {
-    const page = (runs: string[]) => ({ runs: runs.map(recordRow), total: runs.length, nextCursor: null });
+  it("caches per full URL, so different task details revalidate separately", async () => {
+    const detail = (runId: string) => ({ task: { runId }, attempts: [], turns: [] });
     const fetcher = queued([
-      () => jsonResponse(page(["a"]), '"roots-1"'),
-      () => jsonResponse(page(["b"]), '"all-1"'),
-      () => new Response(null, { status: 304, headers: { ETag: '"roots-1"' } }),
-      () => jsonResponse(page(["a"]), '"roots-2"'),
+      () => jsonResponse(detail("a"), '"task-a-1"'),
+      () => jsonResponse(detail("b"), '"task-b-1"'),
+      () => new Response(null, { status: 304, headers: { ETag: '"task-a-1"' } }),
+      () => jsonResponse(detail("b"), '"task-b-2"'),
     ]);
     const api = createApi("/private/", fetcher);
-    await api.tasks({ rootsOnly: true, limit: 50 });
-    await api.tasks({ rootsOnly: false });
+    await api.task("a");
+    await api.task("b");
     expect(fetcher.mock.calls[1][0]).not.toBe(fetcher.mock.calls[0][0]);
-    await api.tasks({ rootsOnly: true, limit: 50 });
-    expect(fetcher.mock.calls[2][1]?.headers).toMatchObject({ "If-None-Match": '"roots-1"' });
-    await api.tasks({ rootsOnly: false });
-    // The all-records URL still carries its own validator, untouched by the
-    // other page's exchanges.
-    expect(fetcher.mock.calls[3][1]?.headers).toMatchObject({ "If-None-Match": '"all-1"' });
+    await api.task("a");
+    expect(fetcher.mock.calls[2][1]?.headers).toMatchObject({ "If-None-Match": '"task-a-1"' });
+    await api.task("b");
+    // The second task URL still carries its own validator.
+    expect(fetcher.mock.calls[3][1]?.headers).toMatchObject({ "If-None-Match": '"task-b-1"' });
   });
 
   it("isolates the cache per API instance", async () => {
@@ -386,30 +346,30 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
 
   it("never publishes a reply issued before a session change after the clear", async () => {
     const sessionB = { ...snapshot, csrfToken: "csrf-b", consoleSession: { id: "session-b", canWrite: true, reason: null } };
-    let releaseTasks: ((value: Response) => void) | undefined;
-    const tasksReply = new Promise<Response>(resolve => { releaseTasks = resolve; });
+    let releaseTask: ((value: Response) => void) | undefined;
+    const taskReply = new Promise<Response>(resolve => { releaseTask = resolve; });
     const fetcher = vi.fn<typeof fetch>()
       .mockImplementationOnce(async () => jsonResponse(snapshot, '"snap-a"'))
-      .mockImplementationOnce(() => tasksReply)
+      .mockImplementationOnce(() => taskReply)
       .mockImplementationOnce(async () => jsonResponse(sessionB, '"snap-b"'))
-      .mockImplementationOnce(async () => jsonResponse({ runs: [], total: 0, nextCursor: null }, '"tasks-b"'));
+      .mockImplementationOnce(async () => jsonResponse({ task: { runId: "run" } }, '"task-b"'));
     const api = createApi("/private/", fetcher);
     await api.snapshot();
-    const inflight = api.tasks({ rootsOnly: true });
-    // The snapshot under session B clears the cache while the tasks read of
+    const inflight = api.task("run");
+    // The snapshot under session B clears the cache while the task read of
     // session A is still in the air.
     await api.snapshot();
-    releaseTasks!(jsonResponse({ runs: [], total: 0, nextCursor: null }, '"tasks-a-late"'));
+    releaseTask!(jsonResponse({ task: { runId: "run" } }, '"task-a-late"'));
     await expect(inflight).resolves.toBeTruthy();
-    // The late pre-session reply must not have published: the next tasks read
+    // The late pre-session reply must not have published: the next task read
     // carries no validator at all instead of session A's stale etag.
-    await api.tasks({ rootsOnly: true });
+    await api.task("run");
     expect((fetcher.mock.calls[3][1]?.headers as Record<string, string> | undefined)?.["If-None-Match"]).toBeUndefined();
   });
 
   it("answers a 304 with the representation this request validated, not the cache's newer body", async () => {
-    const body1 = { runs: [recordRow("one")], total: 1, nextCursor: null };
-    const body2 = { runs: [recordRow("two")], total: 1, nextCursor: null };
+    const body1 = { task: { runId: "one" } };
+    const body2 = { task: { runId: "two" } };
     let release304: ((value: Response) => void) | undefined;
     const reply304 = new Promise<Response>(resolve => { release304 = resolve; });
     const fetcher = vi.fn<typeof fetch>()
@@ -417,9 +377,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
       .mockImplementationOnce(() => reply304)
       .mockImplementationOnce(async () => jsonResponse(body2, '"e2"'));
     const api = createApi("/private/", fetcher);
-    await api.tasks({ rootsOnly: true });
-    const read2 = api.tasks({ rootsOnly: true });
-    await api.tasks({ rootsOnly: true });
+    await api.task("run");
+    const read2 = api.task("run");
+    await api.task("run");
     release304!(new Response(null, { status: 304 }));
     // The 304 validated this request's own e1 representation; the newer body
     // the cache now holds must not be handed to this caller instead.
@@ -432,13 +392,13 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     const reply304 = new Promise<Response>(resolve => { release304 = resolve; });
     const fetcher = vi.fn<typeof fetch>()
       .mockImplementationOnce(async () => jsonResponse(snapshot, '"snap-a"'))
-      .mockImplementationOnce(async () => jsonResponse({ runs: [], total: 0, nextCursor: null }, '"e1"'))
+      .mockImplementationOnce(async () => jsonResponse({ task: { runId: "run" } }, '"e1"'))
       .mockImplementationOnce(() => reply304)
       .mockImplementationOnce(async () => jsonResponse(sessionB, '"snap-b"'));
     const api = createApi("/private/", fetcher);
     await api.snapshot();
-    await api.tasks({ rootsOnly: true });
-    const read2 = api.tasks({ rootsOnly: true });
+    await api.task("run");
+    const read2 = api.task("run");
     await api.snapshot();
     release304!(new Response(null, { status: 304 }));
     await expect(read2).rejects.toHaveProperty("code", "INVALID_RESPONSE");
@@ -448,9 +408,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // ABA guard: the per-URL slot is released on completion, but tickets come
     // from one global counter — a third request's freshly issued slot must
     // not match an older read's late reply.
-    const first = { runs: [recordRow("first")], total: 1, nextCursor: null };
-    const second = { runs: [recordRow("second")], total: 1, nextCursor: null };
-    const third = { runs: [recordRow("third")], total: 1, nextCursor: null };
+    const first = { task: { runId: "first" } };
+    const second = { task: { runId: "second" } };
+    const third = { task: { runId: "third" } };
     let releaseSlow: ((value: Response) => void) | undefined;
     const slowReply = new Promise<Response>(resolve => { releaseSlow = resolve; });
     let releaseThird: ((value: Response) => void) | undefined;
@@ -461,9 +421,9 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
       .mockImplementationOnce(() => thirdReply)
       .mockImplementationOnce(async () => jsonResponse(third, '"e3"'));
     const api = createApi("/private/", fetcher);
-    const slow = api.tasks({ rootsOnly: true });
-    await api.tasks({ rootsOnly: true });
-    const thirdRead = api.tasks({ rootsOnly: true });
+    const slow = api.task("run");
+    await api.task("run");
+    const thirdRead = api.task("run");
     // The first read's reply lands after the third request was issued; the
     // third request's own reply lands last of the three.
     releaseSlow!(jsonResponse(first, '"e1"'));
@@ -472,7 +432,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     await expect(thirdRead).resolves.toBeTruthy();
     // The third request's own reply wins the entry: the next read revalidates
     // with e3, never with the slow reply's e1.
-    await api.tasks({ rootsOnly: true });
+    await api.task("run");
     expect(fetcher.mock.calls[3][1]?.headers).toMatchObject({ "If-None-Match": '"e3"' });
   });
 
@@ -480,8 +440,8 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     // The ticket is held through the body read and the publication verdict is
     // evaluated when the body actually arrives: a header that lands early and
     // a body that lands late must not smuggle an older etag into the cache.
-    const older = { runs: [recordRow("old")], total: 1, nextCursor: null };
-    const newer = { runs: [], total: 2, nextCursor: null };
+    const older = { task: { runId: "old" } };
+    const newer = { task: { runId: "new" } };
     let finishBody: ((value: unknown) => void) | undefined;
     const delayed = jsonResponse(older, '"older-body"');
     delayed.json = () => new Promise(resolve => { finishBody = resolve; });
@@ -490,14 +450,14 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
       .mockImplementationOnce(async () => jsonResponse(newer, '"newer-body"'))
       .mockImplementationOnce(async () => jsonResponse(newer, '"newer-body"'));
     const api = createApi("/private/", fetcher);
-    const slow = api.tasks({ query: "same" });
+    const slow = api.task("same");
     // Let the first reply's headers arrive (and its header-time bookkeeping
     // run) before the second request is even issued — the real race shape.
     await new Promise(resolve => setTimeout(resolve, 0));
-    await api.tasks({ query: "same" });
+    await api.task("same");
     finishBody!(older);
     await expect(slow).resolves.toBeTruthy();
-    await api.tasks({ query: "same" });
+    await api.task("same");
     expect(fetcher.mock.calls[2][1]?.headers).toMatchObject({ "If-None-Match": '"newer-body"' });
   });
 
@@ -516,7 +476,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
       const api = createApi("/private", vi.fn(async () => {
         throw calls++ % 2 ? new DOMException("aborted", "AbortError") : new Error("network failure");
       }) as typeof fetch);
-      for (let index = 0; index < 80; index += 1) await api.tasks({ query: `failed-${index}` }).catch(() => undefined);
+      for (let index = 0; index < 80; index += 1) await api.task(`failed-${index}`).catch(() => undefined);
       const urlMaps = observedMaps.filter(map => map.size > 0
         && [...map.keys()].every(key => typeof key === "string" && key.startsWith("/private/api")));
       // A missing release would leave one retained entry per failed URL —
@@ -527,7 +487,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     }
   });
 
-  it("keeps the successful response body cache bounded across many unique filters", async () => {
+  it("keeps the successful response body cache bounded across many task details", async () => {
     // The LRU bound (32) covers the SUCCESS path too: 80 distinct cached
     // 200+ETag bodies must evict their oldest entries instead of growing the
     // per-instance map without limit. This is the body cache — the failed/
@@ -539,8 +499,8 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
     }
     vi.stubGlobal("Map", WatchedMap);
     try {
-      const api = createApi("/private", vi.fn(async () => jsonResponse({ runs: [], total: 0, nextCursor: null }, '"tag"')) as typeof fetch);
-      for (let index = 0; index < 80; index += 1) await api.tasks({ query: `bound-${index}` });
+      const api = createApi("/private", vi.fn(async () => jsonResponse({ task: { runId: "bound" } }, '"tag"')) as typeof fetch);
+      for (let index = 0; index < 80; index += 1) await api.task(`bound-${index}`);
       const urlMaps = observedMaps.filter(map => map.size > 0
         && [...map.keys()].every(key => typeof key === "string" && key.startsWith("/private/api")));
       // Success bodies really are cached (this is not the failed-path cleanup),
@@ -671,11 +631,11 @@ describe("what the data layer says when a read fails", () => {
     const failure = new ApiError("CONFLICT", "board words");
     const unreadable = createApi("", vi.fn(async () => { throw new TypeError("offline"); }) as typeof fetch);
     expect(errorText(failure)).toBe("记录冲突；请刷新核对后重试。");
-    await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "无法连接本地黑板；请刷新重试。" });
+    await expect(unreadable.task("run")).rejects.toMatchObject({ message: "无法连接本地黑板；请刷新重试。" });
     await i18n.changeLanguage("en");
     try {
       expect(errorText(failure)).toBe("The records conflict; refresh, check them and try again.");
-      await expect(unreadable.tasks({})).rejects.toMatchObject({ message: "Cannot reach the local blackboard; refresh and retry." });
+      await expect(unreadable.task("run")).rejects.toMatchObject({ message: "Cannot reach the local blackboard; refresh and retry." });
       // A code the console has no words for keeps what the board said.
       expect(errorText(new ApiError("OTHER_CODE", "board words"))).toBe("board words");
       expect(errorText("plain")).toBe("The request failed; try again later.");

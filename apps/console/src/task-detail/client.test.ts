@@ -47,34 +47,6 @@ describe("the routing decisions of a micro task", () => {
   });
 });
 
-describe("a Router calculation's own decision", () => {
-  const calculation = task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { adapter: "decision", decision: { decisionId: "d1", kind: "select" } } });
-  const selection = { decision: { decisionId: "d1", status: "completed", selectedBuddy: { harness: "codex", provider: "openai", model: "gpt-6-sol", effort: "high" },
-    routerBuddy: { harness: "codex", provider: "openai", model: "gpt-6-luna", effort: "low" }, routingMode: "fast", reason: "适合任务" } };
-
-  it("reads the compact decision after the task and retains the older verification time", async () => {
-    const command = vi.fn(async () => selection);
-    const readVerifiedAt = vi.fn((reply: unknown) => reply === selection ? 10 : 7);
-    const taskRead = vi.fn(async () => calculation);
-    const client = createTaskDetailClient({ task: taskRead, command, readVerifiedAt } as unknown as ConsoleApi, "csrf");
-    const value = await client.task("m1", new AbortController().signal);
-    expect(value.verifiedAtMs).toBe(7);
-    expect(value.value.routing).toMatchObject({ decisionId: "d1", selectedBuddy: selection.decision.selectedBuddy, reason: "适合任务" });
-    expect(command).toHaveBeenCalledExactlyOnceWith("selection_get", { decisionId: "d1" }, "csrf");
-  });
-
-  it("keeps a raw calculation without a decision ID and reads a command only once", async () => {
-    const command = vi.fn();
-    const taskRead = vi.fn(async () => calculation);
-    taskRead.mockResolvedValueOnce({ ...calculation, spec: {} });
-    const client = createTaskDetailClient({ task: taskRead, command, readVerifiedAt: () => 7 } as unknown as ConsoleApi, "csrf");
-    expect((await client.task("m1", new AbortController().signal)).value.routing).toBeNull();
-    taskRead.mockResolvedValueOnce(task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }));
-    expect((await client.task("m1", new AbortController().signal)).value.record).toBe("record");
-    expect(command).not.toHaveBeenCalled();
-  });
-});
-
 describe("the inquiries of a micro task", () => {
   it("are asked for as many as the console may, and read through the one operation that lists them", async () => {
     const command = vi.fn(async () => ({ messages: [] }));

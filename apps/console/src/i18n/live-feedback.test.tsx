@@ -66,7 +66,7 @@ it("updates a malformed save error while preserving the reminder draft and input
 it("updates a retained task-detail parser error without starting another read", async () => {
   const reads = client();
   vi.spyOn(reads, "task").mockImplementation(async () => ({ value: parseTask({}, "m1"), verifiedAtMs: null }));
-  const { result } = renderHook(() => useTaskDetail(reads, "m1", true, [], null));
+  const { result } = renderHook(() => useTaskDetail(reads, "m1", true, []));
   await waitFor(() => expect(result.current.error).not.toBe(""));
   const chinese = result.current.error;
   act(() => setLanguageChoice("en"));

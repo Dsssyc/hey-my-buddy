@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../api";
-import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseSelection, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
+import { parseAudit, parseBasis, parseInquiries, parseRoutingPage, parseTask, parseTokenUsage, parseWorkflow } from "./parse";
 import { task } from "./task-detail.fixtures";
 
 const usage = { inputTokens: 20000, cachedInputTokens: 15000, outputTokens: 800, source: "codex-native", scope: "attempt" };
@@ -173,17 +173,6 @@ describe("what a decision was bound by", () => {
   });
 });
 
-describe("a calculation's selected route", () => {
-  const buddy = { harness: "codex", provider: "openai", model: "gpt-6-sol", effort: "high" };
-  const decision = { decisionId: "d1", status: "completed", selectedBuddy: buddy, routerBuddy: buddy, routingMode: "review", reason: "适合检查", source: null };
-
-  it("reads the board's chosen buddy, reason and mode, bound to the task's decision ID", () => {
-    expect(parseSelection({ decision }, "d1")).toMatchObject({ decisionId: "d1", selectedBuddy: buddy, reason: "适合检查", routingMode: "review" });
-    expect(() => parseSelection({ decision }, "d2")).toThrow(ApiError);
-    expect(() => parseSelection({ decision: { ...decision, routingMode: "slow" } }, "d1")).toThrow(ApiError);
-  });
-});
-
 describe("the inquiries", () => {
   const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, attemptId: "a1", question: "问", author: "host", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
 
@@ -211,7 +200,7 @@ describe("the task view", () => {
   it("belongs to the run asked for and carries what the detail reads, made definite", () => {
     const view = parseTask(task(), "m1");
     expect(view.task.task).toContain("实现微任务详情");
-    expect(view).toMatchObject({ updatedAt: "2026-09-26T11:00:00Z", lead: false, record: null });
+    expect(view).toMatchObject({ updatedAt: "2026-09-26T11:00:00Z", lead: false });
     expect(view.attempt).toMatchObject({ attemptId: "att-2", active: false, overdue: false, possiblyStuck: false, activity: null, ending: null, session: null });
     expect(() => parseTask(task({ runId: "other" }), "m1")).toThrow(ApiError);
     for (const key of ["task", "status", "cwd", "createdAt", "updatedAt", "lineage"]) {
@@ -222,16 +211,16 @@ describe("the task view", () => {
   it("refuses malformed metadata and actors while accepting an unrecorded project", () => {
     expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "other" } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, project: null } }), "m1").task.lineage?.project).toBeNull();
-    expect(() => parseTask(task({ lineage: { ...task().lineage, routingTask: undefined } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ lineage: { ...task().lineage, sourceHostId: 7 } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ status: "cancelled", cancellation: { actor: { role: "robot", id: "x" }, reason: null } }), "m1")).toThrow(ApiError);
     expect(() => parseTask(task({ selectedAttempt: { reminders: null } }), "m1")).toThrow(ApiError);
   });
 
-  it("tells a run with no collaboration record, and a Router's calculation from a command", () => {
-    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "execution" } }), "m1").record).toBe("record");
-    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" } }), "m1")).toMatchObject({ record: "calculation", decisionId: null, routing: null });
-    expect(parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { decision: { decisionId: "d-1" } } }), "m1").decisionId).toBe("d-1");
-    expect(() => parseTask(task({ workflow: undefined, lineage: { ...task().lineage, kind: "decision" }, spec: { decision: { decisionId: 1 } } }), "m1")).toThrow(ApiError);
+  it("accepts micro tasks and helpers with workflows, and refuses raw records", () => {
+    expect(parseTask(task({ lineage: { ...task().lineage, kind: "helper" } }), "m1").lead).toBe(false);
+    expect(() => parseTask(task({ workflow: undefined }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "execution" } }), "m1")).toThrow(ApiError);
+    expect(() => parseTask(task({ lineage: { ...task().lineage, kind: "decision" } }), "m1")).toThrow(ApiError);
     expect(parseTask(task({ lineage: { ...task().lineage, rootLeadRunId: "lead-1" } }), "m1").lead).toBe(true);
   });
 
@@ -275,14 +264,12 @@ describe("the task view", () => {
     expect(() => parseTask(task({ status: "failed", quotaFailure: { code: "blocked" } }), "m1")).toThrow(ApiError);
   });
 
-  it("reads where the native session is kept and whether it can be resumed, and the final text of a command", () => {
+  it("reads where the native session is kept and whether it can be resumed", () => {
     const view = parseTask(task({ selectedAttempt: attempt({ result: { terminationReason: "completed", error: null, result: { stdout: "做完了", nativeSession: {
       sessionId: "s-1", storageScope: "task-private", storageOwner: "hey-my-buddy-attempt", nativeAppVisibility: "not-listed-in-native-app", resumable: true, bindingPresent: false, note: "  私有  " } } } }) }), "m1");
     expect(view.attempt!.session).toEqual({ id: "s-1", scope: "task-private", owner: "hey-my-buddy-attempt", visibility: "not-listed-in-native-app", resumable: true, binding: false, note: "私有" });
-    expect(view.attempt!.finalText).toBe("做完了");
-    // A Router's calculation names its session by its native identity.
-    const router = parseTask(task({ selectedAttempt: attempt({ result: { terminationReason: "completed", result: { nativeIdentity: { sessionId: "s-2" } } } }) }), "m1").attempt!.session;
-    expect(router).toMatchObject({ id: "s-2", scope: null, resumable: null });
+    const nativeOnly = parseTask(task({ selectedAttempt: attempt({ result: { terminationReason: "completed", result: { nativeIdentity: { sessionId: "s-2" } } } }) }), "m1").attempt!.session;
+    expect(nativeOnly).toMatchObject({ id: "s-2", scope: null, resumable: null });
   });
 
   it("keeps the basis a usage states", () => {

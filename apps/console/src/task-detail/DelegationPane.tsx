@@ -56,12 +56,12 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
         ...(workflow.delegationAuthority ? [[t("delegation.authority"), t("delegation.authorityYes")] as [string, string]] : []),
       ]} />
     </Section>
-    {workflow.children.length > 0 && <Section name={t("delegation.helpers")}>
-      <ul className="space-y-1.5">{workflow.children.map(child => {
+    {workflow.children.some(child => child.role !== "router") && <Section name={t("delegation.helpers")}>
+      <ul className="space-y-1.5">{workflow.children.filter(child => child.role !== "router").map(child => {
         const word = HELPER_WORD[child.state];
         return <li key={child.taskId} className="flex flex-wrap items-center gap-x-2">
           <StateMark kind={word.mark} />
-          <LinkButton hint={child.taskId} onClick={() => ctx.open(child.taskId)}>{child.role === "router" ? t("delegation.calculation") : title(child.taskId)}</LinkButton>
+          <LinkButton hint={child.taskId} onClick={() => ctx.open(child.taskId)}>{title(child.taskId)}</LinkButton>
           <span className={cn("text-xs", word.mark === "hand" ? "text-hand" : word.mark === "fail" ? "text-fail" : "text-ink2")}>
             {t(`state.${word.key === "attention" ? (view.lead ? "lead" : "host") : word.key}`)}
           </span>

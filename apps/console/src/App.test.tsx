@@ -3,7 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
 import type { ConsoleApi } from "./api";
-import type { Snapshot, Task, TaskQuery } from "./types";
+import type { Snapshot } from "./types";
 import { listed, note, pane, selectModel } from "./buddies/page.testing";
 
 const FLASH = "dsh / deepseek-official / deepseek-flash";
@@ -51,102 +51,6 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
-  it("renders a never-claimed cancellation read-only, without retry or acceptance controls", async () => {
-    const state = initial();
-    const records: Task[] = [
-      {
-        runId: "cancelled-before-claim",
-        task: "未执行的测试任务",
-        status: "cancelled",
-        owner: "fixture",
-        cwd: "/fixture",
-        revision: 2,
-        createdAt: "2026-09-22T00:00:00Z",
-        acceptedAt: null,
-        acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-        activeAttemptId: null,
-        selectedAttemptId: null,
-        shutdownConfirmed: false,
-        resultAvailable: false,
-      },
-    ];
-    const api = {
-      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
-      snapshot: vi.fn(async () => state),
-      command: vi.fn(async () => ({})),
-      task: vi.fn(async () => records[0]),
-      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
-        total: rootsOnly ? 0 : records.length, nextCursor: null })),
-      macroTasks: vi.fn(async () => emptyMacroTasks()),
-    } as unknown as ConsoleApi;
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "记录" }));
-    await user.click(
-      await screen.findByRole("button", { name: /未执行的测试任务/ }),
-    );
-    // 0.15.1 U4: task_retry/task_cancel/task_acknowledge are gone from the browser.
-    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
-    expect(api.command).not.toHaveBeenCalled();
-    await user.click(within(screen.getByRole("region", { name: "记录详情" })).getByRole("button", { name: "记录" }));
-    expect(await screen.findByText("选择一条记录。")).toBeTruthy();
-  });
-
-  it("renders the persisted worker receipt and refuses retry when a process may survive", async () => {
-    const state = initial();
-    const records: Task[] = [
-      {
-        runId: "unconfirmed-run",
-        task: "停止证据测试",
-        status: "failed",
-        owner: "fixture",
-        cwd: "/fixture",
-        revision: 3,
-        createdAt: "2026-09-22T00:00:00Z", updatedAt: "2026-09-22T00:01:00Z",
-        lineage: { kind: "execution", sourceHostId: "fixture", currentHostId: "fixture", parentRunId: null, rootRunId: "stop-evidence", rootLeadRunId: null, routingTask: null,
-          project: { id: "fixture", label: "fixture", path: "/fixture" }, buddy: null },
-        acceptedAt: null,
-        acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
-        activeAttemptId: "attempt",
-        selectedAttemptId: "attempt",
-        shutdownConfirmed: false,
-        resultAvailable: true,
-      },
-    ];
-    const api = {
-      runtimeVersion: vi.fn(async () => ({ running: { mode: "source", softwareVersion: null, contractVersion: null, schemaVersion: null, sourceCommit: null, installedAt: null }, installed: null })),
-      snapshot: vi.fn(async () => state),
-      command: vi.fn(),
-      task: vi.fn(async () => ({
-        ...records[0],
-        selectedAttempt: {
-          attemptId: "attempt", startedAt: "2026-09-22T00:00:00Z", finishedAt: null, error: null, shutdownConfirmed: false, tokenUsage: null,
-          reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false },
-          result: {
-            status: "failed",
-            result: { finalText: "真实回执中的产物说明" },
-            shutdownConfirmed: false,
-          },
-        },
-      })),
-      tasks: vi.fn(async ({ rootsOnly }: TaskQuery) => ({ runs: rootsOnly ? [] : records,
-        total: rootsOnly ? 0 : records.length, nextCursor: null })),
-      macroTasks: vi.fn(async () => emptyMacroTasks()),
-    } as unknown as ConsoleApi;
-    const user = userEvent.setup();
-    render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "记录" }));
-    await user.click(
-      await screen.findByRole("button", { name: /停止证据测试/ }),
-    );
-    expect(await screen.findByText("真实回执中的产物说明")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
-    expect(api.command).not.toHaveBeenCalled();
-  });
-
   it("viewing, editing locally and switching pages never sends a write or model request", async () => {
     const state = initial();
     const api = {
@@ -154,14 +58,12 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
-      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
     render(<App suppliedApi={api} />);
-    await user.click(await screen.findByRole("button", { name: "记录" }));
-    await screen.findByText("选择一条记录。");
-    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
+    await screen.findByRole("heading", { name: "还没有宏任务" });
+    await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     // There is no global edit switch: controls are directly editable, and no
     // save bar appears until the user actually changes something.
@@ -174,7 +76,7 @@ describe("console interactions", () => {
     // The save bar belongs to Buddy alone; the draft is kept without any
     // leave confirmation and no save happens by navigating away.
     expect(screen.queryByRole("region", { name: "未保存的修改" })).toBeNull();
-    await user.click(screen.getByRole("link", { name: /Buddy/ }));
+    await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /Buddy/ }));
     expect(note()).toHaveProperty("value", "本地草稿");
     expect(screen.getByRole("region", { name: "未保存的修改" })).toBeTruthy();
     expect(within(pane()).getAllByRole("textbox")).toHaveLength(2);
@@ -190,7 +92,6 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command: vi.fn(),
       task: vi.fn(),
-      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
@@ -207,7 +108,7 @@ describe("console interactions", () => {
     window.location.hash = "#settings";
     render(<App suppliedApi={api} />);
     await screen.findByRole("heading", { name: "主题" });
-    await user.click(screen.getByRole("link", { name: /^Buddy/ }));
+    await user.click(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: /^Buddy/ }));
     await listed(1, 1);
     await user.click(screen.getByRole("link", { name: "设置" }));
     await screen.findByRole("heading", { name: "主题" });
@@ -225,7 +126,6 @@ describe("console interactions", () => {
       snapshot: vi.fn(async () => structuredClone(state)),
       command,
       task: vi.fn(),
-      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     const user = userEvent.setup();
@@ -246,7 +146,6 @@ describe("console interactions", () => {
     const api = {
       snapshot: failure ? vi.fn(async () => { throw new Error("fixture offline"); }) : vi.fn(async () => initial()),
       command: vi.fn(),
-      tasks: vi.fn(async () => ({ runs: [], total: 0, nextCursor: null })),
       macroTasks: vi.fn(async () => emptyMacroTasks()),
     } as unknown as ConsoleApi;
     render(<App suppliedApi={api} />);

@@ -188,12 +188,6 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-export type TaskPage = { runs: Task[]; total: number; nextCursor: string | null };
-export type TaskQuery = {
-  limit?: number; before?: string; rootsOnly?: boolean;
-  query?: string; projectId?: string; hostId?: string;
-  filter?: "all" | "active" | "host" | "review";
-};
 export type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string };
 
 export type Task = {

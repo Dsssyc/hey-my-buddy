@@ -17,8 +17,8 @@ function Mark({ step }: { step: Step }) {
   if (step.kind === "acceptance" && !step.pending && step.events.some(event => event.kind === "accept")) {
     return <StateMark kind="done" className={cn("relative z-10 self-center justify-self-center row-span-2 bg-[var(--rail-ring)]", ring)} />;
   }
-  if (step.kind === "turn" || step.kind === "record") return <i className={cn("relative z-10 row-span-2 size-2.5 self-center justify-self-center", tone, ring)} />;
-  if (step.kind === "routing" || step.kind === "calculation") {
+  if (step.kind === "turn") return <i className={cn("relative z-10 row-span-2 size-2.5 self-center justify-self-center", tone, ring)} />;
+  if (step.kind === "routing") {
     return <i className={cn("relative z-10 row-span-2 size-2.5 self-center justify-self-center border-[1.5px] border-past bg-[var(--rail-ring)]", ring)} />;
   }
   if (step.kind === "delegation" || step.kind === "handoff") return <i className={cn("relative z-10 row-span-2 size-2 self-center justify-self-center rounded-full bg-past", ring)} />;
@@ -45,12 +45,12 @@ function Entry({ step, selected, index, last, onSelect, buddyName, lead, reminde
   const owner = step.events[0]?.actor;
   const small = step.kind === "handoff" ? [modelEffort(step.from), modelEffort(step.to)].filter(Boolean).join(" → ")
     : buddyName(step) ?? (owner ? `${actorRoleText(owner.role)} · ${owner.id}` : null);
-  const mark = step.kind === "turn" || step.kind === "record" ? step.outcome : null;
+  const mark = step.kind === "turn" ? step.outcome : null;
   // What a running turn is reminded of takes the place of the word that it runs.
   const reminded = mark === "running" ? reminder : null;
   const word = reminded ? shell(`reminders.${reminded}`) : mark === "running" ? t("state.running") : mark === "failed" ? t("state.failed")
     : mark === "unknown" ? t("state.unknown") : step.pending ? t(step.kind === "acceptance" ? "wait.acceptance" : lead ? "wait.lead" : "wait.host") : null;
-  const right = step.kind === "turn" || step.kind === "routing" || step.kind === "record" || step.kind === "calculation"
+  const right = step.kind === "turn" || step.kind === "routing"
     ? (step.ms !== null ? formatDuration(step.ms) : null)
     : step.at !== null ? formatClockMinutes(step.at) : null;
   return <li className={cn("relative before:absolute before:inset-y-0 before:left-[21px] before:border-l-[1.5px] before:border-ink3",

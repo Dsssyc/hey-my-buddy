@@ -48,7 +48,7 @@ describe("macro task list", () => {
     expect(within(row).getByLabelText("已验收 2")).toBeTruthy();
     await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
   });
-  it("combines waiting counts and chooses waiting, running, failure, accepted and idle marks in that order", () => {
+  it("draws only actionable state edges, names the state and keeps the count marks", () => {
     const p = props();
     const variants = [
       { host: 1, review: 2, active: 1, failed: 1, accepted: 0 },
@@ -57,16 +57,36 @@ describe("macro task list", () => {
       { host: 0, review: 0, active: 0, failed: 0, accepted: 1 },
       { host: 0, review: 0, active: 0, failed: 0, accepted: 0 },
     ];
-    p.rows = variants.map((counts, index) => ({ ...p.rows[0], macroTaskId: `macro-${index}`, title: `标题 ${index}`, counts: { ...p.rows[0].counts, roots: 1, ...counts } }));
+    p.rows = variants.map((counts, index) => ({ ...p.rows[0], macroTaskId: `macro-${index}`, title: `标题 ${index}`, counts: { ...p.rows[0].counts, roots: 1, ended: counts.active ? 0 : 1, ...counts } }));
     render(<MacroTaskList {...p}/>);
     const rows = [...document.querySelectorAll('[data-slot="macro-entry"]')];
-    expect(rows.map(row => row.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind"))).toEqual(["hand", "live", "fail", "done", "idle"]);
+    expect(rows.map(row => row.classList.contains("before:bg-hand-mark"))).toEqual([true, false, false, false, false]);
+    expect(rows.map(row => row.classList.contains("before:bg-live"))).toEqual([false, true, false, false, false]);
+    expect(rows.map(row => row.classList.contains("before:w-[3px]"))).toEqual([true, true, false, false, false]);
+    expect(rows.every(row => !row.querySelector(":scope > [data-slot=state-mark]"))).toBe(true);
+    for (const [index, status] of ["等人接手", "进行中", "失败", "已验收", "已结束"].entries()) {
+      expect(screen.getByRole("button", { name: `标题 ${index} · ${status}` })).toBe(rows[index]);
+    }
+    expect(rows[2].querySelector('[data-slot="macro-entry-counts"] [data-kind="fail"] path')).toBeTruthy();
     expect(within(rows[0] as HTMLElement).getByLabelText("等人接手 3")).toBeTruthy();
     expect(rows[0].querySelectorAll('[data-slot="macro-entry-counts"] [data-kind="hand"]')).toHaveLength(1);
     expect(within(rows[2] as HTMLElement).getByLabelText("失败 1")).toBeTruthy();
     expect(rows[0].hasAttribute("aria-description")).toBe(false);
     expect(screen.getByRole("tab", { name: "等待 Host 1" }).hasAttribute("aria-description")).toBe(false);
     expect(screen.getByRole("textbox").getAttribute("data-slot")).toBe("macro-search");
+  });
+  it("selects with a wash while retaining only the state's edge and protecting it on hover", () => {
+    const p = props(); p.rows = [{ ...p.rows[0], counts: { ...p.rows[0].counts, host: 0, review: 0, active: 1 } }];
+    const view = render(<MacroTaskList {...p} selected={null}/>);
+    const row = document.querySelector('[data-slot="macro-entry"]')!;
+    const edge = [...row.classList].filter(name => name.startsWith("before:"));
+    view.rerender(<MacroTaskList {...p} selected={p.rows[0].macroTaskId}/>);
+    expect(row.getAttribute("aria-pressed")).toBe("true");
+    expect(row.classList.contains("bg-live-wash")).toBe(true);
+    expect(row.classList.contains("aria-pressed:hover:bg-live-wash")).toBe(true);
+    expect([...row.classList].filter(name => name.startsWith("before:"))).toEqual(edge);
+    expect(row.classList.contains("transition-colors")).toBe(true);
+    expect(row.classList.contains("motion-reduce:transition-none")).toBe(true);
   });
   it("uses first line with provenance in Hint, clips it at 40 characters and names missing titles", () => {
     const p = props(); p.rows = [{ ...p.rows[0], titleSource: "task", title: "任".repeat(80) }, { ...p.rows[1], titleSource: "none", title: "" }];

@@ -128,7 +128,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   // computed over every run, never inferred from a page of recent rows.
   const pending = snapshot.tasks.pendingCount;
   const saveRefusal = editor.saveBlockedReason;
-  // Draft banners belong to the Buddy settings page; the records page shows none.
+  // Draft banners belong to the Buddy settings page.
   const draftTab = tab === "buddies";
   const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
   // What a mark on a tab means; the tab shows it on hover and on focus.

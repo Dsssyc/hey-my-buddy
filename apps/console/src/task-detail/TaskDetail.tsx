@@ -14,9 +14,8 @@ import { Header } from "./Header";
 import { placeInquiries } from "./inquiries";
 import { modelEffort } from "./names";
 import { Rail } from "./Rail";
-import { RecordPane } from "./RecordPane";
 import { RoutingPane } from "./RoutingPane";
-import { buildSteps, defaultStep, recordSteps, stepForItem } from "./steps";
+import { buildSteps, defaultStep, stepForItem } from "./steps";
 import type { Step, Steps } from "./steps";
 import { TurnPane } from "./TurnPane";
 import type { Context, TaskView, Workflow } from "./types";
@@ -35,10 +34,6 @@ type Props = {
   /** The timeline item the detail was opened from: it names the step to open on. */
   origin: string | null;
   active: boolean;
-  /** What going back leads to: the macro task's timeline, or the list of records. */
-  backTo?: "timeline" | "records";
-  /** The revision the list the detail was opened from reads for this run: a new one reads it again. */
-  listed?: number | null;
   /** The step the detail shows changed, by the reader or by the detail choosing a first one. */
   onStep: (step: number) => void;
   onBack: () => void;
@@ -70,16 +65,15 @@ function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): n
  * It reads through the client it is given, hands the address back to its owner,
  * and writes nothing.
  */
-export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, step, origin, active, backTo = "timeline", listed = null, onStep, onBack, onOpenRun }: Props) {
+export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
   const { t } = useTranslation("taskDetail");
   const now = nowMs ?? Date.now();
   const decisionIds = useMemo(() => (timeline?.spans ?? []).flatMap(span => (span.runId === runId && span.kind === "routing" && span.decisionId ? [span.decisionId] : [])), [timeline, runId]);
-  const read = useTaskDetail(client, runId, active, decisionIds, listed);
+  const read = useTaskDetail(client, runId, active, decisionIds);
   const { view, workflow } = read;
   const row = timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
   const steps: Steps | null = useMemo(() => {
     if (view === null) return null;
-    if (view.record !== null) return recordSteps(view.record);
     return timelineLoading ? null : buildSteps(timeline, runId, now);
   }, [view, timeline, timelineLoading, runId, now]);
   const asked = useMemo(() => (steps && read.inquiries ? placeInquiries(read.inquiries.items, steps, now) : {}), [steps, read.inquiries, now]);
@@ -106,22 +100,21 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
   }, [active, onBack]);
 
   // The view brings its own hints, so that it stands in any page.
-  const recordDetail = view?.record != null || (view === null && backTo === "records");
   const bare = (body: ReactNode) => <TooltipProvider delayDuration={300}>
-    <section data-slot="task-detail" aria-label={t(recordDetail ? "record.label" : "label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card max-[760px]:flex-none">{body}</section>
+    <section data-slot="task-detail" aria-label={t("label")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-card max-[760px]:flex-none">{body}</section>
   </TooltipProvider>;
   if (!view) {
     return bare(<div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       {read.error
         ? <>
-          <h2 className="text-base font-semibold">{t(recordDetail ? "record.failed" : "failed")}</h2>
+          <h2 className="text-base font-semibold">{t("failed")}</h2>
           <p role="alert" className="max-w-prose text-fail wrap-anywhere">{read.error}</p>
           <div className="flex gap-2">
             <Button variant="outline" onClick={read.refresh}>{t("retry")}</Button>
-            <Button variant="outline" onClick={onBack}>{t(`back.${backTo}`)}</Button>
+            <Button variant="outline" onClick={onBack}>{t("back.timeline")}</Button>
           </div>
         </>
-        : <p role="status" className="text-ink2">{t(recordDetail ? "record.loading" : "loading")}</p>}
+        : <p role="status" className="text-ink2">{t("loading")}</p>}
     </div>);
   }
   const ctx: Context | null = workflow ? {
@@ -136,10 +129,8 @@ export function TaskDetail({ client, runId, timeline, timelineLoading, nowMs, st
     ? attempt.possiblyStuck ? "possiblyStuck" as const : attempt.overdue ? "overdue" as const : null : null);
   return bare(<>
     <Header view={view} workflow={workflow} turns={workflow ? workflow.counts.turns : null} endMs={elapsedEnd(view, workflow, now)} nowMs={now}
-      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} backTo={backTo} onBack={onBack} onRefresh={read.refresh} />
-    {steps && current && view.record !== null
-      ? <RecordPane step={current} view={view} onOpenRun={onOpenRun} />
-      : steps && current && ctx
+      verifiedAtMs={read.verifiedAtMs} error={read.error} busy={read.busy} onBack={onBack} onRefresh={read.refresh} />
+    {steps && current && ctx
       ? <div className="grid min-h-0 flex-1 grid-cols-[300px_minmax(0,1fr)] max-[760px]:flex-none max-[760px]:grid-cols-1 max-[760px]:grid-rows-[auto_auto]">
         <ScrollArea className="min-h-0 bg-background max-[760px]:border-b min-[761px]:border-r max-[760px]:[&>[data-slot=scroll-area-viewport]]:max-h-[40dvh]">
           <div className="w-0 min-w-full">
