@@ -49,8 +49,6 @@ FIXTURE_CATALOG = {
         {
             "provider": "deepseek-official",
             "displayName": "DeepSeek",
-            "packageName": "@deepseek-ai/dsh-llm-deepseek",
-            "packageVersion": "test",
             "harness": "dsh",
             "efforts": ["off", "low", "high", "max"],
             "models": [

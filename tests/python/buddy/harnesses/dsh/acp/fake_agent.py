@@ -139,6 +139,7 @@ class FakeAgent:
         self.emit_tool_update = args.emit_tool_update
         self.bare_final = args.bare_final
         self.session_record = args.session_record
+        self.config_options_fixture = args.config_options_fixture
         self.stderr_note = args.stderr_note
         self.emit_foreign_chunk = args.emit_foreign_chunk
         self.spam_unknown_kinds = args.spam_unknown_kinds
@@ -437,6 +438,13 @@ class FakeAgent:
             self.close_stubs()
             os._exit(0)
 
+    def config_options_for(self, model_value: str, effort_value: str) -> list:
+        """A recorded reply's configuration options, when a fixture names them."""
+        if self.config_options_fixture:
+            document = json.loads(native_path(Path(self.config_options_fixture)).read_text(encoding="utf-8"))
+            return document["configOptions"]
+        return config_options(model_value, effort_value)
+
     def answer(self, method: str, params: dict) -> dict:
         if method == "initialize":
             return {"result": {
@@ -459,8 +467,8 @@ class FakeAgent:
                     break
             self.sessions[session_id] = session
             return {"result": {"sessionId": session_id, "modes": None,
-                               "configOptions": config_options(self.sessions[session_id]["model"],
-                                                               self.sessions[session_id]["effort"]),
+                               "configOptions": self.config_options_for(self.sessions[session_id]["model"],
+                                                                        self.sessions[session_id]["effort"]),
                                "mountedMcp": mounted}}
         if method == "session/set_config_option":
             session = self.sessions.get(params.get("sessionId"))
@@ -470,7 +478,7 @@ class FakeAgent:
                 session["model"] = params.get("value")
             elif params.get("configId") == "reasoning_effort":
                 session["effort"] = params.get("value")
-            return {"result": {"configOptions": config_options(session["model"], session["effort"])}}
+            return {"result": {"configOptions": self.config_options_for(session["model"], session["effort"])}}
         if method == "session/list" and "session/list" in self.error_data_on:
             return {"error": {"code": -32000, "message": "SAFE-TEST-MARKER-in-message",
                               "data": {"marker": "SAFE-TEST-MARKER-in-data"}}}
@@ -492,7 +500,7 @@ class FakeAgent:
             if self.replay_history:
                 self.replayed_history(params.get("sessionId"))
             answer = {"result": {"modes": None,
-                                 "configOptions": config_options(session["model"], session["effort"])}}
+                                 "configOptions": self.config_options_for(session["model"], session["effort"])}}
             if self.resume_echo_foreign_id:
                 # The observed answer carries no session id at all; an agent
                 # that echoes one naming another session is the mismatch case.
@@ -1187,6 +1195,8 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                                  "resume-flood"],
                         help="write one synthetic session.v3 rollout under the patch-pinned sessions root; "
                              "the resume* modes shape the resumed turn's rollout boundary")
+    parser.add_argument("--config-options-fixture",
+                        help="serve this JSON document's configOptions list as every session's configuration options")
     parser.add_argument("--stderr-note", default=None,
                         help="write one line to stderr at startup, for the tail mirror")
     parser.add_argument("--emit-foreign-chunk", action="store_true",

@@ -1,0 +1,53 @@
+{
+ "comment": "The configOptions of one session/new reply, recorded verbatim from the installed DSH CLI 0.2.1-rc.2 ACP agent on 2026-10-29 (initialize and session/new only; no prompt was sent). The model selector names the provider in each option value and in its group key. The initialize reply of the same session reported authMethods: [] and no account or balance field.",
+ "configOptions": [
+  {
+   "id": "model",
+   "name": "Model",
+   "category": "model",
+   "type": "select",
+   "currentValue": "[\"deepseek-official\",\"deepseek-v4-flash\"]",
+   "options": [
+    {
+     "group": "deepseek-official",
+     "name": "DeepSeek",
+     "options": [
+      {
+       "value": "[\"deepseek-official\",\"deepseek-v4-flash\"]",
+       "name": "deepseek-v4-flash"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "reasoning_effort",
+   "name": "Reasoning effort",
+   "category": "thought_level",
+   "type": "select",
+   "currentValue": "high",
+   "options": [
+    {
+     "value": "off",
+     "name": "Off",
+     "description": "Use for simple tasks that do not need reasoning."
+    },
+    {
+     "value": "low",
+     "name": "Low",
+     "description": "Prefer for routine or latency-sensitive tasks."
+    },
+    {
+     "value": "high",
+     "name": "High",
+     "description": "The default balance for most tasks."
+    },
+    {
+     "value": "max",
+     "name": "Max",
+     "description": "Reserve for the hardest quality-first tasks."
+    }
+   ]
+  }
+ ]
+}

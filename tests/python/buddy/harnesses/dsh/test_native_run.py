@@ -1510,6 +1510,41 @@ class DiscoveryTests(NativeRunCase):
             cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
             native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False, **kwargs)
 
+    def test_a_recorded_acp_reply_reaches_the_official_providers_billing_label(self):
+        """One recorded native reply, through real discovery, catalog and health.
+
+        The guarded boundary is the agreement between the two ends: the provider
+        identity the ACP session's model selector reports — the group key and
+        each option value's first element — is exactly what the blackboard's
+        billing rule reads, so a discovery-format change that loses it, or a
+        billing rule that stops reading it, fails here. This does not guard
+        DSH's future output: when the installed agent changes its reply, the
+        recorded fixture changes with it.
+        """
+        fixture = Path(__file__).with_name('fixtures') / 'session-config-dsh-cli-0.2.1-rc.2.json'
+        self.extra_agent_args = ["--prompt-mode", "final", "--config-options-fixture", str(fixture)]
+        receipt = self.discover()
+        self.assertEqual([entry["provider"] for entry in receipt["providers"]], ["deepseek-official"])
+        self.assertEqual([model["id"] for model in receipt["providers"][0]["models"]], ["deepseek-v4-flash"])
+        from hey_my_buddy.blackboard.catalog import catalog
+        from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore
+        from hey_my_buddy.blackboard.service.harness_health import read_health
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        board = BoardStore(self.base / "board")
+        self.addCleanup(board.db.close)
+        board.initialize()
+        board.evaluation = EvaluationStore(board)
+        with board.db.write() as db:
+            db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES('dsh','ready',?)",
+                       (json.dumps({"reason": None}),))
+        board.evaluation.record_catalog(catalog.discovery_payload(receipt, harness="dsh"))
+        with board.db.read() as db:
+            updated_at = db.execute("SELECT updated_at FROM catalog_current WHERE harness='dsh'").fetchone()[0]
+            billing = read_health(db, "dsh")["billingByProvider"]
+        self.assertEqual(billing, {"deepseek-official": {"kind": "metered",
+                                                         "source": "dsh/provider-identity",
+                                                         "observedAt": updated_at}})
+
     def test_a_discovery_failure_carries_its_own_unconfirmed_stop_fact(self):
         # The error carries this operation's own stop fact for the outer layers:
         # an unobservable group stays False instead of being guessed from the
