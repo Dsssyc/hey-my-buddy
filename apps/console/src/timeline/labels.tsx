@@ -1,17 +1,21 @@
 import { useLayoutEffect, useRef, useState } from "react";
 
 export type Interval = { left: number; right: number };
-export type Label = Interval & { text: string; y: number; className: string };
+export type Occupancy = Interval & { kind: "label" | "obstacle" };
+export type Label = Interval & { kind: "label"; text: string; y: number; className: string };
 
-/** Keep twelve pixels between neighbours. Full, short, then no label. */
-export function fitLabel(candidates: readonly string[], bounds: Interval, occupied: readonly Interval[], measure: (text: string) => number, preferred = bounds.left): (Interval & { text: string }) | null {
+/** Text neighbours need twelve pixels; shapes need four. Full, short, then no label. */
+export function fitLabel(candidates: readonly string[], bounds: Interval, occupied: readonly Occupancy[], measure: (text: string) => number, preferred = bounds.left): (Interval & { kind: "label"; text: string }) | null {
   const free: Interval[] = [];
   let left = bounds.left;
-  for (const item of [...occupied].sort((a, b) => a.left - b.left)) {
-    const before = item.left - 12, after = item.right + 12;
-    if (after <= left || before >= bounds.right) continue;
-    if (before > left) free.push({ left, right: Math.min(bounds.right, before) });
-    left = Math.max(left, after);
+  const blocked = occupied.map(item => {
+    const gap = item.kind === "label" ? 12 : 4;
+    return { left: item.left - gap, right: item.right + gap };
+  }).sort((a, b) => a.left - b.left);
+  for (const item of blocked) {
+    if (item.right <= left || item.left >= bounds.right) continue;
+    if (item.left > left) free.push({ left, right: Math.min(bounds.right, item.left) });
+    left = Math.max(left, item.right);
   }
   if (left < bounds.right) free.push({ left, right: bounds.right });
   for (const text of candidates) {
@@ -21,7 +25,7 @@ export function fitLabel(candidates: readonly string[], bounds: Interval, occupi
       .sort((a, b) => Math.abs(Math.max(a.left, Math.min(preferred, a.right - width)) - preferred) - Math.abs(Math.max(b.left, Math.min(preferred, b.right - width)) - preferred))[0];
     if (room) {
       const x = Math.max(room.left, Math.min(preferred, room.right - width));
-      return { text, left: x, right: x + width };
+      return { kind: "label", text, left: x, right: x + width };
     }
   }
   return null;

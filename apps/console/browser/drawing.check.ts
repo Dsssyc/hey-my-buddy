@@ -122,6 +122,12 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       }));
       expect(outsideDurations).toEqual([]);
       await expectDrawingGeometry(page);
+      const acceptedTrack = page.locator('[data-slot="timeline-track"]').first();
+      const acceptedMark = (await acceptedTrack.locator('[data-slot="accept-mark"] circle').boundingBox())!;
+      const acceptedText = (await acceptedTrack.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? "已验收" : "Accepted" }).boundingBox())!;
+      const acceptanceGap = acceptedText.x - acceptedMark.x - acceptedMark.width;
+      expect(acceptanceGap).toBeGreaterThanOrEqual(3.25);
+      expect(acceptanceGap).toBeLessThanOrEqual(4.75);
       const now = page.locator('[data-slot="timeline-axis"] [data-slot="axis-label"].fill-live');
       await expect(now).toContainText(locale === "zh-CN" ? "现在" : "Now");
       if (locale === "zh-CN") {

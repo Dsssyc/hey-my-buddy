@@ -10,7 +10,7 @@ import { parseTimelineInstant as instant } from "./instant";
 import { formatClock, formatClockMinutes, formatDuration } from "../i18n/format";
 import { acceptanceInterval } from "./acceptance";
 import { fitLabel, useTextMeasure } from "./labels";
-import type { Interval, Label } from "./labels";
+import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerKey } from "./MarkerCluster";
 import type { TimelineMarker } from "./MarkerCluster";
 
@@ -55,17 +55,18 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds }: 
   const pointerWidth = pointer === null ? 0 : measure(pointer) + 8;
   const pointerLeft = Math.max(pointerBounds?.left ?? 0, Math.min((pointerBounds?.right ?? width) - pointerWidth, pointerX ?? 0));
   const nowLeft = Math.max(0, Math.min(width - measure(now), nowX - measure(now)));
-  const occupied: Interval[] = [];
-  if (ongoing) occupied.push({ left: nowLeft - 8, right: nowLeft + measure(now) + 4 });
+  const occupied: Occupancy[] = [];
+  if (ongoing) occupied.push({ kind: "label", left: nowLeft, right: nowLeft + measure(now) });
   const visibleGapLabels = new Set<number>();
   scale.breaks.forEach((gap, index) => {
     const center = (gap.startX + gap.endX) / 2, labelWidth = measure(gapLabels[index]!);
     const left = center - labelWidth / 2, right = center + labelWidth / 2;
-    if (left >= 0 && right <= width && occupied.every(item => right + 4 <= item.left || left - 4 >= item.right)) {
+    const label = fitLabel([gapLabels[index]!], { left, right }, occupied, measure);
+    if (left >= 0 && right <= width && label) {
       visibleGapLabels.add(gap.startMs);
-      occupied.push({ left: left - 4, right: right + 4 });
+      occupied.push(label);
     }
-    occupied.push({ left: gap.startX - 4, right: gap.endX + 4 });
+    occupied.push({ kind: "obstacle", left: gap.startX, right: gap.endX });
   });
   const labels: Label[] = [];
   for (const tick of scale.ticks.filter(item => item.labeled)) {
@@ -155,8 +156,8 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
   const labels: Label[] = [];
-  const occupied: Record<number, Interval[]> = { 12: [], 35: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? 11 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ left: mark.x - mark.radius, right: mark.x + mark.radius })), 58: [] };
-  const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Interval[] = []) => {
+  const occupied: Record<number, Occupancy[]> = { 12: [], 35: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? 11 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ kind: "obstacle" as const, left: mark.x - mark.radius, right: mark.x + mark.radius })), 58: [] };
+  const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Occupancy[] = []) => {
     const label = fitLabel(texts, { left: Math.max(0, left), right: Math.min(scale.widthPx, right) }, [...occupied[y]!, ...blocks], measure, preferred);
     if (label) { labels.push({ ...label, y, className }); occupied[y]!.push(label); }
   };
@@ -169,7 +170,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     const text = eventName(marker.event), room = measure(text) + 20;
     if (allMarkers.some(other => other !== marker && Math.abs(other.x - marker.x) < room)) continue;
     const next = Math.min(scale.widthPx, ...allMarkers.filter(other => other.x > marker.x).map(other => other.x - 10));
-    add([text], marker.x + 10, next, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ left: item.start - 4, right: item.end + 4 })));
+    add([text], marker.x + 10, next, 35, "fill-ink2", marker.x + 10, positioned.filter(item => item.execution).map(item => ({ kind: "obstacle" as const, left: item.start, right: item.end })));
   }
   if (acceptance && acceptanceOpen) add([acceptanceLabel, t("review"), acceptance.duration!], acceptance.start + 10, acceptance.end, 12, "fill-hand");
   for (const item of positioned) {

@@ -25,9 +25,9 @@ describe("measured timeline labels", () => {
     expect(fitLabel(["full", "short"], { left: 0, right: 30 }, [], width)).toBeNull();
   });
   it("keeps labels clear of marks and previously placed text", () => {
-    const first = fitLabel(["full", "short"], { left: 0, right: 200 }, [{ left: 0, right: 40 }, { left: 100, right: 120 }], text => text === "full" ? 100 : 35)!;
-    const next = fitLabel(["next"], { left: 0, right: 200 }, [first, { left: 0, right: 40 }, { left: 100, right: 120 }], () => 35)!;
-    expect(first.left).toBe(52); expect(first.right).toBe(87); expect(next.left).toBeGreaterThanOrEqual(first.right + 12);
+    const first = fitLabel(["full", "short"], { left: 0, right: 200 }, [{ kind: "obstacle", left: 0, right: 40 }, { kind: "obstacle", left: 100, right: 120 }], text => text === "full" ? 100 : 35)!;
+    const next = fitLabel(["next"], { left: 0, right: 200 }, [first, { kind: "obstacle", left: 0, right: 40 }, { kind: "obstacle", left: 100, right: 120 }], () => 35)!;
+    expect(first.left).toBe(44); expect(first.right).toBe(79); expect(next.left).toBeGreaterThanOrEqual(first.right + 12);
   });
 });
 
@@ -203,4 +203,19 @@ it("does not put a clock inside a compressed interval", () => {
   const gap = folded.breaks[0]!;
   render(<Axis scale={folded} ongoing nowMs={Date.parse(at(40))} pointerX={(gap.startX + gap.endX) / 2}/>);
   expect(slot("pointer-clock")).toBeNull();
+});
+
+it("keeps labels four pixels from shapes while keeping twelve pixels between labels", () => {
+  const obstacle = { kind: "obstacle" as const, left: 0, right: 20 };
+  const text = fitLabel(["15 min"], { left: 0, right: 60 }, [obstacle], () => 35)!;
+  expect(text.left - obstacle.right).toBe(4);
+  const next = fitLabel(["Accepted"], { left: text.right, right: 100 }, [obstacle, text], () => 20)!;
+  expect(next.left - text.right).toBe(12);
+});
+
+it("merges mixed shape and label clearances before finding free space", () => {
+  const occupied = [{ kind: "obstacle" as const, left: 100, right: 110 }, { kind: "label" as const, left: 105, right: 130 }];
+  expect(fitLabel(["too wide"], { left: 0, right: 200 }, occupied, () => 95)).toBeNull();
+  const label = fitLabel(["fits"], { left: 0, right: 200 }, occupied, () => 90)!;
+  expect(occupied[1]!.left - label.right).toBeGreaterThanOrEqual(12);
 });
