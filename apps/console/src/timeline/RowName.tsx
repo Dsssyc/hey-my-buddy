@@ -50,7 +50,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
-    className={cn("group relative flex w-full shrink-0 select-none flex-col justify-center gap-1 border-t px-3 text-left outline-none transition-colors duration-150 motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
+    className={cn("group relative flex w-full shrink-0 select-none flex-col justify-center gap-1 border-t px-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
       tall ? "h-[60px] border-t-0" : "h-[52px]",
       current ? "bg-selected-row hover:bg-selected-row" : "hover:bg-sunk")}
     style={{ paddingLeft: 13 + (laneLevel ?? row.depth) * 18 }} data-state-tone={tone ?? "queued"}>
