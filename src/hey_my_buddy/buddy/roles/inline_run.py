@@ -31,7 +31,7 @@ from .turn_io import _private_bytes, guard_private_path
 def _inline_live(control, request, services, state_dir: Path, handle):
     capabilities = (EXISTING_CAPABILITIES[request.harness] if getattr(services, "inquiry", None)
                     else LiveCapabilities(inquiry_delivery="unsupported"))
-    endpoint = CTwoLiveEndpoint(request.identity, capabilities, None, state_dir=state_dir)
+    endpoint = CTwoLiveEndpoint(request.identity, capabilities)
     server = run_execution.execution_live_server()
     try:
         if server is not None:
@@ -140,8 +140,6 @@ def _wrap_up_usage(first: RunResult, summary: RunResult) -> FrozenJson | None:
 
 def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, dict, int]:
     module = run_seam(control["harness"])
-    if module is None:
-        raise BoardError("ROLE_RUN_UNREGISTERED", "The role run requires a registered harness")
     started = time.monotonic()
     input_error = None
     if control["operation"] == "worker":

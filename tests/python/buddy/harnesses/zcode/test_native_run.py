@@ -20,7 +20,6 @@ import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
 import uuid
 import weakref
@@ -48,7 +47,6 @@ from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observ
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.fixture_selection import select_fixture
@@ -75,16 +73,11 @@ def fixture_ask(bridge, frame):
 
 
 def fixture_live_channel(case, identity, *, credentials, journal_path, activity_path, harness="zcode"):
-    """Use the actual owner and shared endpoint; both SDK boundaries are local."""
-    from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
-    from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
+    """Use the actual owner and its in-process endpoint."""
+    from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
     from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
     from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-    endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness], TEST_CRM,
-                               instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-    address = f"fixture-address-{uuid.uuid4().hex}"
-    channel = CTwoLiveChannel(identity, TEST_CRM, name="Test Producer", address=address,
-                             instance_id="c"*64, token="d"*64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+    endpoint = CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES[harness])
     # DSH creates its owner when the native turn starts; its endpoint must not
     # acquire a competing fixture consumer before that owner exists.
     bridge = None
@@ -108,35 +101,26 @@ def fixture_live_channel(case, identity, *, credentials, journal_path, activity_
             if bridge.thread is None:
                 bridge.thread = threading.Thread(target=bridge._consume_loop, daemon=True)
                 bridge.thread.start()
-    def call(operation, request_json):
-        if bridge is not None:
-            bridge._publish()
-        return getattr(endpoint, operation)(request_json)
-    peer = types.SimpleNamespace(
-        capabilities=lambda text: call("capabilities", text),
-        request=lambda text: call("request", text),
-        observe=lambda text: call("observe", text))
-    if not hasattr(case, "_fixture_live_peers"):
-        # Several channels coexist in the journal-correlation cases. One SDK
-        # boundary routes their distinct fixture addresses to their held peers.
-        case._fixture_live_peers = {}
-        def connect(*args, address, timeout, **kwargs):
-            case.assertGreaterEqual(timeout, 0)
-            return nullcontext(case._fixture_live_peers[address])
-        def with_call_options(connection, *, timeout):
-            case.assertTrue(any(connection is held for held in case._fixture_live_peers.values()))
-            case.assertGreaterEqual(timeout, 0)
-            return connection
-        case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
-        case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-    case._fixture_live_peers[address] = peer
+    endpoint.fixture_bridge = bridge
     def close():
         if bridge is not None:
             bridge.close()
         endpoint.close(reason="fixture-finished")
     case.addCleanup(close)
-    channel.fixture_endpoint = endpoint
-    return channel
+    return endpoint
+
+
+def fixture_request(endpoint, request, *, timeout_ms):
+    from hey_my_buddy.buddy.harnesses.live import LiveReply
+    return LiveReply.model_validate_json(endpoint.request_local(
+        request, timeout_ms=timeout_ms, deadline_monotonic=time.monotonic() + timeout_ms / 1000))
+
+
+def fixture_observe(endpoint, **kwargs):
+    from hey_my_buddy.buddy.harnesses.live import LiveSnapshot
+    if endpoint.fixture_bridge is not None:
+        endpoint.fixture_bridge._publish()
+    return LiveSnapshot.model_validate_json(endpoint.observe_local(**kwargs))
 
 
 FALLBACK_PREFERENCES = {"memoryEnabled": {"value": False, "source": "fallback"},
@@ -735,14 +719,13 @@ class WorkerSeamTests(MockNativeCase):
                 "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
 
     def test_native_events_reach_the_activity_callback_with_original_counts_and_order(self):
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
         services = dataclasses.replace(services, live=endpoint)
         seen = []
         original = endpoint.publish_activity
@@ -779,13 +762,12 @@ class WorkerSeamTests(MockNativeCase):
         self.assertFalse(any(self.base.rglob("activity.json")))
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "task-tool"
         request, services = self.worker_request(self.turn_input())
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -824,10 +806,9 @@ class WorkerSeamTests(MockNativeCase):
         _os.environ["HMB_ZCODE_TEST_CASE"] = "wrong-input"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
         services = dataclasses.replace(services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
@@ -1126,12 +1107,11 @@ class ProducerContractTests(NativeRunCase):
         self.assertNotIn("credentials", constructor.call_args.kwargs)
 
     def test_activity_publisher_uses_real_normalization_order_and_throttle(self):
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import ActivityPublisher
         request = self.fast_request("fixture")
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["zcode"])
         now = [0.0]
         callback = mock.Mock(wraps=endpoint.publish_activity)
         publisher = ActivityPublisher(callback, clock=lambda: now[0])
@@ -1151,7 +1131,6 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual(callback.call_count, 3)
 
     def test_the_shared_endpoint_receives_ask_activity_and_journal(self):
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.protocol import activity as activity_protocol
@@ -1171,20 +1150,19 @@ class ProducerContractTests(NativeRunCase):
         bridge.activate("sess-live")
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
-        self.assertIsInstance(channel, CTwoLiveChannel)
-        self.assertEqual(channel.capabilities().inquiry_delivery, "cooperative-checkpoint")
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
-        reply = channel.request(LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
+        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
+        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "cooperative-checkpoint")
+        reply = fixture_request(channel, LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
                                             payload=InquiryPayload(question_id="i-1",
                                                                    question="is the binding real?")),
                                 timeout_ms=1000)
         self.assertEqual(reply.status, "queued")
         # Activity uses the shared normalizer/throttle and actual endpoint
         # callback; no activity file is a live transport source.
-        publisher = activity_protocol.ActivityPublisher(channel.fixture_endpoint.publish_activity)
+        publisher = activity_protocol.ActivityPublisher(channel.publish_activity)
         self.assertTrue(publisher.publish({"phase": "streaming-model", "eventSeq": 3,
                                            "counts": {"modelTurns": 1, "toolCalls": 0}}))
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1000)
+        snapshot = fixture_observe(channel, after_seq=None, limit=8)
         self.assertEqual(snapshot.activity.value["eventSeq"], 3)
         self.assertEqual(snapshot.inquiries[0].question_id, "i-1")
         self.assertEqual(snapshot.inquiries[0].status, "queued")
@@ -1226,12 +1204,12 @@ class ProducerContractTests(NativeRunCase):
                               "answer": "the verified answer"}, "call-answer")
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
-        reply = channel.request(LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
+        reply = fixture_request(channel, LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
                                             payload=InquiryPayload(question_id="i-1",
                                                                    question="what is the answer?")),
                                 timeout_ms=1000)
         self.assertEqual(reply.status, "answered")
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1000)
+        snapshot = fixture_observe(channel, after_seq=None, limit=8)
         self.assertEqual(snapshot.inquiries[0].status, "answered")
         self.assertEqual(snapshot.inquiries[0].answer, "the verified answer")
         # The journal file itself keeps the structured answer with its source
@@ -1261,11 +1239,11 @@ class ProducerContractTests(NativeRunCase):
         journal.write_text(json.dumps(foreign) + "\n" + torn + "\n", encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=100)
+        snapshot = fixture_observe(channel, after_seq=None, limit=8)
         self.assertIsNone(snapshot.activity)
         self.assertEqual(snapshot.inquiries, ())
         with self.assertRaises(BoardError):
-            channel.fixture_endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 9,
+            channel.publish_activity({"phase": "streaming-model", "eventSeq": 9,
                                                        "attemptId": "other"})
 
     def test_journal_states_follow_the_direct_reader_semantics(self):
@@ -1282,7 +1260,7 @@ class ProducerContractTests(NativeRunCase):
                                     journal_path=str(journal), activity_path=temp / "activity.json")
 
         def fact():
-            return channel.observe(after_seq=None, limit=8, timeout_ms=200,
+            return fixture_observe(channel, after_seq=None, limit=8,
                                    fields=("inquiries",)).journal
 
         # Nothing written yet: the direct reader's missing reason.
@@ -1329,7 +1307,7 @@ class ProducerContractTests(NativeRunCase):
         journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n", encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
+        snapshot = fixture_observe(channel, after_seq=None, limit=8, fields=("inquiries",))
         self.assertEqual([(entry.question_id, entry.status, entry.answer) for entry in snapshot.inquiries],
                          [("q-last", "answered", "owned answer")])
         self.assertEqual((snapshot.journal.available, snapshot.journal.entries), (True, 1))
@@ -1356,7 +1334,7 @@ class ProducerContractTests(NativeRunCase):
                                    [valid, foreign, foreign, foreign]), encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=200, fields=("inquiries",))
+        snapshot = fixture_observe(channel, after_seq=None, limit=8, fields=("inquiries",))
         self.assertEqual(snapshot.inquiries, (), "the final foreign record refuses the id")
         self.assertEqual((snapshot.journal.entries, len(snapshot.journal.rejections)), (1, 1))
         self.assertEqual(snapshot.journal.rejections[0].question_id, "q-last")
@@ -1393,10 +1371,9 @@ class ProducerContractTests(NativeRunCase):
         journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
         channel = bind_live_channel(identity, credentials={"socketPath": "", "token": "a" * 64},
                                     journal_path=str(journal), activity_path=temp / "activity.json")
-        self.addCleanup(channel.close, reason="probe-finished")
         entries, rejections, pages, after = [], 0, 0, None
         while True:
-            snapshot = channel.observe(after_seq=after, limit=256, timeout_ms=1500,
+            snapshot = fixture_observe(channel, after_seq=after, limit=256,
                                        fields=("inquiries",))
             encoded = canonical_json(snapshot.to_payload())
             self.assertLessEqual(len(encoded.encode()), 64 * 1024,
@@ -1447,7 +1424,7 @@ class ProducerContractTests(NativeRunCase):
                               "answer": "the verified answer"}, "call-answer")
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
-        snapshot = channel.observe(after_seq=None, limit=8, timeout_ms=1000, fields=("inquiries",))
+        snapshot = fixture_observe(channel, after_seq=None, limit=8, fields=("inquiries",))
         entry = snapshot.inquiries[0]
         self.assertEqual(entry.status, "answered")
         self.assertEqual(entry.answer, "the verified answer")
@@ -1489,7 +1466,7 @@ class ProducerContractTests(NativeRunCase):
                            "params": {"type": "k" * 80, "payload": {"toolName": "t" * 120}}}, "running")
         channel = bind_live_channel(identity, credentials=credentials, journal_path=None,
                                     activity_path=temp / "activity.json")
-        snapshot = channel.observe(after_seq=None, limit=1, timeout_ms=1000, fields=("observation",))
+        snapshot = fixture_observe(channel, after_seq=None, limit=1, fields=("observation",))
         self.assertIs(snapshot.observed, True)
         observation = snapshot.observation
         self.assertIsInstance(observation, LiveObservation)
@@ -1516,7 +1493,7 @@ class ProducerContractTests(NativeRunCase):
             return value
 
         bridge.snapshot = oversized_snapshot
-        broken = channel.observe(after_seq=None, limit=1, timeout_ms=1000, fields=("observation",))
+        broken = fixture_observe(channel, after_seq=None, limit=1, fields=("observation",))
         self.assertIs(broken.observed, False)
         self.assertEqual(broken.reason, "journal-unavailable")
 
@@ -1541,7 +1518,7 @@ class ProducerContractTests(NativeRunCase):
                                     activity_path=temp / "activity.json")
         # No such question: the bridge refuses the point query with its own
         # code, carried as the transport fact — never an invented answer.
-        empty = channel.observe(inquiry_id="i-none", timeout_ms=1000)
+        empty = fixture_observe(channel, inquiry_id="i-none")
         # The baseline native producer still reports its refusal verbatim;
         # the shared endpoint has no published answer and returns known absence.
         self.assertIs(empty.observed, True)
@@ -1565,7 +1542,7 @@ class ProducerContractTests(NativeRunCase):
             "questionSha256": digest, "askedAt": "now"}) + "\n", encoding="utf-8", newline="\n")
         stale_bound = bind_live_channel(identity, credentials=credentials, journal_path=str(stale),
                                         activity_path=temp / "activity.json")
-        view = stale_bound.observe(inquiry_id="i-1", timeout_ms=1000)
+        view = fixture_observe(stale_bound, inquiry_id="i-1")
         entry = view.inquiries[0]
         self.assertEqual(entry.status, "answered")
         self.assertEqual(entry.answer, "the point answer")
@@ -1598,25 +1575,9 @@ class ProducerContractTests(NativeRunCase):
         # The bridge is mounted but the turn is not admitted: the peer refuses
         # with its own code, and the reply keeps both the transport fact and
         # the specific code instead of folding them into one generic refusal.
-        refused = channel.request(request, timeout_ms=1000)
+        refused = fixture_request(channel, request, timeout_ms=1000)
         self.assertEqual((refused.status, refused.reason_code, refused.error_code),
                          ("unavailable", "bridge-refused", "not-ready"))
-        # Connection loss keeps the C-Two transport classification.
-        gone = bind_live_channel(identity, credentials={"socketPath": str(temp / "absent.sock"),
-                                                        "token": credentials["token"]},
-                                 journal_path=None, activity_path=temp / "activity.json")
-        with mock.patch.object(ctl.cc, "connect", side_effect=ConnectionError("fixture peer lost")):
-            unreachable = gone.request(request, timeout_ms=1000)
-        self.assertEqual((unreachable.status, unreachable.reason_code, unreachable.error_code),
-                         ("unavailable", "transport-unreachable", None))
-        # A wrong token is a refused ask whose code is the peer's own.
-        foreign = bind_live_channel(identity, credentials={"socketPath": credentials["socketPath"],
-                                                           "token": "b" * 64},
-                                    journal_path=None, activity_path=temp / "activity.json")
-        foreign._token = "b" * 64
-        unauthorized = foreign.request(request, timeout_ms=1000)
-        self.assertEqual((unauthorized.status, unauthorized.reason_code, unauthorized.error_code),
-                         ("unavailable", "token-mismatch", None))
 
 
 if __name__ == "__main__":

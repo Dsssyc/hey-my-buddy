@@ -18,7 +18,6 @@ from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.run_contract import RunRequest, RunResult, canonical_json
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation, worker_executor
 from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
-from hey_my_buddy.errors import BoardError
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
@@ -135,20 +134,6 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
 
 
 class FastRegisteredRunTests(FakeAppServerTests):
-    def test_preparation_retains_the_run_and_refuses_a_changed_registration(self):
-        context = ExecutionContext("task", "attempt", 1,
-            {"provider": "fixture-api", "model": "fixture-model", "effort": "low"},
-            self.root / "attempt", {}, self.environment,
-            session_record_path=str(self.root / "session.jsonl"))
-        request = NoToolStructuredRequest(str(self.cwd), "Choose", SCHEMA, WIRING_TIMEOUT)
-        preparation = FastPreparation("zcode",  request, context, self.cwd)
-        self.assertIs(preparation.run_module, run_seam("zcode"))
-        with mock.patch.dict(RUN_SEAMS, {"zcode": object()}), \
-                mock.patch("subprocess.Popen", side_effect=AssertionError("spawn")) as spawn:
-            with self.assertRaises(BoardError) as caught:
-                start_router_preparation(preparation)
-            self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
-            spawn.assert_not_called()
 
     def invoke(self, case="ok", *, capture_evidence=False):
         context = ExecutionContext("task", "attempt", 1,

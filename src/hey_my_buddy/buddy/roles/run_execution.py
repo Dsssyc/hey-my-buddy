@@ -201,7 +201,7 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
     top_level = fast_evidence_is_top_level(result.harness)
     if top_level or request.capture_evidence and payload["status"] == "ok":
         module = run_seam(result.harness)
-        if module is None or not callable(getattr(module, "native_evidence", None)):
+        if not callable(getattr(module, "native_evidence", None)):
             raise BoardError("ROLE_RUN_UNREGISTERED", "The registered run has no native evidence projection")
         evidence = module.native_evidence(result)
         if top_level:
@@ -834,7 +834,7 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
     try:
         try:
             module = run_seam(name)
-            if module is None or not callable(getattr(module, specification["seam"], None)):
+            if not callable(getattr(module, specification["seam"], None)):
                 raise BoardError(specification["unavailableCode"],
                                  f"The harness has no registered {operation} operation", harness=name)
             directory = Path(tempfile.mkdtemp(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-"))

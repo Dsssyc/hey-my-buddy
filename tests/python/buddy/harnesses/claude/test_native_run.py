@@ -39,9 +39,8 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.roles.worker_services import OUTCOME_SCHEMA as WORKER_SCHEMA
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import tool_evidence
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
@@ -1170,8 +1169,7 @@ class RoleSurfaceTests(NativeRunCase):
         self.use_fixture(STREAM_FIXTURE)
         self.fixture_case("clean")
         request = self.request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["claude"], HarnessRunLive,
-                                   instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["claude"])
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
@@ -1182,13 +1180,8 @@ class RoleSurfaceTests(NativeRunCase):
         self.assertEqual(payloads[-1]["counts"], {"modelTurns": 1, "toolCalls": 1})
         self.assertTrue(all(normalize_activity(payload) == payload for payload in payloads))
         self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
-        query = LiveWireObserve(identity=request.identity, instance_id="a" * 64, token="b" * 64,
-                                fields=("activity",), limit=10)
-        snapshot = json.loads(endpoint.observe(json.dumps(query.to_payload())))
+        snapshot = json.loads(endpoint.observe_local(fields=("activity",), limit=10))
         self.assertEqual(snapshot["activity"], result.activity.value)
-        foreign = query.model_copy(update={"identity": request.identity.model_copy(
-            update={"attempt_id": "other-attempt"})})
-        self.assertIsNone(json.loads(endpoint.observe(json.dumps(foreign.to_payload())))["activity"])
         self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
 
     def test_refused_activity_publication_keeps_native_final_activity(self):

@@ -408,10 +408,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         identity = RunIdentity(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
                                generation=attempt["generation"], invocation_id="activity-invocation",
                                turn_id="activity-turn", input_sha256="f" * 64)
-        endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
-            None, instance_id="a" * 64, token="b" * 64,
-            state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.addCleanup(endpoint.close, reason="fixture-finished")
+        endpoint = ctl.CTwoLiveEndpoint(identity, LiveCapabilities(inquiry_delivery="cooperative-checkpoint"))
         control.handle.live_endpoint = endpoint
         return endpoint
 

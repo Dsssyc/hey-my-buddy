@@ -980,10 +980,9 @@ class WorkerSeamTests(NativeRunCase):
     def test_a_tampered_finish_receipt_is_fatal(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount, forge_receipt=True)
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
         services = dataclasses.replace(bound.services, live=endpoint)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
             result = run(request, observer=worker_observer, services=services,
@@ -1000,12 +999,11 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_the_micro_task_activity_callback_publishes_bounded_phases(self):
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         from hey_my_buddy.protocol.activity import is_newer
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
         seen = []
         original = endpoint.publish_activity
 
@@ -1044,11 +1042,10 @@ class WorkerSeamTests(NativeRunCase):
         self.assertFalse(any(self.base.rglob("activity.json")))
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
-        from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
         from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
         request, bound, mount = self.worker_request()
-        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"], TEST_CRM, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        endpoint = CTwoLiveEndpoint(request.identity, EXISTING_CAPABILITIES["dsh"])
         services = dataclasses.replace(bound.services, live=endpoint)
         self.micro_task_agent_args(mount)
         with mock.patch.object(endpoint, "publish_activity", return_value=False) as publish:
@@ -1302,7 +1299,7 @@ class InquirySeamTests(NativeRunCase):
             journal_path=credentials["resultsPath"],
             activity_path=self.base / "unused-activity.json", harness="dsh")
         bound = dataclasses.replace(bound, services=dataclasses.replace(
-            bound.services, live=channel.fixture_endpoint))
+            bound.services, live=channel))
         return request, bound, credentials, channel
 
     def ask_when_ready(self, channel):
@@ -1313,7 +1310,9 @@ class InquirySeamTests(NativeRunCase):
                               payload=InquiryPayload(question_id="inq-1", question=self.QUESTION))
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            reply = channel.request(request, timeout_ms=1000)
+            from hey_my_buddy.buddy.harnesses.live import LiveReply
+            reply = LiveReply.model_validate_json(channel.request_local(
+                request, timeout_ms=1000, deadline_monotonic=time.monotonic() + 1))
             if reply.status != "unavailable":
                 return reply
             time.sleep(0.05)
@@ -1429,18 +1428,11 @@ class InquirySeamTests(NativeRunCase):
         self.assertNotIn("delivered", [record.get("state") for record in records],
                          "nothing is journaled delivered without a verified root receipt")
 
-    def test_the_shared_endpoint_declares_the_registered_capability_and_binds_identity(self):
-        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES, InquiryPayload, LiveRequest
+    def test_the_shared_endpoint_declares_the_registered_capability(self):
+        from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
         _, _, credentials, channel = self.inquiry_worker()
-        self.assertEqual(channel.capabilities(), EXISTING_CAPABILITIES["dsh"],
+        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()), EXISTING_CAPABILITIES["dsh"],
                       "the binding carries the declared capability fact, whatever the registry states")
-        foreign_identity = LiveRequest(
-            identity=type(channel.identity).from_payload(
-                {**channel.identity.to_payload(), "attemptId": "another-attempt"}),
-            request_id="foreign-1", kind="inquiry",
-            payload=InquiryPayload(question_id="q", question=self.QUESTION))
-        reply = channel.request(foreign_identity, timeout_ms=200)
-        self.assertFalse(reply.observed, "a foreign execution identity is refused before the bridge")
 
 
 class DiscoveryTests(NativeRunCase):

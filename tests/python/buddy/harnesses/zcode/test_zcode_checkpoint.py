@@ -1,9 +1,8 @@
 """End-to-end cooperative ZCode inquiry flows against the real runner and fixture.
 
 Every test here drives the real adapter, controller, native fixture and the
-run's own C-Two live endpoint: the test process is the holder, binds the
-channel through the held control's ``live`` material and ready descriptor,
-queues a Host question through the real ``request`` operation while the turn
+run's in-process live endpoint: the test process is the holder,
+queues a Host question through ``request_local`` while the turn
 is live, and reads the durable journal through the attempt-private
 ``resultsPath`` the integrated inquiry entry publishes. The fixture's root
 model picks the question up through the real ``hey_my_buddy_checkpoint`` tool,
@@ -51,12 +50,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         for key in ('state', 'runtime', 'home', 'ipcRoot'):
             self.assertNotEqual(own.live[key], peer.live[key], key)
         self.assertNotEqual(own.live['attemptId'], peer.live['attemptId'])
-        # Each controller owns one endpoint: the holder-held live materials and
-        # the published ready descriptors never cross the two private runs.
-        own_material, peer_material = own.live, peer.live
-        self.assertNotEqual(own_material['instanceId'], peer_material['instanceId'])
-        self.assertNotEqual(own_material['token'], peer_material['token'])
-        self.assertNotEqual(own_material['address'], peer_material['address'])
+        self.assertNotEqual(own.live['controllerPid'], peer.live['controllerPid'])
         own_receipt = own.command({'op': 'ask', 'id': 'own-question', 'question': 'Answer this private fixture.'})
         peer_receipt = peer.command({'op': 'ask', 'id': 'peer-question', 'question': 'Answer the other private fixture.'})
         for domain in (own, peer):
@@ -231,7 +225,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         # its own authenticated channel and journal even with another suite live.
         for domain in attempts:
             self.assertTrue(domain.command({'op': 'live'})['live'])
-        for key in ('ownerPid', 'attemptId', 'instanceId', 'token', 'address', 'ipcRoot', 'state', 'runtime', 'home'):
+        for key in ('ownerPid', 'attemptId', 'controllerPid', 'ipcRoot', 'state', 'runtime', 'home'):
             self.assertNotEqual(attempts[0].live[key], attempts[1].live[key], key)
         for domain in attempts:
             domain.command({'op': 'release'})

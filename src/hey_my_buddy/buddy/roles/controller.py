@@ -59,19 +59,14 @@ class WorkerPreparation:
 def worker_executor(name: str) -> Adapter | WorkerRunExecutor:
     """The execution process's one executor selection point (ADR-025 decision 10).
 
-    An extracted harness uses the generic role executor and its registered
-    native run; it never falls through to a deleted legacy carrier entry.
-    ``command`` keeps the registry carrier, and the
-    registry stays the only place any executor is selected.
+    A native harness uses the generic role executor and its fixed run module.
+    ``command`` keeps the registry carrier.
     """
     from ..harnesses.registry import adapter, run_seam
 
-    module = run_seam(name)
-    if module is not None:
-        from .run_execution import WorkerRunExecutor
-        return WorkerRunExecutor(adapter(name), module)
     if name in HARNESS_NAMES:
-        raise BoardError("ROLE_RUN_UNREGISTERED", "The harness has no registered run", harness=name)
+        from .run_execution import WorkerRunExecutor
+        return WorkerRunExecutor(adapter(name), run_seam(name))
     return adapter(name)
 
 
@@ -200,15 +195,11 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
     """Start the prepared role through its frozen registered run.
 
     Eligibility and the selected description stay frozen at preparation. A
-    registered harness takes only the generic role controller path.
+    native harness takes the generic role controller path.
     """
-    from ..harnesses.registry import run_seam
-
     if not isinstance(preparation, (FastPreparation, ReviewPreparation)):
         raise BoardError("INVALID_ARGUMENT", "unknown Router preparation", harness=preparation.harness)
     module = preparation.run_module
-    if module is None or run_seam(preparation.harness) is not module:
-        raise BoardError("ROLE_RUN_UNREGISTERED", "The prepared run is no longer the registered execution body")
     if isinstance(preparation, FastPreparation):
         from .run_execution import start_fast
         return start_fast(module, preparation.harness, preparation.context, preparation.request)
@@ -229,20 +220,11 @@ def run_harness(
 ) -> RunResult:
     """The one common call point of the accepted run seam (ADR-025 decision 1).
 
-    ``module`` must be exactly the run module the registry has registered under
-    ``request.harness`` — never an attribute probe result, a look-alike, or an
-    unregistered object — so a command adapter or an arbitrary object is never
-    mistaken for a run. The observer receives normalized, retained fact mappings
-    and answers with one :class:`RunFeedback` (continue, stop, or one in-run
+    The caller passes its selected native run module. The observer receives
+    normalized, retained fact mappings and answers with one :class:`RunFeedback` (continue, stop, or one in-run
     correction). The caller owns its session services; this entry point passes
     them through without defining unused role policy.
     """
-    from ..harnesses.registry import run_seam
-
-    if run_seam(request.harness) is not module:
-        raise BoardError("ROLE_RUN_UNREGISTERED",
-                         f"the run of {request.harness} must go through its registered run seam",
-                         harness=request.harness)
     if request.permission not in PERMISSION_LEVELS.get(request.harness, {}):
         raise BoardError("UNSUPPORTED_CAPABILITY", "The harness does not declare this permission level",
                          harness=request.harness, requiredCapability=f"permission:{request.permission}")

@@ -22,7 +22,7 @@ import c_two as cc
 from c_two.error import CallDeadlineExceeded
 
 from support import _child_environment, write_catalog_fixture
-from hey_my_buddy.buddy.harnesses.c_two_live import LiveEndpointDescriptor
+from hey_my_buddy.buddy.runtime.execution import LiveEndpointDescriptor
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.protocol.client import BoardClient

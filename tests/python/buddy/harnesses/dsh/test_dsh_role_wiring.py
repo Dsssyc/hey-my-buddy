@@ -235,7 +235,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
     def test_an_answered_host_question_flows_through_the_micro_task_turn(self):
         import threading
         import time as time_module
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest
         context = self.context()
         self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")
@@ -256,33 +256,23 @@ class WorkerRegisteredRunTests(DshRoleCase):
         self.assertTrue(holder and holder[0].request, "the inline run never published its request")
         request = holder[0].request
         control = holder[0].role_run_control
-        from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
         channel = None
         while time_module.monotonic() < deadline:
             endpoint = holder[0].live_endpoint if holder else None
             if endpoint is not None:
-                if endpoint._descriptor is None:
-                    register_test_endpoint(endpoint)
-                    self.addCleanup(endpoint.stop)
-                descriptor = endpoint._descriptor
-                channel = live_binding("dsh")(
-                    request.identity, HarnessRunLive, name=descriptor.name,
-                    address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=endpoint._token,
-                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
-                self.addCleanup(channel.close, reason="fixture-complete")
+                channel = endpoint
                 break
             time_module.sleep(0.05)
         self.assertIsNotNone(channel, "the held controller endpoint never became ready")
-        self.assertEqual(channel._state_dir, (self.root / "state").resolve(),
-                         "the Host inquiry channel must use the fixture's private state root")
+        self.assertEqual(channel.identity, request.identity)
         live_request = LiveRequest(identity=request.identity, request_id="live-1", kind="inquiry",
                                    payload=InquiryPayload(question_id="inq-1",
                                                           question="bounded wiring question"))
         reply = None
         while time_module.monotonic() < deadline:
-            reply = channel.request(live_request, timeout_ms=1000)
+            reply = LiveReply.model_validate_json(channel.request_local(
+                live_request, timeout_ms=1000,
+                deadline_monotonic=time_module.monotonic() + 1))
             if reply.status != "unavailable":
                 break
             time_module.sleep(0.05)

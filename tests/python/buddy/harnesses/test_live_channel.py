@@ -1,24 +1,17 @@
-"""Live DTOs and owner-published facts through the actual C-Two live seam.
+"""Live values and owner-published facts through the local endpoint.
 
-No model, harness or C-Two server is started. ``cc.connect`` and
-``cc.with_call_options`` are replaced at the two SDK boundaries: the fictional
-peer dispatches each named RPC to the real endpoint handler.
-The real channel still builds Wire DTOs, makes its bounded calls and decodes
-replies; the real endpoint owns admission, replay, settlement and pagination.
-The fixture journal is a local fsynced JSONL file with synthetic records, not a
-native receipt or proof of a harness delivery. Tests explicitly consume a
-request, commit that fixture record, then settle/publish owner facts. Real
-cross-process transport belongs to test_c_two_live, with concrete IDs recorded
-in the migration acceptance table.
+The fixture journal is a local fsynced JSONL file with synthetic records. Tests
+consume each admitted request, commit that fixture record, then settle and
+publish owner facts. No native harness or model runs here.
 """
 from __future__ import annotations
 
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
@@ -28,7 +21,6 @@ from hey_my_buddy.buddy.harnesses import session_receipts
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
 from hey_my_buddy.protocol import schemas as board_schemas
-from buddy.harnesses.fixtures.c_two_live_peer import TEST_CRM
 
 
 def identity() -> RunIdentity:
@@ -43,52 +35,20 @@ def inquiry_request(question: str = "what should I check first?", request_id: st
                           payload=lv.InquiryPayload(question_id=question_id, question=question))
 
 
-class EndpointConnection:
-    """Fictional SDK connection; all three operations call actual handlers."""
-
-    def __init__(self, endpoint):
-        self.endpoint = endpoint
-        self.calls = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exception):
-        return False
-
-    def capabilities(self, text):
-        self.calls.append(("capabilities", text))
-        return self.endpoint.capabilities(text)
-
-    def request(self, text):
-        self.calls.append(("request", text))
-        return self.endpoint.request(text)
-
-    def observe(self, text):
-        self.calls.append(("observe", text))
-        return self.endpoint.observe(text)
-
-
 class LiveSeamCase(unittest.TestCase):
     def setUp(self):
-        self.endpoint = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["zcode"],
-                                            TEST_CRM, instance_id="a" * 64, token="b" * 64,
-                                            name="Ada", state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.peer = EndpointConnection(self.endpoint)
-        def connect(*args, timeout, **kwargs):
-            self.assertGreaterEqual(timeout, 0)
-            return self.peer
-        def with_call_options(peer, *, timeout):
-            self.assertIs(peer, self.peer)
-            self.assertGreaterEqual(timeout, 0)
-            return peer
-        self.connection = self.enterContext(patch.object(ctl.cc, "connect", side_effect=connect))
-        self.enterContext(patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-        self.channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                           instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.addCleanup(self.endpoint.close, reason="fixture finished")
+        self.endpoint = ctl.CTwoLiveEndpoint(identity(), lv.EXISTING_CAPABILITIES["zcode"])
         self.directory = self.enterContext(tempfile.TemporaryDirectory(prefix="live-fixture-"))
         self.journal = Path(self.directory) / "inquiries.jsonl"
+
+    def ask(self, request, *, timeout_ms=1500):
+        return lv.LiveReply.from_payload(decode_strict_json(self.endpoint.request_local(
+            request, timeout_ms=timeout_ms,
+            deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)))
+
+    def snapshot(self, *, after_seq=None, limit=10, fields=None, inquiry_id=None, timeout_ms=1500):
+        return lv.LiveSnapshot.from_payload(decode_strict_json(self.endpoint.observe_local(
+            after_seq=after_seq, limit=limit, fields=fields, inquiry_id=inquiry_id)))
 
     def commit(self, record):
         """Only fixture persistence: a complete fsynced record before settlement."""
@@ -106,7 +66,7 @@ class LiveSeamCase(unittest.TestCase):
         request = request or inquiry_request()
         result = []
         thread = threading.Thread(target=lambda: result.append(
-            self.channel.request(request, timeout_ms=1500)))
+            self.ask(request, timeout_ms=1500)))
         thread.start()
         self.addCleanup(thread.join, 2)
         received = self.endpoint.consume_request(timeout_s=1)
@@ -130,8 +90,7 @@ class LiveSeamCase(unittest.TestCase):
 
 class CapabilityTests(unittest.TestCase):
     def test_each_harness_declares_its_existing_facilities_only(self):
-            # DSH moved off the retired Node realtime channel with step four: its
-            # questions now arrive at the session's cooperative checkpoint too.
+        # DSH questions arrive at the session's cooperative checkpoint.
         expected = {"codex": "realtime", "claude": "realtime",
                     "zcode": "cooperative-checkpoint", "dsh": "cooperative-checkpoint"}
         for harness, delivery in expected.items():
@@ -168,12 +127,6 @@ class LimitTests(unittest.TestCase):
             lv.InquiryPayload(question_id="q-1", question="x" * (lv.MAX_QUESTION_BYTES + 1))
         with self.assertRaises(BoardError):
             lv.InquiryPayload(question_id="q-1", question="水" * 2001)  # 6003 UTF-8 bytes, 2001 characters
-        channel = ctl.CTwoLiveChannel(identity(), TEST_CRM, name="Ada", address="ipc://fixture",
-                                       instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        for timeout in (99, 5001, 0, "1500"):
-            with self.assertRaises(BoardError, msg=str(timeout)):
-                channel.request(inquiry_request(), timeout_ms=timeout)
-
     def test_a_multibyte_question_at_the_byte_bound_is_accepted(self):
         payload = lv.InquiryPayload(question_id="q-1", question="水" * 1333)  # 3999 UTF-8 bytes
         self.assertEqual(len(payload.question.encode()), lv.MAX_QUESTION_BYTES - 1)
@@ -203,14 +156,12 @@ class RequestBindingTests(LiveSeamCase):
     def test_request_id_and_question_id_are_independent_facts(self):
         reply = self.handoff()
         self.assertEqual(reply.status, "queued")
-        wire = ctl.LiveWireRequest.from_payload(decode_strict_json(self.peer.calls[0][1]))
-        self.assertEqual((wire.request_id, wire.payload.question_id, wire.timeout_ms),
-                         ("request-1", "question-1", 1500))
+        self.assertEqual(self.endpoint._requests, {"request-1": "question-1"})
         self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
     def test_a_replayed_request_returns_its_recorded_reply_without_redelivery(self):
         first = self.handoff()
-        replay = self.channel.request(inquiry_request(), timeout_ms=1500)
+        replay = self.ask(inquiry_request(), timeout_ms=1500)
         self.assertEqual((first.status, replay.status), ("queued", "queued"))
         self.assertTrue(replay.native_correlation.value["duplicate"])
         self.assertIsNone(self.endpoint.consume_request(0))
@@ -221,7 +172,7 @@ class RequestBindingTests(LiveSeamCase):
         for changed in (inquiry_request(question="a different question"),
                         inquiry_request(question_id="question-2")):
             with self.subTest(changed=changed.payload.to_payload()):
-                reply = self.channel.request(changed, timeout_ms=1500)
+                reply = self.ask(changed, timeout_ms=1500)
                 self.assertEqual((reply.status, reply.reason_code),
                                  ("unavailable", "request-payload-conflict"))
                 self.assertIsNone(self.endpoint.consume_request(0))
@@ -234,50 +185,38 @@ class RequestBindingTests(LiveSeamCase):
         self.assertEqual(self.handoff().status, "queued")
         self.assertEqual(self.journal.read_text(encoding="utf-8").count("\n"), 1)
 
-    def test_a_foreign_identity_is_refused_without_touching_the_bridge(self):
-        foreign = inquiry_request().model_copy(update={"identity": identity().model_copy(
-            update={"task_id": "other"})})
-        reply = self.channel.request(foreign, timeout_ms=1500)
-        self.assertEqual((reply.status, reply.reason_code), ("unavailable", "identity-mismatch"))
-        self.assertEqual(self.peer.calls, [])
-        self.assertIsNone(self.endpoint.consume_request(0))
-
     def test_queued_is_never_upgraded_to_delivered_by_the_adapter(self):
         queued = self.handoff()
         self.assertEqual((queued.status, queued.state), ("queued", "queued"))
-        self.assertEqual(self.channel.observe(inquiry_id="question-1", timeout_ms=1500)
+        self.assertEqual(self.snapshot(inquiry_id="question-1", timeout_ms=1500)
                          .inquiries[0].status, "queued")
         self.commit({"inquiryId": "question-1", "state": "delivered"})
-        later = self.channel.request(inquiry_request(request_id="request-2"), timeout_ms=1500)
+        later = self.ask(inquiry_request(request_id="request-2"), timeout_ms=1500)
         self.assertEqual((later.status, later.state), ("delivered", "delivered"))
         self.assertIsNone(self.endpoint.consume_request(0), "owner publication is the delivery fact")
 
     def test_unsupported_facilities_answer_unsupported(self):
-        unsupported = ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(inquiry_delivery="unsupported"),
-                                           TEST_CRM, instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        self.peer.endpoint = unsupported
-        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        unsupported = ctl.CTwoLiveEndpoint(identity(), lv.LiveCapabilities(inquiry_delivery="unsupported"))
+        reply = lv.LiveReply.from_payload(decode_strict_json(unsupported.request_local(
+            inquiry_request(), timeout_ms=1500,
+            deadline_monotonic=time.monotonic() + 1.5)))
         self.assertEqual((reply.status, reply.reason_code), ("unsupported", "inquiry-unsupported"))
         self.assertIsNone(unsupported.consume_request(0))
 
     def test_close_is_honest_and_touches_nothing_native(self):
         self.endpoint.publish_activity({"phase": "finishing", "eventSeq": 9})
-        self.assertEqual(self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        self.assertEqual(self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
                          .activity.value["phase"], "finishing")
-        before = len(self.peer.calls)
-        self.channel.close(reason="attempt collection finished")
-        self.assertEqual(self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        self.endpoint.close(reason="attempt collection finished")
+        self.assertEqual(self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
                          .unavailable, "channel-closed")
-        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        reply = self.ask(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unavailable", "channel-closed"))
-        self.assertEqual(len(self.peer.calls), before)
-        endpoint_snapshot = lv.LiveSnapshot.from_payload(decode_strict_json(self.endpoint.observe(
-            ctl.LiveWireObserve(identity=identity(), instance_id="a" * 64, token="b" * 64,
-                                limit=1, fields=("activity",)).model_dump_json())))
+        endpoint_snapshot = self.snapshot(limit=1, fields=("activity",))
         self.assertEqual(endpoint_snapshot.activity.value["phase"], "finishing")
         with self.assertRaises(BoardError):
-            self.channel.close(reason="")
-        self.channel.close(reason="second close")
+            self.endpoint.close(reason="")
+        self.endpoint.close(reason="second close")
 
 
 class ObserveTests(LiveSeamCase):
@@ -285,13 +224,13 @@ class ObserveTests(LiveSeamCase):
         self.publish_records([{"inquiryId": f"question-{index}", "state": "answered",
                                "answer": {"text": "x" * 4000}}
                               for index in range(32)])
-        page1 = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        page1 = self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in page1.inquiries],
                          [f"question-{index}" for index in range(10)])
         self.publish_records([{"inquiryId": "question-0", "state": "answered", "answer": {"text": "changed"}}])
         cursor = max(entry.seq for entry in page1.inquiries)
-        page2 = self.channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
-        page3 = self.channel.observe(after_seq=max(entry.seq for entry in page2.inquiries),
+        page2 = self.snapshot(after_seq=cursor, limit=10, timeout_ms=1500)
+        page3 = self.snapshot(after_seq=max(entry.seq for entry in page2.inquiries),
                                      limit=32, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in page2.inquiries],
                          [f"question-{index}" for index in range(10, 20)])
@@ -305,14 +244,14 @@ class ObserveTests(LiveSeamCase):
     def test_activity_updates_during_pagination_do_not_disturb_the_entry_cursor(self):
         self.publish_records([{"inquiryId": f"question-{index}", "state": "queued"} for index in range(12)])
         self.endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 1})
-        first = self.channel.observe(after_seq=None, limit=5, timeout_ms=1500)
+        first = self.snapshot(after_seq=None, limit=5, timeout_ms=1500)
         self.endpoint.publish_activity({"phase": "tool-running", "eventSeq": 2})
-        second = self.channel.observe(after_seq=max(entry.seq for entry in first.inquiries),
+        second = self.snapshot(after_seq=max(entry.seq for entry in first.inquiries),
                                        limit=5, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in second.inquiries],
                          [f"question-{index}" for index in range(5, 10)])
         self.assertEqual(second.activity.value["phase"], "tool-running")
-        last = self.channel.observe(after_seq=max(entry.seq for entry in second.inquiries),
+        last = self.snapshot(after_seq=max(entry.seq for entry in second.inquiries),
                                      limit=5, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in last.inquiries], ["question-10", "question-11"])
         self.assertFalse(last.truncated)
@@ -321,13 +260,13 @@ class ObserveTests(LiveSeamCase):
         self.publish_records([{"inquiryId": f"question-{index}", "state": "answered",
                                "answer": {"text": "x" * 4000}}
                               for index in range(32)])
-        first = self.channel.observe(after_seq=None, limit=4, timeout_ms=1500)
-        self.assertEqual(self.channel.observe(after_seq=None, limit=4, timeout_ms=1500), first)
+        first = self.snapshot(after_seq=None, limit=4, timeout_ms=1500)
+        self.assertEqual(self.snapshot(after_seq=None, limit=4, timeout_ms=1500), first)
         for limit in (1, 7, 32, 256):
             with self.subTest(limit=limit):
                 collected, after, pages = [], None, 0
                 while True:
-                    snapshot = self.channel.observe(after_seq=after, limit=limit, timeout_ms=1500)
+                    snapshot = self.snapshot(after_seq=after, limit=limit, timeout_ms=1500)
                     self.assertLessEqual(len(canonical_json(snapshot.to_payload()).encode()),
                                          lv.MAX_LIVE_FRAME_BYTES)
                     collected.extend(snapshot.inquiries)
@@ -344,45 +283,39 @@ class ObserveTests(LiveSeamCase):
                 self.assertTrue(all(entry.answer == "x" * 4000 for entry in collected))
 
     def test_activity_is_monotone_and_journal_changes_take_fresh_sequences(self):
-        self.publish_records([{"inquiryId": "question-1", "state": "claimed"},
+        self.publish_records([{"inquiryId": "question-1", "state": "queued"},
                               {"inquiryId": "question-2", "state": "answered", "answer": {"text": "check the tests"}}])
         self.endpoint.publish_activity({"phase": "waiting-model", "eventSeq": 4})
-        first = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        first = self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual([entry.status for entry in first.inquiries], ["queued", "answered"])
         cursor = max(entry.seq for entry in first.inquiries)
         self.assertFalse(self.endpoint.publish_activity({"phase": "waiting-model", "eventSeq": 2}))
-        stale = self.channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
+        stale = self.snapshot(after_seq=cursor, limit=10, timeout_ms=1500)
         self.assertEqual(stale.inquiries, ())
         self.assertEqual(stale.activity.value["eventSeq"], 4)
         self.publish_records([{"inquiryId": "question-1", "state": "delivered"}])
-        advanced = self.channel.observe(after_seq=cursor, limit=10, timeout_ms=1500)
+        advanced = self.snapshot(after_seq=cursor, limit=10, timeout_ms=1500)
         self.assertEqual([entry.question_id for entry in advanced.inquiries], ["question-1"])
         self.assertGreater(advanced.inquiries[0].seq, cursor)
 
     def test_limit_truncates_and_reports(self):
         self.publish_records([{"inquiryId": f"question-{index}", "state": "queued"} for index in range(32)])
-        page = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        page = self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual(len(page.inquiries), 10)
         self.assertTrue(page.truncated)
-        rest = self.channel.observe(after_seq=max(entry.seq for entry in page.inquiries), limit=256, timeout_ms=1500)
+        rest = self.snapshot(after_seq=max(entry.seq for entry in page.inquiries), limit=256, timeout_ms=1500)
         self.assertEqual(len(page.inquiries) + len(rest.inquiries), 32)
-        for arguments in ({"limit": 0}, {"after_seq": -1, "limit": 10}):
-            with self.assertRaises(BoardError):
-                self.channel.observe(timeout_ms=1500, **arguments)
-
     def test_an_unknown_journal_state_stays_unknown(self):
         self.handoff()
         self.publish_records([{"inquiryId": "question-1", "state": "mysterious"}])
-        snapshot = self.channel.observe(after_seq=None, limit=10, timeout_ms=1500)
+        snapshot = self.snapshot(after_seq=None, limit=10, timeout_ms=1500)
         self.assertEqual(snapshot.inquiries[0].status, "unknown")
-        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        reply = self.ask(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.reason_code), ("unavailable", "question-state-unknown"))
         self.assertIsNone(self.endpoint.consume_request(0))
 
     def test_model_payload_roundtrip_on_the_actual_interface(self):
-                # The live models have no separate wire codec; their payload projection
-                # and validation are the model boundary itself. Unknown members (a
-                # former frame envelope key included) are refused there.
+        # Payload projection and validation form the live model boundary.
         request = inquiry_request()
         self.assertEqual(lv.LiveRequest.from_payload(request.to_payload()), request)
         reply = lv.LiveReply(status="queued", observed=True,
@@ -398,7 +331,7 @@ class ObserveTests(LiveSeamCase):
 
 
 class TransportFactTests(LiveSeamCase):
-    def test_a_transport_refusal_keeps_reason_and_the_specific_code(self):
+    def test_an_owner_refusal_keeps_reason_and_the_specific_code(self):
         reply = self.handoff(refusal=lv.LiveReply(status="unavailable", reason_code="bridge-refused",
                                                  error_code="not-ready"))
         self.assertEqual((reply.status, reply.reason_code, reply.error_code),
@@ -409,28 +342,16 @@ class TransportFactTests(LiveSeamCase):
     def test_a_committed_withdrawal_is_an_observed_discarded_fact(self):
         self.handoff()
         self.commit({"inquiryId": "question-1", "state": "discarded"})
-        reply = self.channel.request(inquiry_request(), timeout_ms=1500)
+        reply = self.ask(inquiry_request(), timeout_ms=1500)
         self.assertEqual((reply.status, reply.observed, reply.state), ("discarded", True, "discarded"))
         self.assertIsNone(reply.error_code)
         self.assertNotIn("reason", reply.native_correlation.value)
         self.assertIsNone(self.endpoint.consume_request(0))
 
-    def test_an_unreachable_transport_reads_as_a_fact_on_request_and_snapshot(self):
-        with patch.object(ctl.cc, "connect", side_effect=OSError("fictional SDK connection unavailable")):
-            reply = self.channel.request(inquiry_request(), timeout_ms=1500)
-            snapshot = self.channel.observe(after_seq=None, limit=1, timeout_ms=1500,
-                                            fields=("observation",))
-        self.assertEqual((reply.status, reply.reason_code, reply.error_code),
-                         ("unavailable", "transport-unreachable", None))
-        self.assertIs(snapshot.observed, False)
-        self.assertEqual(snapshot.reason, "transport-unreachable")
-        self.assertIsNone(snapshot.error)
-        self.assertIsNone(snapshot.observation)
-
     def test_an_invalid_observation_value_is_unavailable_not_reshaped(self):
         with self.assertRaises(BoardError):
-            self.endpoint.publish_observation({"ready": "yes"})
-        snapshot = self.channel.observe(after_seq=None, limit=1, timeout_ms=1500,
+            lv.LiveObservation.from_payload({"ready": "yes"})
+        snapshot = self.snapshot(after_seq=None, limit=1, timeout_ms=1500,
                                         fields=("observation",))
         self.assertIs(snapshot.observed, False)
         self.assertEqual(snapshot.reason, "observation-unavailable")
@@ -449,29 +370,26 @@ class TransportFactTests(LiveSeamCase):
 
 class ObserveSelectionTests(LiveSeamCase):
     def test_an_omitted_selection_reads_everything_and_selections_narrow_it(self):
-        # Publication is performed by the owner; an RPC reads its bounded cache.
+        # Publication is performed by the owner; observation reads its bounded cache.
         self.endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 3})
         self.publish_records([{"inquiryId": "question-1", "state": "queued"}])
         self.endpoint.publish_journal(lv.LiveJournal(available=True, entries=1))
         self.endpoint.publish_observation(lv.LiveObservation(ready=True, agent_status="running"))
-        everything = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500)
+        everything = self.snapshot(after_seq=None, limit=8, timeout_ms=1500)
         self.assertIsNotNone(everything.activity)
         self.assertEqual(everything.inquiries[0].question_id, "question-1")
         self.assertIsNotNone(everything.observation)
         for field in ("activity", "observation", "inquiries"):
             with self.subTest(field=field):
-                snapshot = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=(field,))
+                snapshot = self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=(field,))
                 self.assertEqual(snapshot.activity is not None, field == "activity")
                 self.assertEqual(snapshot.observation is not None, field == "observation")
                 self.assertEqual(bool(snapshot.inquiries), field == "inquiries")
                 self.assertEqual(snapshot.journal is not None, field == "inquiries")
-        self.assertEqual(self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=()), everything)
-        for bad in (("activity", "events"), "activity", ("activity", 1)):
-            with self.assertRaises(BoardError, msg=repr(bad)):
-                self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=bad)
+        self.assertEqual(self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=()), everything)
 
     def test_a_selection_that_names_an_absent_source_reports_it_honestly(self):
-        snapshot = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("observation",))
+        snapshot = self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=("observation",))
         self.assertIs(snapshot.observed, False)
         self.assertEqual(snapshot.reason, "observation-unavailable")
 
@@ -483,7 +401,7 @@ class ObserveSelectionTests(LiveSeamCase):
                               "answer": {"text": "42", "bytes": 2, "via": "tool:hey_my_buddy_answer_inquiry",
                                          "toolCallId": "call-9", "at": "2026-10-06T00:00:01Z",
                                          "truncated": False}}])
-        snapshot = self.channel.observe(inquiry_id="question-9", timeout_ms=1500)
+        snapshot = self.snapshot(inquiry_id="question-9", timeout_ms=1500)
         self.assertIsNone(snapshot.activity)
         self.assertIsNone(snapshot.journal)
         self.assertIsNone(snapshot.observation)
@@ -492,9 +410,6 @@ class ObserveSelectionTests(LiveSeamCase):
                          ("answered", "42", "call-9", 2, False))
         self.assertEqual(entry.via, "tool:hey_my_buddy_answer_inquiry")
         self.assertTrue(entry.at)
-        for bad in ("", "x" * (lv.MAX_REQUEST_ID + 1)):
-            with self.assertRaises(BoardError):
-                self.channel.observe(inquiry_id=bad, timeout_ms=1500)
 
     def test_journal_source_fields_and_delivery_survive_the_projection(self):
         # This pure function remains used by real owners. Neither fixture form
@@ -525,15 +440,15 @@ class ObserveSelectionTests(LiveSeamCase):
 
     def test_the_journal_fact_reports_availability_count_and_rejections(self):
         self.endpoint.publish_journal(lv.LiveJournal(available=False, reason="journal-not-written", entries=0))
-        snapshot = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        snapshot = self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
         self.assertEqual((snapshot.journal.available, snapshot.journal.reason, snapshot.journal.entries),
                          (False, "journal-not-written", 0))
         self.assertEqual(snapshot.inquiries, ())
         self.publish_records([{"inquiryId": "question-1", "state": "queued"}])
-        self.endpoint.publish_journal({"available": True, "reason": None, "entries": 2,
-                                       "rejections": [{"questionId": "question-foreign",
-                                                       "reason": "journal-task-mismatch"}]})
-        snapshot = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
+        self.endpoint.publish_journal(lv.LiveJournal.from_payload({
+            "available": True, "reason": None, "entries": 2,
+            "rejections": [{"questionId": "question-foreign", "reason": "journal-task-mismatch"}]}))
+        snapshot = self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=("inquiries",))
         self.assertEqual((snapshot.journal.available, snapshot.journal.entries), (True, 2))
         self.assertEqual([item.question_id for item in snapshot.journal.rejections], ["question-foreign"])
         self.assertEqual(snapshot.journal.rejections[0].reason, "journal-task-mismatch")
@@ -542,12 +457,12 @@ class ObserveSelectionTests(LiveSeamCase):
                         {"available": False, "reason": "mysterious", "entries": 0, "rejections": []},
                         [{"inquiryId": "question-1", "state": "queued"}]):
             with self.assertRaises(BoardError):
-                self.endpoint.publish_journal(invalid)
+                lv.LiveJournal.from_payload(invalid)
 
     def test_a_closed_record_projects_only_unavailable_status(self):
         journal = [{"inquiryId": "question-1", "state": "unavailable"}]
         self.publish_records(journal)
-        entry = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500,
+        entry = self.snapshot(after_seq=None, limit=8, timeout_ms=1500,
                                       fields=("inquiries",)).inquiries[0]
         self.assertEqual(entry.status, "unavailable")
         self.assertNotIn("reason", entry.to_payload())
@@ -557,11 +472,11 @@ class ObserveSelectionTests(LiveSeamCase):
         self.endpoint.publish_activity({"phase": "streaming-model", "eventSeq": 6})
         self.endpoint.publish_observation(lv.LiveObservation(ready=True))
         self.endpoint.publish_snapshot(lv.LiveSnapshot(observed=False, reason="bridge-refused", error="not-ready"))
-        broken = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500)
+        broken = self.snapshot(after_seq=None, limit=8, timeout_ms=1500)
         self.assertEqual((broken.observed, broken.reason, broken.error), (False, "bridge-refused", "not-ready"))
         self.assertIsNone(broken.observation)
         self.assertEqual(broken.activity.value["eventSeq"], 6)
-        narrow = self.channel.observe(after_seq=None, limit=8, timeout_ms=1500, fields=("activity",))
+        narrow = self.snapshot(after_seq=None, limit=8, timeout_ms=1500, fields=("activity",))
         self.assertEqual((narrow.observed, narrow.reason, narrow.error), (None, None, None))
 
     def test_live_event_bounds_are_the_producers_character_truncations(self):

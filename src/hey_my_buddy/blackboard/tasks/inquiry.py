@@ -17,6 +17,7 @@ from ...protocol.inquiry import (
 # The shared live frames of the registered-seam path (ADR-025 step 2-C2): the
 # board builds and reads the common channel formats, never a specific harness.
 from ...buddy.harnesses.live import MAX_OBSERVE_LIMIT, InquiryPayload, LiveRequest, LiveReply, LiveSnapshot
+from ...protocol.harness_names import HARNESS_NAMES
 
 if TYPE_CHECKING:
     from ..service.live_registry import LiveRegistry
@@ -93,9 +94,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     attempt_ended = terminal or attempt.get("executionState") == "finished"
     can_ask = inquiry_capable(adapter)
     can_observe = observe_capable(adapter)
-    from ...buddy.harnesses.registry import live_binding
-
-    extracted_live = live_binding(adapter) is not None
+    extracted_live = adapter in HARNESS_NAMES
     channel = None if attempt_ended else _live_channel(live_registry, view)
     # A restarted service waits for the original holder to attach before it
     # admits active inquiry traffic or reads that attempt's journal.

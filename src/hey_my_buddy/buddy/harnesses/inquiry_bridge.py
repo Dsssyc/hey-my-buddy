@@ -31,7 +31,6 @@ from .c_two_live import CTwoLiveEndpoint
 from .session_receipts import (
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
-    MAX_INQUIRY_ID_BYTES,
     MAX_QUESTION_BYTES,
 )
 
@@ -67,12 +66,9 @@ class InquiryBridge:
         self.journal_path = Path(journal_path)
         self.attention_path = Path(attention_path) if attention_path else None
         if live is not None:
-            if not isinstance(live, CTwoLiveEndpoint):
-                raise BoardError("INVALID_ARGUMENT", "live must be a CTwoLiveEndpoint")
             for key, attribute in (("taskId", "task_id"), ("attemptId", "attempt_id"),
                                    ("generation", "generation"), ("turnId", "turn_id")):
-                if (key not in identity or type(identity[key]) is not type(getattr(live.identity, attribute))
-                        or identity[key] != getattr(live.identity, attribute)):
+                if identity[key] != getattr(live.identity, attribute):
                     raise BoardError("INVALID_ARGUMENT", f"inquiry owner identity mismatch: {key}")
         self.live = live
         self._stop = threading.Event()
@@ -455,8 +451,9 @@ class InquiryBridge:
                         **{k: self.identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
                         "requests": self.attention,
                     })
-                except OSError:
-                    self.error = self.error or "the native attention record could not be written"
+                except OSError as error:
+                    raise self.error_factory("attention-record-unavailable",
+                        "the native attention record could not be written") from error
             self._publish()
 
     def attention_report(self) -> dict:
@@ -500,9 +497,8 @@ class InquiryBridge:
         there is nothing to deliver into yet, so the ask is refused as not-ready
         and the asking side may retry the identical id.
         """
-        inquiry_id, question = request.get("inquiryId"), request.get("question")
-        if (not isinstance(inquiry_id, str) or not inquiry_id or len(inquiry_id.encode()) > MAX_INQUIRY_ID_BYTES
-                or not isinstance(question, str) or not question.strip() or len(question.encode()) > MAX_QUESTION_BYTES):
+        inquiry_id, question = request["inquiryId"], request["question"]
+        if not question.strip():
             return response(False, error="bad-request")
         with self.lock:
             if self.closed or (not self.active and self.agent_status == "finishing"):
