@@ -422,6 +422,7 @@ _TASK_BRIEF = (
     "artifactCount",
     "workflowState",
     "awaitingHost",
+    "resumeRecovery",
     "duplicate",
     "alreadyTerminal",
     "retry",
@@ -443,7 +444,7 @@ def task_brief(view: dict) -> dict:
         brief["workflow"] = _pick(
             workflow,
             ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId",
-             "resultSummary", "macroTaskId", "title", "resumeRecovery"),
+             "resultSummary", "macroTaskId", "title"),
         )
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])

@@ -47,7 +47,16 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertEqual(view["continuationCount"], 2)
         self.assertEqual(micro_task_brief(view)["resumeRecovery"], recovery)
         status = board.call("task_get", {"runId": run_id})["task"]
-        self.assertEqual(task_brief(status)["workflow"]["resumeRecovery"], recovery)
+        self.assertEqual(task_brief(status)["resumeRecovery"], recovery)
+        self.assertNotIn("resumeRecovery", status["workflow"])
+        self.assertNotIn("resumeRecovery", task_brief(status)["workflow"])
+        listed = next(row for row in board.call("task_list", {})["runs"] if row["runId"] == run_id)
+        self.assertNotIn("resumeRecovery", listed)
+        self.assertNotIn("resumeRecovery", listed["workflow"])
+        snapshot = board.call("console_snapshot", {})
+        console_row = next(row for row in snapshot["tasks"]["runs"] if row["runId"] == run_id)
+        self.assertNotIn("resumeRecovery", console_row)
+        self.assertNotIn("resumeRecovery", console_row["workflow"])
         # Replayed result and reads cannot allocate an attempt or requeue again.
         self.assertTrue(self.refuse(board, second)["duplicate"])
         third = self.claim(board, claim_request_id="rebuild")

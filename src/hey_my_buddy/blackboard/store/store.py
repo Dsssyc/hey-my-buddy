@@ -991,7 +991,10 @@ class BoardStore:
         with self.db.read() as connection:
             row = self._task_row(connection, params)
             from ..tasks.fixes import view as fix_view
-            return {"task": {**self._decorate(connection, row), **fix_view(connection, row["task_id"])}}
+            view = {**self._decorate(connection, row), **fix_view(connection, row["task_id"])}
+            if "workflow" in view:
+                view["resumeRecovery"] = self.workflow._resume_recovery(connection, row["task_id"])
+            return {"task": view}
 
     def task_list(self, params: dict) -> dict:
         """Bounded task history with explicit filters and stable keyset paging.

@@ -16,7 +16,7 @@
 
 ## Host 可读事实
 
-服务写入 `workflow.native_resume_refused` 与 `workflow.auto_continued` 事件，二者绑定被拒的执行、回合与原续接记录，并携带原因、运行模块说明和后继重建方式。`get` 的 `resumeRecovery` 与 `status` 的 `workflow.resumeRecovery` 从最近一次此类自动续接事件投影同一份事实，包含 `autoContinued`、`reason`、`detail`、`turnId`、`attemptId`、`continuationId` 和 `eventSeq`；这些标识明确其所指的历史回合。新回合的 `resumeReason` 与 `resumeDetail` 也出现在回合视图中，CLI 的默认简短输出保留这些字段。
+服务写入 `workflow.native_resume_refused` 与 `workflow.auto_continued` 事件，二者绑定被拒的执行、回合与原续接记录，并携带原因、运行模块说明和后继重建方式。`get` 与 `status` 在单个微任务视图的顶层通过 `resumeRecovery` 从最近一次此类自动续接事件投影同一份事实，包含 `autoContinued`、`reason`、`detail`、`turnId`、`attemptId`、`continuationId` 和 `eventSeq`；这些标识明确其所指的历史回合。新回合的 `resumeReason` 与 `resumeDetail` 也出现在回合视图中，CLI 的默认简短输出保留这些字段。`task_extension`、`list` 和控制台的逐行任务投影不查询该事件，也不携带 `resumeRecovery`；`task_brief` 的 `workflow` 保持原有字段。
 
 ## 验证
 
@@ -26,6 +26,12 @@
 
 批量检查选择了 `tests/python/blackboard/tasks/test_*workflow*.py`、`test_*continu*.py`、`test_*resume*.py`、`test_lead_*.py` 和新增的 `test_refused_resume.py`；Codex CLI 的 `test_codex.py`、`test_native_run.py`、`test_codex_continuation.py`；DSH CLI 的 `test_native_resume.py`、`test_native_run.py`、`test_dsh_role_wiring.py`、`test_session_records.py`；ZCode CLI 的 `test_zcode.py`、`test_native_run.py`；以及整个 `tests/python/buddy/roles/`、`tests/python/buddy/runtime/` 与 `tests/python/cli/test_cli_views.py`。`git diff --check` 也已通过。
 
+Host 在合并树的完整检查中发现 `test_title_fallback.py::test_projection_does_not_add_a_per_row_query` 失败：上一版在 `task_extension` 中逐行查询自动续接事件，使该投影的查询数由 1 增至 2。此次修正将 `status` 的查询移到只读取一个任务的 `task_get`，与 `get` 复用 `_resume_recovery`；逐行投影及其 CLI `workflow` 摘要不再携带该字段。定向重跑 `test_title_fallback.py` 与 `test_refused_resume.py` 共 2 个文件、17 项测试通过，退出 0 且私有根已清理。
+
+此次又运行整个 `tests/python/cli/`，并用 `rg -l 'workflow_get|task_get|task_list|console_snapshot' tests/python/blackboard/tasks/test_*.py` 选择直接读取微任务视图的测试，共 51 个文件；其中 50 个文件、882 项测试通过，唯一失败文件是 `cli.test_host_preview`，检查运行器退出 1，私有根已清理。该文件中的预览自检与确定性检查通过，真实前端解析器检查因缺少 `apps/console/node_modules/vitest/vitest.mjs` 而失败，尚未执行到解析器验证。另补跑间接读取视图的 `test_console_macro_task_fixture.py` 与 `test_host_workflow_worker.py`，共 2 个文件、8 项测试通过，退出 0 且私有根已清理。此次 `test_refused_resume.py` 同时断言单个微任务 `status` 顶层携带恢复事实，而 `task_brief.workflow`、`list` 和控制台逐行视图都不携带。
+
+准备缺少的前端开发依赖需要写入 `apps/console/node_modules`，超出本微任务冻结的写入范围；没有执行依赖安装，需要 Host 准备依赖或授权准备后，使用同一指定解释器和检查运行器补跑 `tests/python/cli/test_host_preview.py`。此次源码修正和 `git diff --check` 已完成，CLI 全组验证仍有这一项环境缺口。
+
 服务夹具覆盖三个 CLI harness 的自动改排与原因、续接输入和工作区保留、初始回合与重建回合不改排、模型已启动和未知启动事实不改排、未确认停止不改排、重复结果与重复 claim、竞争 Worker 和唯一活动执行、协助微任务保留工作区，以及 Lead 等待与实际失败的唤醒边界。Codex CLI 和 ZCode CLI 的既有运行模块夹具补上严格的 `modelStarted is False` 断言；DSH CLI 的角色连接夹具补上同一归一化结果断言。
 
-没有运行完整检查、真实 CLI 模型调用或日常服务验证；完整检查和安装由 Host 在集成之后处理，`docs/reference` 也由 Host 更新。
+本微任务没有运行完整检查、真实 CLI 模型调用或日常服务验证；完整检查和安装由 Host 在集成之后处理，`docs/reference` 也由 Host 更新。

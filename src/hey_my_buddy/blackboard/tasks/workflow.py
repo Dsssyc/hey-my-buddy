@@ -5843,7 +5843,6 @@ class WorkflowCoordinator:
             "hostId": run_row["host_id"],
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
-            "resumeRecovery": self._resume_recovery(connection, run_row["run_id"]),
             "activeRequestId": run_row["active_request_id"],
             "resultSummary": summary or None,
             "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row)),
