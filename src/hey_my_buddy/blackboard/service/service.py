@@ -144,13 +144,13 @@ class _BaseResource:
             workflow_module.set_request_scope(scope)
             try:
                 if (self.store.directory / "upgrade.json").exists():
-                    permitted = operation in {"ping", "health", "runtime.info", "capabilities", "backup"}
+                    permitted = operation in {"ping", "health", "runtime.info", "capabilities"}
                     if operation == 'capabilities' and params.get('refresh'):
                         permitted = False
                     permitted = permitted or (operation == "console" and params.get("action") == "status")
                     permitted = permitted or (operation == "service.control" and params.get("action") in {"restart", "status"})
                     if not permitted:
-                        raise BoardError("UPGRADE_IN_PROGRESS", "The service is fenced for an idle upgrade; retry after verification")
+                        raise BoardError("UPGRADE_IN_PROGRESS", "Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity")
                 from ...buddy.harnesses.runtime_selection import bound
                 health = getattr(self, 'harnesses', None)
                 with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
@@ -421,17 +421,7 @@ class BoardService(_BaseResource):
     def backup(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             from ..store import backup
-            schemas.reject_unknown(params, {"upgradeToken"}, "backup")
-            marker = self.store.directory / "upgrade.json"
-            if marker.exists():
-                import hashlib
-                import hmac
-                journal = json.loads(marker.read_text())
-                supplied = params.get("upgradeToken")
-                if not isinstance(supplied, str) or not hmac.compare_digest(hashlib.sha256(supplied.encode()).hexdigest(), journal.get("backupTokenHash", "")):
-                    raise BoardError("UPGRADE_IN_PROGRESS", "The rolling backup is reserved for this upgrade")
-            elif "upgradeToken" in params:
-                raise BoardError("INVALID_ARGUMENT", "An upgrade token is only valid during its fenced upgrade")
+            schemas.reject_unknown(params, set(), "backup")
             return backup.create(self.store, runtime_identity=runtime.resolve_runtime(), plugin_commit=backup.source_commit())
         return self._guard("backup", request_json, handler)
 

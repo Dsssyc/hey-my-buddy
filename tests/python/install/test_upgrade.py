@@ -148,7 +148,8 @@ class UpgradeTests(BoardTestCase):
         source = self.directory / 'new-skill'
         source.mkdir()
         (source / 'SKILL.md').write_text('new skill')
-        control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123}
+        control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123,
+                   'contractVersion': '0.19.0'}
         (state / 'control.json').write_text(json.dumps(control))
         active = state / 'active-runtime.json'
         active.write_text(json.dumps({'runtimeDir': str(previous)}))

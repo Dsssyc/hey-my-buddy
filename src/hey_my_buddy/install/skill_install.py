@@ -176,11 +176,11 @@ def install(params: dict) -> dict:
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
             upgrade({})  # Recover the recorded generation before starting another install.
+            if (state / 'board.sqlite3').exists():
+                from .upgrade import install_preflight
+                install_preflight(state)
         from .upgrade import retry_legacy_worker_cleanup
         legacy_cleanup_error = retry_legacy_worker_cleanup(state)
-        if (state / 'board.sqlite3').exists():
-            from .upgrade import install_preflight
-            install_preflight(state)
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
@@ -207,9 +207,6 @@ def install(params: dict) -> dict:
                         'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():
-            if (state / "board.sqlite3").exists():
-                from .upgrade import install_preflight
-                install_preflight(state)
             from .launcher import selected_runtime
             from .upgrade import start
             old_dev = os.environ.pop("HMB_DEV_SOURCE", None)

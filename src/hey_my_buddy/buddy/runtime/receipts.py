@@ -10,7 +10,7 @@ from ...errors import BoardError
 
 DELIVERY = "result-delivery.json"
 RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED",
-                       "INVALID_RESPONSE", "INTERNAL_ERROR"})
+                       "INVALID_RESPONSE", "INTERNAL_ERROR", "UPGRADE_IN_PROGRESS"})
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -28,8 +28,8 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
     delay = 0.25
     while True:
         if flush_hints is not None:
-            # Only a disconnected service may delay hints. Identity rejection
-            # is terminal and must reach the caller instead of looping forever.
+            # A disconnected service or an installation fence may delay hints.
+            # Identity rejection is terminal and must reach the caller.
             flush_hints()
         try:
             client.submit_result(receipt["attemptId"], receipt["generation"],

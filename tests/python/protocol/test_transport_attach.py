@@ -339,16 +339,31 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
         self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
 
-    def test_upgrade_journal_refuses_cold_start_under_startup_lock(self):
+    def test_orphan_upgrade_journal_without_startup_lock_refuses_without_preflight(self):
         self.directory.mkdir(mode=0o700)
         (self.directory / "upgrade.json").write_text("{}")
         with patch("hey_my_buddy.protocol.transport._cold_start_preflight") as preflight:
             with self.assertRaises(ServiceError) as refused:
                 ensure_service(self.directory)
         self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
-        preflight.assert_called_once()
+        self.assertIn("rerun install", refused.exception.message)
+        preflight.assert_not_called()
         self.spawn.assert_not_called()
-        self.assertTrue((self.directory / "control-start.lock").exists())
+        self.assertFalse((self.directory / "control-start.lock").exists(), "an orphan journal must not create a lock")
+
+    def test_upgrade_journal_with_orphan_lock_refuses_control_and_wait_without_preflight(self):
+        self.directory.mkdir(mode=0o700)
+        (self.directory / "upgrade.json").write_text("{}")
+        (self.directory / "control-start.lock").touch(mode=0o600)
+        with patch.object(transport, '_attach_read_only') as attach, \
+             patch.object(transport, '_cold_start_preflight') as preflight:
+            for resource in ("control", "wait"):
+                with self.subTest(resource=resource), self.assertRaises(ServiceError) as refused:
+                    ensure_service(self.directory, resource=resource)
+                self.assertEqual(refused.exception.code, "UPGRADE_IN_PROGRESS")
+        attach.assert_not_called()
+        preflight.assert_not_called()
+        self.spawn.assert_not_called()
 
     def test_installer_finishes_before_an_existing_client_reattaches(self):
         self.directory.mkdir(mode=0o700)
@@ -358,12 +373,31 @@ class ColdStartTests(unittest.TestCase):
         def installer_unlocks(_fd):
             marker.unlink()
 
+        (self.directory / "control-start.lock").touch(mode=0o600)
         with patch.object(transport, '_attach_read_only', return_value=ENDPOINT) as attach, \
-             patch.object(transport, '_cold_start_preflight'), \
+             patch.object(transport, '_cold_start_preflight') as preflight, \
              patch.object(transport.locking, 'lock', side_effect=installer_unlocks) as lock:
             self.assertEqual(ensure_service(self.directory), ENDPOINT)
         lock.assert_called_once()
-        self.assertEqual(attach.call_count, 2)
+        attach.assert_called_once_with(self.directory.resolve())
+        preflight.assert_not_called()
+        self.spawn.assert_not_called()
+
+    def test_installer_finishes_before_wait_client_reattaches(self):
+        self.directory.mkdir(mode=0o700)
+        marker = self.directory / "upgrade.json"
+        marker.write_text("{}")
+        (self.directory / "control-start.lock").touch(mode=0o600)
+
+        def installer_unlocks(_fd):
+            marker.unlink()
+
+        with patch.object(transport, '_attach_read_only', return_value=ENDPOINT) as attach, \
+             patch.object(transport, '_cold_start_preflight') as preflight, \
+             patch.object(transport.locking, 'lock', side_effect=installer_unlocks):
+            self.assertEqual(ensure_service(self.directory, resource="wait"), ENDPOINT)
+        attach.assert_called_once_with(self.directory.resolve())
+        preflight.assert_not_called()
         self.spawn.assert_not_called()
 
     def test_upgrade_journal_created_during_preflight_refuses_spawn_under_lock(self):

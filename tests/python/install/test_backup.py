@@ -12,6 +12,24 @@ from support import BoardTestCase
 
 
 class BackupTests(BoardTestCase):
+    def test_installation_fence_refuses_online_backup_in_both_modes(self):
+        board = self.board()
+        for contract_changed in (False, True):
+            with self.subTest(contractChanged=contract_changed):
+                (board.directory / 'upgrade.json').write_text(json.dumps({'contractChanged': contract_changed}))
+                with mock.patch.object(backup, 'create', side_effect=AssertionError('online backup ran')):
+                    with self.assertRaises(BoardError) as caught:
+                        board.call('backup', {})
+                self.assertEqual(caught.exception.code, 'UPGRADE_IN_PROGRESS')
+                self.assertIn('install', caught.exception.message)
+
+    def test_backup_has_no_upgrade_token_parameter(self):
+        board = self.board()
+        with self.assertRaises(BoardError) as caught:
+            board.call('backup', {'upgradeToken': 'retired'})
+        self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+        self.assertIn('Unknown', caught.exception.message)
+
     def test_roundtrip_one_generation_and_excluded_regenerable_data(self):
         board = self.board()
         for name in ('controls/x.json', 'submissions/y.json', 'attempts/run/attempt/result.json', 'attempts/run/attempt/result-receipt.json', 'workers/local/startup.json', 'worker-pool.json', 'workspaces/large', 'harnesses/zcode/native'):

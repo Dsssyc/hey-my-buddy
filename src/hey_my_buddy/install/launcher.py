@@ -343,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
             marker = state / 'upgrade.json'
             if marker.exists():
                 from hey_my_buddy.errors import BoardError
-                raise BoardError('UPGRADE_IN_PROGRESS', 'Upgrade verification or recovery is in progress; retry the same command and identity after it finishes')
+                raise BoardError('UPGRADE_IN_PROGRESS', 'Installation verification or recovery is in progress; rerun install to recover an interrupted installation, then retry the same command and identity')
             target = selected_runtime(state)
             if target is not None:
                 python = str(_runtime_python(target))
