@@ -82,6 +82,18 @@ def dispatch(connection, task_id: str) -> dict | None:
     return json.loads(row[0]) if row is not None else None
 
 
+def dispatches(connection, decision_id: str) -> tuple[dict, ...]:
+    """Fresh immutable dispatch copies in stable Router order, without results.
+
+    A result belongs to the dispatch's own attempt receipt. The mutable request
+    output must never be projected as an earlier dispatch's answer.
+    """
+    rows = connection.execute("SELECT value FROM meta WHERE key LIKE ? ORDER BY key", (DISPATCH_KEY_PREFIX + "%",))
+    documents = (json.loads(row[0]) for row in rows)
+    return tuple(sorted((item for item in documents if item["decisionId"] == decision_id),
+                        key=lambda item: (item["routerIndex"], item["taskId"])))
+
+
 def reserve_dispatch(connection, *, decision_id: str, task_id: str, router_index: int,
                      profile: dict, document: dict, now: str) -> dict:
     """Record one dispatch under its internal task; the caller owns the transaction.
@@ -179,6 +191,7 @@ __all__ = [
     "DISPATCH_KEY_PREFIX",
     "REQUEST_KEY_PREFIX",
     "dispatch",
+    "dispatches",
     "freeze_request",
     "record_claim",
     "request_snapshot",
