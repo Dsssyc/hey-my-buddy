@@ -147,9 +147,9 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
     def test_empty_retained_scope_is_zero(self):
         board = self.board()
         with board.store.db.write() as connection:
-            connection.execute('INSERT INTO macro_tasks(macro_task_id,title,project_id,project_path,source_host_id,created_at,activity_at)'
-                               ' VALUES(?,?,?,?,?,?,?)', ('macro-empty', 'Empty scope', 'private-project', str(self.repo),
-                                                         'host-1', board.store.now(), board.store.now()))
+            connection.execute('INSERT INTO macro_tasks(macro_task_id,title,project_id,source_host_id,created_at,activity_at)'
+                               ' VALUES(?,?,?,?,?,?)', ('macro-empty', 'Empty scope', 'private-project',
+                                                       'host-1', board.store.now(), board.store.now()))
         before = self.dump(board)
         self.assertEqual(deletion.preview(board.store, 'macro-empty')['scope'], {
             'artifacts': {'count': 0, 'bytes': 0}, 'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 0, 'gitRefs': 0})

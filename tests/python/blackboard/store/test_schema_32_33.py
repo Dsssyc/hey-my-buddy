@@ -57,6 +57,10 @@ class Schema33Tests(unittest.TestCase):
                 sql = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
                 self.assertEqual([tuple(row) for row in migrated.execute(sql)],
                                  [tuple(row) for row in connection.execute(sql)])
+                self.assertEqual([row[1] for row in migrated.execute('PRAGMA table_info(macro_task_goals)')],
+                                 ['macro_task_id', 'revision', 'body', 'created_at'])
+                self.assertNotIn('project_path',
+                                 {row[1] for row in migrated.execute('PRAGMA table_info(macro_tasks)')})
 
     def test_missing_location_skips_git(self):
         self.repository.parent.rename(self.root / 'moved-repository')

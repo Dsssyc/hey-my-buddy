@@ -4,7 +4,7 @@ The list still discovers membership, matching and ordering on every changed
 read. Only _summary is reused. Markers contain derived scalar facts, receipt
 presence/stop facts and bounded presentation fields, never execution results,
 turn inputs, request bodies or manifests. Events are not a substitute for SQL
-facts: changing the current goal also invalidates its group.
+facts: presentation corrections also invalidate their group.
 """
 from __future__ import annotations
 
@@ -156,13 +156,6 @@ def dependencies(connection, members):
             groups[group].append(("macro-task", *tuple(row)))
             from .macro_tasks import project
             groups[group].append(("project", *project(connection, group).values()))
-            goal = connection.execute(
-                "SELECT revision,created_at," + _bounded("body") +
-                " FROM macro_task_goals WHERE macro_task_id=? ORDER BY revision DESC LIMIT 1", (group,),
-            ).fetchone()
-            if goal is not None:
-                groups[group].append(("goal", *tuple(goal)))
-                reusable[group] = goal[3] <= TEXT_BOUND
 
         else:
             row = connection.execute(

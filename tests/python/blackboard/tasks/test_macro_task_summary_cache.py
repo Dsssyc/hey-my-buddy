@@ -370,92 +370,97 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.rows(query="fictional-corrected-source")[group]["matchingRuns"], 1)
             self.assert_recomputed(counter, [group])
 
-    def test_macro_task_metadata_and_description_raw_corrections(self):
+    def test_macro_task_metadata_and_goal_raw_corrections(self):
         group = self.fixture.macros[0]
         first = self.root_for(group)
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.read()
             counter.reset_mock()
-            self.sql("UPDATE macro_tasks SET title='Fictional revised title',project_path='/fictional/revised',source_host_id='revised-source',created_at='2020-01-01T00:00:00Z' WHERE macro_task_id=?", (group,))
+            self.sql("UPDATE macro_tasks SET title='Fictional revised title',source_host_id='revised-source',created_at='2020-01-01T00:00:00Z' WHERE macro_task_id=?", (group,))
+            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd','/fictional/revised') WHERE task_id=?", (first,))
             row = self.rows()[group]
             self.assertEqual(row["title"], "Fictional revised title")
             self.assertEqual(row["project"]["path"], "/fictional/revised")
             self.assertEqual(row["sourceHostId"], "revised-source")
             self.assertEqual(row["createdAt"], "2020-01-01T00:00:00Z")
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.description','Fictional corrected description') WHERE kind='workflow.macro_task_created' AND task_id=?", (first,))
-            self.assertEqual(self.rows()[group]["description"], "Fictional corrected description")
-            self.assert_recomputed(counter, [group])
+            expected = self.read()
+            self.assertNotIn("goal", self.rows()[group])
+            self.sql("UPDATE macro_task_goals SET body='Fictional corrected goal' WHERE macro_task_id=? AND revision=1", (group,))
+            self.assertEqual(self.read(), expected)
+            self.assert_recomputed(counter, [])
+            self.assertEqual(macro_tasks.macro_task_timeline(self.store, {"macroTaskId": group})["macroTask"]["goal"]["body"],
+                             "Fictional corrected goal")
 
-    def test_first_description_run_is_reselected_after_raw_creation_order_change(self):
+    def test_root_creation_order_changes_project_projection(self):
         group = self.fixture.macros[0]
         first = self.root_for(group)
         with self.store.db.read() as connection:
             second = connection.execute("SELECT run_id FROM workflow_runs WHERE macro_task_id=? AND run_id<>? ORDER BY created_at,rowid LIMIT 1", (group,first)).fetchone()[0]
-        self.read()
+        self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd','/fictional/second-root') WHERE task_id=?", (second,))
+        original_project = self.rows()[group]["project"]
         self.sql("UPDATE workflow_runs SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?", (second,))
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            self.assertIsNone(self.rows()[group]["description"])
+            project = self.rows()[group]["project"]
+            self.assertNotEqual(project, original_project)
+            self.assertEqual(project["path"], "/fictional/second-root")
             self.assert_recomputed(counter, [group])
 
-    def test_raw_description_json_type_correction_is_not_a_marker_collision(self):
-        group=self.fixture.macros[0]
-        root=self.root_for(group)
-        self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.description',json(?)) WHERE kind='workflow.macro_task_created' AND task_id=?",('{"fictional":1}',root))
-        self.assertEqual(self.rows()[group]["description"],{"fictional":1})
-        with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.description',?) WHERE kind='workflow.macro_task_created' AND task_id=?",('{"fictional":1}',root))
-            self.assertEqual(self.rows()[group]["description"],'{"fictional":1}')
-            self.assert_recomputed(counter,[group])
-
-    def test_unconsumed_json_fields_and_unrelated_meta_changes_keep_reuse(self):
+    def test_goal_revision_changes_detail_without_recomputing_list(self):
         group = self.fixture.macros[0]
-        root = self.root_for(group)
-        project = "fictional-json-project"
-        self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
-        event = json.dumps({"macroTaskId": group, "noise": "two", "description": "fixed"})
-        self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (event, root))
         expected = self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (event.replace('"two"', '"new"'), root))
+            self.sql("INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,?,?,?)",
+                     (group, 2, "Fictional revised goal", "2020-02-03T04:05:06Z"))
+            self.assertEqual(self.read(), expected)
+            self.assert_recomputed(counter, [])
+            self.assertEqual(macro_tasks.macro_task_timeline(self.store, {"macroTaskId": group})["macroTask"]["goal"],
+                             {"body": "Fictional revised goal", "revision": 2,
+                              "createdAt": "2020-02-03T04:05:06Z"})
+
+    def test_unconsumed_event_fields_and_unrelated_meta_changes_keep_reuse(self):
+        group = self.fixture.macros[0]
+        root = self.root_for(group)
+        self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.fixtureNoise','two') WHERE kind='task.submitted' AND task_id=?", (root,))
+        expected = self.read()
+        with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
+            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.fixtureNoise','new') WHERE kind='task.submitted' AND task_id=?", (root,))
             self.sql("INSERT INTO meta(key,value) VALUES('fictional-unrelated-commit','1')")
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])
 
-    def test_description_type_precision_and_size_boundaries_preserve_summary(self):
+    def test_list_never_reads_or_copies_large_goal_body(self):
         group = self.fixture.macros[0]
-        root = self.root_for(group)
-        cases = (
-            ("x" * memo.TEXT_BOUND, "x" * (memo.TEXT_BOUND - 1) + "y"),
-            ("x" * (memo.TEXT_BOUND + 1), "x" * memo.TEXT_BOUND + "y"),
-            ("字" * memo.TEXT_BOUND, "字" * (memo.TEXT_BOUND - 1) + "新"),
-            (None, False),
-            (False, {"fictional": "new"}),
-        )
-        for before, after in cases:
-            with self.subTest(before_type=type(before).__name__, size=len(str(before))):
-                for value in (before, after):
-                    payload = json.dumps({"macroTaskId": group, "description": value})
-                    self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload, root))
-                    self.assertEqual(self.rows()[group]["description"], value)
-                    with self.store.db.read() as connection:
-                        inputs = macro_tasks._summary_inputs(connection, [group], [], [])[group]
-                        self.assertEqual(macro_tasks._summary(connection, group, inputs)["description"], value)
+        body = "fictional-large-goal-" * 40000
+        self.sql("UPDATE macro_task_goals SET body=? WHERE macro_task_id=? AND revision=1", (body, group))
+        statements = []
+        with self.store.db.read() as connection:
+            connection.set_trace_callback(statements.append)
+        try:
+            page = self.read()
+        finally:
+            with self.store.db.read() as connection:
+                connection.set_trace_callback(None)
+        self.assertFalse(any("macro_task_goals" in statement.lower() for statement in statements))
+        self.assertTrue(all("goal" not in row for row in macro_summaries(page)))
+        self.assertNotIn("fictional-large-goal-", json.dumps(page))
+        cache = memo.for_store(self.store)
+        encoded = json.dumps(list(cache.entries.values()))
+        self.assertNotIn("fictional-large-goal-", encoded)
+        self.assertLess(len(encoded), 100000)
+        self.assertEqual(macro_tasks.macro_task_timeline(self.store, {"macroTaskId": group})["macroTask"]["goal"]["body"], body)
 
     def test_huge_unrelated_event_fields_are_not_copied_into_marker(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
-        project = "fictional-json-project"
-        self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
         padding = "fictional-unconsumed-padding-" * 80000
-        event = json.dumps({"padding": padding, "macroTaskId": group, "description": "fixed"})
-        self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (event, root))
+        self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.fixturePadding',?) WHERE kind='task.submitted' AND task_id=?", (padding, root))
         expected = self.read()
         encoded = json.dumps(list(memo.for_store(self.store).entries.values()))
         self.assertNotIn("fictional-unconsumed-padding", encoded)
         self.assertLess(len(encoded), 100000)
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (event.replace("padding-", "padding!"), root))
+            self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.fixturePadding',?) WHERE kind='task.submitted' AND task_id=?", (padding.replace("padding-", "padding!"), root))
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])
 

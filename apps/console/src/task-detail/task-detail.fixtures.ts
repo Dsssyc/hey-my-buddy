@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { macroTaskSummary } from "../macro-task-fixtures";
+import { macroTaskDetail } from "../macro-task-fixtures";
 import type { MacroTaskTimeline, TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "../macro-task-types";
 import type { Task } from "../types";
 import type { TaskDetailClient } from "./client";
@@ -125,7 +125,7 @@ export function timeline(overrides: Partial<MacroTaskTimeline> = {}): MacroTaskT
     event(2, "decide", at("10:40"), { requestId: "req-1", decision: "approve" }),
     event(3, "continue", at("10:41"), { continuationId: "cont-1" }),
   ];
-  return { macroTask: macroTaskSummary(), observedAt: at("11:30"), cursor: 10, rows: [row()], spans, events,
+  return { macroTask: macroTaskDetail(), observedAt: at("11:30"), cursor: 10, rows: [row()], spans, events,
     totals: { rows: 1, spans: spans.length, events: events.length, allRows: 1 }, truncated: { rows: false, spans: false, events: false },
     filtered: false, scopeComplete: true, ...overrides };
 }
@@ -154,7 +154,7 @@ export function timelineOfRecords(macroTaskId: string, records: Task[]): MacroTa
   const members = records.filter(record => record.lineage?.kind === "micro-task"
     && ((record.workflow as { macroTaskId?: string } | undefined)?.macroTaskId === macroTaskId || `run:${record.runId}` === macroTaskId));
   const base = timeline();
-  return { ...base, macroTask: macroTaskSummary({ macroTaskId }),
+  return { ...base, macroTask: macroTaskDetail({ macroTaskId }),
     rows: members.map(member => row({ runId: member.runId, state: member.workflow?.state ?? "executing" })),
     spans: members.filter(member => member.workflow?.state === "awaiting-host").map(member =>
       span(`host-${member.runId}`, "host", at("10:00"), null, { runId: member.runId, state: "open", requestId: `request-${member.runId}`, requestKind: "assistance" })),

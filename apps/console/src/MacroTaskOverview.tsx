@@ -82,7 +82,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
                   <div className="flex gap-1.5"><dt className="text-ink3">{t("lastActivity")}</dt><dd>{lastActivity === null ? t("unrecorded") : <time dateTime={shown.lastActivityAt!}>{formatDateTime(lastActivity)}</time>}</dd></div>
                 </dl>
                 {shown.kind === "standalone" && <p>{t("standalone")}</p>}
-                {shown.goal && <p>{shown.goal.body}</p>}
+                {timeline?.macroTask.goal && <p>{timeline.macroTask.goal.body}</p>}
                 <h3 className="font-semibold">{t("statsTitle")}</h3>
                 {!timeline
                   ? <p className="text-xs text-ink2">{loading ? t("statsLoading") : t("statsMissing")}</p>

@@ -1601,7 +1601,7 @@ class WorkflowCoordinator:
             if fixed_run["state"] != "accepted":
                 raise BoardError("INVALID_STATE", "fixes must name an accepted micro task", fixes=fixes)
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
-                         attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
+                         attach_macro_task(connection, presentation, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
@@ -2015,7 +2015,7 @@ class WorkflowCoordinator:
 
     def _inquiries(self, connection, run_id: str) -> list[dict]:
         return [self.board._message_view(row) for row in connection.execute(
-            "SELECT * FROM messages WHERE task_id=? AND direction='question' ORDER BY created_at,message_id",
+            "SELECT * FROM messages WHERE task_id=? AND direction='question' ORDER BY created_at,rowid",
             (run_id,),
         )]
 
@@ -4890,6 +4890,7 @@ class WorkflowCoordinator:
             receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
+            reject_deleting_run(connection, run_id)
             macro_task_id = run_row["macro_task_id"]
             if macro_task_id is None:
                 raise BoardError("MACRO_TASK_REQUIRED", "A goal amendment requires a run belonging to a macro task")

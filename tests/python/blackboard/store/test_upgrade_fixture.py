@@ -45,6 +45,54 @@ class UpgradeFixtureTests(unittest.TestCase):
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
         return run_id, manifest, attempt
 
+    def test_floor_created_descriptions_become_goals_with_original_event_times(self):
+        fixture = load_fixture(self.root / 'goal-stock')
+        load_delivered_stock(fixture)
+        # The released writer normalized the submitted whitespace before it
+        # stored the event; the migration preserves that stored value.
+        expected_body = 'Goal from the 0.54.1 writer. Preserve this line.'
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            connection.row_factory = sqlite3.Row
+            source_events = list(connection.execute(
+                "SELECT payload_json,created_at FROM events WHERE kind='workflow.macro_task_created' ORDER BY seq"))
+            delivered_macro = connection.execute(
+                'SELECT macro_task_id FROM workflow_runs WHERE run_id=?',
+                (fixture['deliveredStockRunId'],)).fetchone()[0]
+            # Distinguish the retained event time from the independent display
+            # row's time; the floor writer's event and sealed inputs stay intact.
+            connection.execute('UPDATE macro_tasks SET created_at=? WHERE macro_task_id=?',
+                               ('2026-01-05T00:00:01.000Z', delivered_macro))
+            source_macros = [tuple(row) for row in connection.execute(
+                'SELECT macro_task_id,title,project_id,source_host_id,created_at,activity_seq,activity_at '
+                'FROM macro_tasks ORDER BY rowid')]
+            paths = list(connection.execute(
+                "SELECT m.project_path,(SELECT json_extract(t.spec_json,'$.cwd')"
+                " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                " WHERE r.macro_task_id=m.macro_task_id ORDER BY r.created_at,r.rowid LIMIT 1) AS source_cwd"
+                " FROM macro_tasks m"))
+            self.assertEqual(len(paths), 3)
+            for row in paths:
+                self.assertEqual(row['project_path'], row['source_cwd'])
+        self.assertEqual(len(source_events), 3)
+        descriptions = {json.loads(row['payload_json'])['macroTaskId']:
+                        (json.loads(row['payload_json'])['description'], row['created_at'])
+                        for row in source_events}
+        self.assertEqual(descriptions[delivered_macro], (expected_body, '2026-01-05T00:00:00.000Z'))
+        self.assertEqual([body for macro_id, (body, _at) in descriptions.items()
+                          if macro_id != delivered_macro], [None, None])
+
+        upgrade_state(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM events WHERE kind='workflow.macro_task_created'").fetchone()[0], 0)
+            self.assertEqual(list(connection.execute(
+                'SELECT macro_task_id,revision,body,created_at FROM macro_task_goals')),
+                [(delivered_macro, 1, expected_body, '2026-01-05T00:00:00.000Z')])
+            self.assertEqual([tuple(row) for row in connection.execute(
+                'SELECT macro_task_id,title,project_id,source_host_id,created_at,activity_seq,activity_at '
+                'FROM macro_tasks ORDER BY rowid')], source_macros)
+            self.assertNotIn('project_path', {row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')})
+
     def test_delivered_v3_stock_continues_and_is_accepted_after_upgrade(self):
         from admission import admit_board
         from support import FakeClock, InProcessBoard
@@ -295,6 +343,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         before = upgrade.idle_snapshot(state)
         old_rows = {name: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
                     for name in before['tables']}
+        macro_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')]]
         task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
         identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
         cleanup_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
@@ -317,7 +366,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         retained_commands = {row['command_id'] for row in connection.execute(
             "SELECT command_id FROM commands WHERE kind NOT IN ('workflow.cleanup_plan','workflow.cleanup_apply')")}
         retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
-                           if json.loads(row['payload_json']).get('planId') not in deleted_plans}
+                           if row['kind'] != 'workflow.macro_task_created'
+                           and json.loads(row['payload_json']).get('planId') not in deleted_plans}
         old_project_id = json.loads(connection.execute(
             'SELECT workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()[0])['repositoryId']
         marker_blob = hashlib.sha1(b'blob ' + str(len(old_project_id)).encode() + b'\0'
@@ -360,6 +410,9 @@ class UpgradeFixtureTests(unittest.TestCase):
             if name == 'meta':
                 self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
                                  [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
+            elif name == 'macro_tasks':
+                keep = [i for i, column in enumerate(macro_columns) if column != 'project_path']
+                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
             elif name == 'tasks':
                 removed = {'required_capabilities', 'exclusive_resources', 'expected_seconds', 'router_budget_seconds'}
                 keep = [i for i, column in enumerate(task_columns) if column not in removed]

@@ -298,6 +298,24 @@ class MicroTaskParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
         self.assertTrue(cancelled["cancelled"])
 
 
+    def test_goal_amend_uses_the_control_file_and_preserves_the_text(self):
+        board = self.board()
+        self.use_board_transport(board)
+        submitted = self.submit(board, macroTask={"title": "CLI goal", "goal": "Original goal"})
+        control_file = cli._save_control(submitted["runId"], submitted["control"], self.directory)
+        body = "  New goal\n\nKeep this spacing.  "
+        payload = {"runId": submitted["runId"], "commandId": "goal-cli-1", "goal": body,
+                   "expectedGoalRevision": 1, "controlFile": control_file}
+        code, result, text = self.run_cli("goal-amend", json.dumps(payload))
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["goal"], {"body": body, "revision": 2, "createdAt": result["goal"]["createdAt"]})
+        self.assertEqual(result["goalRevision"], 2)
+        self.assertNotIn("controlToken", text)
+        code, replay, _ = self.run_cli("goal-amend", json.dumps(payload))
+        self.assertEqual(code, 0, replay)
+        self.assertTrue(replay["duplicate"])
+
+
 class HelpTests(unittest.TestCase):
     """Item 13: help is generated from the validators and starts nothing."""
 
@@ -375,6 +393,19 @@ class HelpTests(unittest.TestCase):
             self.assertIn("single line", note)
             self.assertNotIn("splitlines()", note)
             self.assertNotIn("any((", text)
+
+    def test_goal_help_names_its_own_revision_and_required_text(self):
+        method = cli_help.method_help("goal-amend")
+        fields = {item.name: item for item in method.parameters}
+        self.assertTrue(fields["goal"].required)
+        self.assertTrue(fields["expectedGoalRevision"].required)
+        self.assertNotIn("expectedRevision", fields)
+        text = self.help_text("goal-amend")
+        self.assertIn("controlFile", text)
+        self.assertIn("1048576", text)
+        submit = self.help_text("submit")
+        self.assertIn("goal", submit)
+        self.assertNotIn("description", submit)
 
     def test_accept_and_conclude_help_require_the_note(self):
         for method in ("accept", "conclude"):

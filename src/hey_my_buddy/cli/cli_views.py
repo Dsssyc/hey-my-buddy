@@ -35,7 +35,7 @@ MICRO_TASK_RECEIPTS = frozenset(
         "conclude",
         "reclaim",
         "scope-amend",
-    "goal-amend",
+        "goal-amend",
         "workspace-resolve",
     }
 )

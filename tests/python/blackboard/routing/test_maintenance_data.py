@@ -64,6 +64,26 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertFalse(pending(db))
 
+    def test_grouped_project_uses_creating_root_directory_without_goal_text(self):
+        board = self.board_
+        cwd = str(self.workdir("project-creator"))
+        first = self.submit(board, request_id="project-creator", cwd=cwd, kind="worktree",
+                            macroTask={"title": "Project", "goal": "Private goal sentinel"})
+        second = self.submit(board, request_id="project-member", cwd=cwd, kind="worktree",
+                             macroTaskId=first["macroTaskId"])
+        for run in (first, second):
+            self.finish_turn(board, self.claim(board, run_id=run["runId"]))
+            self.accept_run(board, board.call("workflow_get", {"runId": run["runId"]}))
+        with board.store.db.write() as db:
+            db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd',?) WHERE task_id=?",
+                       (str(self.workdir("different-member-source")), second["runId"]))
+        packet = self.packet()
+        projects = {item["runId"]: item["project"] for item in packet["microTasks"]}
+        expected = {"id": f"repo:{cwd}", "path": cwd}
+        self.assertEqual(projects[first["runId"]], expected)
+        self.assertEqual(projects[second["runId"]], expected)
+        self.assertNotIn("Private goal sentinel", json.dumps(packet))
+
     def test_summary_schema_binds_kind_combinations_and_citations(self):
         packet = deepcopy(self.packet())
         first, second = (run["runId"] for run in self.runs)

@@ -147,7 +147,7 @@ def pending_root_count(store) -> int:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
 
 
-def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
+def attach_macro_task(connection, presentation: dict, *, host_id: str, manifest: dict, now: str,
                       fixed_run=None) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest_project_id(manifest)
@@ -581,7 +581,6 @@ SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status
 
 def _summary(connection, group_id: str, inputs: dict) -> dict:
     result_summary = None
-    goal = None
     members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
               "failed": 0,
@@ -604,7 +603,6 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
-        goal = current_goal(connection, group_id)
         kind = "macro-task"
     else:
         root_id = group_id[len("run:"):]
@@ -624,7 +622,6 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         "title": title,
         "titleSource": title_source,
         "summary": result_summary,
-        "goal": goal,
         "project": group_project,
         "sourceHostId": source_host,
         "currentHostIds": current_hosts,
@@ -667,7 +664,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         members = inputs["executions"]
         if not members:
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
-        summary = _summary(connection, group_id, inputs)
+        summary = {**_summary(connection, group_id, inputs), "goal": current_goal(connection, group_id)}
         runs = inputs["members"]
         matching_ids = {row["task_id"] for row in runs if row["summary_matching"]}
         ordered = _tree_order(runs)

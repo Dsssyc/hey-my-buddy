@@ -8,10 +8,9 @@ export type MacroTaskSort = "activity-desc" | "activity-asc" | "created-desc" | 
 export type MacroTaskFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
 type MacroTaskCategory = MacroTaskSummary["state"];
-const macroTaskSummarySchema = z.looseObject({
+const macroTaskSummaryFields = z.looseObject({
   macroTaskId: z.string().min(1), kind: z.enum(["macro-task", "standalone"]), title: z.string().nullable(),
   titleSource: z.enum(["macro-task", "title", "task", "none"]),
-  goal: z.looseObject({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString }).nullable(),
   summary: z.string().nullable(),
   project: z.looseObject({ id: z.string(), path: z.string().nullable(), label: z.string() }).nullable(),
   sourceHostId: z.string().nullable(), currentHostIds: z.array(z.string()), createdAt: z.string().nullable(),
@@ -21,13 +20,18 @@ const macroTaskSummarySchema = z.looseObject({
     stoppableHelpers: safeCount, delivered: safeCount, awaitingHost: safeCount }),
   matchingRuns: safeCount, rootRunIds: z.array(z.string()),
 });
+const macroTaskSummarySchema = macroTaskSummaryFields.refine(summary => !Object.hasOwn(summary, "goal"));
+const macroTaskDetailSchema = macroTaskSummaryFields.extend({
+  goal: z.looseObject({ body: z.string(), revision: z.number().int().positive(), createdAt: dateString }).nullable(),
+});
 export type MacroTaskSummary = z.infer<typeof macroTaskSummarySchema>;
+export type MacroTaskDetail = z.infer<typeof macroTaskDetailSchema>;
 export type MacroTaskQuery = {
   limit?: number; before?: string; group?: string; hostId?: string;
   query?: string; filter?: MacroTaskFilter; sort?: MacroTaskSort;
 };
 export const macroTaskGroupSchema = z.object({
-  id: z.string().min(1), project: macroTaskSummarySchema.shape.project, total: safeCount,
+  id: z.string().min(1), project: macroTaskSummaryFields.shape.project, total: safeCount,
   macroTasks: z.array(macroTaskSummarySchema), nextCursor: z.string().nullable(),
 });
 export type MacroTaskGroup = z.infer<typeof macroTaskGroupSchema>;
@@ -134,7 +138,7 @@ export type TimelineEvent = {
   stopInitiator?: "host" | "lead" | "console" | "service" | "unknown" | null;
 };
 export const macroTaskTimelineSchema = z.object({
-  macroTask: macroTaskSummarySchema, observedAt: z.string(), cursor: integer,
+  macroTask: macroTaskDetailSchema, observedAt: z.string(), cursor: integer,
   rows: z.array(timelineRowSchema.transform(row => row as TimelineRow)),
   spans: z.array(timelineSpanSchema.transform(span => span as TimelineSpan)), events: z.array(z.custom<TimelineEvent>()),
   totals: z.looseObject({ rows: integer, spans: integer, events: integer, allRows: integer }),

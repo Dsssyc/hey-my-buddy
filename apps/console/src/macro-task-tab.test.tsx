@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
-import { macroTaskGroups, macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
+import { listSummary, macroTaskGroups, macroTaskTimelineFixture, OBSERVED_AT } from "./macro-task-fixtures";
 import { clockTime } from "./macro-task-display";
 
 function snapshotFixture(): Snapshot {
@@ -28,7 +28,7 @@ function harness() {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     command: vi.fn(),
     task: vi.fn(),
-    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([timeline.macroTask]), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([listSummary(timeline.macroTask)]), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -92,7 +92,7 @@ describe("macro task page", () => {
     const selectedRow = await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     fireEvent.click(selectedRow);
     await waitFor(() => expect(f.api.macroTaskTimeline).toHaveBeenCalled());
-    const macroTask = f.timeline.macroTask;
+    const macroTask = listSummary(f.timeline.macroTask);
     const newer = { ...macroTask, macroTaskId: "macro-new", title: "刚有活动的目标", lastActivitySeq: macroTask.lastActivitySeq + 1 };
     vi.mocked(f.api.macroTasks).mockResolvedValueOnce({ groups: macroTaskGroups([newer, macroTask]), totals: { all: 2, active: 2, host: 0, review: 0 },
       cursor: 42, changed: true });

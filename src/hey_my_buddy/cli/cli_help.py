@@ -127,7 +127,7 @@ _CONTROL_METHODS = frozenset(
         "conclude",
         "reclaim",
         "scope-amend",
-    "goal-amend",
+        "goal-amend",
         "workspace-resolve",
     }
 )

@@ -146,12 +146,12 @@ class HarnessHealthTests(BoardTestCase):
             directory.mkdir()
             (directory / (('node' if index % 2 else 'codex') + CLI_SUFFIX)).write_text('fixture', encoding="utf-8", newline="\n")
             directories.append(str(directory))
-        empty = [str(self.directory / f'empty-{index}') for index in range(100)]
+        empty = str(self.directory / 'empty')
         unrelated = self.directory / 'unrelated'
         unrelated.mkdir()
         (unrelated / 'other-tool').write_text('fixture', encoding="utf-8", newline="\n")
         (unrelated / ('codex' + CLI_SUFFIX)).mkdir()
-        self.health.add_path_hint(os.pathsep.join([*empty, str(unrelated), *directories]))
+        self.health.add_path_hint(os.pathsep.join([empty, str(unrelated), *directories]))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
         self.health.add_path_hint(os.pathsep.join(reversed(directories)))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))

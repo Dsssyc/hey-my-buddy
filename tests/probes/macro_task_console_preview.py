@@ -2092,18 +2092,15 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
     if group.startswith("macro-"):
         meta = MACRO_TASKS[group]
         title, title_source, project = meta["title"], "macro-task", meta["project"]
-        goal = meta["goal"]
         source_host, created, kind = meta["host"], meta["createdAt"], "macro-task"
         roots = [entry["runId"] for entry in entries if entry["parentRunId"] is None]
     else:
         root = FIXTURES["runs"][group[len("run:"):]]
         title, title_source, project = root["title"], root["titleSource"], root["project"]
-        goal = None
         source_host, created, kind, roots = root["sourceHostId"], root["createdAt"], "standalone", [root["runId"]]
     seq, at = FIXTURES["group_activity"][group]
     return {
         "macroTaskId": group, "kind": kind, "title": title, "titleSource": title_source,
-        "goal": goal,
         "summary": "合成记录：保留独立委派的结果摘要。" if kind == "standalone" else None,
         "project": PROJECTS[project], "sourceHostId": source_host,
         "currentHostIds": sorted({entry["currentHostId"] for entry in entries if entry["currentHostId"]}),
@@ -2224,7 +2221,7 @@ def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
     template = macro_task_summary(MACRO_C, set(FIXTURES["groups"][MACRO_C]))
     for index in range(6):
         row = {**template, "macroTaskId": f"macro-preview-list-{index + 1}",
-               "title": f"合成分页任务 {index + 1}", "goal": None,
+               "title": f"合成分页任务 {index + 1}",
                "createdAt": instant(0, index + 1), "lastActivityAt": instant(0, index + 1),
                "lastActivitySeq": index + 1, "state": "ended", "matchingRuns": 1,
                "rootRunIds": [], "counts": {**template["counts"], "roots": 1, "helpers": 0,
@@ -2334,7 +2331,9 @@ def macro_task_timeline(params: dict, scenario: str, state: PreviewState | None 
     truncated = {"rows": len(selected) > len(shown), "spans": span_total > len(spans),
                  "events": marker_total > len(markers)}
     return {
-        "macroTask": macro_task_summary(group, matching), "observedAt": OBSERVED_AT,
+        "macroTask": {**macro_task_summary(group, matching),
+                      "goal": MACRO_TASKS[group]["goal"] if group.startswith("macro-") else None},
+        "observedAt": OBSERVED_AT,
         "cursor": state.cursor if state is not None else FIXTURES["head"], "rows": [timeline_row(entry, depth) for entry, depth in shown],
         "spans": spans, "events": markers,
         "totals": {"rows": len(selected), "spans": span_total, "events": marker_total,
@@ -3107,7 +3106,7 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 REQUIRED_KEYS = {
     "MacroTaskPage": {"groups", "totals", "cursor", "changed"},
     "MacroTaskGroup": {"id", "project", "total", "macroTasks", "nextCursor"},
-    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "goal", "summary", "project",
+    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "summary", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
     "MacroTaskCounts": {"roots", "helpers", "accepted", "failed", "active", "host", "review", "ended",
@@ -3357,14 +3356,14 @@ def validate_fixtures() -> list[str]:
         problems.append("normal scope must be complete")
     if not macro_task_timeline({"macroTaskId": MACRO_A}, "truncated")["truncated"]["rows"]:
         problems.append("truncated scenario must report row truncation")
-    summary_a = next(item for item in listed if item["macroTaskId"] == MACRO_A)
+    summary_a = macro_task_timeline({"macroTaskId": MACRO_A}, "normal")["macroTask"]
     if (not summary_a["goal"] or not summary_a["goal"]["body"]
-            or len(summary_a["goal"]["body"]) > 300
             or summary_a["goal"]["revision"] != 1
             or summary_a["goal"]["createdAt"] != MACRO_TASKS[MACRO_A]["createdAt"]):
         problems.append("macro task A must carry a bounded initial goal")
-    if any(item["goal"] is not None and item["kind"] == "standalone"
-           for item in listed):
+    if any("goal" in item for item in listed):
+        problems.append("list summaries must not carry goal text")
+    if macro_task_timeline({"macroTaskId": STANDALONE_GROUP}, "normal")["macroTask"]["goal"] is not None:
         problems.append("standalone groups must not carry a goal")
     if not all(isinstance(item["counts"][key], int) for item in listed
                for key in ("accepted", "failed")):
