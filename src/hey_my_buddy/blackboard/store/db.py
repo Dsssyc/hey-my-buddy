@@ -20,7 +20,6 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
 SCHEMA_VERSION = 29
-UPGRADE_BASE_SCHEMA = 28
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -209,8 +208,7 @@ CREATE INDEX IF NOT EXISTS attempts_model_service_idx
 
 #: One row per recorded execution root. POSIX roots carry their boot session and
 #: process-group leader with no Job; Windows roots carry the exclusively created
-#: root Job with no boot or process-group id. Fresh boards and the pending
-#: schema-28 upgrade build this table from the same DDL.
+#: root Job with no boot or process-group id.
 ATTEMPT_PROCESS_IDENTITIES_DDL = """
 CREATE TABLE IF NOT EXISTS attempt_process_identities (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
