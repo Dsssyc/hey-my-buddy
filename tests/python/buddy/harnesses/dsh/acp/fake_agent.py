@@ -357,7 +357,8 @@ class FakeAgent:
         if method in self.orphan_on:
             # Spawn a same-group child that outlives this leader, then exit
             # without answering: the leader is gone but the group is not.
-            sleeper = subprocess.Popen(["/bin/sleep", "20"], start_new_session=False,
+            sleeper = subprocess.Popen([sys._base_executable, "-c", "import time; time.sleep(20)"],
+                                       start_new_session=False,
                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL)
             log(self.log_path, {"event": "orphan-spawned", "pid": sleeper.pid})

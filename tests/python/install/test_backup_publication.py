@@ -2,10 +2,12 @@
 import gzip
 import json
 import os
+import queue
 import shutil
+import site
 import subprocess
 import sys
-import time
+import threading
 from pathlib import Path
 from unittest import mock
 
@@ -13,6 +15,32 @@ from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
+
+
+def _spawn(script: str, state: Path, phase: str) -> subprocess.Popen:
+    environment = {key: value for key, value in os.environ.items() if key not in {
+        "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+        "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD", "VIRTUAL_ENV",
+        "UV_PROJECT_ENVIRONMENT"}}
+    # Start the writer itself with the locked environment's site bootstrap.
+    bootstrap = "import site; " + "; ".join(f"site.addsitedir({value!r})" for value in site.getsitepackages()) + "\n"
+    return subprocess.Popen([sys._base_executable, "-c", bootstrap + script, str(state), phase],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=environment)
+
+
+def _wait_for_writer(process: subprocess.Popen, phase: str) -> None:
+    messages: queue.Queue[bytes] = queue.Queue()
+    threading.Thread(target=lambda: messages.put(process.stdout.readline()), daemon=True).start()
+    try:
+        marker = messages.get(timeout=10)
+    except queue.Empty:
+        marker = None
+    if marker != b"READY\n":
+        if process.poll() is None:
+            process.kill()
+        _, stderr = process.communicate(timeout=5)
+        raise AssertionError(f"writer missed {phase}: {marker!r}; {stderr.decode(errors='replace')}")
 
 
 class BackupPublicationTests(BoardTestCase):
@@ -42,27 +70,26 @@ class BackupPublicationTests(BoardTestCase):
     def test_killed_writer_recovers_whole_generation_and_retains_sole_copy(self):
         # The child announces a publication boundary and waits to be killed.
         # A new reader then exercises recovery against the on-disk state.
-        script = """
+        script = r"""
 import gzip
 import os
 from pathlib import Path
 import shutil
 import sys
-import time
 from unittest import mock
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 
-state, marker, phase = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+state, phase = Path(sys.argv[1]), sys.argv[2]
 rename = backup._rename
 link = os.link
 remove = shutil.rmtree
 gzip_write, gzip_close, fsync = gzip.GzipFile.write, gzip.GzipFile.close, os.fsync
 
 def pause():
-    marker.write_text('ready', encoding='ascii')
-    while True:
-        time.sleep(60)
+    sys.stdout.buffer.write(b"READY\n")
+    sys.stdout.buffer.flush()
+    sys.stdin.buffer.read(1)
 
 def hooked_rename(source, target):
     rename(source, target)
@@ -136,21 +163,9 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
                     backup.create(board.directory, runtime_identity=None, plugin_commit=None,
                                   contract_version=CONTRACT_VERSION)
                     marker.write_text(json.dumps({'generation': 'new'}), encoding='utf-8')
-                pause_marker = self.workdir('backup-kill-' + phase) / 'ready'
-                child_env = os.environ.copy()
-                for name in ('HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
-                             'HMB_AGENT_CREDENTIAL_FILE', 'HMB_AGENT_CREDENTIAL_FD', 'VIRTUAL_ENV',
-                             'UV_PROJECT_ENVIRONMENT'):
-                    child_env.pop(name, None)
-                process = subprocess.Popen([sys.executable, '-c', script, str(board.directory),
-                                            str(pause_marker), phase], stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.PIPE, text=True, env=child_env)
+                process = _spawn(script, board.directory, phase)
                 try:
-                    deadline = time.monotonic() + 15
-                    while not pause_marker.exists() and process.poll() is None and time.monotonic() < deadline:
-                        time.sleep(0.02)
-                    self.assertTrue(pause_marker.exists(), process.stderr.read() if process.poll() is not None else
-                                    'writer did not reach publication boundary')
+                    _wait_for_writer(process, phase)
                     process.kill()
                     process.communicate(timeout=5)
                     backup.recover(board.directory)

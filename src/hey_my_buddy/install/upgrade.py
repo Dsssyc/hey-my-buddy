@@ -431,7 +431,11 @@ def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
     from ..blackboard.tasks.storage import prune_old_runtimes
     try:
         write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
-        return prune_old_runtimes(BoardStore(state))
+        store = BoardStore(state)
+        try:
+            return prune_old_runtimes(store)
+        finally:
+            store.db.close()
     except (BoardError, OSError) as cleanup_error:
         return {'complete':False, 'error':cleanup_error.code if isinstance(cleanup_error, BoardError) else type(cleanup_error).__name__,
                 'message':str(cleanup_error),

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -35,22 +37,31 @@ class NativeProcessJournalTests(unittest.TestCase):
             try:
                 with mock.patch.object(identity, "_active_native_journal", journal):
                     for _ in range(2):
-                        process = owned_popen([PYTHON, "-c", "import time; time.sleep(30)"],
-                                              start_new_session=True)
+                        process = owned_popen(
+                            [PYTHON, "-c", "import sys; sys.stdout.buffer.write(b'R'); "
+                             "sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)"],
+                            start_new_session=True, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         handles.append(ProcessHandle(process, own_group=True, log_paths={}))
+                        ready: queue.Queue[bytes] = queue.Queue()
+                        threading.Thread(target=lambda: ready.put(process.stdout.read(1)), daemon=True).start()
+                        self.assertEqual(ready.get(timeout=10), b"R")
                 evidence = identity.read_native_process_journal(path, BINDING)
                 self.assertIsNotNone(evidence)
                 self.assertEqual(evidence["pending"], 0)
                 self.assertEqual({entry["pid"] for entry in evidence["identities"]},
                                  {handle.pid for handle in handles})
                 for entry in evidence["identities"]:
-                    self.assertEqual(set(entry), {"bootId", "pid", "startedAt",
-                                                  "processGroupId", "jobName"})
+                    keys = {"pid", "startedAt", "jobName"}
+                    if os.name != "nt":
+                        keys |= {"bootId", "processGroupId"}
+                    self.assertEqual(set(entry), keys)
                     self.assertEqual(identity.inspect_process_identity(entry), "alive")
             finally:
                 for handle in handles:
                     handle.terminate(grace_seconds=0)
-                    handle.process.wait(timeout=5)
+                    handle.process.communicate(timeout=5)
+                    self.assertTrue(handle.shutdown_confirmed(), "native process tree did not stop")
 
     def test_unresolved_spawn_intent_blocks_a_complete_journal(self):
         with tempfile.TemporaryDirectory() as directory:

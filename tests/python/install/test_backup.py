@@ -105,10 +105,9 @@ class BackupTests(BoardTestCase):
         manifest = json.loads(path.read_text(encoding="utf-8"))
         source = self.directory / 'mismatched.sqlite3'
         source.write_bytes(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()))
-        with sqlite3.connect(source) as connection:
+        with closing(sqlite3.connect(source)) as connection, connection:
             connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
             manifest['databaseSnapshot'] = backup.database_snapshot(connection)
-        connection.close()
         payload = current / 'board.sqlite3.gz'
         payload.write_bytes(gzip.compress(source.read_bytes()))
         manifest['files']['board.sqlite3.gz'] = {'bytes': payload.stat().st_size,
@@ -271,30 +270,34 @@ class BackupTests(BoardTestCase):
         self.assertEqual(secret.read_text(encoding="utf-8"), 'private credential')
         self.assertEqual(checkout.read_text(encoding="utf-8"), 'unchanged checkout')
 
-    @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires POSIX FIFOs')
-    def test_special_rollback_source_refuses_publication_and_keeps_previous_generation(self):
+    def _assert_special_rollback_source_refused(self, kind):
         board = self.board()
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         before = (current / 'manifest.json').read_bytes()
         source = board.directory / 'console-settings.json'
-        for kind in ('directory', 'fifo'):
-            with self.subTest(kind=kind):
-                if kind == 'directory':
-                    source.mkdir()
-                else:
-                    os.mkfifo(source)
-                try:
-                    with self.assertRaises(BoardError) as caught:
-                        backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-                    self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
-                    self.assertEqual((current / 'manifest.json').read_bytes(), before)
-                    self.assertEqual(stat.S_ISDIR(source.lstat().st_mode), kind == 'directory')
-                finally:
-                    source.rmdir() if kind == 'directory' else source.unlink()
+        if kind == 'directory':
+            source.mkdir()
+        else:
+            os.mkfifo(source)
+        try:
+            with self.assertRaises(BoardError) as caught:
+                backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
+            self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
+            self.assertEqual((current / 'manifest.json').read_bytes(), before)
+            self.assertEqual(stat.S_ISDIR(source.lstat().st_mode), kind == 'directory')
+        finally:
+            source.rmdir() if kind == 'directory' else source.unlink()
+
+    def test_directory_rollback_source_refuses_publication_and_keeps_previous_generation(self):
+        self._assert_special_rollback_source_refused('directory')
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX FIFO source')
+    def test_posix_fifo_rollback_source_refuses_publication_and_keeps_previous_generation(self):
+        self._assert_special_rollback_source_refused('fifo')
 
     def test_snapshot_keeps_historical_json_sort_and_exemption_format(self):
-        with sqlite3.connect(self.directory / "fingerprint.sqlite3") as connection:
+        with closing(sqlite3.connect(self.directory / "fingerprint.sqlite3")) as connection, connection:
             connection.execute("CREATE TABLE workers(id INTEGER PRIMARY KEY AUTOINCREMENT,value TEXT)")
             connection.execute("CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT)")
             connection.execute('CREATE TABLE "quoted table"(value,other)')
