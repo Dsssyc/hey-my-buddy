@@ -314,7 +314,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                              [tuple(row) for row in baseline.execute(query)])
         after = upgrade.idle_snapshot(state, column_projections=before['columnProjections'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
-        self.assertEqual(after['tables'], {**before['tables'],
+        self.assertEqual(after['tables'], {**before['tables'], 'attempt_received_receipts': 0,
                                          'router_requests': before['tables']['router_requests'] + 5})
         self.assertNotIn('expectedTableCounts', before)
         for name, fingerprint in before['fingerprints'].items():

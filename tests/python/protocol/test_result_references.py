@@ -3,7 +3,7 @@ import json
 from unittest import mock
 
 from admission import admit_execution
-from support import BoardTestCase
+from support import BoardTestCase, settle_fixture_receipt
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
@@ -33,7 +33,7 @@ class ResultReferenceTests(BoardTestCase):
         return self.client.submit_result(self.attempt["attemptId"], self.attempt["generation"],
                                          self.nonce if nonce is None else nonce, reference)
 
-    def test_large_receipt_is_committed_and_replayed_with_a_small_wire_frame(self):
+    def test_large_receipt_is_received_and_imported_with_a_small_wire_frame(self):
         paths = [f"src/{index:04d}-" + "a" * 2990 for index in range(3000)]
         report = {"status": "ok", "shutdownConfirmed": True, "result": {
             "workspaceSeal": {"changedPaths": paths, "snapshot": {"changedPaths": paths},
@@ -44,8 +44,9 @@ class ResultReferenceTests(BoardTestCase):
                                wraps=self.board_fixture.service.execution_result) as called:
             first = self.submit(reference)
             replay = self.submit(reference)
-        self.assertFalse(first["duplicate"])
-        self.assertTrue(replay["duplicate"])
+        self.assertEqual(first, {"received": True})
+        self.assertEqual(replay, first)
+        imported = settle_fixture_receipt(self.board_fixture, self.attempt["attemptId"])
         for call in called.call_args_list:
             self.assertLess(len(call.args[0].encode()), 1024)
             wire = json.loads(call.args[0])
@@ -55,7 +56,7 @@ class ResultReferenceTests(BoardTestCase):
             raw = connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                      (self.attempt["attemptId"],)).fetchone()[0]
         self.assertEqual(json.loads(raw)["result"], report["result"])
-        self.assertEqual(first["attempt"]["result"]["result"]["workspaceSeal"]["changedPathsCount"], len(paths))
+        self.assertEqual(imported["attempt"]["result"]["result"]["workspaceSeal"]["changedPathsCount"], len(paths))
         self.assertLess(len(json.dumps(first).encode()), MAX_MESSAGE_BYTES)
 
     def test_wrong_nonce_is_rejected_before_the_file_is_opened(self):

@@ -586,8 +586,8 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertTrue(by_run[first['runId']]['shutdownConfirmed'])
         self.assertFalse(by_run[first['runId']]['uncertain'])
         self.assertEqual(by_run[first['runId']]['buddy']['model'], 'deepseek-flash')
-        # An unconfirmed stop stays uncertain and open-ended: it is never drawn as ended.
-        self.assertEqual(by_run[second['runId']]['state'], 'uncertain')
+        # A received unconfirmed stop stays finalizing with an open-ended span.
+        self.assertEqual(by_run[second['runId']]['state'], 'finalizing')
         self.assertIsNone(by_run[second['runId']]['endAt'])
         self.assertFalse(by_run[second['runId']]['shutdownConfirmed'])
         self.assertIn('queue', {span['kind'] for span in timeline['spans']})
@@ -597,7 +597,7 @@ class MacroTaskReadTests(WorkflowTestCase):
             self.assertTrue(span['startAt'].endswith('Z'))
         self.assertTrue(timeline['rows'][0]['shutdownConfirmed'])
         self.assertFalse(timeline['rows'][1]['shutdownConfirmed'])
-        self.assertTrue(by_run[second['runId']]['uncertain'])
+        self.assertFalse(by_run[second['runId']]['uncertain'])
         self.assertEqual([row['depth'] for row in timeline['rows']], [0, 0])
         dispatch = timeline['events'][0]
         self.assertEqual({key: dispatch[key] for key in ('kind', 'decision', 'verdict', 'state', 'strategy', 'note')},
@@ -810,7 +810,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.finish_turn(board, claim, disposition='attention', shutdown=False)
         timeline = board.call('macro_task_timeline', {'macroTaskId': f"run:{run['runId']}"})
         execution = next(span for span in timeline['spans'] if span['kind'] == 'execution')
-        self.assertEqual(execution['state'], 'uncertain')
+        self.assertEqual(execution['state'], 'finalizing')
         self.assertFalse(execution['shutdownConfirmed'])
         self.assertTrue(execution['uncertain'])
         self.assertIsNone(execution['endAt'])

@@ -422,13 +422,6 @@ class ExecutionObservationTests(unittest.TestCase):
         self.assertEqual(client.stop.call_args.kwargs,
                          {"initiator": "host", "grace_deadline": None, "force": True})
 
-    def test_confirmed_receipt_prevents_force_kill(self):
-        handle = Mock()
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_receipt",
-                   return_value={"report": {"shutdownConfirmed": True}}), patch(
-                   "hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
-            self.assertTrue(ExecutionScheduler._force_if_required(handle, {"pid": 1}))
-        kill.assert_not_called()
 
     def test_conflict_is_retried_and_other_admission_errors_are_recorded(self):
         store = Mock()

@@ -28,7 +28,7 @@ if str(PYTHON_ROOT) not in sys.path:
 from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
 from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
-from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference  # noqa: E402
+from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
 from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
@@ -268,7 +268,7 @@ def remove_private_test_root(directory: Path) -> None:
     shutil.rmtree(directory, onexc=readonly_file)
 
 
-def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | None = None) -> dict:
+def publish_result_receipt(state_dir: Path, params: dict) -> dict:
     """Turn a model-free inline test report into the one production RPC shape."""
     state_dir = Path(state_dir)
     attempt_id = params["attemptId"]
@@ -281,11 +281,6 @@ def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | Non
     adapter = row["model_harness"] if row["adapter"] == "decision" else row["adapter"]
     directory = attempt_root(state_dir, adapter, row["task_id"], attempt_id)
     path = directory / RECEIPT
-    if cleanup is not None:
-        cleanup["path"] = path
-        cleanup["previous"] = path.read_bytes() if path.exists() else None
-        cleanup["created_dirs"] = [part for part in (directory, directory.parent, directory.parent.parent)
-                                   if not part.exists()]
     report = {key: value for key, value in params.items()
               if key not in ("attemptId", "generation", "nonce")}
     directory.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
@@ -296,20 +291,21 @@ def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | Non
             "receipt": receipt_reference(directory)}
 
 
-def _ack_fixture_receipt(cleanup: dict) -> None:
-    """Match the execution's acknowledged receipt cleanup within the test state."""
-    path = cleanup["path"]
-    previous = cleanup["previous"]
-    if previous is None:
-        path.unlink()
-    else:
-        path.write_bytes(previous)
-    for directory in cleanup["created_dirs"]:
-        try:
-            directory.rmdir()
-        except OSError as error:
-            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
-                raise
+def settle_fixture_receipt(board: "InProcessBoard", attempt_id: str, *, native_stopped: bool = False) -> dict:
+    """Give a received fixture its root-stop proof; native proof must be explicit."""
+    with board.store.db.read() as connection:
+        attempt = board.store._attempt_row(connection, attempt_id)
+        adapter = attempt["model_harness"] if attempt["adapter"] == "decision" else attempt["adapter"]
+        directory = attempt_root(board.directory, adapter, attempt["task_id"], attempt_id)
+        binding = {"taskId": attempt["task_id"], "attemptId": attempt_id, "generation": attempt["generation"]}
+        digest = connection.execute("SELECT sha256 FROM attempt_received_receipts WHERE attempt_id=?",
+                                    (attempt_id,)).fetchone()[0]
+    receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+    if receipt["report"].get("shutdownConfirmed", False) or native_stopped:
+        return board.store.finalize_execution_receipt(attempt_id, receipt, {
+            "kind": "process-reaped", "native": "receipt" if not native_stopped else "identity-absent"})
+    task = board.call("task_get", {"runId": binding["taskId"]})["task"]
+    return {"attempt": task["selectedAttempt"], "task": task, "committed": False, "duplicate": False}
 
 
 class FixtureBoardClient(BoardClient):
@@ -321,14 +317,10 @@ class FixtureBoardClient(BoardClient):
 
     def submit_result(self, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
         if set(report) == {"path", "sha256"}:
-            return super().submit_result(attempt_id, generation, nonce, report)
-        cleanup = {}
-        wire = publish_result_receipt(self._board.directory, {"attemptId": attempt_id,
-                                                              "generation": generation,
-                                                              "nonce": nonce, **report}, cleanup=cleanup)
-        response = super().submit_result(attempt_id, generation, nonce, wire["receipt"])
-        _ack_fixture_receipt(cleanup)
-        return response
+            super().submit_result(attempt_id, generation, nonce, report)
+            return settle_fixture_receipt(self._board, attempt_id)
+        return self._board.call("execution_result", {"attemptId": attempt_id,
+                                                     "generation": generation, "nonce": nonce, **report})
 
 
 class InProcessBoard:
@@ -411,11 +403,9 @@ class InProcessBoard:
     def call(self, operation: str, params: dict) -> dict:
         service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
         if operation == "execution_result" and "receipt" not in params:
-            cleanup = {}
-            params = publish_result_receipt(self.directory, params, cleanup=cleanup)
-            response = call_operation(service, operation, params)
-            _ack_fixture_receipt(cleanup)
-            return response
+            params = publish_result_receipt(self.directory, params)
+            call_operation(service, operation, params)
+            return settle_fixture_receipt(self, params["attemptId"])
         return call_operation(service, operation, params)
 
     def console_call(self, operation: str, params: dict) -> dict:

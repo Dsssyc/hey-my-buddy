@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .db import (ATTEMPT_PROCESS_IDENTITIES_DDL, DB_FILE, DECISION_REQUESTS_DDL,
+from .db import (ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, DB_FILE, DECISION_REQUESTS_DDL,
                  EVALUATION_DECISIONS_DDL, EVENTS_ROUTER_CLAIMED_INDEX_DDL,
                  MODEL_SERVICE_CONCURRENCY_DDL, ROUTER_DISPATCHES_DDL, ROUTER_OUTCOMES_DDL,
                  ROUTER_REQUESTS_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
@@ -540,6 +540,7 @@ def migrate_schema(state: Path) -> None:
                 _rebuild_table(connection, 'workflow_children', WORKFLOW_CHILDREN_DDL)
                 _rebuild_table(connection, 'workflow_turns', WORKFLOW_TURNS_DDL)
                 _rebuild_table(connection, 'attempt_process_identities', ATTEMPT_PROCESS_IDENTITIES_DDL)
+                connection.execute(ATTEMPT_RECEIVED_RECEIPTS_DDL)
                 connection.execute("UPDATE events SET payload_json=? WHERE kind='attempt.activity'",
                                    (ACTIVITY_EVENT_PAYLOAD,))
                 connection.execute('DROP INDEX events_router_claimed_idx')

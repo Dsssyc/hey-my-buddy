@@ -61,9 +61,8 @@ class SystemRequestTests(WorkflowTestCase):
                 self.assertEqual(view['activeRequest']['helperOutcomes'][0]['taskId'], child_id)
 
     def test_unlisted_automatic_requeue_error_cannot_become_a_reason(self):
-        with self.assertRaises(BoardError) as caught:
+        with self.assertRaisesRegex(KeyError, 'UNLISTED_ERROR'):
             self.report_after_settlement(auto_continue=True, error_code='UNLISTED_ERROR')
-        self.assertEqual(caught.exception.code, 'INTERNAL_ERROR')
         with self._stack[-1].store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_requests WHERE reason_code='UNLISTED_ERROR'").fetchone()[0], 0)
 

@@ -41,7 +41,7 @@ def _native_at(connection, attempt_id: str, activity: dict | None) -> str | None
 def status(connection, attempt, activity: dict | None) -> dict:
     """Current warnings belong only to the selected, still unresolved execution."""
     native_at = _native_at(connection, attempt['attempt_id'], activity)
-    active = attempt['execution_state'] != 'finished' and attempt['result_json'] is None
+    active = attempt['execution_state'] not in ('finalizing', 'finished') and attempt['result_json'] is None
     silence_at = native_at or attempt['started_at']
     row = connection.execute(
         "SELECT EXISTS(SELECT 1 FROM attempt_reminders WHERE attempt_id=? AND kind='expected-duration'),"
@@ -84,7 +84,7 @@ def _scan(store, connection, now: str, instant: float, *, record: bool) -> tuple
     silence_seconds = connection.execute('SELECT silence_seconds FROM reminder_settings WHERE id=1').fetchone()[0]
     attempts = connection.execute(
         "SELECT a.*, t.expected_seconds FROM attempts a JOIN tasks t ON t.task_id=a.task_id"
-        " WHERE a.execution_state IN ('starting','executing','finalizing','uncertain')"
+        " WHERE a.execution_state IN ('starting','executing','uncertain')"
         " AND a.result_json IS NULL AND t.active_attempt_id=a.attempt_id AND t.adapter!='decision'"
     ).fetchall()
     for attempt in attempts:
@@ -153,7 +153,7 @@ def consume(store, selector: dict) -> dict | None:
                 raise BoardError('CONFLICT', 'reminderWaitId belongs to a different run')
             return view(delivered)
         attempt = store._selected_attempt(connection, task)
-        if attempt is None or attempt['execution_state'] == 'finished' or attempt['result_json'] is not None:
+        if attempt is None or attempt['execution_state'] in ('finalizing', 'finished') or attempt['result_json'] is not None:
             return None
         row = connection.execute(
             'SELECT r.*, a.started_at FROM attempt_reminders r'

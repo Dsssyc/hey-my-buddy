@@ -28,9 +28,8 @@ class ResultViewTests(BoardTestCase):
         }}
         self.assertGreater(len(json.dumps(report).encode()), MAX_MESSAGE_BYTES)
 
-        # The store call exercises the acknowledgement after commitment. The
-        # request decoder's 8 MiB input ceiling is a separate delivery boundary.
-        acknowledged = board.store.execution_result({
+        # The fixture supplies stop proof after receipt reception.
+        acknowledged = board.call("execution_result", {
             "attemptId": attempt["attemptId"], "generation": attempt["generation"],
             "nonce": "n" * 32, **report,
         })

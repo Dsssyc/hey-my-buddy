@@ -271,8 +271,8 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["state"], "failed")
         self.assertEqual(view["currentTurn"]["state"], "failed")
         receipt = board.call("task_result", {"runId": submitted["runId"]})["result"]
-        self.assertEqual(receipt["microTaskError"]["code"], "TURN_INVALID")
-        self.assertIn("outcomeTruncated", receipt["microTaskError"]["message"])
+        self.assertEqual(receipt["receiptRejection"]["code"], "TURN_INVALID")
+        self.assertIn("outcomeTruncated", receipt["receiptRejection"]["message"])
 
     def test_stored_outcome_truncation_metadata_stays_readable(self):
         board = self.board()
@@ -488,8 +488,9 @@ class LifecycleTests(WorkflowTestCase):
         # Approval with no helpers recorded one-use auto continuation: the parent is
         # requeued exactly once, and replaying the turn result adds nothing.
         self.assertEqual(first_decide["state"], "executing")
-        replay_result = self.finish_turn(board, first, disposition="assistance")
-        self.assertTrue(replay_result["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            self.finish_turn(board, first, disposition="assistance")
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         after = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         self.assertEqual([turn["turnIndex"] for turn in after["audit"]["turns"]], [1])
         self.assertEqual(len(after["turns"]), 1)
@@ -944,7 +945,7 @@ class WorkspaceTests(WorkflowTestCase):
 
         failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
         self.assertEqual(failed["taskState"], "failed")
-        self.assertIn("micro-task", (failed["attempt"]["error"] or "").lower())
+        self.assertEqual(failed["attempt"]["result"]["result"]["receiptRejection"]["code"], "WORKSPACE_INVALID")
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual([row for row in audit["artifacts"] if row["kind"] == "output"], [])
 

@@ -40,7 +40,9 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertIsNotNone(receipt["attempt"]["graceDeadline"])
         self.assertEqual(receipt["task"]["state"], "cancelled")
         self.assertEqual(receipt["task"]["terminationReason"], "wrap-up")
-        self.assertTrue(board.call('execution_result', params)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            board.call("execution_result", params)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
 
     def test_local_unattributed_worker_stop_records_unknown_without_host_intent(self):
         board = self.board()
@@ -62,11 +64,10 @@ class WrapUpStopTests(WorkflowTestCase):
         params["result"]["partialOutput"] = {"partial": True, "verified": False, "final": False,
                                                "reason": "wrap-up"}
         receipt = board.call('execution_result', params)
-        self.assertEqual(receipt["attempt"]["result"]["status"], "cancelled")
-        self.assertEqual(receipt["attempt"]["result"]["terminationReason"], "forced-stop")
-        self.assertEqual(receipt["attempt"]["result"]["result"]["partialOutput"]["reason"], "forced-stop")
+        self.assertEqual(receipt["attempt"]["result"]["status"], "failed")
+        self.assertEqual(receipt["attempt"]["result"]["result"]["receiptRejection"]["code"], "TURN_INVALID")
         self.assertTrue(receipt["attempt"]["shutdownConfirmed"])
-        self.assertEqual(receipt["task"]["state"], "cancelled")
+        self.assertEqual(receipt["task"]["state"], "failed")
         self.assertEqual(receipt["task"]["workflowState"], "cancelled")
 
     def test_unconfirmed_stop_keeps_uncertain_ownership_and_no_termination_reason(self):
@@ -76,9 +77,9 @@ class WrapUpStopTests(WorkflowTestCase):
         claim = self.claim(board)
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
         receipt = self.result(board, claim, reason=None, status="failed", shutdown=False)
-        self.assertEqual(receipt["task"]["state"], "reconciliation-needed")
-        self.assertEqual(receipt["attempt"]["executionState"], "uncertain")
-        self.assertIsNone(receipt["attempt"]["result"]["terminationReason"])
+        self.assertEqual(receipt["task"]["state"], "cancelling")
+        self.assertEqual(receipt["attempt"]["executionState"], "finalizing")
+        self.assertFalse(receipt["attempt"]["resultAvailable"])
         self.assertFalse(receipt["attempt"]["shutdownConfirmed"])
 
     def test_host_cancel_persists_five_minute_deadline_and_replay_keeps_it(self):
@@ -191,15 +192,11 @@ class WrapUpStopTests(WorkflowTestCase):
         claim = self.claim(board)
         for reason, status, shutdown in (
             ("invented", "cancelled", True),
-            ("wrap-up", "cancelled", True),
             ("wrap-up", "ok", True),
             ("wrap-up", "cancelled", False),
-            ("grace-expired", "cancelled", True),
-            ("console-stop", "cancelled", True),
             ("service-stop", "cancelled", False),
             ("unknown-stop", "cancelled", False),
             ("forced-stop", "cancelled", False),
-            ("deadline", "cancelled", True),
         ):
             with self.subTest(reason=reason, status=status, shutdown=shutdown):
                 with self.assertRaises(BoardError) as rejected:
@@ -209,12 +206,9 @@ class WrapUpStopTests(WorkflowTestCase):
             board.call('execution_result', {**self.result_params(claim, reason=None), "stopInitiator": "host"})
         self.assertEqual(forbidden.exception.code, "INVALID_ARGUMENT")
         board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
-        with self.assertRaises(BoardError) as mismatch:
-            self.result(board, claim, reason="console-stop")
-        self.assertEqual(mismatch.exception.code, "INVALID_ARGUMENT")
-        settled = self.result(board, claim, reason="wrap-up")
-        self.assertEqual(settled["attempt"]["result"]["terminationReason"], "wrap-up")
-        self.assertNotIn("stopInitiator", settled["attempt"]["result"])
+        rejected = self.result(board, claim, reason="console-stop")
+        self.assertEqual(rejected["attempt"]["result"]["result"]["receiptRejection"]["code"], "INVALID_ARGUMENT")
+        self.assertNotIn("stopInitiator", rejected["attempt"]["result"])
 
     def test_harness_capability_controls_grace_without_a_name_list(self):
         board = self.board(max_concurrent=4)
@@ -340,10 +334,9 @@ class WrapUpStopTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute("UPDATE attempts SET stop_initiator='service' WHERE attempt_id=?",
                                (claim["claim"]["attempt"]["attemptId"],))
-        with self.assertRaises(BoardError) as rejected:
-            self.result(board, claim, reason="console-stop")
-        self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
-        self.assertFalse(self.attempt(board, claim)["resultAvailable"])
+        rejected = self.result(board, claim, reason="console-stop")
+        self.assertEqual(rejected["attempt"]["result"]["result"]["receiptRejection"]["code"], "INVALID_ARGUMENT")
+        self.assertTrue(self.attempt(board, claim)["resultAvailable"])
 
     def test_regular_endings_keep_their_own_causes(self):
         board = self.board()

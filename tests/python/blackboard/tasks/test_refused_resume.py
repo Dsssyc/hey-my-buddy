@@ -1,5 +1,6 @@
 """A stopped pre-model refusal requeues the same continuation under service authority."""
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.cli.cli_views import micro_task_brief, task_brief
 
 
@@ -56,7 +57,9 @@ class RefusedResumeTests(WorkflowTestCase):
         self.assertNotIn("resumeRecovery", console_row)
         self.assertNotIn("resumeRecovery", console_row["workflow"])
         # Replayed result and reads cannot allocate an attempt or requeue again.
-        self.assertTrue(self.refuse(board, second)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            self.refuse(board, second)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         third = self.claim(board, claim_request_id="rebuild")
         document = third["claim"]["turn"]["input"]
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
@@ -102,7 +105,7 @@ class RefusedResumeTests(WorkflowTestCase):
                 board, run_id, second = self.native_turn(suffix=str(index))
                 self.refuse(board, second, **facts)
                 view = board.call("workflow_get", {"runId": run_id})
-                self.assertEqual(view["state"], "failed")
+                self.assertEqual(view["state"], "executing" if facts.get("shutdown") is False else "failed")
                 self.assertEqual(view["continuationCount"], 1)
                 self.assertIsNone(view["resumeRecovery"])
                 self.assertIsNone(self.claim(board, "w2", claim_request_id="blocked-" + str(index), run_id=run_id)["claim"])

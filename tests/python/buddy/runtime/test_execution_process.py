@@ -441,4 +441,5 @@ class ExecutionEndpointTests(unittest.TestCase):
                     execution.live.finish()
             self.assertFalse(thread.is_alive())
             self.assertFalse((execution.directory / "execution-live.json").exists())
-            self.assertTrue((execution.directory / "result-delivery.json").exists())
+            self.assertFalse((execution.directory / "result-delivery.json").exists())
+            self.assertTrue((execution.directory / "result-receipt.json").exists())

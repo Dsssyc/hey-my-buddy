@@ -132,6 +132,9 @@ def _stop_reason(attempt):
 
 
 def _cleanup_dead_material(board, attempt, identity, observation):
+    with board.db.read() as connection:
+        if not board._attempt_row(connection, attempt['attempt_id'])['shutdown_confirmed']:
+            return
     from ...protocol.execution import LIVE, cleanup_execution_endpoint
     directory = _directory(board, attempt)
     cleaned = True
@@ -148,27 +151,20 @@ def _cleanup_dead_material(board, attempt, identity, observation):
     except Exception as error:
         cleaned = False
         board.record_execution_issue(attempt['attempt_id'], 'endpoint-cleanup', error)
-    # Execution death precedes this function, but surviving native work can
-    # still be unknown. Only committed complete stop proof permits deletion.
-    with board.db.read() as connection:
-        stopped = board._attempt_row(connection, attempt['attempt_id'])['shutdown_confirmed']
-    if stopped:
-        from ...private_dirs import cleanup_attempt_credentials
-        try:
-            cleanup_attempt_credentials(board.directory, attempt_private_adapter(attempt),
-                                        attempt['task_id'], attempt['attempt_id'])
-            board.clear_execution_issue(attempt['attempt_id'], 'credential-cleanup')
-        except (BoardError, OSError) as error:
-            cleaned = False
-            board.record_execution_issue(attempt['attempt_id'], 'credential-cleanup', error)
-    else:
+    from ...private_dirs import cleanup_attempt_credentials
+    try:
+        cleanup_attempt_credentials(board.directory, attempt_private_adapter(attempt),
+                                    attempt['task_id'], attempt['attempt_id'])
+        board.clear_execution_issue(attempt['attempt_id'], 'credential-cleanup')
+    except (BoardError, OSError) as error:
         cleaned = False
+        board.record_execution_issue(attempt['attempt_id'], 'credential-cleanup', error)
     if cleaned:
         board.complete_execution_cleanup(attempt['attempt_id'])
 
 
 def _recover_one(board, attempt, identity, stopped_evidence):
-    from ...protocol.execution import read_execution_receipt, read_execution_delivery
+    from ...protocol.execution import REFUSED, read_execution_receipt, receipt_reference
     if stopped_evidence is None:
         if identity is None:
             identity = marker_identity(board, attempt)
@@ -193,15 +189,15 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             if observed not in ('boot-changed', 'identity-absent'):
                 return None
     if stopped_evidence is not None:
-            # Only the service's execution observer calls this internal path. It has
+        # Only the service's execution observer calls this internal path. It has
         # already inspected this identity or reaped its own pre-identity child.
         observed = stopped_evidence['kind']
     try:
         if attempt['execution_state'] == 'finished':
             return None  # Only pending endpoint/credential cleanup remains.
         if attempt['result_json'] is not None:
-            # The committed result is authoritative even if its private receipt
-            # survived an exit between commit and unlink. Do not replay or replace it.
+            # Only the no-receipt interruption path can commit before native stop
+            # is proven. Supplement that interruption without replaying a receipt.
             confirmed, kind = _stop_native(board, attempt, identity, observed)
             if not confirmed:
                 return None
@@ -226,20 +222,45 @@ def _recover_one(board, attempt, identity, stopped_evidence):
             return board.confirm_execution_shutdown(attempt['attempt_id'], evidence)
         directory = _directory(board, attempt)
         binding = {'taskId': attempt['task_id'], 'attemptId': attempt['attempt_id'], 'generation': attempt['generation']}
-        delivery = read_execution_delivery(directory, binding=binding)
-        refusal = delivery['error'] if delivery is not None and not delivery['accepted'] else None
-        receipt = read_execution_receipt(directory, binding=binding) if refusal is None else None
-        if receipt is not None:
-            response = board.execution_result({**receipt['report'], 'attemptId': attempt['attempt_id'],
-                'generation': attempt['generation']}, recovered=True,
-                stop_evidence={**(stopped_evidence or {}), 'kind': observed, 'native': 'receipt'})
-            if not response['attempt']['shutdownConfirmed']:
+        with board.db.read() as connection:
+            received = connection.execute("SELECT sha256 FROM attempt_received_receipts WHERE attempt_id=?",
+                                          (attempt['attempt_id'],)).fetchone()
+        refusal = None
+        try:
+            if received is None:
+                try:
+                    digest = receipt_reference(directory)['sha256']
+                except FileNotFoundError:
+                    digest = None
+            else:
+                digest = received['sha256']
+            receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+            if receipt is None and received is not None:
+                raise BoardError('RECEIPT_MISSING', 'Received execution receipt is missing')
+            if receipt is not None:
+                board._validate_execution_report(receipt['report'])
+        except (ValueError, RecursionError):
+            refusal = {'code': 'INVALID_ARGUMENT', 'message': 'Execution receipt is not valid JSON'}
+        except BoardError as error:
+            if error.code not in REFUSED:
+                raise
+            refusal = {'code': error.code, 'message': error.message}
+        if refusal is None and receipt is not None:
+            board._receive_execution_receipt(attempt['attempt_id'], digest)
+            if receipt['report'].get('shutdownConfirmed', False):
+                confirmed, kind = True, observed
+            else:
                 confirmed, kind = _stop_native(board, attempt, identity, observed)
-                if confirmed:
-                    response = board.confirm_execution_shutdown(attempt['attempt_id'], {
-                        'kind': kind, 'execution': observed})
-            return response
+            if not confirmed:
+                board.record_execution_issue(attempt['attempt_id'], 'shutdown', BoardError(
+                    'SHUTDOWN_UNCONFIRMED', 'The execution root stopped but native shutdown is unconfirmed'))
+                return None
+            return board.finalize_execution_receipt(attempt['attempt_id'], receipt, {
+                **(stopped_evidence or {}), 'kind': kind, 'execution': observed,
+                'native': 'receipt' if receipt['report'].get('shutdownConfirmed', False) else kind})
         confirmed, kind = _stop_native(board, attempt, identity, observed)
+        if refusal is not None and not confirmed:
+            return None
         # Creator reaping is stop evidence, not a historical interruption enum.
         evidence_kind = kind if kind in ('boot-changed', 'identity-absent', 'orphan-stopped') else 'identity-absent'
         result = _partial_result(board, attempt, identity, evidence_kind, confirmed=confirmed)
@@ -257,8 +278,7 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                   'exitCode': None, 'signal': None, 'shutdownConfirmed': confirmed, 'artifacts': [],
                   'terminationReason': reason if confirmed or not stopped else None,
                   'logPaths': json.loads(attempt['log_paths']), 'runtimeIdentity': attempt['runtime_identity']}
-        return board.execution_result({**report, 'attemptId': attempt['attempt_id'],
-            'generation': attempt['generation']}, recovered=True,
+        return board.execution_result({**report, 'attemptId': attempt['attempt_id']},
             stop_evidence={**(stopped_evidence or {}), 'kind': kind, 'execution': observed})
     finally:
         _cleanup_dead_material(board, attempt, identity, observed)

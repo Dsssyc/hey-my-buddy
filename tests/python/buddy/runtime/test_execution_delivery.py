@@ -192,11 +192,11 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual([name for name, _ in calls], ["hint", "result", "hint", "result"])
         self.assertEqual(calls[1][1], calls[3][1])
         self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, reference))
-        self.assertFalse((self.execution.directory / "result-receipt.json").exists())
-        self.assertTrue((self.execution.directory / "result-delivery.json").exists())
+        self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
+        self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
     def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
         write_receipt(self.execution.directory, receipt)
@@ -213,10 +213,10 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 client.submit_result.assert_called_once()
                 pause.assert_not_called()
                 self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
-                self.assertFalse((self.execution.directory / DELIVERY).exists())
+                self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
-    def test_explicit_refusal_records_reason_and_retains_receipt_as_evidence(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY
+    def test_explicit_refusal_logs_reason_and_retains_receipt_as_evidence(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
         for code in ("ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT",
                      "INVALID_ARGUMENT", "RECEIPT_MISMATCH", "ARTIFACT_MISSING", "ARTIFACT_MISMATCH"):
             with self.subTest(code=code):
@@ -227,11 +227,11 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 write_receipt(directory, receipt)
                 client = mock.Mock()
                 client.submit_result.side_effect = BoardError(code, "attempt refused")
-                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64))
+                logs = []
+                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64, log=logs.append))
                 self.assertEqual(read_execution_receipt(directory), receipt)
-                self.assertEqual(json.loads((directory / DELIVERY).read_text()),
-                                 {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1,
-                                  "accepted": False, "error": {"code": code, "message": "attempt refused"}})
+                self.assertEqual(logs, [f"result refused: {code}: attempt refused"])
+                self.assertFalse((directory / "result-delivery.json").exists())
 
     def test_result_waits_for_hint_already_in_backoff(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
@@ -266,21 +266,6 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(client.progress.call_args.kwargs["data"],
                          {"activity": {"phase": "completed"}})
         client.submit_result.assert_called_once()
-        self.assertIsNone(read_execution_receipt(self.execution.directory))
-
-    def test_refusal_is_durable_before_a_log_failure_can_exit_delivery(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt
-        from hey_my_buddy.protocol.execution import read_execution_delivery
-        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
-                   'report': {'status': 'ok'}, 'createdAt': 'fixture'}
-        write_receipt(self.execution.directory, receipt)
-        self.execution.client.submit_result.side_effect = BoardError('INVALID_ARGUMENT', 'report rejected')
-        with self.assertRaisesRegex(OSError, 'log failed'):
-            deliver_receipt(self.execution.client, receipt, self.execution.directory, nonce='n' * 64,
-                            log=mock.Mock(side_effect=OSError('log failed')))
-        decision = read_execution_delivery(self.execution.directory,
-                    binding={'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1})
-        self.assertEqual(decision['error'], {'code': 'INVALID_ARGUMENT', 'message': 'report rejected'})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
 
     def test_repeated_wrap_up_does_not_extend_deadline_and_force_escalates(self):
@@ -571,7 +556,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertEqual(execution._hints, {})
 
     def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
         receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
                    'report': {'status': 'ok', 'shutdownConfirmed': True}, 'createdAt': 'fixture'}
         write_receipt(self.execution.directory, receipt)
@@ -588,7 +573,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.execution.client.submit_result.assert_not_called()
                 self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
                 self.assertEqual(self.execution._hints, {'waitingReason': None})
-                self.assertFalse((self.execution.directory / DELIVERY).exists())
+                self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
     def test_budget_cleanup_failure_exits_with_the_original_durable_receipt(self):
         from hey_my_buddy.protocol.execution import BUDGET, RECEIPT

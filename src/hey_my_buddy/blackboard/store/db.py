@@ -224,6 +224,13 @@ CREATE TABLE IF NOT EXISTS attempt_process_identities (
 );
 """
 
+ATTEMPT_RECEIVED_RECEIPTS_DDL = """
+CREATE TABLE IF NOT EXISTS attempt_received_receipts (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    sha256              TEXT NOT NULL
+);
+"""
+
 CORE_SCHEMA_TAIL = """
 
 CREATE TABLE IF NOT EXISTS attempt_interruptions (
@@ -1022,7 +1029,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
 """
-SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, CORE_SCHEMA_TAIL,
+SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))

@@ -17,7 +17,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
 from ...protocol.execution import (BUDGET, execution_directory,
-                                  launch_execution, read_execution_endpoint, read_execution_receipt)
+                                  launch_execution, read_execution_endpoint)
 from ...protocol.process_identity import (inspect_process_identity, boot_id, kill_verified_process_group,
                                           verify_job_member)
 from ...protocol.run_identity import RunIdentity
@@ -431,7 +431,6 @@ class ExecutionScheduler:
         client = None
         stop_sent: tuple | None = None
         forced_at: float | None = None
-        force_checked = False
         force_retry_at = None
         force_delay = 0.1
         retry_at = None
@@ -455,6 +454,7 @@ class ExecutionScheduler:
                         retry_at = time.monotonic() + delay
                         delay = min(delay * 2, self.TICK_SECONDS)
                     view = self.store.task_get({"runId": task_id})["task"]
+                    finalizing = view.get("attemptState") == "finalizing"
                     pending_stop = (view.get("cancelRequested") or
                                     (view.get("selectedAttempt") or {}).get("forceRequestedAt") is not None)
                     if client is None and (pending_stop or retry_at is None or time.monotonic() >= retry_at):
@@ -463,6 +463,10 @@ class ExecutionScheduler:
                             if self._recover_if_gone(attempt_id, identity, observation):
                                 settled = True
                                 return
+                        elif finalizing:
+                            if observation != "alive":
+                                self._issue(attempt_id, "shutdown", BoardError(
+                                    "EXECUTION_UNKNOWN", "Execution shutdown cannot be verified"))
                         elif observation == "alive":
                             try:
                                 client = self._endpoint(attempt_id, handle, identity)
@@ -498,15 +502,14 @@ class ExecutionScheduler:
                             observer.watch = None
                     retry_at = time.monotonic() + delay
                     delay = min(delay * 2, self.TICK_SECONDS)
-                if forced_at is not None and not force_checked and (
+                if forced_at is not None and (
                         time.monotonic() >= (force_retry_at or forced_at + self.STOP_GRACE_SECONDS)):
                     try:
-                        force_checked = self._force_if_required(handle, identity)
+                        self._force_if_required(identity)
                     except Exception as error:
                         self._issue(attempt_id, "force-stop", error)
-                    if not force_checked:
-                        force_retry_at = time.monotonic() + force_delay
-                        force_delay = min(force_delay * 2, self.TICK_SECONDS)
+                    force_retry_at = time.monotonic() + force_delay
+                    force_delay = min(force_delay * 2, self.TICK_SECONDS)
                 if client is None:
                     try:
                         if self._recover_if_gone(attempt_id, identity):
@@ -517,7 +520,7 @@ class ExecutionScheduler:
                 deadlines = [value for value in (
                     next_deadline, retry_at if client is None else None,
                     (force_retry_at or forced_at + self.STOP_GRACE_SECONDS)
-                        if forced_at is not None and not force_checked else None,
+                        if forced_at is not None else None,
                 ) if value is not None]
                 timeout = max(0, min(deadlines) - time.monotonic()) if deadlines else None
                 with self._condition:
@@ -535,7 +538,8 @@ class ExecutionScheduler:
                     self._handles.pop(attempt_id, None)
 
     def _unknown(self, attempt_id: str, error) -> None:
-        self.store.execution_connection(attempt_id, connected=False)
+        if not self.store.execution_connection(attempt_id, connected=False):
+            return
         detail = error.message if isinstance(error, BoardError) else str(error)
         details = error.details if isinstance(error, BoardError) else {}
         logging.warning("Execution %s connection unavailable: %s; %s",
@@ -641,13 +645,7 @@ class ExecutionScheduler:
         return "forced-stop"
 
     @staticmethod
-    def _force_if_required(handle, identity: dict) -> bool:
-        try:
-            receipt = read_execution_receipt(handle.execution_directory, binding=handle.execution_binding)
-        except (BoardError, OSError, ValueError, RecursionError):
-            receipt = None
-        if receipt is not None and receipt["report"].get("shutdownConfirmed") is True:
-            return True
+    def _force_if_required(identity: dict) -> None:
         kill_verified_process_group(identity)
-        # A signal, or an identity that could not be verified, proves no stop.
-        return False
+        # Only the ordinary stop observation can finish recovery; keep retrying
+        # while the root or any owned member may still be present.

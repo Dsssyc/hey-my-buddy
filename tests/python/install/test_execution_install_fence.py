@@ -83,10 +83,8 @@ class ExecutionInstallFenceTests(BoardTestCase):
             finished = wait_for(lambda: self.finished(run_id), timeout=35)
             self.assertIsNotNone(finished, client.get(runId=run_id))
             self.assertEqual(finished["selectedAttempt"]["result"]["status"], "ok")
-            self.assertEqual(json.loads((directory / "result-delivery.json").read_text(encoding="utf-8")),
-                             {"taskId": run_id, "attemptId": attempt["attemptId"], "generation": attempt["generation"],
-                              "accepted": True, "error": None})
-            self.assertFalse((directory / "result-receipt.json").exists())
+            self.assertFalse((directory / "result-delivery.json").exists())
+            self.assertTrue((directory / "result-receipt.json").exists())
 
     def gated_runtime(self, *, activity_refusal: bool = False) -> Path:
         """Pause this private runtime after identity acknowledgement, before preflight."""

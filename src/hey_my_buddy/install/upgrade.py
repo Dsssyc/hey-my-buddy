@@ -325,9 +325,10 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
                                column_projections=before['columnProjections'] if converting else None)
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
-        if set(actual['tables']) != set(before['tables']):
+        expected_tables = set(before['tables']) | ({'attempt_received_receipts'} if converting else set())
+        if set(actual['tables']) != expected_tables:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
-                             tables=sorted(set(actual['tables']) ^ set(before['tables'])))
+                             tables=sorted(set(actual['tables']) ^ expected_tables))
         changed = [name for name, value in before['fingerprints'].items()
                    if not (name == 'meta' and before['schema'] != expected_schema)
                    and actual['fingerprints'].get(name) != (

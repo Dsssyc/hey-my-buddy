@@ -1,6 +1,7 @@
 """Native attempt facts update token usage and provider cooling on a private board."""
 import json
 
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
 from hey_my_buddy.blackboard.routing.quota_routing import cooling, provider_state
 from hey_my_buddy.blackboard.service.harness_health import read_health
@@ -81,10 +82,12 @@ class NativeReceiptTests(WorkflowTestCase):
         attempt = claim["claim"]["attempt"]
         with board.store.db.read() as db:
             event_count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        board.call("execution_result", {"attemptId": attempt["attemptId"],
-                                     "generation": attempt["generation"], "nonce": NONCE,
-                                     "status": "ok", "result": captured,
-                                     "shutdownConfirmed": True, "exitCode": 0})
+        with self.assertRaises(BoardError) as caught:
+            board.call("execution_result", {"attemptId": attempt["attemptId"],
+                                         "generation": attempt["generation"], "nonce": NONCE,
+                                         "status": "ok", "result": captured,
+                                         "shutdownConfirmed": True, "exitCode": 0})
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         expected = normalize_token_usage(usage)
         self.assertEqual(view["currentTurn"]["tokenUsage"], expected)
