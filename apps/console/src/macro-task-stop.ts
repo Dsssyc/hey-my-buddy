@@ -57,7 +57,13 @@ export type StopScope = NonNullable<ReturnType<typeof stopScope>>;
 export function stopStatus(entry: MacroTaskStopEntry | undefined, timeline: MacroTaskTimeline | null): MacroTaskStopStatus | null {
   const t = (key: keyof typeof import("./i18n/zh/shell").default["macroStop"], options?: Record<string, number | string>) =>
     i18n.t(`shell:macroStop.${key}`, options);
-  if (!entry) return null;
+  if (!entry) {
+    const unconfirmed = timeline?.rows.filter(row => row.state === "cancelled" && !row.shutdownConfirmed) ?? [];
+    if (!unconfirmed.length) return null;
+    const pending = unconfirmed.filter(row => ACTIVE_TASK_STATUS.has(row.status)).length;
+    return pending ? { phase: "in-progress", label: t("stopping"), detail: t("pendingCount", { count: pending }) }
+      : { phase: "unconfirmed-stop", label: t("unknown"), detail: t("uncertainCount", { count: unconfirmed.length }) };
+  }
   if (entry.phase === "refused") {
     return { phase: "refused", label: t("refused"), detail: (typeof entry.error === "function" ? entry.error() : entry.error) || t("refusedDetail") };
   }

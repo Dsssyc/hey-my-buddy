@@ -5,6 +5,7 @@ import type { Page } from "@playwright/test";
 import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
+const B = "macro-22222222-2222-4222-8222-222222222222";
 const shots = process.env.HMB_LIST_SHOTS;
 
 const words = [
@@ -164,7 +165,8 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
     test("groups, filters, search, fold, menu and time statistics stay usable", async ({ page }) => {
       await themeBeforeLoad(page, theme);
       await open(page, "#tasks");
-      await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
+      // The Lead stop at 09:59 makes B the preview's most recent macro task.
+      await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       const list = page.locator("[data-slot=macro-list]");
       await expect(list).toBeVisible();
       await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(2);
@@ -198,7 +200,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await list.locator("[data-slot=macro-group-heading]").last().click();
       await expect(list.locator("[data-slot=macro-entry]")).toHaveCount(3);
       await list.locator("[data-slot=macro-group-heading]").last().click();
-      await list.locator("[data-macro-task-id]").first().locator("[data-slot=macro-entry]").click();
+      await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
       await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
       await assertHeaderGeometry(page);
       await photograph(page, "detail", w.locale, width, theme);

@@ -12,7 +12,7 @@ export default {
   title: { fromTask: "{{title}} (taken from the first line of the task)" },
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
-  state: { running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
+  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   rail: { label: "Steps", truncated: "The timeline read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {

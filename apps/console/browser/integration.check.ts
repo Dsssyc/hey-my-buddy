@@ -4,7 +4,7 @@ import type { MacroTaskTimeline } from "../src/macro-task-types";
 import { expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const shots = "../../tmp/polish-shots";
+const shots = process.env.HMB_BROWSER_SHOTS ?? "../../tmp/polish-shots";
 mkdirSync(shots, { recursive: true });
 const tracks = (page: Page) => page.locator('[data-slot="timeline-tracks"]');
 const canvas = (page: Page) => page.locator('[data-slot="timeline-canvas"]');
