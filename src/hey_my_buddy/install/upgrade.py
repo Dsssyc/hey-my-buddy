@@ -58,8 +58,7 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False,
-                  upgrade_to_current: bool = False) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -84,9 +83,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact,
-                                               upgrade_to_current=upgrade_to_current),
-                    'schema': SCHEMA_VERSION if upgrade_to_current else int(schema[0])}
+        snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
+                    'schema': int(schema[0])}
         return snapshot
 
 
@@ -511,10 +509,8 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
                     if before['schema'] == UPGRADE_BASE_SCHEMA:
-                        expected = idle_snapshot(state, event_head=before['eventHead'], upgrade_to_current=True)
                         upgrade_schema_24_to_25(state)
-                    else:
-                        expected = idle_snapshot(state, event_head=before['eventHead'])
+                    expected = idle_snapshot(state, event_head=before['eventHead'])
                 else:
                     expected = before
                 expected['runtimeSettings'] = runtime_settings

@@ -158,22 +158,15 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False,
-                      upgrade_to_current: bool = False) -> dict:
+def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False) -> dict:
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
     Python retains one row at a time. ``exact`` adds the lifecycle rows normally
-    exempted by backup without changing ordinary backup metadata. For the pending
-    schema-24 upgrade, ``upgrade_to_current`` hashes its explicit converted form
-    before any migration writes: NULL command links, an empty deletion table and
-    the schema marker. Ordinary backup fingerprints always describe actual rows.
+    exempted by backup without changing ordinary backup metadata.
     """
     tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     counts = {name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0]
               for name in tables}
-    if upgrade_to_current:
-        tables.append('macro_task_deletions')
-        counts['macro_task_deletions'] = 0
     if event_head is None:
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
 
@@ -186,15 +179,9 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
 
         quoted = '"' + name.replace('"','""') + '"'
         columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
-        quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
-        if upgrade_to_current and name == 'commands':
-            quoted_columns.append('NULL')
-        elif upgrade_to_current and name == 'meta':
-            quoted_columns[columns.index('value')] = (
-                f"CASE WHEN key='schema_version' THEN '{SCHEMA_VERSION}' ELSE value END")
-        arguments = ','.join(quoted_columns)
+        arguments = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
         limit = connection.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)
-        wide = len(quoted_columns) > limit
+        wide = len(columns) > limit
         if wide:
             # SELECT * also supports generated columns and tables wider than a
             # SQLite function call. Join bounded chunks in the same JSON format.
@@ -202,8 +189,9 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
                 return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
 
             connection.create_function('hey_my_buddy_snapshot_part', -1, encode_part)
+            quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
             parts = ['hey_my_buddy_snapshot_part(' + ','.join(quoted_columns[offset:offset + limit]) + ')'
-                     for offset in range(0, len(quoted_columns), limit)]
+                     for offset in range(0, len(columns), limit)]
             arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
         else:
             arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'

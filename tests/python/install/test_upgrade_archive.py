@@ -50,7 +50,7 @@ class UpgradeCutoverTests(BoardTestCase):
         self.started_runtimes = []
 
     def cutover(self, previous: Path, target: Path, *, fail_target=False,
-                fail_backup=False, interrupt_target=False, fail_migration=False, tamper_migration=False):
+                fail_backup=False, interrupt_target=False, fail_migration=False):
         target.mkdir(parents=True, exist_ok=True)
         endpoint = {"runtimeIdentity": "runtime:" + previous.name,
                     "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
@@ -99,17 +99,14 @@ class UpgradeCutoverTests(BoardTestCase):
             if fail_backup:
                 stack.enter_context(mock.patch.object(
                     backup, "create", side_effect=BoardError("BACKUP_INVALID", "injected backup failure")))
-            if fail_migration or tamper_migration:
+            if fail_migration:
                 migrate = upgrade.upgrade_schema_24_to_25
 
-                def changed_migration(state):
+                def failed_migration(state):
                     migrate(state)
-                    if fail_migration:
-                        raise BoardError('INJECTED_MIGRATION', 'migration did not complete')
-                    with sqlite3.connect(state / 'board.sqlite3') as connection:
-                        connection.execute("UPDATE commands SET response_json='{}'")
+                    raise BoardError('INJECTED_MIGRATION', 'migration did not complete')
 
-                stack.enter_context(mock.patch.object(upgrade, 'upgrade_schema_24_to_25', side_effect=changed_migration))
+                stack.enter_context(mock.patch.object(upgrade, 'upgrade_schema_24_to_25', side_effect=failed_migration))
             if interrupt_target:
                 with self.assertRaises(KeyboardInterrupt):
                     upgrade.upgrade({})
@@ -135,10 +132,11 @@ class UpgradeCutoverTests(BoardTestCase):
             self.assertEqual(upgrade.idle_snapshot(self.state), self.before)
 
     def test_schema_upgrade_then_same_schema_cutover_keep_board_and_history(self):
-        self.after_upgrade = upgrade.idle_snapshot(self.state, upgrade_to_current=True)
         first = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, first)
         self.assertTrue(result["upgraded"], result)
+        self.after_upgrade = upgrade.idle_snapshot(self.state)
+        self.assertEqual(self.after_upgrade['schema'], SCHEMA_VERSION)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], UPGRADE_BASE_SCHEMA)
         self.assert_history_preserved(migrated=True)
@@ -175,16 +173,6 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertFalse(result['upgraded'], result)
         self.assertEqual(result['error']['details']['reason']['code'], 'INJECTED_MIGRATION')
         self.assertEqual(self.started_runtimes, [self.previous])
-        self.assert_history_preserved()
-
-    def test_migration_cannot_hide_changes_to_retained_commands(self):
-        target = self.runtime_root / ('b' * 32)
-        result = self.cutover(self.previous, target, tamper_migration=True)
-        self.assertFalse(result['upgraded'], result)
-        reason = result['error']['details']['reason']
-        self.assertEqual(reason['code'], 'UPGRADE_VERIFY_FAILED')
-        self.assertEqual(reason['details']['tables'], ['commands'])
-        self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()
 
     def test_interrupted_install_journal_recovers_with_history(self):

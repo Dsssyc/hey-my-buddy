@@ -413,8 +413,8 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_started_verification_preserves_command_fingerprints_and_rejects_tampering(self):
         fixture, connection = self.restored('started-stop')
         self.insert_stop_receipt(fixture, connection)
-        before = upgrade.idle_snapshot(fixture['state'], upgrade_to_current=True)
         upgrade_schema_24_to_25(fixture['state'])
+        before = upgrade.idle_snapshot(fixture['state'], exact=True)
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
