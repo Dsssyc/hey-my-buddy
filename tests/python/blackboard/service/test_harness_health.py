@@ -19,7 +19,7 @@ class HarnessHealthTests(BoardTestCase):
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
         self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
         self.scan.start()
@@ -108,7 +108,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.snapshot = {'paths': [{'path': '/native/codex', 'mtimeNs': 1}]}
         self.discovered = {'adapter': 'codex', 'status': 'ready', 'command': ['/native/codex'],
                            'executable': '/native/codex', 'version': '1.0', 'source': 'common', 'available': True}
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)))
+        self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
         self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
         self.scan.start()
@@ -662,7 +662,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertEqual(self.events('harness.invalidated')[0]['reasonCode'], first['reasonCode'])
         with self.board.db.write() as db:
             db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE adapter='codex'")
-        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None)):
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
             recovered = self.health.refresh('codex', force=True)
         self.assertTrue(recovered['available'])
         self.assertNotIn('reasonCode', recovered)
@@ -681,13 +681,25 @@ class NativeAccountReadFailureTests(BoardTestCase):
                     db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
                 with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=error):
                     result = self.health.refresh('codex', force=True)
-                self.assertFalse(result['available'])
-                self.assertEqual(result['reasonCode'], reason)
+                self.assertTrue(result['available'])
+                self.assertEqual(result['status'], 'ready')
+                self.assertNotIn('reasonCode', result)
+                self.assertEqual(result['accountReadFailure']['reasonCode'], reason)
+                self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
                 self.assertEqual(result['accountReadFailure']['errorType'], type(error).__name__)
                 self.assertEqual(result['accountReadFailure']['message'], str(error))
-                self.assertEqual(self.events('harness.invalidated')[-1]['reasonCode'], reason)
+                self.assertEqual(self.events('harness.account_read_failed')[-1]['reasonCode'], reason)
         self.assertEqual(self.events('harness.account_observed'), [])
-        self.assertEqual(self.catalog_reads, [])
+        self.assertEqual(self.events('harness.invalidated'), [])
+        self.assertEqual(len(self.catalog_reads), 3)
+        with self.board.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM harness_quota_observations').fetchone()[0], 0)
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=(None, None, None)):
+            recovered = self.health.refresh('codex', force=True)
+        self.assertTrue(recovered['available'])
+        self.assertNotIn('accountReadFailure', recovered)
 
     def test_late_account_failure_cannot_invalidate_a_new_health_generation(self):
         from hey_my_buddy.errors import BoardError
@@ -703,13 +715,46 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertEqual(failure['reasonCode'], 'HARNESS_ACCOUNT_STOP_UNCONFIRMED')
         self.assertLess(failure['revision'], failure['currentRevision'])
 
-    def test_quota_rpc_failure_propagates_after_confirmed_probe_shutdown(self):
+    def test_account_success_survives_quota_rpc_failure_after_confirmed_stop(self):
         from hey_my_buddy.buddy.harnesses.codex import account_probe
         from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
         with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
              patch.object(account_probe, 'Connection') as connection:
             handle.return_value.shutdown_confirmed.return_value = True
-            connection.return_value.call.side_effect = [{}, {'account': None}, CodexProtocolError('native-rpc-error', 'quota RPC denied')]
-            with self.assertRaises(CodexProtocolError):
-                account_probe.read(['fixture-codex'], {})
+            connection.return_value.call.side_effect = [{}, {'account': {'type': 'chatgpt', 'planType': 'pro'}},
+                                                       CodexProtocolError('native-rpc-error', 'quota RPC denied')]
+            result = self.health.refresh('codex', force=True)
             handle.return_value.terminate.assert_called_once()
+        self.assertTrue(result['available'])
+        self.assertEqual(result['billingByProvider']['openai']['kind'], 'subscription')
+        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
+        self.assertEqual(self.events('harness.account_read_failed')[0]['reasonCode'], 'native-rpc-error')
+        self.assertEqual(self.events('harness.account_observed')[0]['billing']['openai']['kind'], 'subscription')
+        self.assertFalse(self.events('harness.account_observed')[0]['quotaRecorded'])
+        self.assertEqual(self.events('harness.invalidated'), [])
+        with self.board.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM harness_quota_observations').fetchone()[0], 0)
+
+    def test_confirmed_stop_with_account_data_failure_restores_health_and_records_failure(self):
+        from hey_my_buddy.errors import BoardError
+        from hey_my_buddy.buddy.harnesses.codex import account_probe
+        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
+        with patch.object(account_probe, 'read', side_effect=BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'unknown stop')):
+            self.assertFalse(self.health.refresh('codex', force=True)['available'])
+        with self.board.db.write() as db:
+            db.execute("DELETE FROM harness_account_reads WHERE adapter='codex'")
+        with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
+             patch.object(account_probe, 'Connection') as connection:
+            handle.return_value.shutdown_confirmed.return_value = True
+            connection.return_value.call.side_effect = [{}, CodexProtocolError('native-rpc-error', 'account RPC denied')]
+            result = self.health.refresh('codex', force=True)
+        self.assertTrue(result['available'])
+        self.assertNotIn('reasonCode', result)
+        self.assertEqual(result['accountReadFailure']['reasonCode'], 'native-rpc-error')
+        self.assertEqual(result['billingByProvider']['openai']['kind'], 'unknown')
+
+    def test_unexpected_account_reader_exception_is_not_silently_recorded(self):
+        with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', side_effect=TypeError('fixture programming error')):
+            with self.assertRaises(TypeError):
+                self.health.refresh('codex', force=True)
+        self.assertEqual(self.events('harness.account_read_failed'), [])

@@ -443,7 +443,7 @@ Host报告在封存候选 fc516168 上前端类型检查通过，78个前端文�
 额外改动的 install.test_upgrade_migration 全文件16项通过（33.942秒）；本回合共81项尝试，80项通过，只有上述真实HTTP用例受环境限制。最终 git diff --check 通过；当前剩余请求仅为Host补跑 blackboard.tasks.test_console_objective_fixture，确认四项整文件通过，无需再次补跑第11节的其他模块。
 
 
-## 13. 第五回合：Host验收打回四处的修正
+## 13. 第五回合：Host验收打回四处的修正（普通读取失败语义由第14节修订）
 
 Host报告封存候选f725eda7的类型检查与78个前端文件／1119项通过，Python完整检查3644项、216个文件里215个通过，唯一失败为基点已知的cli.test_host_preview；本节不把这份机械结果视为产品行为验收，第五回合四处实际问题均已修正。第5条列明的控制台构建、architecture版本文字与Codex私有主目录／固定native绑定未动，分别留给Host和批次3b。
 
@@ -467,3 +467,17 @@ BoardStore原生认领的attempt-harness:<attemptId>写入、只服务它的harn
 
 
 最终静态核对：git diff --check通过；源码attempt-harness只剩迁移清理，retry_basis只剩测试断言退休列不存在，最新观察writer只写adapter／quota_json。五个schema16固定夹具文件与metadata中的内容哈希、生成器来源哈希仍一致，未篡改生成stock。该回合剩余验证仅为上述私有升级服务用例和更新后的前端typecheck／test，由Host在允许的环境补验。
+
+
+## 14. 第六回合：普通读取失败与停止未确认的区别
+
+Host确认前四处修正正确，本回合只修账户读取的失败语义，优先于第13节将普通失败也记成unhealthy的候选行为；不改额度归属、表结构、升级、前端或Codex私有绑定。只有HARNESS_ACCOUNT_STOP_UNCONFIRMED调用invalidate，使健康不可用并保留原因与事件，握手成功但账户读取被限频时仍不能消掉它。
+
+其他已列明的BoardError／CodexProtocolError／OSError／ValueError／RuntimeError只作观察事实，保留发现阶段给出的健康状态，不调用invalidate或因此改变模型可用性；在harness_health.record_json里写accountReadFailure的原因码、错误类型、受限消息与时刻，并写harness.account_read_failed事件。账户读取本身失败时计费写unknown，不新增额度观察；未列明的异常照常抛出。普通失败不会在下一次握手或限频路径把ready改成unhealthy，读取成功才清普通失败事实。若前一次停止未确认，后来的读取确认了停止，即使数据RPC失败也可以恢复发现阶段的健康，同时保留这一次非致命的数据失败事实。
+
+account_probe.read当前内部接口明确返回计费、额度和可选额度读取错误三个值，不保留旧tuple的两套读法。账户RPC成功之后，额度RPC的已列明异常返回已经读到的计费、空额度与错误；finally仍执行真实停止核验，停止未确认会优先抛出严格原因，不把这次部分结果当成已停止发布。健康边界在确认停止后照样存计费事实，另存额度失败事实／事件；harness.account_observed记quotaRecorded=false，不把失败的额度当成观察。下一次完整成功读取清掉accountReadFailure，既有180秒限频、升级／关闭栅栏和健康代次守门保留；迟到普通失败只留事件，不覆盖新代次。
+
+测试保留停止未确认及限频／恢复回归，普通失败改为核验ready、available=true、unknown计费、原因事实与事件而无invalidate，另以真实account_probe代码加私有进程／连接替身覆盖账户成功且额度失败后的subscription计费保留、空额度与失败事件；覆盖数据RPC失败但停止确认后的健康恢复，以及未列明TypeError不被静默转换。所有生产调用方与fixture都使用新的三个值接口。
+
+
+用Host授权的只读解释器、src:tests/python优先与清除十个继承绑定的环境，最终按文件独立subprocess执行：blackboard.service.test_harness_health 30项、test_harness_service 12项、blackboard.evaluation.test_native_observations 12项、blackboard.routing.test_quota_retry 20项、test_nonretryable_quota 5项、protocol.test_billing_quota 11项，合计六文件90项全部通过，本回合没有未运行的指定文件；git diff --check通过。未重跑完整检查、前端、浏览器或其他由Host负责的检查。

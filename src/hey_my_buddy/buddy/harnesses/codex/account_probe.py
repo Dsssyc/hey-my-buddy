@@ -6,18 +6,22 @@ import threading
 import time
 
 from ..base import ProcessHandle
-from .protocol import Connection, quota_candidate_from_response
+from .protocol import Connection, CodexProtocolError, quota_candidate_from_response
 from ...runtime.windows_process import owned_popen
 from ....protocol.billing import codex_account
 from ....blackboard.store.db import utc_now
 from ..discovery import native_environment
 from ....protocol.usage import normalize_quota
+from ....errors import BoardError
 
 
-def read(command: list[str], environment: dict) -> tuple[dict | None, dict | None]:
-    """Read two account RPCs; never start a thread, turn or model request."""
+def read(command: list[str], environment: dict) -> tuple[dict | None, dict | None, Exception | None]:
+    """Return billing, quota and a partial quota-read error; unconfirmed stop raises.
+
+    Read two account RPCs; never start a thread, turn or model request.
+    """
     if not command:
-        return None, None
+        return None, None, None
     child = owned_popen([*command, "app-server", "--listen", "stdio://"],
                         env=native_environment(environment, command=command),
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -32,14 +36,16 @@ def read(command: list[str], environment: dict) -> tuple[dict | None, dict | Non
         account = connection.call("account/read", {"refreshToken": False}).get("account")
         observed_at = utc_now()
         billing = codex_account(account, observed_at)
-        response = connection.call("account/rateLimits/read", {})
-        quota = normalize_quota(quota_candidate_from_response(response, observed_at=utc_now()))
-        return billing, quota
+        try:
+            response = connection.call("account/rateLimits/read", {})
+            quota = normalize_quota(quota_candidate_from_response(response, observed_at=utc_now()))
+        except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as error:
+            return billing, None, error
+        return billing, quota, None
     finally:
         handle.terminate(grace_seconds=0.25)
         for stream in (child.stdin, child.stdout):
             if stream is not None:
                 stream.close()
         if not handle.shutdown_confirmed():
-            from ....errors import BoardError
             raise BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'The account read process stop could not be confirmed')

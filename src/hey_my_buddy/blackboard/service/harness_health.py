@@ -217,7 +217,7 @@ class HarnessHealth:
                       'systemSandbox': old['systemSandbox']}
             status = record.get('status')
             native_ready = status == 'ready'
-            if native_ready and 'accountReadFailure' in record:
+            if native_ready and record.get('accountReadFailure', {}).get('reasonCode') == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED':
                 status = 'unhealthy'
                 record.update(status=status, available=False, reasonCode=record['accountReadFailure']['reasonCode'])
             if status not in ('ready', 'missing', 'login-required', 'unhealthy'):
@@ -332,7 +332,8 @@ class HarnessHealth:
 
     def _codex_account_read(self, health):
         """One on-demand native read per harness every 180 seconds."""
-        if (health.get('status') != 'ready' and not health.get('accountReadFailure')) or not health.get('command'):
+        stop_unconfirmed = health.get('accountReadFailure', {}).get('reasonCode') == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
+        if (health.get('status') != 'ready' and not stop_unconfirmed) or not health.get('command'):
             return
         if self._closed or (self.board.directory / 'upgrade.json').exists():
             return
@@ -346,41 +347,55 @@ class HarnessHealth:
             db.execute('INSERT INTO harness_account_reads(adapter,checked_at) VALUES(?,?) '
                        'ON CONFLICT(adapter) DO UPDATE SET checked_at=excluded.checked_at', ('codex', now))
         from ...buddy.harnesses.codex.protocol import CodexProtocolError
+        billing = quota = failure = None
         try:
             from ...buddy.harnesses.codex.account_probe import read
-            billing, quota = read(health['command'], self.environment())
-        except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as error:
+            billing, quota, error = read(health['command'], self.environment())
+        except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as caught:
+            error = caught
+        if error is not None:
             reason = error.code if isinstance(error, (BoardError, CodexProtocolError)) else 'HARNESS_ACCOUNT_READ_FAILED'
-            self.invalidate('codex', health['revision'], reason, account_read_failure={
-                'reasonCode': reason, 'errorType': type(error).__name__, 'message': str(error)[:512],
-                'observedAt': utc_now()})
-            return
+            failure = {'reasonCode': reason, 'errorType': type(error).__name__, 'message': str(error)[:512],
+                       'observedAt': utc_now()}
+            if reason == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED':
+                self.invalidate('codex', health['revision'], reason, account_read_failure=failure)
+                return
+        account_observed = failure is None or billing is not None
         with self.board.db.write() as db:
             if self._closed or (self.board.directory / 'upgrade.json').exists():
                 return
             row = db.execute("SELECT record_json,revision FROM harness_health WHERE adapter='codex'").fetchone()
-            if row is None or row['revision'] != health['revision']:
+            if row is None:
                 return
-            if quota is not None:
-                from ..evaluation.native_observations import record_quota
-                record_quota(db, 'codex', {**quota, 'provider': 'openai'})
-            record = json.loads(row['record_json'])
-            recovered = record.pop('accountReadFailure', None) is not None
-            if recovered:
-                record.pop('reasonCode', None)
-                record.update(status='ready', available=True)
-            observed_at = utc_now()
-            if billing is None:
-                from ...protocol.billing import fact
-                billing = fact('unknown', 'codex/account-read', observed_at)
-            record['billingByProvider'] = {'openai': billing}
-            db.execute("UPDATE harness_health SET record_json=?,status='ready',expires_at=? WHERE adapter='codex'",
-                       (canonical_json(record), _later(READY_SECONDS)))
-            if recovered:
-                from ..catalog.catalog import restore_retained_availability
-                restore_retained_availability(db, 'codex')
-            self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
-                'observedAt': observed_at, 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
+            if failure is not None:
+                self.board._append_event(db, 'harness.account_read_failed', payload={
+                    'adapter': 'codex', 'reasonCode': failure['reasonCode'], 'revision': health['revision'],
+                    'currentRevision': row['revision'], 'accountReadFailure': failure})
+            if row['revision'] == health['revision']:
+                if quota is not None:
+                    from ..evaluation.native_observations import record_quota
+                    record_quota(db, 'codex', {**quota, 'provider': 'openai'})
+                record = json.loads(row['record_json'])
+                previous_failure = record.pop('accountReadFailure', None)
+                recovered_stop = previous_failure is not None and previous_failure['reasonCode'] == 'HARNESS_ACCOUNT_STOP_UNCONFIRMED'
+                if recovered_stop:
+                    record.pop('reasonCode', None)
+                    record.update(status='ready', available=True)
+                if failure is not None:
+                    record['accountReadFailure'] = failure
+                observed_at = utc_now()
+                if billing is None:
+                    from ...protocol.billing import fact
+                    billing = fact('unknown', 'codex/account-read', observed_at)
+                record['billingByProvider'] = {'openai': billing}
+                db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'", (canonical_json(record),))
+                if recovered_stop:
+                    db.execute("UPDATE harness_health SET status='ready',expires_at=? WHERE adapter='codex'", (_later(READY_SECONDS),))
+                    from ..catalog.catalog import restore_retained_availability
+                    restore_retained_availability(db, 'codex')
+                if account_observed:
+                    self.board._append_event(db, 'harness.account_observed', payload={'adapter': 'codex',
+                        'observedAt': observed_at, 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
             head = self.board._head_of(db)
         self.board._notify(head)
 
