@@ -400,6 +400,11 @@ class RuntimeMaterializationTests(unittest.TestCase):
         def observe_lock(fd, **options):
             if not options.get("shared"):
                 locked_inodes.append(os.fstat(fd).st_ino)
+                if len(locked_inodes) == 1:
+                    # Keep the unlinked inode allocated with a separate open,
+                    # without retaining the flock through a duplicated fd.
+                    # Filesystems may immediately reuse a freed inode number.
+                    self.addCleanup(os.close, os.open(lock_path, os.O_RDONLY))
                 if len(locked_inodes) == 2:
                     second_attempted.set()
             return real_lock(fd, **options)
