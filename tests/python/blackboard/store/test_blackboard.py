@@ -463,12 +463,32 @@ class TestCrashWindows(BoardTestCase):
                 self.assertEqual(status["selectedAttemptId"], attempt_id, "no replacement generation may exist")
                 # A replacement worker with the same identity must not release it either:
                 # it no longer holds the handle, so it has no evidence of termination.
-                replacement_started = time.time()
                 replacement = subprocess.Popen(
                     [
                         sys.executable,
-                        "-m",
-                        "hey_my_buddy.buddy.runtime.supervisor",
+                        "-c",
+                        '''
+import json, os
+from pathlib import Path
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.buddy.runtime.supervisor import main
+original = BoardClient.claim
+def observed_claim(self, *args, **kwargs):
+    try:
+        result = original(self, *args, **kwargs)
+    except BoardError as error:
+        outcome = error.code
+        raise
+    else:
+        outcome = "returned"
+        return result
+    finally:
+        path = Path(self.state_dir) / "workers/fault/replacement-claim.json"
+        path.write_text(json.dumps({"pid": os.getpid(), "outcome": outcome}))
+BoardClient.claim = observed_claim
+raise SystemExit(main())
+''',
                         "--worker-id",
                         "fault",
                         "--state-dir",
@@ -488,25 +508,19 @@ class TestCrashWindows(BoardTestCase):
                     start_new_session=True,
                 )
                 self.children.append(replacement)
-                # Wait for evidence, not elapsed time: the replacement owns the
-                # supervisor lifetime lock (freed when its predecessor was killed) and
-                # has written two distinct heartbeats newer than its own launch. A
-                # heartbeat follows the boot reconciliation and every claim pass, so
-                # two of them prove that at least one full claim pass ran after the
-                # boot decision and both had their chance to resume or release.
+                # The test-only client records a completed claim after boot
+                # reconciliation. The replacement still owns no child handle.
                 from hey_my_buddy.cli.checks import lock_is_held
 
                 replacement_dir = self.directory / "workers" / "fault"
-                heartbeats: set[str] = set()
-
                 def replacement_ran_a_claim_pass() -> bool:
-                    path = replacement_dir / "heartbeat.json"
+                    path = replacement_dir / "replacement-claim.json"
                     try:
-                        if path.stat().st_mtime >= replacement_started:
-                            heartbeats.add(json.loads(path.read_text())["at"])
+                        observation = json.loads(path.read_text())
                     except (OSError, ValueError, KeyError):
                         return False
-                    return len(heartbeats) >= 2 and lock_is_held(replacement_dir / "supervisor.lock")
+                    return (observation == {"pid": replacement.pid, "outcome": "WORKER_BUSY"}
+                            and lock_is_held(replacement_dir / "supervisor.lock"))
 
                 self.assertTrue(
                     wait_for(replacement_ran_a_claim_pass, 30),

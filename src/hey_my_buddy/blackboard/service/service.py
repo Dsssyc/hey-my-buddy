@@ -18,7 +18,7 @@ from typing import Any, Callable
 import re
 
 from ...install import runtime
-from ...protocol import schemas
+from ...protocol import rpc_config, schemas
 from ..tasks import workflow as workflow_module
 from ...buddy.harnesses.registry import capability_report
 from ...protocol.contracts import CONTRACT_VERSION
@@ -108,32 +108,40 @@ class WaitAdmission:
 
     def __init__(self, capacity: int = WAIT_CAPACITY_DEFAULT):
         self.capacity = max(1, int(capacity))
-        self._semaphore = threading.BoundedSemaphore(self.capacity)
         self.admitted = 0
+        self._workers: set[str] = set()
         self.rejected = 0
         self._lock = threading.Lock()
 
-    def acquire(self) -> bool:
-        if not self._semaphore.acquire(blocking=False):
-            with self._lock:
-                self.rejected += 1
-            return False
+    def acquire(self, *, worker_id: str | None = None) -> bool:
         with self._lock:
-            self.admitted += 1
+            if (self.admitted + len(self._workers) >= rpc_config.MAX_WAIT_CAPACITY
+                    or (worker_id is None and self.admitted >= self.capacity)
+                    or (worker_id is not None and worker_id in self._workers)):
+                self.rejected += 1
+                return False
+            if worker_id is not None:
+                self._workers.add(worker_id)
+            else:
+                self.admitted += 1
         return True
 
-    def release(self) -> None:
+    def release(self, *, worker_id: str | None = None) -> None:
         with self._lock:
-            self.admitted = max(0, self.admitted - 1)
-        self._semaphore.release()
+            if worker_id is not None:
+                self._workers.remove(worker_id)
+            else:
+                self.admitted -= 1
 
     def stats(self) -> dict:
         with self._lock:
             return {
                 "capacity": self.capacity,
                 "admitted": self.admitted,
+                "workerAdmitted": len(self._workers),
                 "rejected": self.rejected,
-                "available": max(0, self.capacity - self.admitted),
+                "available": min(self.capacity - self.admitted,
+                                 rpc_config.MAX_WAIT_CAPACITY - self.admitted - len(self._workers)),
             }
 
 
@@ -954,38 +962,28 @@ class WaitService(_BaseResource):
         self.admission = admission
 
     def _bounded(self, operation: str, request_json: str, handler: Callable[[dict], dict]) -> str:
-        if not self.admission.acquire():
+        def admitted(params: dict) -> dict:
+            worker_id = None
+            if operation == "events.wait" and "workerId" in params:
+                worker_id = schemas.required_string(params, "workerId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
+                params.pop("workerId")
+                with self.store.db.read() as connection:
+                    if connection.execute("SELECT 1 FROM workers WHERE worker_id=?", (worker_id,)).fetchone() is None:
+                        raise BoardError("NOT_REGISTERED", "Register this worker before waiting", workerId=worker_id)
+            # Worker waits share the existing aggregate bound (and its control
+            # reserve), without occupying the caller-configured public wait slots.
+            if not self.admission.acquire(worker_id=worker_id):
+                raise BoardError(
+                    "WAIT_OVERLOAD",
+                    "Every admitted wait slot is busy; no task state changed. Retry with the same cursor.",
+                    cursor=params.get("after", self.store.head()), retryAfterMs=250, capacity=self.admission.capacity,
+                )
             try:
-                params = schemas.decode_request(request_json, f"{operation} request")
-                self._authenticate(params)
-            except BoardError:
-                params = {}
-            cursor = params.get("after")
-            if cursor is None:
-                try:
-                    cursor = self.store.head()
-                except Exception:  # pragma: no cover - defensive
-                    cursor = 0
-            return schemas.encode(
-                {
-                    "error": {
-                        "code": "WAIT_OVERLOAD",
-                        "message": (
-                            "Every admitted wait slot is busy; this is not an execution failure and no task state "
-                            "changed. Retry with the same cursor — the event stream is the replayable outbox."
-                        ),
-                        "details": {
-                            "cursor": cursor,
-                            "retryAfterMs": 250,
-                            "capacity": self.admission.capacity,
-                        },
-                    }
-                }
-            )
-        try:
-            return self._guard(operation, request_json, handler)
-        finally:
-            self.admission.release()
+                return handler(params)
+            finally:
+                self.admission.release(worker_id=worker_id)
+
+        return self._guard(operation, request_json, admitted)
 
     def events_wait(self, request_json: str) -> str:
         return self._bounded("events.wait", request_json, self.store.events_wait)

@@ -25,7 +25,8 @@ from ...blackboard.store.db import TERMINATION_REASONS
 from ...errors import BoardError
 
 DEFAULT_RETRY_SECONDS = 120
-CLAIM_IDLE_SECONDS = 2.0
+RECOVERY_RETRY_SECONDS = 2.0
+IDLE_WAIT_TIMEOUT_MS = 2000
 
 
 def supervisor_start_stop_path(directory: Path) -> Path | None:
@@ -218,7 +219,7 @@ class Worker:
         self.retry_seconds = retry_seconds
         self.spool = ReceiptSpool(self.state_dir, worker_id)
         self._log = log or (lambda message: None)
-        self.heartbeat_path = self.spool.directory / "heartbeat.json"
+        self._idle_cursor = 0
         self.stop_request_path = self.spool.directory / "stop.request"
         self.start_stop_request_path = supervisor_start_stop_path(self.spool.directory)
         #: Scale-down intent. Read only between attempts, after receipt replay.
@@ -252,12 +253,6 @@ class Worker:
         if isinstance(intent, dict) and intent.get("attemptId"):
             pending.append(f"startup-intent:{intent['attemptId']}")
         return pending
-
-    def heartbeat(self, state: str, **extra: Any) -> None:
-        fsync_json(
-            self.heartbeat_path,
-            {"workerId": self.worker_id, "pid": os.getpid(), "state": state, "at": _now(), **extra},
-        )
 
     def preserve_orphan_startup(self, intent: dict) -> None:
         """Record a previous process's intent as orphaned evidence and clear it.
@@ -426,7 +421,6 @@ class Worker:
         try:
             self.register()
             self.reattach()
-            self.heartbeat("idle")
             iterations = 0
             while not self.stop_requested():
                 if self.retire_requested():
@@ -439,16 +433,34 @@ class Worker:
                         self.log("retire intent observed with no unreconciled evidence; retiring")
                         return
                     self.log(f"retire intent observed with unreconciled evidence {remaining}; retrying reconciliation")
-                    self.stop.wait(CLAIM_IDLE_SECONDS)
+                    self.stop.wait(RECOVERY_RETRY_SECONDS)
                     continue
                 if max_iterations is not None and iterations >= max_iterations:
                     return
                 iterations += 1
                 outcome = self.run_once()
+                if max_iterations is not None and iterations >= max_iterations:
+                    return
                 if outcome == "idle":
-                    self.stop.wait(CLAIM_IDLE_SECONDS)
+                    self.wait_for_work()
+                elif outcome == "retry":
+                    self.stop.wait(RECOVERY_RETRY_SECONDS)
         finally:
             self.live.stop()
+
+    def wait_for_work(self) -> None:
+        """Wait after the empty claim's snapshot; a timeout only renews the wait."""
+        try:
+            with self.client.event_waiter(worker_id=self.worker_id) as wait:
+                while not self.stop_requested() and not self.retire_requested():
+                    page = wait(after=self._idle_cursor, timeout_ms=IDLE_WAIT_TIMEOUT_MS, limit=1)
+                    if page["events"]:
+                        self._idle_cursor = page["head"]
+                        return
+        except BoardError as error:
+            self.log(f"event wait failed: {error.code}")
+            if not self.stop_requested() and not self.retire_requested():
+                self.stop.wait(RECOVERY_RETRY_SECONDS)
 
     def run_once(self) -> str:
         # A durable receipt means this attempt already ran. Recovery may only replay
@@ -463,15 +475,10 @@ class Worker:
             )
         except BoardError as error:
             self.log(f"claim failed: {error.code}")
-            self.heartbeat("idle", lastError=error.code)
-            return "idle"
+            return "retry"
         claim = response.get("claim")
         if not claim:
-            reason = response.get("reason")
-            if reason not in (None, "no-queued-work"):
-                self.heartbeat("idle", queueReason=reason)
-            else:
-                self.heartbeat("idle")
+            self._idle_cursor = response["cursor"]
             self.spool.clear_startup()
             return "idle"
         attempt = claim["attempt"]
@@ -481,7 +488,6 @@ class Worker:
         self.spool.write_startup(
             {**intent, "attemptId": attempt["attemptId"], "taskId": attempt["taskId"], "generation": generation}
         )
-        self.heartbeat("busy", attemptId=attempt["attemptId"], generation=generation)
         receipt = self.execute(claim)
         delivered = self.deliver(receipt)
         # The startup intent is cleared only once the result is durably committed
@@ -489,9 +495,7 @@ class Worker:
         # and the next round replays instead of executing again.
         if delivered:
             self.spool.clear_startup()
-            self.heartbeat("idle")
             return "ran"
-        self.heartbeat("replaying", attemptId=receipt["attemptId"])
         return "replay"
 
     def replay(self, pending: list[dict]) -> str:
@@ -502,9 +506,7 @@ class Worker:
                 delivered_all = False
         if delivered_all:
             self.spool.clear_startup()
-            self.heartbeat("idle")
             return "replayed"
-        self.heartbeat("replaying", pendingReceipts=len(pending))
         return "replay"
 
     def execute(self, claim: dict) -> dict:

@@ -6,6 +6,7 @@ C-Two operation here.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager, ExitStack
 from .. import home, locking, private_dirs
 import json
 import os
@@ -202,21 +203,15 @@ def _read_endpoint(directory: Path) -> dict | None:
             os.close(fd)
 
 
-def _request(endpoint: dict, operation: str, params: dict, resource: str = "control", *, state_dir: Path) -> dict:
+def _invoke(service, endpoint: dict, operation: str, params: dict) -> dict:
     # The token travels with the operation's own parameters and is verified by the
     # resource before any schema validation happens.
     payload = {"token": endpoint["token"], **params}
     if operation in {'capabilities', 'buddy_list', 'model_catalog_refresh', 'workflow_submit', 'selection_request', 'console_snapshot'}:
         payload['_harnessPathHint'] = os.environ.get('PATH', '')
     request = encode_message(payload)
-    contract = BuddyControl if resource == "control" else BuddyWait
-    name = CONTROL_NAME if resource == "control" else WAIT_NAME
-    # Every call validates the supplied paths and selects the private endpoint domain.
-    # This client chokepoint also applies the profile before the first connection.
-    rpc_config.configure_client(state_dir, create=False)
     try:
-        with cc.connect(contract, name=name, address=endpoint["address"]) as service:
-            raw = getattr(service, operation)(request)
+        raw = getattr(service, operation)(request)
     except Exception as exc:
         raise ServiceError("SERVICE_UNAVAILABLE", "The board service did not answer this operation") from exc
     if not isinstance(raw, str) or len(raw.encode()) > MAX_MESSAGE_BYTES:
@@ -233,6 +228,35 @@ def _request(endpoint: dict, operation: str, params: dict, resource: str = "cont
         return reply
     except (KeyError, TypeError, ValueError) as exc:
         raise ServiceError("INVALID_RESPONSE", "Malformed service response") from exc
+
+
+@contextmanager
+def _connection(endpoint: dict, resource: str, directory: Path):
+    contract = BuddyControl if resource == "control" else BuddyWait
+    name = CONTROL_NAME if resource == "control" else WAIT_NAME
+    # Validate the paths and select the private domain before opening a connection.
+    rpc_config.configure_client(directory, create=False)
+    with ExitStack() as stack:
+        try:
+            service = stack.enter_context(cc.connect(contract, name=name, address=endpoint["address"]))
+        except Exception as exc:
+            raise ServiceError("SERVICE_UNAVAILABLE", "The board service did not answer this operation") from exc
+        yield service
+
+
+def _request(endpoint: dict, operation: str, params: dict, resource: str = "control", *, state_dir: Path) -> dict:
+    with _connection(endpoint, resource, state_dir) as service:
+        return _invoke(service, endpoint, operation, params)
+
+
+@contextmanager
+def _event_waiter(directory: Path):
+    """Keep the named wait resource attached across an idle Worker's timeouts."""
+    endpoint = _attach_read_only(directory)
+    if endpoint is None:
+        raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
+    with _connection(endpoint, "wait", directory) as service:
+        yield lambda params: _invoke(service, endpoint, "events_wait", params)
 
 
 def call_board(operation: str, params: dict | None = None, state_dir: str | Path | None = None, *, resource: str = "control", endpoint: dict | None = None) -> dict:

@@ -179,7 +179,7 @@ class LoopRecordingClient(WorkerLiveWiringTests.RecordingClient):
     def claim(self, worker_id, claim_request_id, nonce, **kwargs):
         self.claims.append({"workerId": worker_id, "claimRequestId": claim_request_id,
                             "nonce": nonce})
-        return {"reason": "no-queued-work"}
+        return {"reason": "no-queued-work", "cursor": 0}
 
 
 class EndingControllerHandle(ProcessHandle):

@@ -17,6 +17,8 @@ from mock_workspace import MockWorkspace
 from support import BoardTestCase
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
+from hey_my_buddy.buddy.runtime.worker import Worker
+from hey_my_buddy.errors import BoardError
 
 NONCE = "n" * 16
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
@@ -142,12 +144,12 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
 
         with mock.patch.object(workflow_module.WorkflowCoordinator, "collect_claim_stash_facts", skipping_collect):
             board.call("worker_register", {"workerId": "w1", "capabilities": ["dsh"]})
-            deferred = self.claim(board, run_id=submitted["runId"])
+            with self.assertRaises(BoardError) as deferred:
+                self.claim(board, run_id=submitted["runId"])
         # A coverage miss that survives the bounded retry never starts a turn
-        # and never masquerades as a reading: the claim defers with its own
-        # external reason, stores no receipt, and leaves the work queued.
-        self.assertIsNone(deferred["claim"])
-        self.assertEqual(deferred["reason"], "stash-observation-pending")
+        # and never masquerades as an idle board: the claim returns a retryable
+        # conflict, stores no receipt, and leaves the work queued.
+        self.assertEqual(deferred.exception.code, "CONFLICT")
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
             self.assertEqual(connection.execute(
@@ -158,6 +160,32 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         start = claimed["claim"]["turn"]["input"]["context"]["sharedStash"]["start"]
         self.assertEqual(start["state"], "unknown")
         self.assertEqual(start["reason"], "not-configured-in-double")
+
+    def test_worker_retries_a_collection_conflict_without_waiting_for_an_unrelated_event(self):
+        board = self.board()
+        self.submit(board, request_id="retry-collection", cwd=self.workdir("retry-collection"))
+        worker = Worker("w1", self.directory, client=board.client(), adapters=("dsh",))
+        worker.live.start = lambda: None
+        worker.live.stop = lambda: None
+        claimed = []
+        worker.execute = lambda claim: claimed.append(claim) or {}
+        worker.deliver = lambda receipt: True
+        real_collect = workflow_module.WorkflowCoordinator.collect_claim_stash_facts
+        calls = []
+
+        def collect(coordinator, params, *, selector=None):
+            calls.append(selector)
+            if len(calls) <= 2:
+                return {"repositories": {}}
+            return real_collect(coordinator, params, selector=selector)
+
+        with mock.patch.object(workflow_module.WorkflowCoordinator, "collect_claim_stash_facts", collect), \
+                mock.patch("hey_my_buddy.buddy.runtime.worker.RECOVERY_RETRY_SECONDS", 0), \
+                mock.patch.object(worker.client, "event_waiter") as waiter:
+            worker.run(max_iterations=2)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(claimed), 1)
+        waiter.assert_not_called()
 
     def test_a_chosen_run_beyond_the_pass_bound_is_collected_by_the_coverage_retry(self):
         from hey_my_buddy.blackboard.tasks import workflow as workflow_module
@@ -250,13 +278,13 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
 
         with mock.patch.object(workflow_module.WorkflowCoordinator, "collect_claim_stash_facts",
                                racing_collect):
-            response = self.claim(board, claim_request_id="same-drift")
+            with self.assertRaises(BoardError) as response:
+                self.claim(board, claim_request_id="same-drift")
         # The targeted pass observed no repository for A — identity alone is not
         # proof — so this claim admits nothing and stores no receipt; the same
         # identity being claimable again cannot start it unobserved.
         self.assertTrue(injected["done"])
-        self.assertIsNone(response["claim"])
-        self.assertEqual(response["reason"], "stash-observation-pending")
+        self.assertEqual(response.exception.code, "CONFLICT")
         self.assertEqual(collect_calls, [None, target["runId"]])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute(

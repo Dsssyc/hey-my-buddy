@@ -103,6 +103,7 @@ class BoardStore:
         self._clock = clock
         self._condition = threading.Condition()
         self._head = 0
+        self._wait_stopped = False
         self.persistence_error: str | None = None
         # The board is the single composition root for durable evaluation and
         # decision state: both wrap this same store (one SQLite file, one event
@@ -135,6 +136,12 @@ class BoardStore:
     def _notify(self, head: int) -> None:
         with self._condition:
             self._head = max(self._head, head)
+            self._condition.notify_all()
+
+    def stop_waiters(self) -> None:
+        """Release all event waits before shutting down their service transport."""
+        with self._condition:
+            self._wait_stopped = True
             self._condition.notify_all()
 
     # -- event helpers -------------------------------------------------------
@@ -198,6 +205,9 @@ class BoardStore:
         timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
         limit = schemas.optional_int(params, "limit", 100, 1, MAX_EVENT_PAGE)
         task_id = params.get("taskId") or params.get("runId")
+        with self._condition:
+            if self._wait_stopped:
+                raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
         page = self.events_read({"after": after, "limit": limit, **({"taskId": task_id} if task_id else {})})
         # Compare against the *filtered* head: an unrelated task's later event must
         # not make this task's unchanged cursor look satisfied.
@@ -206,6 +216,8 @@ class BoardStore:
         deadline = self._monotonic() + timeout_ms / 1000.0
         with self._condition:
             while True:
+                if self._wait_stopped:
+                    raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
                 if stop is not None and stop.is_set():
                     raise BoardError("WAIT_ABANDONED", "The wait was abandoned; no task state was changed")
                 observed = self._filtered_head(task_id)
@@ -214,7 +226,7 @@ class BoardStore:
                 remaining = deadline - self._monotonic()
                 if remaining <= 0:
                     return {**page, "timedOut": True}
-                self._condition.wait(min(remaining, 1.0))
+                self._condition.wait(remaining if stop is None else min(remaining, 1.0))
         page = self.events_read({"after": after, "limit": limit, **({"taskId": task_id} if task_id else {})})
         return {**page, "timedOut": False}
 
@@ -1534,7 +1546,6 @@ class BoardStore:
                     explicit_task=explicit_task,
                     request=request,
                     stash_facts=stash_facts,
-                    stash_retry_allowed=coverage_round == 0,
                     restrict_to=retry_selector if coverage_round else None,
                 )
             except ClaimStashCoverageRetry as retry:
@@ -1543,7 +1554,7 @@ class BoardStore:
 
     def _claim_in_transaction(
         self, params: dict, *, worker_id: str, claim_request_id: str, nonce: str,
-        explicit_task: str | None, request: dict, stash_facts: dict, stash_retry_allowed: bool,
+        explicit_task: str | None, request: dict, stash_facts: dict,
         restrict_to: str | None = None,
     ) -> dict:
         """The claim's one write transaction; a stash-coverage miss rolls it back.
@@ -1740,8 +1751,8 @@ class BoardStore:
                         blocker = scheduling.REASON_MODEL_CAPACITY
                     else:
                         blocker = "no-queued-work"
-                response = {"claim": None, "reason": blocker, "retryAfterMs": 1000 if blocker != "no-queued-work" else 2000}
                 head = self._head_of(connection)
+                response = {"claim": None, "reason": blocker, "cursor": head}
                 # An empty claim is a transient observation, never an allocation
                 # receipt: no commands row exists to replay, so a retried
                 # claimRequestId scans the board again and can observe newly
@@ -1753,27 +1764,18 @@ class BoardStore:
             # pre-transaction pass observed — the run's identity alone proves
             # nothing, because the targeted pass can legitimately find the run
             # not queued (another worker holds it) and observe no repository for
-            # it at all. A miss with retry budget left rolls the whole
-            # transaction back for one targeted re-collection; a miss on the
-            # bounded retry honestly reports no admissible work and leaves the
-            # claim to the next poll, which re-collects for whichever run it
-            # actually chooses. Either way nothing is admitted and no receipt is
-            # stored on a miss; a repository whose reading genuinely failed is
+            # it at all. A miss rolls the whole transaction back for targeted
+            # re-collection. Exhausting the bounded retry reports a conflict,
+            # never an idle snapshot: another claim must collect fresh facts.
+            # Nothing is admitted and no receipt is stored on a miss; a
+            # repository whose reading genuinely failed is
             # present as a key and may start with its honest ``unknown``.
             repository = self.workflow.run_repository_path(connection, chosen["task_id"])
             if repository is not None and not (
                 isinstance(stash_facts, dict)
                 and repository in (stash_facts.get("repositories") or {})
             ):
-                if stash_retry_allowed:
-                    raise ClaimStashCoverageRetry(chosen["task_id"])
-                response = {"claim": None, "reason": "stash-observation-pending", "retryAfterMs": 1000}
-                head = self._head_of(connection)
-                # A transient observation like an empty claim: no commands row
-                # exists to replay, so a retried claimRequestId re-collects and
-                # can admit the same work with its own real observation.
-                self._notify(head)
-                return response
+                raise ClaimStashCoverageRetry(chosen["task_id"])
             spec = self.workflow.effective_spec(connection, chosen)
             generation = chosen_generation
             attempt_id = chosen_attempt_id or str(uuid.uuid4())

@@ -14,15 +14,74 @@ import sys
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 from support import BoardTestCase, _child_environment
+from hey_my_buddy.cli.checks import lock_is_held
+from hey_my_buddy.errors import BoardError
 
 from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from hey_my_buddy.protocol.transport import _read_endpoint
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.protocol.client import BoardClient
+from hey_my_buddy.protocol import transport
 
 
 class TestNamedContract(BoardTestCase):
+    def test_idle_waits_reuse_one_named_connection_across_timeouts(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1", "HMB_WAIT_CAPACITY": "1"}):
+            client = BoardClient(self.directory, autostart=False)
+            client.register_worker("wait-fixture", adapter="external", capabilities=[])
+            # A future cursor isolates the timeouts from supervisor startup events.
+            with patch.object(transport.cc, "connect", wraps=transport.cc.connect) as connect:
+                with client.event_waiter(worker_id="wait-fixture") as wait:
+                    for _ in range(3):
+                        self.assertTrue(wait(after=2**62, timeout_ms=50)["timedOut"])
+                    self.assertEqual(connect.call_count, 2, "attach ping and one persistent wait connection")
+                    # A Worker wait must not take the configured public wait slot.
+                    capacity = client.call("wait_capacity", resource="wait")
+                    self.assertEqual(capacity["admitted"], 0)
+                    self.assertEqual(capacity["available"], 1)
+
+    def test_service_stop_wakes_the_remote_wait_resource(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            client = BoardClient(self.directory, autostart=False)
+            endpoint = self._endpoint()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                holder = executor.submit(self._wait_call, endpoint, "events_wait",
+                                         {"after": 2**62, "timeoutMs": 30000})
+                deadline = time.monotonic() + 3
+                while True:
+                    capacity = client.call("wait_capacity", resource="wait")
+                    if capacity["admitted"] == 1 and capacity["workerAdmitted"] == 1:
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(.02)
+                with self.assertRaises(BoardError) as duplicate:
+                    client.wait_events(after=2**62, timeout_ms=0, workerId="local")
+                self.assertEqual(duplicate.exception.code, "WAIT_OVERLOAD")
+                deadline = time.monotonic() + 3
+                client.call("service_control", {"action": "stop", "drainSeconds": 0})
+                self.assertEqual(holder.result(timeout=2)["error"]["code"], "SERVICE_STOPPING")
+                while lock_is_held(self.directory / "workers/local/supervisor.lock"):
+                    self.assertLess(time.monotonic(), deadline, "waiting Worker did not stop within three seconds")
+                    time.sleep(.02)
+
+    def test_retirement_releases_the_waiting_worker_process_within_three_seconds(self):
+        with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
+            client = BoardClient(self.directory, autostart=False)
+            deadline = time.monotonic() + 3
+            while client.call("wait_capacity", resource="wait")["workerAdmitted"] != 1:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(.02)
+            worker_dir = self.directory / "workers/local"
+            (worker_dir / "retire.request").touch()
+            deadline = time.monotonic() + 3
+            while lock_is_held(worker_dir / "supervisor.lock"):
+                self.assertLess(time.monotonic(), deadline, "waiting Worker did not retire within three seconds")
+                time.sleep(.02)
+            self.assertEqual(json.loads((worker_dir / "supervisor.json").read_text())["state"], "retired")
+
     def _endpoint(self):
         endpoint = _read_endpoint(self.directory)
         self.assertIsNotNone(endpoint, "the daemon must publish a private endpoint")

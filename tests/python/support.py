@@ -355,6 +355,7 @@ class InProcessBoard:
     def close(self) -> None:
         if self.console is not None:
             self.console.close()
+        self.store.db.close()
         self.store.db.path.unlink(missing_ok=True)
 
 
