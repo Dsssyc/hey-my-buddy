@@ -8,6 +8,40 @@ from buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_upgrade_backs_up_board_with_historical_codex_auth_link(self):
+        board = self.board()
+        state = board.directory
+        root = self.directory / 'runtimes'
+        previous, target = root / ('a' * 32), root / ('b' * 32)
+        previous.mkdir(parents=True)
+        target.mkdir()
+        endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
+                    'pid': 123, 'contractVersion': '0.19.0'}
+        (state / 'control.json').write_text(json.dumps(endpoint))
+        home = state / 'attempts/run/attempt/native/codex-home'
+        home.mkdir(parents=True)
+        secret = self.directory / 'private-auth.json'
+        secret.write_text('private credential')
+        (home / 'auth.json').symlink_to(secret)
+        (home / 'cache.sqlite').write_bytes(b'native cache')
+        health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
+        with mock.patch.dict(os.environ, {'BUDDY_RUNTIME_ROOT': str(root)}), \
+             mock.patch('buddy.upgrade.get_state_dir', return_value=state), \
+             mock.patch('buddy.upgrade.runtime.is_ready', return_value=True), \
+             mock.patch('buddy.upgrade.runtime.read_ready', return_value={'sourceCommit': 'fixture'}), \
+             mock.patch('buddy.upgrade.runtime.materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch('buddy.upgrade.probe', return_value=health), \
+             mock.patch('buddy.upgrade.detach'), \
+             mock.patch('buddy.upgrade.start', return_value={'runtimeContentId': target.name}), \
+             mock.patch('buddy.upgrade.verify_started', return_value={'retainedDataFingerprints': True}), \
+             mock.patch('buddy.storage.prune_old_runtimes', return_value={'complete': True}):
+            result = upgrade.upgrade({})
+        self.assertTrue(result['upgraded'], result)
+        manifest = backup.verify(Path(result['backup']['path']))
+        self.assertFalse(any('codex-home' in name for name in manifest['files']))
+        self.assertTrue((home / 'auth.json').is_symlink())
+        self.assertEqual(secret.read_text(), 'private credential')
+
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
         state = board.directory
@@ -135,6 +169,10 @@ class UpgradeTests(BoardTestCase):
         board=self.board()
         control=board.directory/'controls/x.json';control.parent.mkdir();control.write_text('{"original":true}')
         native=board.directory/'harnesses/zcode/retained';native.mkdir(parents=True);(native/'sessions.sqlite').write_bytes(b'native')
+        home=board.directory/'attempts/run/attempt/native/codex-home';home.mkdir(parents=True)
+        secret=self.directory/'private-auth.json';secret.write_text('private credential')
+        (home/'auth.json').symlink_to(secret)
+        (home.parent.parent/'personal-provider.json').write_text('private provider key')
         current=Path(backup.create(board.store)['path'])
         control.write_text('{"changed":true}')
         with board.store.db.write() as connection:
@@ -142,6 +180,10 @@ class UpgradeTests(BoardTestCase):
         upgrade.restore(board.directory,current)
         self.assertEqual(json.loads(control.read_text()),{'original':True})
         self.assertEqual((native/'sessions.sqlite').read_bytes(),b'native')
+        self.assertTrue((home/'auth.json').is_symlink())
+        self.assertEqual(secret.read_text(),'private credential')
+        self.assertFalse((current/'state/attempts/run/attempt/native/codex-home').exists())
+        self.assertFalse((current/'state/attempts/run/attempt/personal-provider.json').exists())
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT value FROM meta WHERE key='post-backup'").fetchone())
         upgrade.idle_snapshot(board.directory)

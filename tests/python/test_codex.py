@@ -298,6 +298,36 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse(context.turn_output_file().exists())
 
+    def test_read_only_shutdown_removes_only_private_auth_link(self):
+        from buddy.adapters.base import ReadOnlyStructuredRequest
+        from buddy.adapters.read_only import collect
+        from buddy.router import answer_schema, budget
+        account_home = self.root / 'account-home'
+        account_home.mkdir()
+        source_auth = account_home / 'auth.json'
+        source_auth.write_text('private fixture auth')
+        context = self.context(index=42)
+        context.turn = None
+        context.environment['CODEX_HOME'] = str(account_home)
+        request = ReadOnlyStructuredRequest(str(self.cwd), 'Select', answer_schema(['legal']), budget())
+        handle = self.adapter.start_read_only_structured(context, request)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.status, 'ok', result.result)
+        self.assertTrue(result.shutdown_confirmed)
+        self.assertFalse((context.directory / 'native/codex-home/auth.json').is_symlink())
+        self.assertEqual(source_auth.read_text(), 'private fixture auth')
+
+    def test_auth_cleanup_preserves_a_regular_file(self):
+        from buddy.adapters.codex_runner import _remove_private_auth
+        home = self.root / 'native/codex-home'
+        home.mkdir(parents=True)
+        auth = home / 'auth.json'
+        auth.write_text('retain regular file')
+        _remove_private_auth(self.root / 'native')
+        self.assertEqual(auth.read_text(), 'retain regular file')
+
 
     def test_router_budget_interrupts_and_keeps_unknown_read_bytes(self):
         from buddy.adapters.decision import DecisionAdapter

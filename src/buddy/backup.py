@@ -71,13 +71,25 @@ def exchange(left: Path, right: Path) -> None:
         raise OSError(ctypes.get_errno(), 'Atomic backup exchange failed')
 
 
-def _regular_files(root: Path):
+def _excluded_attempt_path(relative: Path, *, directory: bool) -> bool:
+    parts = relative.parts
+    if directory:
+        return len(parts) == 4 and parts[2:] == ('native', 'codex-home')
+    return len(parts) == 3 and parts[2] in ('builtin-provider.json', 'personal-provider.json')
+
+
+def _regular_files(root: Path, *, exclude_attempt_private: bool = False):
     if _linked(root):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source cannot be a symlink')
     if not root.exists():
         return
     for directory, dirs, files in os.walk(root, followlinks=False):
         parent = Path(directory)
+        if exclude_attempt_private:
+            dirs[:] = [name for name in dirs
+                       if not _excluded_attempt_path((parent / name).relative_to(root), directory=True)]
+            files = [name for name in files
+                     if not _excluded_attempt_path((parent / name).relative_to(root), directory=False)]
         if any(_linked(parent / d) for d in dirs):
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source contains a linked directory')
         for name in files:
@@ -332,7 +344,7 @@ def create(store, *, runtime_identity: dict | None = None, plugin_commit: str | 
         os.chmod(incoming / 'board.sqlite3.gz', 0o600)
         snapshot.unlink()
         for name in ('attempts', 'controls', 'submissions'):
-            for path in _regular_files(state / name):
+            for path in _regular_files(state / name, exclude_attempt_private=name == 'attempts'):
                 _private_copy(path, incoming / 'state' / path.relative_to(state))
         if _linked(state / 'workers'):
             raise BoardError('BACKUP_UNSAFE_PATH', 'Worker root cannot be linked')

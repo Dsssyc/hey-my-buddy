@@ -74,6 +74,8 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(private["experimental_supported_tools"], [])
         self.assertEqual(private["tool_mode"], "direct")
         self.assertIsNone(private["multi_agent_version"])
+        self.assertFalse((directory / "native/codex-home/auth.json").is_symlink())
+        self.assertTrue((self.home / "auth.json").is_file())
 
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "adapter"
@@ -148,6 +150,8 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual(result["code"], "deadline")
         self.assertFalse(result["zeroToolVerified"])
+        self.assertTrue(result["processState"]["shutdownConfirmed"])
+        self.assertFalse((self.root / "run-hang/native/codex-home/auth.json").is_symlink())
 
     def test_missing_or_mismatched_native_metadata_refused(self):
         cache = self.home / "models_cache.json"

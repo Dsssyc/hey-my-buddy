@@ -255,6 +255,12 @@ def _read_only_call(connection, control, result, catalog):
         prompt = request["prompt"] + "\n\nFormat correction: " + correction + ". Return exactly the supplied JSON Schema; do not repeat exploration."
 
 
+def _remove_private_auth(native_root: Path) -> None:
+    auth = native_root / "codex-home" / "auth.json"
+    if auth.is_symlink():
+        auth.unlink()
+
+
 def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
     directory = Path(control["directory"])
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -298,6 +304,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
                                    env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=fd,
                                    start_new_session=True, close_fds=True)
     except OSError:
+        if control.get("noToolRequest") or control.get("readOnlyRequest"):
+            _remove_private_auth(native_root)
         return {'status': 'error', 'code': 'adapter-unavailable', 'modelStarted': False,
                 'error': 'The selected Codex executable could not start', 'processState': {'shutdownConfirmed': True}}, 1
     finally:
@@ -508,6 +516,8 @@ def _run(control: dict, cancelled: threading.Event) -> tuple[dict, int]:
         shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
         result["processState"] = {"shutdownConfirmed": shutdown, "nativeExitCode": process.returncode}
         process.stdout.close()
+        if shutdown and (control.get("noToolRequest") or control.get("readOnlyRequest")):
+            _remove_private_auth(native_root)
     if cancelled.is_set() and result["status"] != "ok":
         result.update(status="cancelled", code="user-cancel", error="the Codex execution was cancelled")
     if result["status"] == "ok" and (not shutdown or process.returncode != 0):

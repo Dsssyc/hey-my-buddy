@@ -55,3 +55,38 @@ class BackupTests(BoardTestCase):
         with self.assertRaises(BoardError) as error:
             board.call('backup', {})
         self.assertEqual(error.exception.code, 'BACKUP_UNSAFE_PATH')
+
+    def test_attempt_private_native_home_and_provider_snapshots_are_excluded(self):
+        board = self.board()
+        attempt = board.directory / 'attempts/run/attempt'
+        home = attempt / 'native/codex-home'
+        home.mkdir(parents=True)
+        secret = self.directory / 'private-auth.json'
+        secret.write_text('private auth must not be copied')
+        (home / 'auth.json').symlink_to(secret)
+        (home / 'native.sqlite').write_bytes(b'native cache')
+        for name in ('builtin-provider.json', 'personal-provider.json'):
+            (attempt / name).write_text('private provider key')
+            (attempt / 'native' / name).write_text('retained native record')
+        (attempt / 'result.json').write_text('{"status":"ok"}')
+
+        current = Path(board.call('backup', {})['path'])
+        manifest = backup.verify(current)
+        entries = set(manifest['files'])
+        self.assertIn('state/attempts/run/attempt/result.json', entries)
+        self.assertIn('state/attempts/run/attempt/native/builtin-provider.json', entries)
+        self.assertIn('state/attempts/run/attempt/native/personal-provider.json', entries)
+        self.assertFalse(any(name.startswith('state/attempts/run/attempt/native/codex-home/') for name in entries))
+        self.assertNotIn('state/attempts/run/attempt/builtin-provider.json', entries)
+        self.assertNotIn('state/attempts/run/attempt/personal-provider.json', entries)
+        self.assertTrue((home / 'auth.json').is_symlink())
+        self.assertEqual(secret.read_text(), 'private auth must not be copied')
+
+    def test_other_attempt_symlink_is_unsafe(self):
+        board = self.board()
+        attempt = board.directory / 'attempts/run/attempt'
+        attempt.mkdir(parents=True)
+        (attempt / 'result.json').symlink_to(board.directory / 'board.sqlite3')
+        with self.assertRaises(BoardError) as error:
+            board.call('backup', {})
+        self.assertEqual(error.exception.code, 'BACKUP_UNSAFE_PATH')
