@@ -48,6 +48,19 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(item.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(page.locator("[data-slot=timeline-track] [data-slot=selected-item]")).toHaveCount(1);
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/span-selected-${theme}.png` });
+
+      const wait = track.locator('[data-key="span:queue:att-b1-1"]');
+      await wait.click();
+      await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
+      await expect(wait.locator("[data-slot=selected-item]")).toHaveCount(1);
+      await page.locator('[data-slot=timeline-legend]').hover();
+      await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "排队" : "Queue");
+      const marker = track.locator(`[data-key^="event:"][aria-label*="${locale === "zh-CN" ? "续接" : "Continuation"}"]`);
+      await marker.click();
+      await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
+      await expect(marker.locator("[data-slot=selected-item]")).toHaveCount(1);
+      await page.locator('[data-slot=timeline-legend]').hover();
+      await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "续接" : "Continuation");
     });
 
     test("keeps event names beside dots, glyphs unlabelled, and timeline text unselectable", async ({ page }) => {
@@ -110,8 +123,11 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       for (const style of selectionStyles) expect(style.userSelect, style.slot ?? "timeline text").toBe("none");
       await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').dblclick();
       expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+      await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
+      await page.locator('[data-key="span:routing:att-router-a1"]').dblclick();
+      expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
 
-      await open(page, `#tasks/${MACRO_B}`);
+      await page.goto(`#tasks/${MACRO_B}`);
       const failed = page.locator("[data-slot=failed-conclusion-mark]");
       await expect(failed.first()).toBeVisible();
       const failedLabels = await failed.evaluateAll(marks => marks.map(mark => {
