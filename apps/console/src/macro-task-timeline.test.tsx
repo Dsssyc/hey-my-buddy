@@ -350,7 +350,7 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
+        shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
       spans: [{
         spanId: "s-r7", runId: "r7", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:20:00Z",
@@ -375,7 +375,7 @@ describe("macroTask timeline rendering", () => {
       rows: [{
         runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
-        shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null,
+        shutdownConfirmed: true, depth: 0, kind: "goal", buddy: null, acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
       }],
       spans: [{
         spanId: "s-r8", runId: "r8", kind: "execution", startAt: "2026-09-26T07:00:00Z", endAt: null,

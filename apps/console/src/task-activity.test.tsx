@@ -21,7 +21,7 @@ function task(overrides: Partial<Task> = {}): Task {
     revision: 3,
     createdAt: "2026-09-25T09:00:00Z",
     acceptedAt: null,
-    acceptanceVerdict: null,
+    acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     ...overrides,
   };
 }

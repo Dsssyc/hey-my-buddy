@@ -3246,7 +3246,7 @@ class WorkflowCoordinator:
         return response
 
     def stop_macro_task(self, params: dict, *, console_authority: dict | None = None) -> dict:
-        """Fence one fixed browser scope, then conclude each stopped owned run."""
+        """One browser-only cancellation scope, resolved and fenced atomically."""
         schemas.reject_unknown(params, {"macroTaskId", "commandId", "reason"}, "macro_task.stop")
         if console_authority is None:
             raise BoardError("UNAUTHORIZED", "Stopping a macro task requires an authenticated console writer")
@@ -3258,142 +3258,41 @@ class WorkflowCoordinator:
         with self.db.write() as connection:
             receipt = self.board._receipt(connection, command_id, "macro_task.stop", request)
             if receipt is not None:
-                response = {**receipt, "duplicate": True}
-                head = self.board._head_of(connection)
+                return {**receipt, "duplicate": True}
+            if identifier.startswith("macro-"):
+                roots = connection.execute(
+                    "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
+                    " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)"
+                    " ORDER BY r.created_at,r.run_id", (identifier,),
+                ).fetchall()
+            elif identifier.startswith("run:"):
+                roots = connection.execute(
+                    "SELECT r.* FROM workflow_runs r WHERE r.run_id=? AND r.macro_task_id IS NULL"
+                    " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
+                    (identifier[4:],),
+                ).fetchall()
             else:
-                response = self._stop_macro_task_record(connection, identifier, request, command_id,
-                                                        reason, console_authority, now)
-                head = self.board._head_of(connection)
-        self.board._notify(head)
-        response["conclusions"] = self._finalize_macro_stop_targets(response)
-        with self.db.read() as connection:
-            response["results"] = [self.compact(connection, self._run_row(connection, run_id))
-                                   for run_id in response["runIds"]]
-        return response
-
-    def _stop_macro_task_record(self, connection, identifier: str, request: dict, command_id: str,
-                                reason: str, console_authority: dict, now: str) -> dict:
-        if identifier.startswith("macro-"):
-            roots = connection.execute(
-                "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
-                " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)"
-                " ORDER BY r.created_at,r.run_id", (identifier,),
-            ).fetchall()
-        elif identifier.startswith("run:"):
-            roots = connection.execute(
-                "SELECT r.* FROM workflow_runs r WHERE r.run_id=? AND r.macro_task_id IS NULL"
-                " AND NOT EXISTS (SELECT 1 FROM workflow_children c WHERE c.child_task_id=r.run_id)",
-                (identifier[4:],),
-            ).fetchall()
-        else:
-            raise BoardError("INVALID_ARGUMENT", "macroTaskId must identify a macro task or standalone root")
-        if not roots:
-            raise BoardError("NOT_FOUND", "Unknown work macro task")
-        results, accepted, concluded, targets = [], [], [], []
-        for root in roots:
-            if root["state"] == "accepted":
-                accepted.append(root["run_id"])
-                continue
-            if root["state"] == "concluded":
-                concluded.append(root["run_id"])
-                continue
-            # A delivered or failed result is already an execution fact. Stop
-            # its descendants without replacing that fact with cancellation.
-            descendants = self._owned_children(connection, root["run_id"])
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
-            if root["state"] in ("delivered", "failed"):
-                self._cancel_children(connection, root["run_id"], reason, now,
-                                      actor=f"console:{console_authority['sessionId']}")
-                results.append(self.compact(connection, root, task))
-            else:
+                raise BoardError("INVALID_ARGUMENT", "macroTaskId must identify a macro task or standalone root")
+            if not roots:
+                raise BoardError("NOT_FOUND", "Unknown work macro task")
+            results, accepted, concluded = [], [], []
+            for root in roots:
+                if root["state"] == "accepted":
+                    accepted.append(root["run_id"])
+                    continue
+                if root["state"] == "concluded":
+                    concluded.append(root["run_id"])
+                    continue
+                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (root["run_id"],)).fetchone()
                 results.append(self._cancel_in_transaction(
                     connection, root, task, reason, f"console:{console_authority['sessionId']}", now,
                 ))
-            for target_id in [*(child["child_task_id"] for child in reversed(descendants)), root["run_id"]]:
-                target_run = self._run_row(connection, target_id)
-                target_task = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",
-                                                 (target_id,)).fetchone()
-                targets.append({"ownerRunId": root["run_id"], "targetRunId": target_id,
-                                "ownerGeneration": root["owner_generation"],
-                                "ownerContinuationCount": self._continuation_count(connection, root["run_id"]),
-                                "selectedAttemptId": target_task["selected_attempt_id"],
-                                "continuationCount": self._continuation_count(connection, target_id)})
-        response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
-                    "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False,
-                    "conclusionTargets": targets, "stopActor": f"console:{console_authority['sessionId']}",
-                    "conclusionNote": reason}
-        self.board._store_receipt(connection, command_id, "macro_task.stop", request, response)
+            response = {"macroTaskId": identifier, "runIds": [r["runId"] for r in results],
+                        "acceptedRunIds": accepted, "concludedRunIds": concluded, "results": results, "duplicate": False}
+            self.board._store_receipt(connection, command_id, "macro_task.stop", request, response)
+            head = self.board._head_of(connection)
+        self.board._notify(head)
         return response
-
-    @staticmethod
-    def _continuation_count(connection, run_id: str) -> int:
-        return connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (run_id,)).fetchone()[0]
-
-    def _finalize_macro_stop_targets(self, stop: dict) -> list[dict]:
-        """Report each fixed target's conclusion or concrete blocker."""
-        actor = stop["stopActor"]
-        authority = {"sessionId": actor.removeprefix("console:")}
-        outcomes = []
-        for target in stop["conclusionTargets"]:
-            target_id = target["targetRunId"]
-            with self.db.read() as connection:
-                owner = self._run_row(connection, target["ownerRunId"])
-                run = self._run_row(connection, target_id)
-                task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
-                try:
-                    self._assert_macro_stop_binding(connection, target, owner, task)
-                except BoardError as error:
-                    if error.code != "STOP_SUPERSEDED":
-                        raise
-                    outcomes.append({"targetRunId": target_id, "state": "superseded",
-                                     "reason": error.message})
-                    continue
-                if run["state"] in ("accepted", "concluded"):
-                    outcomes.append({"targetRunId": target_id, "state": run["state"]})
-                    continue
-                try:
-                    self._conclude_precheck(connection, run, task)
-                except BoardError as error:
-                    if error.code in ("NOT_READY", "SHUTDOWN_UNCONFIRMED", "CONFLICT"):
-                        outcomes.append({"targetRunId": target_id, "state": "pending",
-                                         "code": error.code, "reason": error.message})
-                        continue
-                    raise
-            try:
-                result = self.conclude({"runId": target["ownerRunId"], "targetRunId": target_id,
-                                        "note": stop["conclusionNote"]}, console_authority=authority,
-                                       _stop_binding=target)
-                outcomes.append({"targetRunId": target_id, "state": "concluded", "result": result})
-            except BoardError as error:
-                if error.code == "STOP_SUPERSEDED":
-                    outcomes.append({"targetRunId": target_id, "state": "superseded", "reason": error.message})
-                    continue
-                # An expected changing boundary stays reviewable in the response;
-                # a different error is an implementation failure and propagates.
-                if error.code in ("NOT_READY", "SHUTDOWN_UNCONFIRMED", "CONFLICT",
-                                  "REVISION_CONFLICT", "WORKSPACE_SCOPE_VIOLATION"):
-                    outcomes.append({"targetRunId": target_id, "state": "pending",
-                                     "code": error.code, "reason": error.message})
-                    continue
-                raise
-        return outcomes
-
-    def finalize_macro_stops(self, run_id: str) -> None:
-        """Resume fixed stop scopes after a Worker's confirmed result or release."""
-        with self.db.read() as connection:
-            route_owners = connection.execute(
-                "SELECT r.run_id FROM workflow_routes r JOIN decision_requests d ON d.decision_id=r.decision_id"
-                " WHERE d.task_id=?", (run_id,),
-            ).fetchall()
-            affected = [run_id, *(row["run_id"] for row in route_owners)]
-            receipts = connection.execute(
-                "SELECT response_json FROM commands WHERE kind='macro_task.stop'"
-                " AND EXISTS (SELECT 1 FROM json_each(commands.response_json,'$.conclusionTargets')"
-                f" WHERE json_extract(value,'$.targetRunId') IN ({','.join('?' for _ in affected)}))",
-                affected,
-            ).fetchall()
-        for row in receipts:
-            self._finalize_macro_stop_targets(json.loads(row["response_json"]))
 
     def cancel_for_service_stop(self, reason: str) -> tuple[dict[str, int], set[str]]:
         """Internal daemon shutdown path; no request fields or caller authority enter here."""
@@ -4285,8 +4184,7 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             return self._adopted_board_paths(connection, run_id, manifest)
 
-    def conclude(self, params: dict, *, console_authority: dict | None = None,
-                 _stop_binding: dict | None = None) -> dict:
+    def conclude(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """End one goal that will not be accepted, then reclaim its checkout.
 
         A failed, cancelled or delivered-but-unaccepted goal receives one
@@ -4316,8 +4214,6 @@ class WorkflowCoordinator:
             actor = self._authorize(connection, owner, params, console_authority=console_authority, action="A Host conclusion")
             target_snapshot = self._target_run(connection, owner, target_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (target_id,)).fetchone()
-            if _stop_binding is not None:
-                self._assert_macro_stop_binding(connection, _stop_binding, owner, task)
             request_key = {"runId": owner_run_id, "targetRunId": target_id, "note": note,
                            "attemptId": task["selected_attempt_id"]}
             command_id = "conclude-" + sha256_text(canonical_json(request_key))[:32]
@@ -4353,8 +4249,6 @@ class WorkflowCoordinator:
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             if duplicate is None:
-                if _stop_binding is not None:
-                    self._assert_macro_stop_binding(connection, _stop_binding, owner, task)
                 # The receipt, seal and conclusion must describe one execution.
                 # A concurrent continuation can finish a later attempt while the
                 # Git seal runs; it cannot inherit this earlier Host review.
@@ -4381,13 +4275,6 @@ class WorkflowCoordinator:
             response.update(self.compact(connection, run_row, task))
             response["targetRevision"] = run_row["revision"]
         return response
-
-    def _assert_macro_stop_binding(self, connection, binding: dict, owner, task) -> None:
-        if (owner["owner_generation"] != binding["ownerGeneration"]
-                or self._continuation_count(connection, owner["run_id"]) != binding["ownerContinuationCount"]
-                or task["selected_attempt_id"] != binding["selectedAttemptId"]
-                or self._continuation_count(connection, binding["targetRunId"]) != binding["continuationCount"]):
-            raise BoardError("STOP_SUPERSEDED", "The Host ownership or execution changed after the stop")
 
     def _conclude_precheck(self, connection, run_row, task) -> dict:
         """Everything that must hold before one goal may be concluded."""

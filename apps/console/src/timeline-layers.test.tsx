@@ -61,7 +61,7 @@ function row(overrides: Partial<TimelineRow>): TimelineRow {
     title: "已结束的短执行紧接着等待 Host", titleSource: "title", taskSummary: null, summary: null,
     createdAt: "2026-09-26T01:12:00Z", state: "running", status: "running", category: "active",
     shutdownConfirmed: false, depth: 0, kind: "goal", buddy: null,
-    acceptedAt: null, acceptanceVerdict: null,
+    acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     ...overrides,
   };
 }

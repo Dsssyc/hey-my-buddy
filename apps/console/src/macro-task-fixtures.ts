@@ -63,7 +63,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     kind: "goal",
     buddy: GLM,
     acceptedAt: null,
-    acceptanceVerdict: null,
+    acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     ...overrides,
   };
 }

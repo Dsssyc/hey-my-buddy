@@ -19,6 +19,7 @@ function fixture() {
   const task: Task = {
     runId: "parent", task: "完成状态内核", status: "waiting-host", owner: "host-a", cwd: "/repo",
     revision: 4, createdAt: "2026-09-22", acceptedAt: null, acceptanceVerdict: null,
+    reviewRejectedAt: null, reviewRejectionNote: null,
     spec: { workspace: false }, shutdownConfirmed: true,
     workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host-a", ownerGeneration: 2, revision: 7 },
   };

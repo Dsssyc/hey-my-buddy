@@ -4,7 +4,7 @@ import { excerpt, needsReview, taskTitle, titleTooltip } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
   runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
-  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   ...overrides,
 });
 

@@ -22,7 +22,7 @@ function snapshotFixture(): Snapshot {
 
 function taskFixture(runId: string): Task {
   const base: Task = { runId, task: `目标 ${runId}`, status: "completed", owner: "fixture", cwd: `/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null,
+    revision: 1, createdAt: "2026-09-26T01:12:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     resultAvailable: true, shutdownConfirmed: true,
     delegation: { kind: runId === "r3" ? "helper" : "goal", sourceHostId: "codex-desktop", currentHostId: "codex-desktop",
       parentRunId: runId === "r3" ? "r2" : null, rootRunId: runId === "r3" ? "r2" : runId,
@@ -69,7 +69,7 @@ function harness(options: StopOptions = {}) {
   const tasks = new Map(["r1", "r2", "r3", "r4"].map(id => [id, taskFixture(id)]));
   let stopAttempts = 0;
   const stopReply: MacroTaskStopResult = {
-    macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"],
+    macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [],
     results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r6", result: "cancel-requested" }],
   };
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
@@ -365,7 +365,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
       if (operation === "macro_task_stop") {
         refreshShouldFail = true;
-        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], results: [{ runId: "r4", result: "cancel-requested" }] };
+        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
       }
       throw new Error(`Unexpected command: ${operation}`);
     });
@@ -388,7 +388,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     (f.api.command as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (operation: string, params: Record<string, unknown>) => {
       if (operation === "macro_task_stop") {
         if (fail) throw new ApiError("NETWORK", "lost reply");
-        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], results: [{ runId: "r4", result: "cancel-requested" }] };
+        return { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
       }
       if (operation === "workflow_get") return workflowFixture(f.tasks.get(String(params.runId)) ?? taskFixture(String(params.runId)));
       throw new Error(`Unexpected command: ${operation}`);
@@ -452,10 +452,10 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect((await screen.findByText("正在停止")).textContent).toBe("正在停止");
     // Resolving both replies settles each macroTask without a stuck phase.
     pending.get(String((first![1] as { commandId: string }).commandId))!.resolve({
-      macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], results: [{ runId: "r4", result: "cancel-requested" }],
+      macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
     });
     pending.get(String((second![1] as { commandId: string }).commandId))!.resolve({
-      macroTaskId: "macro-2", runIds: ["r4"], acceptedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
+      macroTaskId: "macro-2", runIds: ["r4"], acceptedRunIds: [], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }],
     });
     await waitFor(() => expect(screen.queryByText("停止请求未提交")).toBeNull(), { timeout: 3000 });
     expect(stopCalls(f).length).toBe(2);
@@ -517,9 +517,9 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
         attempts += 1;
         if (attempts === 1) {
           // results do not cover runIds: the scope is incoherent.
-          return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], results: [{ runId: "r4", result: "cancel-requested" }] };
+          return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
         }
-        return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"],
+        return { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1", "r2"], concludedRunIds: [],
           results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r6", result: "cancel-requested" }] };
       }
       throw new Error(`Unexpected command: ${operation}`);

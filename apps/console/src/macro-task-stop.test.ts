@@ -6,7 +6,7 @@ import type { MacroTaskTimeline } from "./macro-task-types";
 
 const entry = (overrides: Partial<MacroTaskStopEntry> = {}): MacroTaskStopEntry => ({
   commandId: "cmd-1", phase: "acknowledged",
-  result: { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], results: [{ runId: "r4", result: "cancel-requested" }] },
+  result: { macroTaskId: "macro-1", runIds: ["r4", "r6"], acceptedRunIds: ["r1"], concludedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] },
   error: "", ...overrides,
 });
 
@@ -119,7 +119,7 @@ describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
       title: "已停的协助任务", state: "cancelled", status: "cancelled", shutdownConfirmed: true,
     });
     const withHelper: MacroTaskStopEntry = { ...entry(), result: {
-      macroTaskId: "macro-1", runIds: ["r4", "r4-h1", "r6"], acceptedRunIds: [],
+      macroTaskId: "macro-1", runIds: ["r4", "r4-h1", "r6"], acceptedRunIds: [], concludedRunIds: [],
       results: [
         { runId: "r4", result: "cancel-requested" },
         { runId: "r4-h1", result: "cancel-requested" },
@@ -132,11 +132,15 @@ describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
   });
 
   it("a malformed reply is an unknown outcome, never a confirmed stop", () => {
-    const good = { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: [], results: [{ runId: "r4", result: "cancel-requested" }] };
+    const good = { macroTaskId: "macro-1", runIds: ["r4"], acceptedRunIds: [], concludedRunIds: ["r-closed"], results: [{ runId: "r4", result: "cancel-requested" }] };
     expect(errorOfStopReply("macro-1", structuredClone(good))).toEqual(good);
     for (const malformed of [
       { ...good, macroTaskId: "macro-other" }, { ...good, runIds: "r4" },
-      { ...good, acceptedRunIds: [7] }, { ...good, results: [{ runId: "", result: "x" }] },
+      { ...good, acceptedRunIds: [7] },
+      { ...good, concludedRunIds: undefined }, { ...good, concludedRunIds: [7] },
+      { ...good, concludedRunIds: ["r-closed", "r-closed"] },
+      { ...good, concludedRunIds: ["r4"] },
+      { ...good, acceptedRunIds: ["r-closed"] }, { ...good, results: [{ runId: "", result: "x" }] },
       null,
       // Duplicate identifiers inside one list.
       { ...good, runIds: ["r4", "r4"] },
@@ -152,7 +156,7 @@ describe("macroTask stop status (0.15.1 U4, Host-reviewed)", () => {
       expect(() => errorOfStopReply("macro-1", malformed)).toThrowError(/不完整|响应/);
     }
     // Helper ids in runIds stay valid when the results cover them exactly.
-    const helperReply = { macroTaskId: "macro-1", runIds: ["r4", "r4-h1"], acceptedRunIds: [],
+    const helperReply = { macroTaskId: "macro-1", runIds: ["r4", "r4-h1"], acceptedRunIds: [], concludedRunIds: [],
       results: [{ runId: "r4", result: "cancel-requested" }, { runId: "r4-h1", result: "cancel-requested" }] };
     expect(errorOfStopReply("macro-1", helperReply)).toEqual(helperReply);
   });

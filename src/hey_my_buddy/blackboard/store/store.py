@@ -2559,7 +2559,6 @@ class BoardStore:
             )
             head = self._head_of(connection)
         self._notify(head)
-        self.workflow.finalize_macro_stops(attempt["task_id"])
         return response
 
     def worker_release(self, params: dict) -> dict:
@@ -2642,7 +2641,6 @@ class BoardStore:
             )
             head = self._head_of(connection)
         self._notify(head)
-        self.workflow.finalize_macro_stops(attempt["task_id"])
         return {"task": self._decorate(connection, task_row) if False else self._task_view(task_row), "released": True}
 
     def worker_list(self, params: dict) -> dict:

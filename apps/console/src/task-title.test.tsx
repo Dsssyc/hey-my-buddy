@@ -9,19 +9,19 @@ afterEach(cleanup);
 
 const governed: Task = {
   runId: "run-governed", task: "列表行的第一行\n不应出现在标题的第二行", status: "completed", owner: "host-a", cwd: "/repo",
-  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   workflow: { state: "delivered", awaitingHost: false, hostId: "host-a", ownerGeneration: 1, revision: 2,
     title: "修复标题错位", resultSummary: "已验证的整合结果摘要" },
 };
 const noTitle: Task = {
   runId: "run-plain", task: "普通执行任务\n第二行", status: "queued", owner: "host-a", cwd: "/repo",
-  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
   workflow: { state: "delivered", awaitingHost: false, hostId: "host-a", ownerGeneration: 1, revision: 2,
     resultSummary: "只有结果没有标题" },
 };
 const unnamed: Task = {
   runId: "run-unnamed", task: "\n\t ", status: "queued", owner: "host-a", cwd: "/repo",
-  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+  revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
 };
 
 function workflowValue(task: Task, overrides: Partial<Workflow> = {}): Workflow {

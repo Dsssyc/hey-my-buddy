@@ -31,7 +31,7 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 function goal(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null,
+    revision: 1, createdAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     delegation: { kind: "goal", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },

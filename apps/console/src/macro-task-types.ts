@@ -68,8 +68,8 @@ export type TimelineRow = {
   buddy: TimelineBuddy | null;
   acceptedAt: string | null;
   acceptanceVerdict: string | null;
-  reviewRejectedAt?: string | null;
-  reviewRejectionNote?: string | null;
+  reviewRejectedAt: string | null;
+  reviewRejectionNote: string | null;
 };
 export type TimelineSpan = {
   spanId: string; runId: string; kind: "queue" | "routing" | "execution" | "host";
@@ -130,6 +130,8 @@ export type MacroTaskStopResult = {
   runIds: string[];
   /** Accepted roots retained by the stop; they keep their recorded outcome. */
   acceptedRunIds: string[];
+  /** Concluded roots retained by the stop; they keep their Host conclusion. */
+  concludedRunIds: string[];
   /** Per-root cancellation results; acknowledgement is not termination evidence. */
   results: ReadonlyArray<{ runId: string; result: string }>;
 };
