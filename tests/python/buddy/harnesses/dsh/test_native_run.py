@@ -430,12 +430,10 @@ class FastSeamTests(NativeRunCase):
         self.assertIn("--patch", record["argv"])
         patch_path = Path(record["argv"][record["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
-        # The uniform order: the private session-record root pin (this test's
-        # source home binds nothing), then the disabled tool rows with
-        # plan-mode, then the title suppression row last.
+        # The storage roots precede the disabled tool rows and plan-mode.
         self.assertEqual([row["id"] for row in rows],
                          ["session-persistence-jsonl", "storage-json", *CONFIRMED_NONE_ROWS,
-                          native_run.PLAN_MODE_ROW, *native_run._ALWAYS_DISABLED_ROWS])
+                          native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
         self.assertTrue(pin["config"]["root"].endswith("/sessions"))
@@ -1371,14 +1369,13 @@ class DiscoveryTests(NativeRunCase):
         prompts = [entry for entry in self.agent_log()
                    if entry.get("dir") == "in" and (entry.get("raw") or {}).get("method") == "session/prompt"]
         self.assertEqual(prompts, [], "discovery never sends a prompt")
-        # Discovery carries the uniform launch patch: the private session-record
-        # root pin and title suppression, with no tool-scope rows.
+        # Discovery pins private session and JSON storage roots, with no tool-scope rows.
         launch = self.launch_records()[-1]
         self.assertIn("--patch", launch["argv"])
         patch_path = Path(launch["argv"][launch["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text())
         self.assertEqual([row["id"] for row in rows],
-                         ["session-persistence-jsonl", "storage-json", *native_run._ALWAYS_DISABLED_ROWS])
+                         ["session-persistence-jsonl", "storage-json"])
 
     def discover(self, **kwargs):
         return native_run.run_discovery(
@@ -1410,48 +1407,6 @@ class DiscoveryTests(NativeRunCase):
                       "the operation's own confirmed group stop is the fact")
         self.assertTrue(self.wait_for(lambda: any(
             entry.get("event") == "dying-before-answer" for entry in self.agent_log())))
-
-
-class AlwaysOffPatchRowsTests(NativeRunCase):
-    """The retained title suppression, named literally, on the real launch.
-
-    The witnesses read the patch the real run and discovery startup
-    construction wrote through the launch wrapper and assert each literal
-    row's own presence and ``disabled`` fact. Neither the expected names nor
-    the expected flag may come from the module's row constant: an expectation
-    built from the same value stays self-consistent when a row is dropped, so
-    each row here fails its own witness instead of a tautology.
-    """
-
-    def assert_patch_row_disabled(self, row_id):
-        records = self.launch_records()
-        self.assertTrue(records, "the launch must record its argv and patch")
-        argv = records[-1]["argv"]
-        patch_path = Path(argv[argv.index("--patch") + 1])
-        matches = [row for row in json.loads(patch_path.read_text())
-                   if row.get("id") == row_id]
-        self.assertEqual(len(matches), 1,
-                         f"the launch patch must carry the {row_id} row exactly once")
-        self.assertIs(matches[0].get("disabled"), True,
-                      f"the launch patch must disable the {row_id} row")
-
-    def test_a_run_launch_disables_the_session_title_llm_row(self):
-        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt", scope="write"),
-                     observer=lambda _facts: FEEDBACK_CONTINUE, services=None,
-                     cancelled=lambda: False)
-        self.assertEqual(result.end.status, "ok", result.end.message)
-        self.assert_patch_row_disabled("session-title-llm")
-
-    def test_a_discovery_launch_disables_title_generation_only(self):
-        self.extra_agent_args = ["--prompt-mode", "final"]
-        catalog = native_run.run_discovery(
-            cwd=str(self.base / "cwd"), invocation_root=self.base / "disc-inv",
-            native_root=self.root, timeout_seconds=FAST_TIMEOUT, cancelled=lambda: False)
-        self.assertEqual(catalog["discoveries"], [{"adapter": "dsh", "status": "complete",
-                                                   "accountStatus": "not-applicable"}])
-        self.assert_patch_row_disabled("session-title-llm")
 
 
 class NativeConfigurationTests(NativeRunCase):
@@ -1503,8 +1458,7 @@ class NativeConfigurationTests(NativeRunCase):
                     launch = self.launch_records()[-1]
                     rows = json.loads(Path(launch["argv"][launch["argv"].index("--patch") + 1]).read_text())
                     expected = (["session-persistence-jsonl", "storage-json"]
-                                + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else [])
-                                + ["session-title-llm"])
+                                + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)
                     self.assertEqual({path: path.read_bytes() for path in materials}, before)
         self.assertFalse((source / "sessions").exists(), "native records remain private")

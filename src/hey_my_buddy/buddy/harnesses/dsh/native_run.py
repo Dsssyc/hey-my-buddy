@@ -3,7 +3,7 @@
 The selected CLI loads its own ACP profile, settings, credentials, home/profile
 patches, skills and MCP. HOME and DSH_HOME are inherited unchanged. The private
 launch patch pins session storage, expresses the existing tool scope, and
-suppresses title model calls for private sessions; telemetry follows the user.
+leaves title generation and telemetry to the user's native configuration.
 The owned connection supplies native configuration readback, tool/update facts,
 signed turn receipts and conservative stop evidence. Discovery creates a bare
 session without sending a prompt. Worker native resume continues the exact
@@ -119,10 +119,6 @@ NONE_SCOPE_DISABLED_ROWS: tuple[str, ...] = (
     "tool-subagent", "tool-subagent-fork", "tool-workflow", "tool-todo",
     "tool-goal", "tool-ralph", "tool-web",
 )
-#: Private session titles are not displayed, so generating them would spend
-#: model quota without a consumer. Telemetry remains the user's own setting.
-_ALWAYS_DISABLED_ROWS = ("session-title-llm",)
-
 # -- the private session record's launch constants ------------------------------------
 
 #: DSH writes its session rollout under the sessions root this run's launch
@@ -585,17 +581,15 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
                   permission_policy) -> AcpClient:
     """Launch ACP with the user's configuration and a private session root.
 
-    The public patch pins session records and their JSON projection storage,
-    expresses the existing tool scope,
-    and disables title generation for sessions with no user-visible title.
-    HOME and DSH_HOME are inherited; telemetry follows the user's settings.
+    The public patch pins session records and their JSON projection storage
+    and expresses the existing tool scope. HOME and DSH_HOME are inherited;
+    title generation and telemetry follow the user's native configuration.
     """
     command = command_for("dsh", dict(os.environ))
     argv = [*command, "--profile", "acp"]
     rows = [{"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
             {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},
-            *scope_rows,
-            *({"id": name, "disabled": True} for name in _ALWAYS_DISABLED_ROWS)]
+            *scope_rows]
     patch_path = invocation_root / "dsh-launch-patch.json"
     private_json(patch_path, rows, exclusive=True)
     argv += ["--patch", str(patch_path)]
@@ -1565,7 +1559,7 @@ def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
     if not state.session_opened:
         return EffectivePolicy()
     if request.tool_scope == "none":
-        requested = {"disabledRows": [*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW, *_ALWAYS_DISABLED_ROWS]}
+        requested = {"disabledRows": [*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))
     if request.tool_scope == "read":
@@ -1678,7 +1672,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
     native_root = ensure_private_dir(Path(native_root))
     sessions_root = ensure_private_dir(native_root / "dsh-home" / _SESSIONS_DIRNAME)
     # Discovery carries the same uniform patch as every launch of this module —
-    # its private session-record root pin and the title suppression row — with no tool-scope rows: it never sends a prompt.
+    # its private session-record and JSON storage roots, with no tool-scope
+    # rows: it never sends a prompt.
     client = _launch_agent(cwd=cwd, launch_root=native_root, invocation_root=invocation_root,
                            sessions_root=sessions_root,
                            scope_rows=[], extra_env={},

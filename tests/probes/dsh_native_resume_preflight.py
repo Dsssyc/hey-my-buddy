@@ -26,7 +26,7 @@ rejections, errors and unverifiable items are recorded as exactly that - the
 probe never falls back to ``session/new``, never seeds a private format and
 never sends content to reach a green result.
 
-The launch rows reuse the production session-root pin and title suppression,
+The launch rows reuse the production session-root pin and JSON storage root,
 with the same AcpClient.start wrapper and inherited native configuration. No
 private home or profile is built. The literal row ids are asserted against the
 production constants at startup. Materials land under the registered task root only -
@@ -59,7 +59,6 @@ ALLOWED_INSIDE_TASK_ROOT = ("TMPDIR", "BUDDY_CHECKS_TMPDIR", "BUDDY_STATE_DIR",
 #: The public row ids this probe pins, kept literally beside the production
 #: constants they mirror (asserted against them before any launch).
 SESSION_ROOT_ROW = "session-persistence-jsonl"
-ALWAYS_OFF_ROWS = ("session-title-llm",)
 
 #: The embedded MCP stub's one catalog entry; a name only, never invoked.
 STUB_TOOL_NAME = "r1_probe_catalog_tool"
@@ -328,8 +327,7 @@ class Probe:
         patch_path = root / "dsh-launch-patch.json"
         stub_evidence = root / "mcp-stub-evidence.jsonl"
         rows = [{"id": SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
-                {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},
-                *[{"id": name, "disabled": True} for name in ALWAYS_OFF_ROWS]]
+                {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}}]
         private_json(patch_path, rows, exclusive=True)
         # The same selection check_preparation runs, kept whole so the
         # selected version travels with the launch evidence.
@@ -456,11 +454,9 @@ def production_anchor() -> dict:
     drift = []
     if SESSION_ROOT_ROW != getattr(native_run, "_SESSION_ROOT_ROW", None):
         drift.append("sessionRootRow")
-    if list(ALWAYS_OFF_ROWS) != list(getattr(native_run, "_ALWAYS_DISABLED_ROWS", ())):
-        drift.append("alwaysOffRows")
     if drift:
         raise ProbeError(f"probe row literals drifted from production constants: {drift}")
-    return {"sessionRootRowMatchesProduction": True, "alwaysOffRowsMatchProduction": True}
+    return {"sessionRootRowMatchesProduction": True}
 
 
 # -- the two processes -----------------------------------------------------------------

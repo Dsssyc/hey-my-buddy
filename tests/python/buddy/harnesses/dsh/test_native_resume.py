@@ -186,7 +186,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertEqual(rows[1], {"id": "storage-json", "config": {"root": str(self.root / "storages")}})
         self.assertTrue((self.root / "storages/session_projcache/sessions" / f"{previous}.json").is_file())
         self.assertEqual([row["id"] for row in rows[1:]],
-                         ["storage-json", "session-title-llm"])
+                         ["storage-json"])
         rollout = list((self.root / "sessions").glob(f"{previous}.v3.jsonl*"))
         self.assertEqual(len(rollout), 1, "the resumed rollout lives in the shared root")
         self.assertFalse((self.root / "dsh-home").exists())

@@ -8,7 +8,7 @@ Host 已确认：`session-persistence-jsonl.config.root` 经 DSH 的公开 `--pa
 
 本回合删除强制私有 `DSH_HOME`（包括版本探测）、显式私有 `HOME` 的参数入口、settings/credentials 的文件路径覆盖、`source_home`/`source_binding_rows` 与自行写 ACP profile 的全部代码及旧测试；`HOME`、`DSH_HOME` 原样经过白名单，无 DSH_HOME 时保持未设置，由 DSH 自己选默认主目录。额外环境仍不许覆盖两个继承的主目录键，这是调用方参数边界，不限制用户主目录。
 
-`session-telemetry-otel` 的禁用已删除：遥测开不开是用户自己的设置；`session-title-llm` 的禁用保留：私有会话标题没有人看，多发一次模型调用只会浪费用户额度，这是 Host 明确保留的例外。无工具固定禁用行和 read 范围的 `DSH_PERMISSION_MODE=read-only` 不变，留给批次 4。
+`session-telemetry-otel` 与 `session-title-llm` 的禁用均已删除：遥测和标题由用户的原生配置决定；Host 最新决定撤回标题的例外，省一次模型调用不能超出 ADR-030 穷尽列举的交付范围。无工具固定禁用行和 read 范围的 `DSH_PERMISSION_MODE=read-only` 不变，留给批次 4。
 
 Worker 会话仍在微任务共享 `T/sessions`，goal binding、用量边界与续接规则不变，`workflow.py` 未改；发现/无工具的原 `N/dsh-home/sessions` 位置也不变，其中 `dsh-home` 只是会话目录的父目录，没有 profile、设置、凭据，不作为环境主目录传给 DSH。这保持了所有记录的位置，不是第二种读法。补丁、签名服务控制材料、启动日志与帧日志继续按本次 invocation 私有。
 
@@ -78,11 +78,11 @@ SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NODE_EXTRA_CA_CERTS
 | `credentials` 的 `path=用户主目录/.credentials.yaml, watch=false` | 替用户另建或改写的配置 | 同上；改前本项目只探文件存在，不读内容，但仍依赖布局，已删除 |
 | `session-persistence-jsonl.config.root` | 会话与证据放在哪里 | 官方存储文档明确 root 只管会话位置，Host 已认定通用补丁接口符合任务，沿用 |
 | scope 的固定禁用行/只读环境值 | 表达权限 | 原生 CLI 的补丁接口与既有权限验收；沿用，留批次 4 改过严检查 |
-| `session-title-llm` 的 `disabled=true` | 拿不准（Host 已定） | 旧验收接受，Host 本次明确保留，以免私有会话标题浪费模型额度 |
+| `session-title-llm` 的 `disabled=true` | 替用户另建或改写的配置 | Host 最新决定删除，标题遵循原生配置，不为它预加事件处理 |
 | `session-telemetry-otel` 的 `disabled=true` | 替用户另建或改写的配置 | Host 本次明确删除，遥测由用户设置决定 |
 | 私有 `dsh-home/` | 替用户另建或改写的配置 | 包装强制环境覆盖并检查私有 home；已删除配置主目录与相应校验，保留证据路径防护 |
 | `profiles/acp/package.json`、`cordis.yml`、`cordis.patch.yml`、`pnpm-workspace.yaml` | 替用户另建或改写的配置 | `materialize_acp_profile` 自写 base/acp-app bundles、空 patch、包管理设置；官方 CLI 自带 ACP 初始化，已整段删除，不能复制用户配置代替 |
-| `dsh-launch-patch.json` | 会话与证据放在哪里（控制材料） | 文件本身仍按回合私有，内容已收敛为会话根、暂行权限行与保留的标题禁用 |
+| `dsh-launch-patch.json` | 会话与证据放在哪里（控制材料） | 文件本身仍按回合私有，内容已收敛为会话根、JSON storage 根与暂行权限行 |
 | `sessions/**/session.v3.jsonl[.zstd]`、原生 `session.lock` | 会话与证据放在哪里 | DSH 自己写持久记录/锁，官方 JSONL 文档说明 root 与目录布局；微任务共享会话根沿用目标不变 |
 | 会话 ID 摘要命名的 goal binding JSON | 会话与证据放在哪里 | 本项目的 task/session/cwd/configuration 绑定，仅完整回执且确认停止后保存，不是 DSH 配置；沿用 |
 | `logs/launches.jsonl`、`logs/frames.jsonl` | 会话与证据放在哪里 | 本项目启动与 ACP 帧元数据证据，路径经过私有根防护，不是 DSH 官方参数或配置；沿用 |
@@ -104,11 +104,11 @@ SSL_CERT_FILE SSL_CERT_DIR REQUESTS_CA_BUNDLE CURL_CA_BUNDLE NODE_EXTRA_CA_CERTS
 以下步骤使用最终启动参数与环境，但未在本回合执行真实握手、dump 或用户配置读回；模拟原生程序验证不等于真实接口验证。审阅仍未接入，不新增验证通道。
 
 1. 用生产 `native_environment` 构造环境，核对 `HOME` 与用户给定的 `DSH_HOME` 原样相同；运行真实 `C --version`，应只得到版本且停止确认，没有新建黑板的配置主目录。
-2. 在 `<host-root>/测试.v2 空间/` 准备字面 JSON 补丁：`[{"id":"session-persistence-jsonl","config":{"root":"<host-root>/测试.v2 空间/会话"}},{"id":"storage-json","config":{"root":"<host-root>/测试.v2 空间/storages"}},{"id":"session-title-llm","disabled":true}]`，另按所测范围加权限行；不把路径写成点号键。真实 `C --profile acp --patch <补丁> --dump-config` 不调用模型，需由 Host 私下核对 settings/credentials 行与其未加补丁的原生 dump 相同，用户 home/profile 补丁保留，遥测行与原生 dump 相同，标题行 disabled=true，会话 root 等于指定路径；dump 可能含敏感配置，只保留核对摘要。
+2. 在 `<host-root>/测试.v2 空间/` 准备字面 JSON 补丁：`[{"id":"session-persistence-jsonl","config":{"root":"<host-root>/测试.v2 空间/会话"}},{"id":"storage-json","config":{"root":"<host-root>/测试.v2 空间/storages"}}]`，另按所测范围加权限行；不把路径写成点号键。真实 `C --profile acp --patch <补丁> --dump-config` 不调用模型，需由 Host 私下核对 settings/credentials 行与其未加补丁的原生 dump 相同，用户 home/profile 补丁保留，遥测行与原生 dump 相同，标题行与原生 dump 相同，会话 root 等于指定路径；dump 可能含敏感配置，只保留核对摘要。
 3. 对目录发现、Worker 初始/续接、none 调用分别用最终启动 argv/env 创建 ACP 连接，initialize → new → 读 configOptions → set_config_option（只针对回合路径）→ 读回 provider/model/effort → close → 停止；不调用 prompt/authenticate。none 使用原来的固定权限补丁，审阅仍不可用，不另建通道。读回选项应是用户原生目录的选项，设置的值应等于被冻结的请求值。
 4. 第二个独立进程沿用同一个私有会话根，resume 第一个进程返回的 sessionId，重新读回配置、close 并确认停止；若无 prompt 的 new/close 未落盘，如实记录而不偷偷加模型调用。比较私有 root 下的记录位置与固定 binding 路径；带 prompt 的两回合真实续接仍由 Host 授权后验收。
 
-可用 `PYTHONPATH=src:tests/python <只读解释器> tests/probes/dsh_native_resume_preflight.py --task-root "<Host 已分配的验证根>" --run-label "batch3d.v2 空间 测试"` 验证两进程恢复；先按探针要求清除继承的运行时/Worker/agent 环境钉住的变量，保留用户自己的 HOME/DSH_HOME；不传 prompt，不运行任何服务。`tests/probes/dsh_native_resume_preflight.py` 已同步删除旧函数导入、profile 物化、私有 DSH_HOME 与 settings/credentials 覆盖，补丁只固定共享会话根并禁用标题；它的两进程无模型协议顺序保持不变，供 Host 按其中的命令说明执行。
+可用 `PYTHONPATH=src:tests/python <只读解释器> tests/probes/dsh_native_resume_preflight.py --task-root "<Host 已分配的验证根>" --run-label "batch3d.v2 空间 测试"` 验证两进程恢复；先按探针要求清除继承的运行时/Worker/agent 环境钉住的变量，保留用户自己的 HOME/DSH_HOME；不传 prompt，不运行任何服务。`tests/probes/dsh_native_resume_preflight.py` 已同步删除旧函数导入、profile 物化、私有 DSH_HOME 与 settings/credentials 覆盖，补丁只固定共享会话根与 JSON storage 根；它的两进程无模型协议顺序保持不变，供 Host 按其中的命令说明执行。
 
 ## 实际验证与交回边界
 
@@ -149,7 +149,7 @@ Host 本次输入报告：前一封存在整合树上完整 Python 检查 216 �
 
 **索引的原生依据。** 只读了 DSH 官方 JSON storage backend 文档的 Use this package / Configuration、Session projection cache 文档的 Minimal configuration / How checkpoints are written / What the cache guarantees，没有读项目源码；前者公开唯一 root 字段，后者明确投影缓存使用 storage-json（默认 dshHomePath('storages')），并在 root/session_projcache/sessions/<id>.json 写入索引。旧的 `adr025-dsh-feasibility.md` 第 60–62 条也已经记录过这一分离，前次实现漏了这一项。
 
-**最终位置。** 每条 ACP 启动补丁现在按顺序包含 `session-persistence-jsonl.root=<原会话根>`、`storage-json.root=<原会话根的父目录>/storages`、原来的暂行权限行、标题禁用。Worker 的索引在 `T/storages/session_projcache/sessions/`，发现与无工具的索引在 `N/dsh-home/storages/session_projcache/sessions/`；会话记录、绑定、身份、续接与 workflow 判断都不变。重定向的是整个原生 JSON storage 后端，并未改它的路由、用户设置或凭据主目录。投影缓存是原生文档所说的派生数据，记录仍是权威；不搬用户目录留下的旧缓存，不加旧位置读取，缓存缺失由 DSH 自己从记录重建。
+**最终位置。** 每条 ACP 启动补丁现在按顺序包含 `session-persistence-jsonl.root=<原会话根>`、`storage-json.root=<原会话根的父目录>/storages`、原来的暂行权限行。Worker 的索引在 `T/storages/session_projcache/sessions/`，发现与无工具的索引在 `N/dsh-home/storages/session_projcache/sessions/`；会话记录、绑定、身份、续接与 workflow 判断都不变。重定向的是整个原生 JSON storage 后端，并未改它的路由、用户设置或凭据主目录。投影缓存是原生文档所说的派生数据，记录仍是权威；不搬用户目录留下的旧缓存，不加旧位置读取，缓存缺失由 DSH 自己从记录重建。
 
 **无模型验收补充。** 最终 dump 的 storage-json.root 应等于会话根父目录下的 storages，同时会话 root、标题和权限核对照旧；真实两进程探针已写入相同的 storage-json 补丁。Host 在运行探针前、确认两个进程停止后，分别只列用户 `$DSH_HOME/storages`（未设置时为 `~/.dsh/storages`）下的相对文件名，比对没有新增文件，私有 storage 根下出现本次会话索引；这一步不读取凭据或索引正文，证据只保留核对摘要。无模型验证仍由 Host 显式执行，检查套件不再代跑真实 CLI。
 
@@ -157,16 +157,22 @@ Host 本次输入报告：前一封存在整合树上完整 Python 检查 216 �
 
 **测试目录审计。** 对整个 tests 树搜索启动、discovery、available、cli_command/command_for、用户主目录与安装路径，再按测试函数和 setUp 核对调用周围的模拟/环境来源；原始候选留在忽略的 tmp/adr030-batch3d/audit-candidates.txt 与 other-harness-audit.txt。DSH 的 NativeRunCase / ACP support 本来就在设置模拟用户目录和假进程；角色接线、no-tool、runtime_version、adapter_usage 与 private_adapter_invariants 使用同一假程序或测试选择记录；locator/stop-timing 文件使用临时可执行文件并替换候选扫描/握手，不用本机 CLI。查出的共享真实发现入口已经删除；防线又抓到了 ConsoleCoreTests 和 UserPolicyTests 的普通快照通过 capability 查询落入 DSH 版本探测的路径，由下面的默认选择修掉。
 
-**其他 harness 的实际风险，仅列不改。** `buddy.harnesses.zcode.test_zcode_native.InstalledZcodeTests` 六项会从本机 ZCode 安装加载 CLI/内置供应方文件，并通过一个测试自己生成的 sandbox-exec shell 包装运行真实 CLI；它的私有数据目录与 loopback 模型桩不改变“真实安装被启动”的事实。`buddy.harnesses.zcode.test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities` 会加载默认已安装的 bundle 并运行免费版本/插件探测；fake global_root 也不改变这一事实。两组都未修改，Host 应交给 ZCode 微任务迁移到 probes 或改为模拟；新防线会拒绝这些启动，因此它们仍是完整检查的待办。其他 ZCode 的普通 adapter/native_run、Codex 的 codex/native_run、Claude 的 claude/native_run，以及共用 runtime_version 矩阵，都从各自 setUp 的私有假程序/替换函数取命令；没有找到另一个未模拟的 Codex/Claude 真实 CLI 入口。`tests/probes/` 的真实调用保留，必须由 Host 在检查根之外显式运行。
+**其他 harness 的实际风险，仅列不改。** `buddy.harnesses.zcode.test_zcode_native.InstalledZcodeTests` 六项会从本机 ZCode 安装加载 CLI/内置供应方文件，并通过一个测试自己生成的 sandbox-exec shell 包装运行真实 CLI；它的私有数据目录与 loopback 模型桩不改变“真实安装被启动”的事实。`buddy.harnesses.zcode.test_zcode_hooks_probe.FreeProbePipelineTests.test_free_probe_pipeline_is_isolated_and_selftested` 与 `test_gather_versions_reports_native_identities` 会加载默认已安装的 bundle 并运行免费版本/插件探测；fake global_root 也不改变这一事实。两组都未修改；按 Host 最新决定，它们照旧运行，继承检查运行器的私有主目录，迁成探针或改用模拟由 Host 另排，不是本批的阻断项。其他 ZCode 的普通 adapter/native_run、Codex 的 codex/native_run、Claude 的 claude/native_run，以及共用 runtime_version 矩阵，都从各自 setUp 的私有假程序/替换函数取命令；没有找到另一个未模拟的 Codex/Claude 真实 CLI 入口。`tests/probes/` 的真实调用保留，必须由 Host 在检查根之外显式运行。
 
 **选择的防线。** checks 的每个子进程现在有自己的 HOME、USERPROFILE/HOMEPATH、四个 harness 的配置路径、ZCode 两个供应方路径、XDG/AppData 路径；这覆盖在测试进程里直接调用产品代码的情形。Claude/Codex 沿用已有的未安装 CLI 哨兵，DSH/ZCode 默认读一份 status=missing、command=[] 的测试选择记录；模型目录默认是不存在的离线夹具路径，具体测试显式提供自己的模拟来源。BoardTestCase 的本进程默认冻结四个 harness 的未安装选择（其中 catalog 的 Claude 模拟测试不继承这个基类），避免绕过检查运行器时普通 capability 查询意外探测本机。模仿 CLI 的测试仍可提供它自己的选择和程序，没有真实测试的 opt-in。
 
-**第二道启动门。** 仅在 checks 临时树里，tests/python/sitecustomize 通过 Python audit hook 在 subprocess.Popen 的进程创建前拒绝检查根/仓库之外的 dsh/codex/claude/zcode 可执行文件和安装包入口；跟随别名链接，识别 Node 入口、显式 shell 命令，以及测试自己生成的 shell 包装（只读测试自己的脚本，不读安装源码）。TMPDIR 在产品的环境白名单里，所以 Python 角色控制器也自动保留这道边界。测试证明外部模拟“安装”程序的写标记动作没有执行，私有假 CLI 正常运行，本进程读取的 Home/所有配置根都是私有的；移除自动安装 hook 会让标记测试失败。
+**防线的界限。** 只保留私有主目录与配置路径这一个隔离机制：即使测试启动了本机安装的 harness，正常原生配置解析看到的也是空的私有目录；不再根据可执行文件名字、shell 命令或脚本头判断是否为真实安装。它不是系统沙箱，挡不住测试硬编码用户文件路径或自行覆盖私有环境，这些需要测试审查；直接运行 unittest 必须按约定提供私有环境，BoardTestCase 的未安装选择仅避免它自己的普通发现。真实配置与原生接口验收仍由 Host 在 tests/probes 显式运行。
 
-**防线的界限。** 它是检查基础设施，不是针对恶意测试的系统沙箱：不拦测试用硬编码路径直接 open 用户文件，不解析任意 eval/编码脚本，也不能把复制进测试根或任意更名的第三方程序辨认为真实 harness；这类代码仍要通过测试审查。正常的 unittest 外部运行不自动取得 checks 启动门，直接运行必须按约定提供私有环境；BoardTestCase 额外的未安装选择只守它自己的普通发现。probes 不继承 checks 临时树，不提供任何“运行真实测试”的开关。产品运行模块没有因这道门而增加资格判断。
+**索引修正回合的验证记录（历史结果）。** 上一回合用指定只读解释器和 checks.child_environment 的新私有根运行，281 项通过（43.718 秒，退出 0），日志在忽略的 `tmp/adr030-batch3d/host-fixes-final.log`。包含 evaluation/user_policy/catalog、测试环境隔离、检查运行器、support 和 DSH ACP/存储/记录/发现/native_run/native_resume 的聚焦测试；九项 C-Two 与四项进程枚举清理测试未运行。该结果不是本次删除之后的验证，本次最终结果另列。
 
-**本回合实际验证。** 用指定只读解释器和 checks.child_environment 创建的新私有检查根运行，最终 281 项通过（43.718 秒，退出 0），日志在忽略的 `tmp/adr030-batch3d/host-fixes-final.log`。包含整个 `blackboard.evaluation.test_evaluation`、`test_user_policy`、`blackboard.catalog.test_catalog`、新防线文件全量；检查运行器 ScheduledModules/ResolveJobs/ParallelOutcome、环境/锁/模拟 lsof 类、support 两项环境用例；DSH ACP 三文件、会话存储和记录读取文件全量、native_run/native_resume 除前述九项 C-Two 用例外全量、locator 全文件。23 个改过的 Python 文件编译通过，没有写字节码；最终 diff 检查通过。本回合没有启动本机安装的 harness，第一轮防线的拒绝证据表明漏网版本探测在进程创建之前就被拦住了。
+索引修正回合还修掉普通 ConsoleCoreTests/UserPolicyTests 快照触发 DSH 版本探测的默认选择、并行子根创建和 scope 旧断言；未修改 Claude 模拟测试。模拟原生程序写投影缓存到补丁选定的 storage 根，测试检查模拟用户 storages 不出现、两类私有根内出现缓存，以及第二进程恢复后仍有同号索引。
 
-第一轮 278 项有 12 项错误/失败：普通快照触发真实 DSH 的九项被启动门拦住、并行子根尚未创建的两项、scope 旧断言的一项；第二轮 279 项有一个模拟 Claude 的缓存计数断言失败，因为一度给已经有 CLI 哨兵的 Claude/Codex 重复绑定了 missing 选择，已收敛为 DSH/ZCode 使用选择记录、Claude/Codex 沿用原哨兵，未改那条 Claude 模拟测试。最后还将 BoardTestCase 的选择收紧为四个 harness 均 missing（不影响不继承该基类的 Claude 模拟缓存测试），再次跑全套 281 项通过；最终 281 项是修正后的最终源文件结果，没有把前两次失败算成通过。模拟原生程序实际写投影缓存到补丁选定的 storage 根，测试检查用户模拟 storages 不出现、两类私有根内出现缓存，以及第二进程恢复后仍有同号索引。
+完整检查、九项 C-Two、四项进程枚举清理测试与真实 CLI 验证仍由 Host 跑；其他 harness 的源码和测试均未修改，两组真实 ZCode 测试按 Host 决定照旧运行。Host 的真实两进程验证还要确认用户 storages 零新增，才能把这一次索引修正描述为实际通过。
 
-本回合没有重做完整检查、那九项 C-Two、四项进程枚举清理测试或真实 CLI 验证；它们仍由 Host 跑。新增测试启动门会拒绝审计表中的真实 ZCode 安装调用，Host 应先处理那两组测试再跑完整检查；其他 harness 的源码和测试均未修改。Host 的真实两进程验证还要确认用户 storages 零新增，才能把这一次索引修正描述为实际通过。
+## Host 最新收敛：一套隔离与原生标题
+
+按 Host 最新决定删除 tests/python/sitecustomize.py、checks_guard.py 及三个只为启动拦截编写的测试；保留测试子进程私有 HOME/配置路径与两项环境/默认发现回归，ZCode 两组测试不改。删除 _ALWAYS_DISABLED_ROWS 常量、补丁的标题行、EffectivePolicy 中的标题禁用声明、两个旧标题禁用测试与探针对应常量/锚点；现有三路径配置测试与续接测试按字面名称核对补丁仅有两类存储根及所需权限行，不为可能新增的标题事件加处理。
+
+本次最终验证：指定只读解释器、checks.create_private_root 的默认独立临时根和 checks.child_environment 下，276 项通过（40.684 秒、退出 0），日志在忽略的 `tmp/adr030-batch3d/simplification-default-root.log`；覆盖与上一回合相同，少了三个启动门测试与两个标题禁用旧测试。首轮把检查根误放在本检出 tmp 内，导致 evaluation 的多工作目录被识别为同一个 Git 检出，276 项中一项触发已有写入排他检查；改用默认独立临时根后整组重跑通过，未改该测试或生产行为。五个本次改动的 Python 文件编译通过，探针 --help 退出 0，最终 diff 检查通过；这只验证探针的入口，不是实际原生握手。
+
+完整检查、受限测试、用户原生标题行为与 storages 零新增仍由 Host 验证，本次未运行本机安装的 harness、服务、Worker 或模型调用。
