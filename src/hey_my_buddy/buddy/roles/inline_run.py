@@ -90,6 +90,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
         "continuation": RunContinuation(mode="native-session", previous_session_id=identity.session_id,
                                         checkpoint=checkpoint),
         "budget": RunBudget(timeout_seconds=next_control["timeoutSeconds"]),
+        "session_record_failure": result.session_record_failure,
     })
     handle.request = next_request
     handle.role_run_active_control = next_control
@@ -102,11 +103,12 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
         with _inline_live(next_control, next_request, services, state_dir, handle) as live_services:
             summary = run_harness(module, next_request, observer=observer, services=live_services,
                                   cancelled=summary_cancelled)
-    except Exception:
+    except Exception as error:
         summary = RunResult(identity=next_request.identity, harness=next_request.harness,
             end=RunEnd(status="unknown", reason_code="native-summary-unverified",
                        message="The summary run produced no verified stop receipt"),
             buddy=ResultBuddy(requested=next_request.buddy),
+            session_record_failure=getattr(error, "session_record_failure", next_request.session_record_failure),
             stop_evidence=StopEvidence(native=StopLayer(group_state="unknown")))
         return next_control, next_request, summary, False, time.monotonic() >= deadline
     expired = time.monotonic() >= deadline

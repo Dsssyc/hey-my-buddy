@@ -7,6 +7,9 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from hey_my_buddy.buddy.harnesses.run_contract import (RunResult, RunEnd, RunIdentity, SessionRecordFailure, StopEvidence, StopLayer)
+from hey_my_buddy.buddy.roles.run_execution import _base_result
 from hey_my_buddy.console import session_content
 from hey_my_buddy.protocol.session_content import SESSION_FORMAT, MessageChunk, TextContent
 
@@ -96,20 +99,74 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
             with self.subTest(query=query):
                 self.get(browser, route + '?' + query, status=400, code='INVALID_ARGUMENT')
 
+    def finish_recording_failure(self, board, run, path, error):
+        record = SessionRecord(path, 'session-attempt')
+        with mock.patch.object(record, '_write', side_effect=error):
+            record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text='display')))
+        record.close()
+        native = RunResult(
+            identity=RunIdentity(task_id=run['runId'], attempt_id='session-attempt', generation=1,
+                                 invocation_id='session-read-result'), harness='codex',
+            end=RunEnd(status='ok', native_exit_code=0),
+            stop_evidence=StopEvidence(native=StopLayer(group_state='gone')),
+            session_record_failure=SessionRecordFailure.from_payload(record.failure))
+        report = AdapterOutcome(status='ok', result=_base_result(native), exit_code=0,
+                                shutdown_confirmed=True).to_report()
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET execution_state='finished', result_json=?",
+                               (json.dumps(report),))
+        return native.session_record_failure.to_payload()
+
     def test_cursor_survives_append_and_finish_with_stopped_reason(self):
-        board, browser, route, path, events, _, _ = self.fixture(count=1)
+        board, browser, route, path, events, _, run = self.fixture(count=1)
         cursor = self.get(browser, route)['after']
         appended = self.event('session-attempt', '原生路径 /workspace/src/code.py')
         held = self.get(browser, route + f'?after={cursor}')
         self.assertEqual((held['events'], held['after'], held['state']), ([], cursor, 'running'))
         self.assertEqual(self.get(browser, route)['events'], events)
         self.append(path, appended)
-        stopped = {'code': 'session-record-write-failed', 'message': 'Could not write the attempt session record', 'cause': 'OSError'}
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET execution_state='finished', result_json=?",
-                               (json.dumps({'sessionRecordFailure': stopped}),))
+        stopped = self.finish_recording_failure(board, run, path, OSError('file write unavailable'))
         ended = self.get(browser, route + f'?after={cursor}')
         self.assertEqual((ended['events'], ended['state'], ended['stopped']), ([appended], 'ended', stopped))
+
+    def test_empty_and_partial_header_pages_keep_polling_until_events_arrive(self):
+        _, browser, route, path, _, _, _ = self.fixture()
+        for body in (b'', b'{"protocol":'):
+            with self.subTest(body=body):
+                path.write_bytes(body)
+                page = self.get(browser, route)
+                self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
+                                 ([], 0, 0, None))
+                self.assertEqual(self.get(browser, route + '?after=0')['events'], [])
+        event = self.event('session-attempt', 'first complete event')
+        path.write_bytes(self.line(SESSION_FORMAT.to_payload()) + self.line(event))
+        self.assertEqual(self.get(browser, route + '?after=0')['events'], [event])
+
+    def assert_failure_before_first_line(self, kind):
+        board, browser, route, path, _, _, run = self.fixture(record=False)
+        if kind == 'linked-parent':
+            outside = board.directory / 'outside-session'
+            outside.mkdir()
+            path.parent.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.symlink_to(outside, target_is_directory=True)
+            error = OSError('linked session directory')
+        else:
+            error = OSError('file could not be opened')
+        with mock.patch('hey_my_buddy.buddy.harnesses.session_record.open_regular_fd', side_effect=error):
+            stopped = self.finish_recording_failure(board, run, path, error)
+        page = self.get(browser, route)
+        self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
+                         ([], 0, 0, stopped))
+        self.assertEqual(set(stopped), {'code', 'params'})
+        self.assertEqual(stopped['params']['category'], 'BoardError' if kind == 'linked-parent' else 'OSError')
+        if kind == 'linked-parent':
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_missing_record_with_failure_returns_an_empty_stopped_page(self):
+        self.assert_failure_before_first_line('missing')
+
+    def test_linked_directory_with_failure_returns_an_empty_stopped_page(self):
+        self.assert_failure_before_first_line('linked-parent')
 
     def test_snapshot_excludes_appends_after_the_size_was_fixed(self):
         _, browser, route, path, events, _, _ = self.fixture(count=1)

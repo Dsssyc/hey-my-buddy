@@ -11,8 +11,6 @@ import threading
 import time
 
 from ...errors import BoardError
-from ...private_dirs import session_record_path
-from ..tasks.macro_tasks import MEMBERS_SQL
 from .live_registry import LiveRegistry
 from ...protocol.execution import BUDGET, execution_directory, launch_execution, read_execution_endpoint, read_execution_receipt
 from ...protocol.process_identity import inspect_process_identity, boot_id, kill_verified_process_group
@@ -204,9 +202,8 @@ class ExecutionScheduler:
             failure = None
             with self._lock:
                 try:
-                    record_path = self._session_record_path(claim)
                     handle = launch_execution(claim, self.store.directory, nonce,
-                                              session_record_path=record_path)
+                                              session_record_path=claim["sessionRecordPath"])
                 except Exception as error:
                     failure = error
                     handle = getattr(error, "execution_handle", None)
@@ -227,19 +224,6 @@ class ExecutionScheduler:
                     self.store.recover_executions(attempt_id)
                 return
             self._start_observer(claim, handle, identity)
-
-    def _session_record_path(self, claim: dict) -> Path | None:
-        """Resolve the same group key the console uses for this execution."""
-        if claim["task"]["spec"]["adapter"] == "command":
-            return None
-        with self.store.db.read() as connection:
-            member = connection.execute(
-                f"SELECT group_id FROM ({MEMBERS_SQL}) WHERE task_id=?",
-                (claim["task"]["taskId"],)).fetchone()
-        if member is None:
-            return None
-        return session_record_path(self.store.directory, member["group_id"],
-                                   claim["attempt"]["attemptId"])
 
     def _settle_unidentified(self, claim: dict, handle) -> None:
         """Use the creator's reaped child and empty group when no identity was published."""

@@ -58,7 +58,7 @@ def execution_directory(claim: dict, state_dir: Path) -> Path:
 
 
 def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
-                     session_record_path: Path | None = None):
+                     session_record_path: Path | str | None = None):
     """Persist intent and startup before spawning an owned new-session process."""
     state_dir = Path(state_dir)
     attempt = claim["attempt"]

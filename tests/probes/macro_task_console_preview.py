@@ -1339,6 +1339,11 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
     for event in events:
         boundaries.append(boundaries[-1] + len(session_line(event)))
     cursor = params.get("before", params.get("after"))
+    if cursor == 0:
+        if "before" in params:
+            return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": [],
+                    "events": [], "before": 0, "after": 0, "hasEarlier": False, "stopped": None}
+        cursor = start
     if cursor is not None and cursor not in boundaries:
         raise PreviewError("INVALID_ARGUMENT", "Session offset is outside the event area or not a line boundary")
     if pair == SESSION_RUNNING and "after" in params:

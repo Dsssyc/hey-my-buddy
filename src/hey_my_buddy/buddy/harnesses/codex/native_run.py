@@ -31,6 +31,8 @@ own narrow facts to the shared role executor, which owns every prompt, completio
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import dataclasses
 import hashlib
 import json
@@ -894,7 +896,7 @@ class _EventChain:
     def observe(self, message: dict) -> None:
         self.observe_facts(message)
         if self.session is not None:
-            self.session.observe_notification(message)
+            self.session.record.project(self.session.observe_notification, message)
         if self.carrier is None:
             if len(self.pending) >= _BOUND_NOTIFICATIONS:
                 self.truncated = True
@@ -950,7 +952,7 @@ class _NativeInquiry:
                     response = self.connection.call("turn/steer", {
                         "threadId": self.thread_id, "expectedTurnId": self.turn_id,
                         "input": [{"type": "text", "text": prompt}]},
-                        on_sent=(lambda: self.session.record_input(prompt, (self.thread_id, self.turn_id)))
+                        on_sent=(lambda: self.session.record.project(self.session.record_input, prompt, (self.thread_id, self.turn_id)))
                         if self.session is not None else None)
                 except CodexProtocolError as error:
                     if error.code == "native-rpc-error" and self.evidence.completed is not None:
@@ -1100,7 +1102,7 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
     return connection.call("turn/start", params,
-                           on_sent=(lambda: chain.session.record_input(input_text))
+                           on_sent=(lambda: chain.session.record.project(chain.session.record_input, input_text))
                            if chain.session is not None else None)
 
 
@@ -1162,73 +1164,79 @@ def _run(request: RunRequest, services: RunServices, mode: str,
                                          "attemptId": request.identity.attempt_id,
                                          "generation": request.identity.generation})
     activity = _ActivityWriter(services.live)
-    session = (CodexSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
-               if request.session_record_path is not None else None)
-    chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
-    inquiry_bridge: InquiryBridge | None = None
-    inquiry_poller: list[_NativeInquiry] = []
-    try:
-        prep = _prepare(request, mode)
-        if mode == "worker" and services.inquiry is not None:
-            configuration = services.inquiry.configuration
-            inquiry_bridge = InquiryBridge(
-                identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
-                error_factory=CodexProtocolError,
-                event_metadata=lambda message: {
-                    "kind": message.get("method") if isinstance(message.get("method"), str) else "unknown",
-                    "toolName": (message.get("params") or {}).get("item", {}).get("tool")
-                    if isinstance((message.get("params") or {}).get("item"), dict) else None},
-                attention_path=configuration.get("attentionPath"),
-                live=services.live, delivery_mode="realtime", checkpoint_tool=None)
-            inquiry_bridge.start()
-        prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
-                                     deadline=prep.deadline, owned=owned_spawn)
-        state.version = prep.version
-        spawn = _spawn_app_server(prep, cancel, owned_spawn)
-        connection = spawn.connection
-        _wire(connection, chain, facts, observer, request, state, mode, inquiry_poller)
-        state.selected_model_listed = _initialize(connection, prep, mode, buddy_spec(request), state)
-        if mode == "worker":
-            thread_id = _configure_worker(connection, request, prep, state, services.inquiry)
-            _worker_turn(connection, chain, request, state, thread_id, observer, activity,
-                         inquiry_bridge, services.inquiry, inquiry_poller)
-        else:
-            if mode == "fast":
-                thread_id = _configure_fast(connection, request, state)
+    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
+                                    failure=request.session_record_failure.to_payload()
+                                    if request.session_record_failure is not None else None)
+                      if request.session_record_path is not None else None)
+    with (session_record.protect() if session_record is not None else nullcontext()):
+        session = (session_record.project(CodexSessionProjector, session_record)
+                   if session_record is not None else None)
+        chain = _EventChain(facts, _Classifier(facts), projector, session, overflow_raises=mode == "fast")
+        inquiry_bridge: InquiryBridge | None = None
+        inquiry_poller: list[_NativeInquiry] = []
+        try:
+            prep = _prepare(request, mode)
+            if mode == "worker" and services.inquiry is not None:
+                configuration = services.inquiry.configuration
+                inquiry_bridge = InquiryBridge(
+                    identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
+                    error_factory=CodexProtocolError,
+                    event_metadata=lambda message: {
+                        "kind": message.get("method") if isinstance(message.get("method"), str) else "unknown",
+                        "toolName": (message.get("params") or {}).get("item", {}).get("tool")
+                        if isinstance((message.get("params") or {}).get("item"), dict) else None},
+                    attention_path=configuration.get("attentionPath"),
+                    live=services.live, delivery_mode="realtime", checkpoint_tool=None)
+                inquiry_bridge.start()
+            prep.version = probe_version(prep.command, prep.environment, cwd=request.cwd,
+                                         deadline=prep.deadline, owned=owned_spawn)
+            state.version = prep.version
+            spawn = _spawn_app_server(prep, cancel, owned_spawn)
+            connection = spawn.connection
+            _wire(connection, chain, facts, observer, request, state, mode, inquiry_poller)
+            state.selected_model_listed = _initialize(connection, prep, mode, buddy_spec(request), state)
+            if mode == "worker":
+                thread_id = _configure_worker(connection, request, prep, state, services.inquiry)
+                _worker_turn(connection, chain, request, state, thread_id, observer, activity,
+                             inquiry_bridge, services.inquiry, inquiry_poller)
             else:
-                thread_id = _configure_review(connection, request, state)
-            _structured_rounds(connection, chain, request, state, thread_id,
-                               mode, observer, activity)
-    except ObserverInterrupt:
-        state.status, state.reason = "cancelled", "observer-interrupt"
-        state.error_text = "the role observer stopped the run"
-        state.interrupt_requested = True
-        state.interrupt_basis = state.interrupt_basis or "observer-request"
-        if connection is not None and state.thread_id and state.turn_id:
-            _interrupt(connection, state, chain.session)
-    except (CodexProtocolError, VersionShutdownError) as error:
-        state.status = "cancelled" if error.code == "user-cancel" else "error"
-        state.reason, state.error_text = error.code, str(error)
-        if connection is not None and state.thread_id and state.turn_id \
-                and error.code in ("user-cancel", "deadline"):
-            _interrupt(connection, state, chain.session)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-        state.status, state.reason = "error", "invalid-native-result"
-        state.error_text = "Codex returned invalid or incomplete native data"
-    finally:
-        if inquiry_bridge is not None:
-            inquiry_bridge.close()
-            state.inquiry_report = inquiry_bridge.report()
-        # A preparation failure also reaches the stop collection: nothing was
-        # ever spawned, and that known fact — not an unknown — is what the
-        # result must carry.
-        _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
-    if session is not None:
-        session.close()
-    _collect_quota_failure(state, stream_truncated=chain.truncated)
-    return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
-        update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                if session is not None and session.record.failure is not None else None})
+                if mode == "fast":
+                    thread_id = _configure_fast(connection, request, state)
+                else:
+                    thread_id = _configure_review(connection, request, state)
+                _structured_rounds(connection, chain, request, state, thread_id,
+                                   mode, observer, activity)
+        except ObserverInterrupt:
+            state.status, state.reason = "cancelled", "observer-interrupt"
+            state.error_text = "the role observer stopped the run"
+            state.interrupt_requested = True
+            state.interrupt_basis = state.interrupt_basis or "observer-request"
+            if connection is not None and state.thread_id and state.turn_id:
+                _interrupt(connection, state, chain.session)
+        except (CodexProtocolError, VersionShutdownError) as error:
+            state.status = "cancelled" if error.code == "user-cancel" else "error"
+            state.reason, state.error_text = error.code, str(error)
+            if connection is not None and state.thread_id and state.turn_id \
+                    and error.code in ("user-cancel", "deadline"):
+                _interrupt(connection, state, chain.session)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            state.status, state.reason = "error", "invalid-native-result"
+            state.error_text = "Codex returned invalid or incomplete native data"
+        finally:
+            if inquiry_bridge is not None:
+                inquiry_bridge.close()
+                state.inquiry_report = inquiry_bridge.report()
+            # A preparation failure also reaches the stop collection: nothing was
+            # ever spawned, and that known fact — not an unknown — is what the
+            # result must carry.
+            _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
+        if session is not None:
+            session.record.project(session.close)
+        _collect_quota_failure(state, stream_truncated=chain.truncated)
+        return _build_result(request, prep, state, mode, projector, facts, activity).model_copy(
+            update={"session_record_failure": SessionRecordFailure(**session_record.failure)
+                    if session_record is not None and session_record.failure is not None
+                    else request.session_record_failure})
 
 
 def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
@@ -1268,7 +1276,7 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
         # refusal answer is already on the wire when the role's stop lands.
         if connection.messages.empty():
             if chain.session is not None:
-                chain.session.flush()
+                chain.session.record.project(chain.session.flush)
         if facts.dirty:
             facts.dirty = False
             tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
@@ -1336,7 +1344,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     try:
         chain.bind(carrier)
         if chain.session is not None:
-            chain.session.observe_root(thread_id, turn_id, request.input_text, turn.get("items") or [])
+            chain.session.record.project(chain.session.observe_root, thread_id, turn_id, request.input_text, turn.get("items") or [])
         activity.write(evidence, "waiting-model")
         while evidence.completed is None:
             connection.pump()
@@ -1441,7 +1449,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         try:
             items = turn.get("items")
             if chain.session is not None:
-                chain.session.observe_root(thread_id, turn_id, input_text, items if isinstance(items, list) else [])
+                chain.session.record.project(chain.session.observe_root, thread_id, turn_id, input_text, items if isinstance(items, list) else [])
             if mode == "fast":
                 while fast_state["completed"] is None:
                     connection.pump()
@@ -1538,7 +1546,7 @@ def _interrupt(connection: Connection, state: _RunState, session: CodexSessionPr
     """A fresh short control budget permits a native interrupt after the deadline."""
     def observe_terminal(message: dict) -> None:
         if session is not None:
-            session.defer_notification(message)
+            session.record.project(session.defer_notification, message)
         if state.turn_evidence is not None:
             state.turn_evidence.observe(message)
 

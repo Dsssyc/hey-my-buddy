@@ -475,13 +475,13 @@ class SessionRecordFailureTests(unittest.TestCase):
     def test_failure_roundtrips_without_changing_other_run_facts(self):
         result = full_result()
         payload = result.to_payload()
-        failure = {"code": "session-record-write-failed", "message": "database or disk is full", "cause": "OperationalError"}
+        failure = {"code": "session-record-write-failed", "params": {"category": "OSError", "message": "No space left on device", "truncated": False}}
         decoded = rc.RunResult.from_payload({**payload, "sessionRecordFailure": failure})
         self.assertEqual(decoded.session_record_failure.to_payload(), failure)
         self.assertEqual({**decoded.to_payload(), "sessionRecordFailure": None}, payload)
         self.assertEqual(decoded.end.status, "ok")
         self.assertEqual(decoded.stop_evidence.native.group_state, "gone")
-        for bad in ({**failure, "code": "unknown"}, {**failure, "cause": None}):
+        for bad in ({**failure, "code": "unknown"}, {**failure, "params": {**failure["params"], "category": None}}):
             with self.subTest(bad=bad), self.assertRaises(BoardError):
                 rc.RunResult.from_payload({**payload, "sessionRecordFailure": bad})
 

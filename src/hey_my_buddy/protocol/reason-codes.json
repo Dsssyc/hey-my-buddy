@@ -228,7 +228,7 @@
   "routing-taken-over": [],
   "routing-unusable-selection": [],
   "service-stopped-before-launch": [],
-  "session-record-write-failed": [],
+  "session-record-write-failed": ["category", "message", "truncated"],
   "session.codex-internal-reasoning-omitted": [],
   "session.deleted": [],
   "session.invalid-record": [],

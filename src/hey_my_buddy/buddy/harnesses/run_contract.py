@@ -207,6 +207,21 @@ class WorkerPermission(InternalModel):
     enforcement: Literal["enforced", "convention"]
 
 
+class SessionRecordFailureParams(InternalModel):
+    """Bounded diagnostic facts of a failed display-record operation."""
+
+    category: Text(128)
+    message: RawText(8192)
+    truncated: bool = False
+
+
+class SessionRecordFailure(InternalModel):
+    """A standard reason; display failure never changes native execution facts."""
+
+    code: Literal["session-record-write-failed"]
+    params: SessionRecordFailureParams
+
+
 class RunRequest(InternalModel):
     """One harness run request: values only, no role authority of any kind."""
 
@@ -218,6 +233,7 @@ class RunRequest(InternalModel):
     cwd: AbsolutePath
     private_state: PrivateStatePaths
     session_record_path: Optional[AbsolutePath] = None
+    session_record_failure: Optional[SessionRecordFailure] = None
     input_text: NonEmptyInputText
     tool_scope: ToolScope
     #: None for runs without a micro task Worker permission choice.
@@ -589,14 +605,6 @@ class NativeEvidence(InternalModel):
     unconfirmed: JsonTuple(Annotated[str, Field(min_length=1, max_length=MAX_UNCONFIRMED_NAME_CHARS,
                                               pattern=r"^[a-z0-9-]+$")],
                            max_items=MAX_UNCONFIRMED_ITEMS) = ()
-
-
-class SessionRecordFailure(InternalModel):
-    """The first failed session write; it does not change execution facts."""
-
-    code: Literal["session-record-write-failed"]
-    message: RawText(8192)
-    cause: Text(128)
 
 
 class RunResult(InternalModel):

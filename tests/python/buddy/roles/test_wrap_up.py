@@ -154,6 +154,7 @@ class RoleStopTests(unittest.TestCase):
 
     def _execute(self, *, resumable=True, native_gone=True, summary_session="native-session",
                  summary_native_gone=True, summary_status="ok", summary_raises=False,
+                 first_session_failure=None, summary_session_failure=None,
                  force_before_summary=False, force_during_setup=False, expired=False,
                  late_summary=False, invalid_summary=False, first_usage=None, summary_usage=None):
         control = {**self.control, "timeoutSeconds": 60}
@@ -178,13 +179,16 @@ class RoleStopTests(unittest.TestCase):
                 if force_before_summary:
                     handle.force_cancelled.set()
                 return result_for(native_request, resumable=resumable, native_gone=native_gone,
-                                  usage=first_usage)
+                                  usage=first_usage).model_copy(update={"session_record_failure": first_session_failure})
             if summary_raises:
-                raise OSError("native summary failed after launch")
+                error = OSError("native summary failed after launch")
+                error.session_record_failure = summary_session_failure or native_request.session_record_failure
+                raise error
             if late_summary:
                 late_now[0] = True
             return result_for(native_request, status=summary_status, session=summary_session,
-                              native_gone=summary_native_gone, usage=summary_usage)
+                              native_gone=summary_native_gone, usage=summary_usage).model_copy(
+                                  update={"session_record_failure": summary_session_failure or native_request.session_record_failure})
         def prepare(candidate, _module):
             if force_during_setup and candidate["privateRoot"] != str(self.invocation):
                 handle.force_cancelled.set()
@@ -314,6 +318,29 @@ class RoleStopTests(unittest.TestCase):
         self.assertFalse(calls[1][1], "the first interrupt must not cancel the summary run")
         self.assertEqual(result.identity, second.identity)
         self.assertTrue((self.invocation / "stop-summary").is_dir())
+
+    def test_summary_request_explicitly_carries_the_first_recording_failure(self):
+        failure = rc.SessionRecordFailure.from_payload({
+            "code": "session-record-write-failed",
+            "params": {"category": "OSError", "message": "file write unavailable", "truncated": False}})
+        result, code, calls = self._execute(first_session_failure=failure)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][0].session_record_failure, failure)
+        self.assertEqual(result.session_record_failure, failure)
+        self.assertEqual(code, 0)
+        self.assertEqual(result.end.status, "ok")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_synthesized_summary_result_keeps_its_own_recording_failure(self):
+        failure = rc.SessionRecordFailure.from_payload({
+            "code": "session-record-write-failed",
+            "params": {"category": "KeyError", "message": "display item", "truncated": False}})
+        result, code, calls = self._execute(summary_raises=True, summary_session_failure=failure)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result.session_record_failure, failure)
+        self.assertEqual(code, 1)
+        self.assertEqual(result.end.status, "unknown")
+        self.assertEqual(result.stop_evidence.native.group_state, "unknown")
 
     def test_unknown_native_stop_or_unbound_continuation_never_resumes(self):
         for resumable, gone, expired in ((False, True, False), (True, False, False),

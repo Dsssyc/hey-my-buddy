@@ -136,6 +136,19 @@ class ProjectorTests(unittest.TestCase):
 
 
 class SessionRunTests(NativeRunCase):
+    def test_projector_exceptions_preserve_completed_native_facts(self):
+        self.extra_agent_args = ["--prompt-mode", "final"]
+        for method in ("__init__", "start_prompt", "observe_notification", "close"):
+            with self.subTest(method=method):
+                with mock.patch.object(DshSessionProjector, method, side_effect=KeyError("display projection")):
+                    result = native_run.run(self.fast_request("prompt"), observer=lambda _: FEEDBACK_CONTINUE,
+                                            services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertIsNotNone(result.value)
+                self.assertTrue(result.evidence_refs)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
         request = self.fast_request('router input').model_copy(update={'session_record_path': None})
         with mock.patch.object(native_run, 'DshSessionProjector') as projector:

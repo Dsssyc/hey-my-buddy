@@ -94,26 +94,17 @@ def _record(connection, target):
 
 
 def _collect(connection, target):
+    from .macro_tasks import MEMBERS_SQL
+
     kind, identifier = _target(target)
-    if kind == 'macro-task':
-        if connection.execute('SELECT 1 FROM macro_tasks WHERE macro_task_id=?', (identifier,)).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown macro task', macroTaskId=target)
-        seed = 'SELECT run_id FROM workflow_runs WHERE macro_task_id=?'
-        seed_id = identifier
-    else:
-        root = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (identifier[4:],)).fetchone()
-        if (root is None or root['macro_task_id'] is not None or connection.execute(
-                'SELECT 1 FROM workflow_children WHERE child_task_id=?',(identifier[4:],)).fetchone() is not None
-                or connection.execute('SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=?',
-                                      (identifier[4:],)).fetchone() is not None):
-            raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
-        seed, seed_id = 'SELECT run_id FROM workflow_runs WHERE run_id=?', identifier[4:]
-    runs = {row[0] for row in connection.execute(f'''
-        WITH RECURSIVE members(run_id) AS (
-            {seed}
-            UNION SELECT c.child_task_id FROM workflow_children c JOIN members m ON c.parent_run_id=m.run_id
-            UNION SELECT l.owned_run_id FROM workflow_lead_tasks l JOIN members m ON l.lead_run_id=m.run_id
-        ) SELECT run_id FROM members''', (seed_id,))}
+    if kind == 'macro-task' and connection.execute(
+            'SELECT 1 FROM macro_tasks WHERE macro_task_id=?', (identifier,)).fetchone() is None:
+        raise BoardError('NOT_FOUND', 'Unknown macro task', macroTaskId=target)
+    members = connection.execute(
+        f'SELECT task_id,micro_task_run_id FROM ({MEMBERS_SQL}) WHERE group_id=?', (target,)).fetchall()
+    if not members and kind == 'micro-task-tree':
+        raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
+    runs = {row['micro_task_run_id'] for row in members if row['micro_task_run_id'] is not None}
     run_rows = _rows(connection, 'workflow_runs', 'run_id', runs)
     assert len(run_rows) == len(runs), 'Owned child has no workflow run'
     if kind == 'macro-task':

@@ -16,6 +16,8 @@ resumed usage counts only an extension of a reliable frozen record boundary.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import dataclasses
 import hashlib
 import json
@@ -974,191 +976,197 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
-    session = (DshSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
-               if request.session_record_path is not None else None)
-    # The cooperative inquiry bridge lives in this process because only it holds
-    # the native connection; it queues questions for the root's own checkpoint
-    # tool and journals delivered/answered state after the verified receipt.
-    inquiry_bridge: InquiryBridge | None = None
-    if micro_task and services.inquiry is not None:
-        inquiry_bridge = make_inquiry_bridge(
-            identity={"taskId": request.identity.task_id,
-                                        "attemptId": request.identity.attempt_id,
-                                        "generation": request.identity.generation,
-                                        "turnId": request.identity.turn_id},
-            journal_path=str(services.inquiry.get("resultsPath") or ""),
-            attention_path=services.mount.bridge.get("attentionPath"), live=services.live)
-        inquiry_bridge.start()
-    client: AcpClient | None = None
-    sessions: list[str] = []
-    evidence: RootTurnEvidence | None = None
-    raw_answer: str | None = None
-    correction_count = 0
-    drained: bool | None = None
-    pump: _Pump | None = None
+    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
+                                    failure=request.session_record_failure.to_payload()
+                                    if request.session_record_failure is not None else None)
+                      if request.session_record_path is not None else None)
+    with (session_record.protect() if session_record is not None else nullcontext()):
+        session = (session_record.project(DshSessionProjector, session_record)
+                   if session_record is not None else None)
+        # The cooperative inquiry bridge lives in this process because only it holds
+        # the native connection; it queues questions for the root's own checkpoint
+        # tool and journals delivered/answered state after the verified receipt.
+        inquiry_bridge: InquiryBridge | None = None
+        if micro_task and services.inquiry is not None:
+            inquiry_bridge = make_inquiry_bridge(
+                identity={"taskId": request.identity.task_id,
+                                            "attemptId": request.identity.attempt_id,
+                                            "generation": request.identity.generation,
+                                            "turnId": request.identity.turn_id},
+                journal_path=str(services.inquiry.get("resultsPath") or ""),
+                attention_path=services.mount.bridge.get("attentionPath"), live=services.live)
+            inquiry_bridge.start()
+        client: AcpClient | None = None
+        sessions: list[str] = []
+        evidence: RootTurnEvidence | None = None
+        raw_answer: str | None = None
+        correction_count = 0
+        drained: bool | None = None
+        pump: _Pump | None = None
 
-    def denied_count() -> int:
-        if client is None:
-            return 0
-        connection_facts = client.facts()
-        return len(connection_facts.get("deniedInteractions") or []) \
-            + len(connection_facts.get("permissionDecisions") or [])
+        def denied_count() -> int:
+            if client is None:
+                return 0
+            connection_facts = client.facts()
+            return len(connection_facts.get("deniedInteractions") or []) \
+                + len(connection_facts.get("permissionDecisions") or [])
 
-    def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
-        feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
-                                          raw_answer=raw, denied=denied_count()))
-        if not isinstance(feedback, RunFeedback):
-            raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
-        if feedback.action == "correct" and not settled:
-            raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
-        if feedback.action == "stop":
-            raise ObserverInterrupt()
-        return feedback
+        def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
+            feedback = observer(facts.mapping(tool_calls=tools.tool_calls, settled=settled,
+                                              raw_answer=raw, denied=denied_count()))
+            if not isinstance(feedback, RunFeedback):
+                raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
+            if feedback.action == "correct" and not settled:
+                raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
+            if feedback.action == "stop":
+                raise ObserverInterrupt()
+            return feedback
 
-    def fold(message: object) -> bool:
-        state.event_count += 1
+        def fold(message: object) -> bool:
+            state.event_count += 1
+            if session is not None:
+                session.record.project(session.observe_notification, message)
+            changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
+                                   evidence=evidence, inquiry_bridge=inquiry_bridge)
+            if pump is not None and pump.overflow:
+                raise NativeError("invalid-protocol", "the native update queue overflowed; frames were dropped")
+            return changed
+
+        def send_cancel(session: str | None) -> None:
+            if client is None or session is None or state.interrupt_requested:
+                return
+            state.interrupt_requested = True
+            state.interrupt_basis = ("observer-request" if state.observer_stopped
+                                     else "deadline-budget" if state.deadline_hit
+                                     else "session-cancel-notification")
+            try:
+                client.cancel(session, timeout=10.0)
+            except (AcpTimeout, AcpConnectionClosed, BoardError):
+                pass  # the stop collection still owns the group; the cancel is a transport fact
+
+        try:
+            if mode == "native-session":
+                # Eligibility confirms existence only: the private micro task binding this
+                # run itself wrote for that exact session, micro task, checkout and
+                # configuration. Nothing vendor-side is statically proven here, and
+                # a missing or foreign binding fails the run before any process
+                # exists, inside the same honest error result as every other stage.
+                try:
+                    binding = decode_json(_binding_path(native_root, previous).read_bytes())
+                except (OSError, ValueError):
+                    raise NativeError("native-resume-unavailable",
+                                      "the previous native session has no private micro task binding") from None
+                if not _valid_micro_task_binding(request, previous, binding):
+                    raise NativeError("native-resume-unavailable",
+                                      "the previous native session does not match this micro task, "
+                                      "checkout and buddy")
+            scope_rows, extra_env = _launch_policy(request)
+            state.scope_rows = scope_rows
+            state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
+            if request.tool_scope == "none" and not NONE_SCOPE_DISABLED_ROWS:
+                state.native_facts["toolScope"] = {"status": "unknown",
+                                                   "reason": "scope-configuration-unconfirmed",
+                                                   "disabledRows": [row["id"] for row in scope_rows]}
+            policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
+                      if micro_task else PermissionPolicy())
+            client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
+                                   invocation_root=invocation_root,
+                                   sessions_root=sessions_root,
+                                   scope_rows=scope_rows, extra_env=extra_env,
+                                   permission_policy=policy)
+            state.harness_version = _initialize(client, state.native_facts, deadline)
+            pump = _Pump(client.connection)
+            if micro_task:
+                mount = services.mount
+                evidence = RootTurnEvidence(
+                    "", mount.finish_tool, mount.bridge,
+                    checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
+                    on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id))
+                    if inquiry_bridge is not None else None,
+                    on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
+                    if inquiry_bridge is not None else None,
+                    validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
+                _micro_task_round(client=client, pump=pump, request=request, services=services,
+                                deadline=deadline, cancel=cancel, state=state, tools=tools,
+                                activity=activity, sessions=sessions, evidence=evidence,
+                                inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
+                                fold=fold, notify=notify, session=session,
+                                denied=denied_count, send_cancel=send_cancel)
+                if state.status != "unknown":
+                    state.status = "ok"
+                    notify(settled=True)
+            else:
+                raw_answer, correction_count = _final_message_rounds(
+                    client=client, pump=pump, request=request, deadline=deadline, cancel=cancel,
+                    state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
+                    fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel, session=session)
+                if state.status != "unknown":
+                    state.status = "ok"
+        except ObserverInterrupt:
+            state.status = "cancelled"
+            state.reason = "observer-interrupt"
+            state.observer_stopped = True
+            send_cancel(sessions[-1] if sessions else None)
+        except NativeError as error:
+            state.spawn_failure = getattr(error, "spawn_evidence", None)
+            state.status = "cancelled" if error.code in ("cancelled", "native-cancelled") else "error"
+            state.reason = error.code
+            state.error_text = str(error)[:512]
+            send_cancel(sessions[-1] if sessions else None)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            state.status = "error"
+            state.reason = "invalid-native-result"
+            state.error_text = "the native execution returned invalid or incomplete data"
+        finally:
+            drained = _collect(client=client, pump=pump, state=state, tools=tools, sessions=sessions,
+                               deadline=deadline, cancel=cancel, fold=fold, notify=notify)
+            if inquiry_bridge is not None:
+                # Closing before the process disappears keeps an after-end question
+                # honest instead of leaving a dangling observation; the reports are
+                # retained as evidence references whatever the run's end was.
+                inquiry_bridge.close()
+                state.inquiry = inquiry_bridge.report()
+                state.attention = inquiry_bridge.attention_report()
         if session is not None:
-            session.observe_notification(message)
-        changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
-                               evidence=evidence, inquiry_bridge=inquiry_bridge)
-        if pump is not None and pump.overflow:
-            raise NativeError("invalid-protocol", "the native update queue overflowed; frames were dropped")
-        return changed
-
-    def send_cancel(session: str | None) -> None:
-        if client is None or session is None or state.interrupt_requested:
-            return
-        state.interrupt_requested = True
-        state.interrupt_basis = ("observer-request" if state.observer_stopped
-                                 else "deadline-budget" if state.deadline_hit
-                                 else "session-cancel-notification")
-        try:
-            client.cancel(session, timeout=10.0)
-        except (AcpTimeout, AcpConnectionClosed, BoardError):
-            pass  # the stop collection still owns the group; the cancel is a transport fact
-
-    try:
-        if mode == "native-session":
-            # Eligibility confirms existence only: the private micro task binding this
-            # run itself wrote for that exact session, micro task, checkout and
-            # configuration. Nothing vendor-side is statically proven here, and
-            # a missing or foreign binding fails the run before any process
-            # exists, inside the same honest error result as every other stage.
+            session.record.project(session.close)
+        if sessions:
+            if state.record_baseline is not None:
+                record = resumed_session_record_facts(sessions_root, state.record_baseline)
+                record["bootstrapUpdates"] = state.bootstrap_updates
+                record["sessionIdentitySource"] = "resume-request"
+            else:
+                record = session_record_facts(sessions_root, sessions)
+        else:
+            record = None
+        continuation = None
+        completed = state.status == "ok" and state.provenance is not None
+        interrupted = (state.status == "cancelled" and state.interrupt_requested
+                       and state.prompt_stop_reason == "cancelled" and state.interrupted_turn_closed)
+        if micro_task and sessions and (completed or interrupted) and state.stop.get("shutdown") is True:
+            # The reusable binding needs the complete native turn, its verified
+            # provenance or acknowledged cancellation, plus the really-gone group.
+            session_id = sessions[-1]
+            expected = _micro_task_binding(request, session_id)
             try:
-                binding = decode_json(_binding_path(native_root, previous).read_bytes())
-            except (OSError, ValueError):
-                raise NativeError("native-resume-unavailable",
-                                  "the previous native session has no private micro task binding") from None
-            if not _valid_micro_task_binding(request, previous, binding):
-                raise NativeError("native-resume-unavailable",
-                                  "the previous native session does not match this micro task, "
-                                  "checkout and buddy")
-        scope_rows, extra_env = _launch_policy(request)
-        state.scope_rows = scope_rows
-        state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
-        if request.tool_scope == "none" and not NONE_SCOPE_DISABLED_ROWS:
-            state.native_facts["toolScope"] = {"status": "unknown",
-                                               "reason": "scope-configuration-unconfirmed",
-                                               "disabledRows": [row["id"] for row in scope_rows]}
-        policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
-                  if micro_task else PermissionPolicy())
-        client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
-                               invocation_root=invocation_root,
-                               sessions_root=sessions_root,
-                               scope_rows=scope_rows, extra_env=extra_env,
-                               permission_policy=policy)
-        state.harness_version = _initialize(client, state.native_facts, deadline)
-        pump = _Pump(client.connection)
-        if micro_task:
-            mount = services.mount
-            evidence = RootTurnEvidence(
-                "", mount.finish_tool, mount.bridge,
-                checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
-                on_delivery=(lambda receipt, call_id: inquiry_bridge.deliver_inquiries(receipt, call_id))
-                if inquiry_bridge is not None else None,
-                on_answer=(lambda receipt, call_id: inquiry_bridge.record_answer(receipt, call_id))
-                if inquiry_bridge is not None else None,
-                validate_outcome=services.validate_outcome, mounted_tools=mount.bare_tools)
-            _micro_task_round(client=client, pump=pump, request=request, services=services,
-                            deadline=deadline, cancel=cancel, state=state, tools=tools,
-                            activity=activity, sessions=sessions, evidence=evidence,
-                            inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
-                            fold=fold, notify=notify, session=session,
-                            denied=denied_count, send_cancel=send_cancel)
-            if state.status != "unknown":
-                state.status = "ok"
-                notify(settled=True)
-        else:
-            raw_answer, correction_count = _final_message_rounds(
-                client=client, pump=pump, request=request, deadline=deadline, cancel=cancel,
-                state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
-                fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel, session=session)
-            if state.status != "unknown":
-                state.status = "ok"
-    except ObserverInterrupt:
-        state.status = "cancelled"
-        state.reason = "observer-interrupt"
-        state.observer_stopped = True
-        send_cancel(sessions[-1] if sessions else None)
-    except NativeError as error:
-        state.spawn_failure = getattr(error, "spawn_evidence", None)
-        state.status = "cancelled" if error.code in ("cancelled", "native-cancelled") else "error"
-        state.reason = error.code
-        state.error_text = str(error)[:512]
-        send_cancel(sessions[-1] if sessions else None)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-        state.status = "error"
-        state.reason = "invalid-native-result"
-        state.error_text = "the native execution returned invalid or incomplete data"
-    finally:
-        drained = _collect(client=client, pump=pump, state=state, tools=tools, sessions=sessions,
-                           deadline=deadline, cancel=cancel, fold=fold, notify=notify)
-        if inquiry_bridge is not None:
-            # Closing before the process disappears keeps an after-end question
-            # honest instead of leaving a dangling observation; the reports are
-            # retained as evidence references whatever the run's end was.
-            inquiry_bridge.close()
-            state.inquiry = inquiry_bridge.report()
-            state.attention = inquiry_bridge.attention_report()
-    if session is not None:
-        session.close()
-    if sessions:
-        if state.record_baseline is not None:
-            record = resumed_session_record_facts(sessions_root, state.record_baseline)
-            record["bootstrapUpdates"] = state.bootstrap_updates
-            record["sessionIdentitySource"] = "resume-request"
-        else:
-            record = session_record_facts(sessions_root, sessions)
-    else:
-        record = None
-    continuation = None
-    completed = state.status == "ok" and state.provenance is not None
-    interrupted = (state.status == "cancelled" and state.interrupt_requested
-                   and state.prompt_stop_reason == "cancelled" and state.interrupted_turn_closed)
-    if micro_task and sessions and (completed or interrupted) and state.stop.get("shutdown") is True:
-        # The reusable binding needs the complete native turn, its verified
-        # provenance or acknowledged cancellation, plus the really-gone group.
-        session_id = sessions[-1]
-        expected = _micro_task_binding(request, session_id)
-        try:
-            binding_file = _binding_path(native_root, session_id)
-            try:
-                private_json(binding_file, expected, exclusive=True)
-            except FileExistsError:
-                if decode_json(binding_file.read_bytes()) != expected:
-                    raise ValueError("the existing DSH session binding differs")
-        except (OSError, ValueError, BoardError):
-            continuation = ContinuationFacts(resumable=False)
-        else:
-            continuation = ContinuationFacts(resumable=True)
-    return _build_result(request, state=state, tools=tools, activity=activity, client=client,
-                         sessions=sessions, evidence=evidence, raw_answer=raw_answer,
-                         correction_count=correction_count, drained=drained,
-                         invocation_root=invocation_root, record=record,
-                         stderr_mirror=services.native_stderr if micro_task else None,
-                         continuation=continuation).model_copy(
-                             update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                                     if session is not None and session.record.failure is not None else None})
+                binding_file = _binding_path(native_root, session_id)
+                try:
+                    private_json(binding_file, expected, exclusive=True)
+                except FileExistsError:
+                    if decode_json(binding_file.read_bytes()) != expected:
+                        raise ValueError("the existing DSH session binding differs")
+            except (OSError, ValueError, BoardError):
+                continuation = ContinuationFacts(resumable=False)
+            else:
+                continuation = ContinuationFacts(resumable=True)
+        return _build_result(request, state=state, tools=tools, activity=activity, client=client,
+                             sessions=sessions, evidence=evidence, raw_answer=raw_answer,
+                             correction_count=correction_count, drained=drained,
+                             invocation_root=invocation_root, record=record,
+                             stderr_mirror=services.native_stderr if micro_task else None,
+                             continuation=continuation).model_copy(
+                                 update={"session_record_failure": SessionRecordFailure(**session_record.failure)
+                                         if session_record is not None and session_record.failure is not None
+                                         else request.session_record_failure})
 
 
 # -- the session/prompt stages shared by both carriers -------------------------------
@@ -1225,7 +1233,7 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     deadline and the role's feedback while it streams.
     """
     if session is not None:
-        session.start_prompt(session_id, input_text,
+        session.record.project(session.start_prompt, session_id, input_text,
                              f"{session_id}/{time.monotonic_ns()}")
     state.root_model_activity = False
     activity.note_prompt()

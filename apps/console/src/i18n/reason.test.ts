@@ -8,6 +8,7 @@ const codes = JSON.parse(readFileSync("../../src/hey_my_buddy/protocol/reason-co
 const samples: Record<string, unknown> = {
   access: "read-only", adapter: "codex", bound: "unavailable", buddy: { harness: "codex", provider: "openai", model: "sample", effort: "high" },
   buddyId: "buddy-1", bytes: 12345, catalogReadAt: "2026-10-18T01:02:03Z", cause: { code: "harness.not-found", params: { operation: "probe" } },
+  category: "OSError", message: "file write unavailable", truncated: false,
   collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, disposition: "completed", enabled: false,
   errorCode: "SAMPLE", harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
   missingCapabilities: ["decision"], operation: "probe", paths: ["src/first.ts", "src/second.ts"], recordId: "record-1",

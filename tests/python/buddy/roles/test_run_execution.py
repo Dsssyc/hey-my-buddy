@@ -259,13 +259,12 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         request = self._request("none")
         result = self._result(request, with_ref=False, status="ok").model_copy(update={
             "session_record_failure": rc.SessionRecordFailure(
-                code="session-record-write-failed", message="storage unavailable", cause="OperationalError")})
+                code="session-record-write-failed", params={"category": "OSError", "message": "file write unavailable"})})
         payload = run_execution._fast_result(result, request,
                                              {"stopReason": None, "elapsedMs": 1})
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["sessionRecordFailure"], {
-            "code": "session-record-write-failed", "message": "storage unavailable",
-            "cause": "OperationalError"})
+            "code": "session-record-write-failed", "params": {"category": "OSError", "message": "file write unavailable", "truncated": False}})
 
     def test_a_changed_evidence_reference_is_refused(self):
         request = self._request("none")

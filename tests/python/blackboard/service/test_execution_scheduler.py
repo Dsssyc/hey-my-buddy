@@ -85,9 +85,9 @@ class ExecutionObservationTests(unittest.TestCase):
 
     def test_failed_creation_releases_attempt_and_next_admission_runs(self):
         with tempfile.TemporaryDirectory() as root:
-            first = {"attempt": {"attemptId": "attempt-1"},
+            first = {"sessionRecordPath": None, "attempt": {"attemptId": "attempt-1"},
                      "task": {"taskId": "task-1", "spec": {"adapter": "command"}}}
-            second = {"attempt": {"attemptId": "attempt-2"},
+            second = {"sessionRecordPath": None, "attempt": {"attemptId": "attempt-2"},
                       "task": {"taskId": "task-2", "spec": {"adapter": "command"}}}
             store = Mock(directory=Path(root))
             service = Mock(store=store, control={})
@@ -438,7 +438,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             service = Mock(store=store, control={})
             service.admit_execution.return_value = {"claim": {
-                "task": {"taskId": "task", "spec": {"adapter": "command"}},
+                "sessionRecordPath": None, "task": {"taskId": "task", "spec": {"adapter": "command"}},
                 "attempt": {"attemptId": "attempt"}}}
             scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             error = OSError("ownership failed after suspended child creation")
@@ -451,14 +451,37 @@ class ExecutionObservationTests(unittest.TestCase):
                 "attempt", stopped_evidence={"kind": "creator-reaped", "exitCode": 1})
             store.release_execution.assert_not_called()
 
+    def test_launch_uses_admitted_record_path_without_reading_the_database(self):
+        claim = {"task": {"taskId": "task"}, "attempt": {"attemptId": "attempt"},
+                 "sessionRecordPath": "/private/fixture/session.jsonl"}
+        store = Mock(directory=Path("/private/fixture"))
+        service = Mock(store=store, control={})
+        service.admit_execution.side_effect = [{"claim": claim}, {"claim": None}]
+        scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.launch_execution") as launch, \
+                patch.object(scheduler, "_start_observer"):
+            scheduler._admit_available()
+        self.assertEqual(launch.call_args.kwargs["session_record_path"], claim["sessionRecordPath"])
+        store.db.read.assert_not_called()
+
 
 class SessionRecordGroupingTests(WorkflowTestCase):
+    def test_admission_has_no_record_path_for_command_or_ungrouped_execution(self):
+        board = self.board()
+        for adapter in ('command', 'dsh'):
+            claim = {'task': {'taskId': 'ungrouped', 'spec': {'adapter': adapter}},
+                     'attempt': {'attemptId': 'attempt'}}
+            with self.subTest(adapter=adapter), \
+                    patch.object(board.store, 'admit_execution', return_value={'claim': claim}), \
+                    patch.object(board.store.workflow, 'prepare_continuation_workspace'):
+                admitted = board.service.admit_execution('fixture-nonce-00000000000000000')['claim']
+            self.assertIsNone(admitted['sessionRecordPath'])
+
     def test_launch_path_uses_the_consoles_group_for_macro_standalone_and_helper(self):
         from hey_my_buddy.blackboard.tasks.session_content import identity as console_identity
         from hey_my_buddy.private_dirs import session_record_path
 
         board = self.board()
-        scheduler = ExecutionScheduler(Mock(store=board.store), live_registry=Mock(spec=LiveRegistry))
         for named in (True, False):
             with self.subTest(named=named):
                 root = self.submit(board, request_id=f"session-group-{named}", kind="worktree",
@@ -469,8 +492,8 @@ class SessionRecordGroupingTests(WorkflowTestCase):
                 group = console_identity(board.store, claim["task"]["taskId"],
                                          claim["attempt"]["attemptId"])["group_id"]
                 self.assertEqual(group, root.get("macroTaskId") or f"run:{root['runId']}")
-                self.assertEqual(scheduler._session_record_path(claim), session_record_path(
-                    board.store.directory, group, claim["attempt"]["attemptId"]))
+                self.assertEqual(claim["sessionRecordPath"], str(session_record_path(
+                    board.store.directory, group, claim["attempt"]["attemptId"])))
 
                 self.finish_turn(board, {"claim": claim}, disposition="assistance")
                 view = board.call("workflow_get", {"runId": root["runId"]})
@@ -482,6 +505,6 @@ class SessionRecordGroupingTests(WorkflowTestCase):
                 child_id = decision["children"][0]["taskId"]
                 helper = self.claim(board, run_id=child_id,
                                     claim_request_id=f"session-child-claim-{named}")["claim"]
-                self.assertEqual(scheduler._session_record_path(helper), session_record_path(
-                    board.store.directory, group, helper["attempt"]["attemptId"]))
+                self.assertEqual(helper["sessionRecordPath"], str(session_record_path(
+                    board.store.directory, group, helper["attempt"]["attemptId"])))
                 self.finish_turn(board, {"claim": helper}, disposition="assistance")

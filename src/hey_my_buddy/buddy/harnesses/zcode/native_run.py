@@ -25,6 +25,8 @@ through this run's narrow session services.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import dataclasses
 import hashlib
 import os
@@ -787,7 +789,7 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
 
 def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:
     if session is not None:
-        session.observe_notification(message)
+        session.record.project(session.observe_notification, message)
 
 
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
@@ -930,7 +932,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     if before_send is not None:
         before_send(session_id)
     if session is not None:
-        session.start_prompt(session_id, input_id, input_text, request.identity.invocation_id)
+        session.record.project(session.start_prompt, session_id, input_id, input_text, request.identity.invocation_id)
     state.model_started = True
     accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                 "content": input_text})
@@ -1118,153 +1120,159 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
-    session = (ZcodeSessionProjector(SessionRecord(request.session_record_path, request.identity.attempt_id))
-               if request.session_record_path is not None else None)
-    outcome = _CarrierOutcome()
-    spawn: _Spawn | None = None
-    owned_spawn: list = []
-    drained: bool | None = None
+    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
+                                    failure=request.session_record_failure.to_payload()
+                                    if request.session_record_failure is not None else None)
+                      if request.session_record_path is not None else None)
+    with (session_record.protect() if session_record is not None else nullcontext()):
+        session = (session_record.project(ZcodeSessionProjector, session_record)
+                   if session_record is not None else None)
+        outcome = _CarrierOutcome()
+        spawn: _Spawn | None = None
+        owned_spawn: list = []
+        drained: bool | None = None
 
-    def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
-        facts_snapshot = facts.mapping(tool_calls=tools.tool_calls if tools is not None else 0,
-                                       settled=settled, raw_answer=raw)
-        feedback = observer(facts_snapshot)
-        if not isinstance(feedback, RunFeedback):
-            raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
-        if feedback.action == "correct" and not settled:
-            raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
-        if feedback.action == "stop":
-            raise ObserverInterrupt()
-        return feedback
+        def notify(*, settled: bool = False, raw: str | None = None) -> RunFeedback:
+            facts_snapshot = facts.mapping(tool_calls=tools.tool_calls if tools is not None else 0,
+                                           settled=settled, raw_answer=raw)
+            feedback = observer(facts_snapshot)
+            if not isinstance(feedback, RunFeedback):
+                raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
+            if feedback.action == "correct" and not settled:
+                raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
+            if feedback.action == "stop":
+                raise ObserverInterrupt()
+            return feedback
 
-    feedback_due = [False]
+        feedback_due = [False]
 
-    def attention_sink(record_item: dict) -> None:
-        # Record the fact first; the pump still answers the request itself
-        # right after this returns. The role's answer to the retained fact is
-        # taken at the driver's next pump boundary — before any further native
-        # waiting — so a stop takes effect at once without bypassing the
-        # recorder or the refusal I/O.
-        facts.denied.append(record_item)
-        if outcome.inquiry_bridge is not None:
-            outcome.inquiry_bridge.note_attention(record_item)
-        feedback_due[0] = True
+        def attention_sink(record_item: dict) -> None:
+            # Record the fact first; the pump still answers the request itself
+            # right after this returns. The role's answer to the retained fact is
+            # taken at the driver's next pump boundary — before any further native
+            # waiting — so a stop takes effect at once without bypassing the
+            # recorder or the refusal I/O.
+            facts.denied.append(record_item)
+            if outcome.inquiry_bridge is not None:
+                outcome.inquiry_bridge.note_attention(record_item)
+            feedback_due[0] = True
 
-    def dispatch_feedback() -> None:
-        # NativeConnection invokes this after every pump step, including the
-        # steps inside RPC reply waits. Its reverse-request refusal is already
-        # sent, and the role can stop before any further native waiting.
-        if feedback_due[0]:
-            feedback_due[0] = False
-            notify()
+        def dispatch_feedback() -> None:
+            # NativeConnection invokes this after every pump step, including the
+            # steps inside RPC reply waits. Its reverse-request refusal is already
+            # sent, and the role can stop before any further native waiting.
+            if feedback_due[0]:
+                feedback_due[0] = False
+                notify()
 
-    def unknown_sink(label: str) -> None:
-        facts.note_unknown(label)
-        feedback_due[0] = True
+        def unknown_sink(label: str) -> None:
+            facts.note_unknown(label)
+            feedback_due[0] = True
 
-    try:
-        spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
-                                  deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=no_tool,
-                                  owned=owned_spawn)
-        connection = spawn.connection
-        connection.on_unknown = unknown_sink
-        connection.attention = attention_sink
-        connection.after_pump = dispatch_feedback
-        connection.call("runtime/capabilities", {})
-        workspace = {"workspacePath": request.cwd, "workspaceKey": request.cwd}
-
-        if not completion_carrier:
-            _final_message_rounds(connection=connection, request=request, spawn=spawn,
-                                  workspace=workspace, no_tool=no_tool, facts=facts,
-                                  classifier=classifier, state=state, tools=tools,
-                                  notify=notify, outcome=outcome, session=session)
-        else:
-            _micro_task_turn(connection=connection, request=request, services=services, spawn=spawn,
-                           workspace=workspace, invocation_root=invocation_root, native_root=native_root,
-                           facts=facts, classifier=classifier, state=state, tools=tools,
-                           notify=notify, outcome=outcome, session=session)
-    except ObserverInterrupt:
-        state.status = "cancelled"
-        state.reason = "observer-interrupt"
-        state.observer_stopped = True
-        outcome.record = None
-    except (NativeError, VersionShutdownError) as error:
-        state.status = "cancelled" if error.code == "cancelled" else "error"
-        state.reason = error.code
-        state.error_text = str(error)
-        if error.code == "native-disconnected":
-            state.failure_kind = "transport"
-        # Whitelisted native failure attribution (only the exported turn.failed
-        # event supplies it) is observable on the failed result; it never
-        # changes the status, code or failureKind, so this stays a harness
-        # error distinct from a deadline, a user cancel or a transport break.
-        failure = getattr(error, "failure", None)
-        if isinstance(failure, dict):
-            state.native_failure = failure
-            classified = quota_failure(failure)
-            if classified is not None:
-                state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
-                                       "observedAt": utc_now()}
-        # A failed turn still retains its native observations: the bounded read is
-        # optional, so it can never turn this failure into another one.
-        if outcome.attempt_usage is not None and spawn is not None:
-            outcome.attempt_usage.capture_final(spawn.connection)
-        outcome.record = None
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-        state.status = "error"
-        state.reason = "invalid-native-result"
-        state.error_text = "the native execution returned invalid or incomplete data"
-        outcome.record = None
-    finally:
-        drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
-                                   tools=tools, classifier=classifier, facts=facts, notify=notify,
-                                   completion_carrier=completion_carrier, outcome=outcome, session=session)
-    if session is not None:
-        session.close()
-    if state.quota_failure is not None:
-        usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
-        has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
-                                        for key in ("outputTokens", "reasoningOutputTokens")))
-        has_text = bool(outcome.attempt_usage and outcome.attempt_usage.last_assistant_message)
-        incomplete = (drained is not True or state.drain_error is not None
-                      or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
-                      or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
-                                                        or outcome.attempt_usage.message_truncated
-                                                        or outcome.attempt_usage.delta_conflict)))
-        state.quota_failure.update(
-            resetsAt=None,
-            rejectionPhase="unknown" if incomplete else
-            "during-model" if state.root_model_activity or has_output or has_text else "before-model")
-    if (completion_carrier and state.status == "ok" and state.shutdown
-            and state.exit_code == 0 and outcome.record is not None
-            and outcome.binding_path is not None and outcome.session_id is not None):
         try:
-            expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
-                        "cwd": request.cwd, "buddy": outcome.resolved}
+            spawn = _spawn_app_server(cwd=request.cwd, invocation_root=invocation_root, native_root=native_root,
+                                      deadline=deadline, cancel=cancel, stderr_path=stderr_path, no_tools=no_tool,
+                                      owned=owned_spawn)
+            connection = spawn.connection
+            connection.on_unknown = unknown_sink
+            connection.attention = attention_sink
+            connection.after_pump = dispatch_feedback
+            connection.call("runtime/capabilities", {})
+            workspace = {"workspacePath": request.cwd, "workspaceKey": request.cwd}
+
+            if not completion_carrier:
+                _final_message_rounds(connection=connection, request=request, spawn=spawn,
+                                      workspace=workspace, no_tool=no_tool, facts=facts,
+                                      classifier=classifier, state=state, tools=tools,
+                                      notify=notify, outcome=outcome, session=session)
+            else:
+                _micro_task_turn(connection=connection, request=request, services=services, spawn=spawn,
+                               workspace=workspace, invocation_root=invocation_root, native_root=native_root,
+                               facts=facts, classifier=classifier, state=state, tools=tools,
+                               notify=notify, outcome=outcome, session=session)
+        except ObserverInterrupt:
+            state.status = "cancelled"
+            state.reason = "observer-interrupt"
+            state.observer_stopped = True
+            outcome.record = None
+        except (NativeError, VersionShutdownError) as error:
+            state.status = "cancelled" if error.code == "cancelled" else "error"
+            state.reason = error.code
+            state.error_text = str(error)
+            if error.code == "native-disconnected":
+                state.failure_kind = "transport"
+            # Whitelisted native failure attribution (only the exported turn.failed
+            # event supplies it) is observable on the failed result; it never
+            # changes the status, code or failureKind, so this stays a harness
+            # error distinct from a deadline, a user cancel or a transport break.
+            failure = getattr(error, "failure", None)
+            if isinstance(failure, dict):
+                state.native_failure = failure
+                classified = quota_failure(failure)
+                if classified is not None:
+                    state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
+                                           "observedAt": utc_now()}
+            # A failed turn still retains its native observations: the bounded read is
+            # optional, so it can never turn this failure into another one.
+            if outcome.attempt_usage is not None and spawn is not None:
+                outcome.attempt_usage.capture_final(spawn.connection)
+            outcome.record = None
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            state.status = "error"
+            state.reason = "invalid-native-result"
+            state.error_text = "the native execution returned invalid or incomplete data"
+            outcome.record = None
+        finally:
+            drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
+                                       tools=tools, classifier=classifier, facts=facts, notify=notify,
+                                       completion_carrier=completion_carrier, outcome=outcome, session=session)
+        if session is not None:
+            session.record.project(session.close)
+        if state.quota_failure is not None:
+            usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
+            has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
+                                            for key in ("outputTokens", "reasoningOutputTokens")))
+            has_text = bool(outcome.attempt_usage and outcome.attempt_usage.last_assistant_message)
+            incomplete = (drained is not True or state.drain_error is not None
+                          or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
+                          or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
+                                                            or outcome.attempt_usage.message_truncated
+                                                            or outcome.attempt_usage.delta_conflict)))
+            state.quota_failure.update(
+                resetsAt=None,
+                rejectionPhase="unknown" if incomplete else
+                "during-model" if state.root_model_activity or has_output or has_text else "before-model")
+        if (completion_carrier and state.status == "ok" and state.shutdown
+                and state.exit_code == 0 and outcome.record is not None
+                and outcome.binding_path is not None and outcome.session_id is not None):
             try:
-                private_json(outcome.binding_path, expected, exclusive=True)
-            except FileExistsError:
-                if decode_strict_json(outcome.binding_path.read_bytes()) != expected:
-                    raise ValueError("the existing ZCode session binding differs")
-        except (OSError, ValueError, BoardError):
-            outcome.binding_save_failed = True
-    tool_package = None
-    if state.session_opened:
-        # A stream is complete only when it was read to its EOF with the owned
-        # group confirmed stopped — the same rule for both carriers; anything
-        # less is unproven, never complete by assumption.
-        stream_complete = bool(state.status == "ok" and state.shutdown
-                               and drained is True
-                               and not tools.close_pending)
-        exclude = outcome.evidence.verified_delivery() if outcome.evidence is not None else frozenset()
-        tool_package = tools.finish(stream_complete, exclude_calls=exclude)
-    evidence_refs = _evidence_refs(invocation_root=invocation_root, stderr_path=stderr_path,
-                                   state=state, facts=facts, record=outcome.record)
-    return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
-                          outcome=outcome, completion_carrier=completion_carrier, drained=drained,
-                          evidence_refs=evidence_refs, tool_package=tool_package, facts=facts).model_copy(
-                              update={"session_record_failure": SessionRecordFailure(**session.record.failure)
-                                      if session is not None and session.record.failure is not None else None})
+                expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
+                            "cwd": request.cwd, "buddy": outcome.resolved}
+                try:
+                    private_json(outcome.binding_path, expected, exclusive=True)
+                except FileExistsError:
+                    if decode_strict_json(outcome.binding_path.read_bytes()) != expected:
+                        raise ValueError("the existing ZCode session binding differs")
+            except (OSError, ValueError, BoardError):
+                outcome.binding_save_failed = True
+        tool_package = None
+        if state.session_opened:
+            # A stream is complete only when it was read to its EOF with the owned
+            # group confirmed stopped — the same rule for both carriers; anything
+            # less is unproven, never complete by assumption.
+            stream_complete = bool(state.status == "ok" and state.shutdown
+                                   and drained is True
+                                   and not tools.close_pending)
+            exclude = outcome.evidence.verified_delivery() if outcome.evidence is not None else frozenset()
+            tool_package = tools.finish(stream_complete, exclude_calls=exclude)
+        evidence_refs = _evidence_refs(invocation_root=invocation_root, stderr_path=stderr_path,
+                                       state=state, facts=facts, record=outcome.record)
+        return _finish_result(request=request, spawn=spawn, state=state, owned_spawn=owned_spawn,
+                              outcome=outcome, completion_carrier=completion_carrier, drained=drained,
+                              evidence_refs=evidence_refs, tool_package=tool_package, facts=facts).model_copy(
+                                  update={"session_record_failure": SessionRecordFailure(**session_record.failure)
+                                          if session_record is not None and session_record.failure is not None
+                                          else request.session_record_failure})
 
 
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,

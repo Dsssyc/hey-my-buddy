@@ -166,6 +166,19 @@ class ProjectorTests(unittest.TestCase):
 
 
 class RunRecordTests(NativeRunCase):
+    def test_projector_exceptions_preserve_completed_native_facts(self):
+        for method in ("__init__", "start_prompt", "record_input", "observe_frame", "close"):
+            with self.subTest(method=method):
+                request = self.request()
+                with mock.patch.object(ClaudeSessionProjector, method, side_effect=KeyError("display projection")):
+                    result = self.execute(request)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertIsNotNone(result.value)
+                self.assertIsNotNone(result.tool_evidence)
+                self.assertIsNotNone(result.last_assistant_message)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
         request = self.request().model_copy(update={"session_record_path": None})
         with mock.patch("hey_my_buddy.buddy.harnesses.claude.native_run.ClaudeSessionProjector") as projector:
@@ -254,7 +267,7 @@ class RunRecordTests(NativeRunCase):
                 self.assertEqual(result.end.status, "ok")
                 self.assertEqual(result.session_record_failure.code, "session-record-write-failed")
                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                self.assertEqual(result.session_record_failure.message, str(error))
+                self.assertEqual(result.session_record_failure.params.message, str(error))
                 if method == "close":
                     self.assertIsNotNone(result.value)
                     self.assertIsNotNone(result.tool_evidence)

@@ -173,7 +173,8 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             self.assertGreater(group['activity_seq'], 0)
         self.register(board)
         claim = self.claim(board)
-        text = json.dumps(claim)
+        text = json.dumps({key: value for key, value in claim["claim"].items()
+                           if key != "sessionRecordPath"})
         for hidden in ('Human group sentinel', 'Human run sentinel', identifier):
             self.assertNotIn(hidden, text)
 
@@ -685,11 +686,12 @@ class MacroTaskReadTests(WorkflowTestCase):
     def test_lead_owned_waits_count_as_active_and_timeline_projects_ownership(self):
         board = self.board()
         self.register(board)
-        lead = self.submit(board, request_id='timeline-lead-owner', cwd=str(self.workdir('timeline-lead-owner')))
+        lead = self.submit(board, request_id='timeline-lead-owner', cwd=str(self.workdir('timeline-lead-owner')),
+                           macroTask={'title': 'Lead owned work'})
         self.finish_turn(board, self.claim(board, run_id=lead['runId'], claim_request_id='timeline-lead-claim'))
         root = self.submit(board, request_id='timeline-owned-root', kind='worktree',
-                           cwd=str(self.workdir('timeline-owned-root')),
-                           macroTask={'title': 'Lead owned work'})
+                           cwd=str(self.workdir('timeline-lead-owner')),
+                           macroTaskId=lead['macroTaskId'])
         self.finish_turn(board, self.claim(board, run_id=root['runId'], claim_request_id='timeline-root-claim'),
                          disposition='assistance')
         view = board.call('workflow_get', {'runId': root['runId']})

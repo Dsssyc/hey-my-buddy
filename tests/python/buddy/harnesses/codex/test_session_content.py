@@ -337,18 +337,25 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertEqual(linked.failure['code'], 'session-record-write-failed')
         self.assertEqual(notifications(self.record.path)[-1]['sessionId'], 'attempt')
 
-    def test_io_failure_disables_future_writes_and_same_path_writer(self):
+    def test_io_failure_disables_future_writes_and_explicitly_continued_writer(self):
         self.frame("item/agentMessage/delta", itemId="message", delta="pending")
         with patch.object(self.record, '_open', side_effect=OSError('controlled write failure')):
             self.record.close()
             self.projector.flush()
-        self.assertEqual(self.record.failure['message'], 'controlled write failure')
+        self.assertEqual(self.record.failure['params']['message'], 'controlled write failure')
         count = len(notifications(self.record.path))
         self.record.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='ignored')))
         self.assertEqual(len(notifications(self.record.path)), count)
-        reopened = SessionRecord(self.record.path, 'attempt')
+        reopened = SessionRecord(self.record.path, 'attempt', failure=self.record.failure)
+        reopened.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='ignored')))
         self.assertEqual(reopened.failure, self.record.failure)
         self.assertIsNone(reopened._fd)
+        self.assertEqual(len(notifications(self.record.path)), count)
+        independent = SessionRecord(self.record.path, 'attempt')
+        independent.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='fresh run')))
+        independent.close()
+        self.assertIsNone(independent.failure)
+        self.assertEqual(len(notifications(self.record.path)), count + 1)
 
 
 class SessionRecordRecoveryTests(unittest.TestCase):

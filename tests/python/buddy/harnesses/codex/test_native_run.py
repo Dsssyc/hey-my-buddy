@@ -872,6 +872,59 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_escaping_native_failure_carries_recorded_session_failure(self):
+        native_error = RuntimeError("fatal native result failure")
+        with mock.patch.object(native_run.CodexSessionProjector, "observe_notification",
+                               side_effect=KeyError("display failure")), \
+             mock.patch.object(native_run, "_build_result", side_effect=native_error):
+            with self.assertRaises(RuntimeError) as raised:
+                self.worker_run("usage")
+        self.assertIs(raised.exception, native_error)
+        self.assertEqual(native_error.session_record_failure.params.category, "KeyError")
+        self.assertEqual(native_error.session_record_failure.params.message, "'display failure'")
+
+    def test_session_projection_exceptions_preserve_result_usage_checkpoint_and_stop(self):
+        for method in ("__init__", "record_input", "observe_root", "observe_notification", "flush", "close"):
+            with self.subTest(method=method):
+                with mock.patch.object(native_run.CodexSessionProjector, method,
+                                       side_effect=KeyError("display projection")):
+                    result = self.worker_run("usage")
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+                self.assertEqual(json.loads(result.value.raw)["outcome"]["disposition"], "completed")
+                self.assertGreater(result.usage.value["inputTokens"], 0)
+                checkpoint = native_run._read_evidence_ref(result, "native-checkpoint")
+                self.assertEqual(checkpoint["nativeTurnStatus"], "completed")
+                self.assertIsNotNone(result.last_assistant_message)
+
+    def test_explicit_session_failure_disables_followup_run_without_path_cache(self):
+        self.set_case("usage")
+        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="fixture micro task task")
+        with mock.patch.object(native_run.CodexSessionProjector, "record_input", side_effect=KeyError("first")):
+            first = run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                        services=self.worker_services(), cancelled=lambda: False)
+        continued = request.model_copy(update={
+            "session_record_failure": first.session_record_failure,
+            "identity": request.identity.model_copy(update={"invocation_id": "continued"}),
+            "private_state": request.private_state.model_copy(update={"invocation_root": str(self.base / "continued")}),
+        })
+        with mock.patch.object(native_run, "CodexSessionProjector") as projector:
+            second = run(continued, observer=lambda _: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(second.session_record_failure, first.session_record_failure)
+        fresh = request.model_copy(update={
+            "identity": request.identity.model_copy(update={"invocation_id": "independent"}),
+            "private_state": request.private_state.model_copy(update={"invocation_root": str(self.base / "independent")}),
+        })
+        with mock.patch.object(native_run.CodexSessionProjector, "record_input", side_effect=ValueError("new")):
+            independent = run(fresh, observer=lambda _: FEEDBACK_CONTINUE,
+                              services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(independent.end.status, "ok", independent.end.message)
+        self.assertEqual(independent.session_record_failure.params.category, "ValueError")
+
     def test_no_record_path_skips_projection_and_keeps_result_usage_checkpoint_and_stop(self):
         self.set_case('usage')
         request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA,
@@ -911,7 +964,7 @@ class WorkerSeamTests(CodexSeamCase):
             result = self.worker_run('usage')
         self.assertEqual(result.end.status, 'ok', result.end.message)
         self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
-        self.assertEqual(result.session_record_failure.message, 'database or disk is full')
+        self.assertEqual(result.session_record_failure.params.message, 'database or disk is full')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
         self.assertGreater(result.usage.value['inputTokens'], 0)
