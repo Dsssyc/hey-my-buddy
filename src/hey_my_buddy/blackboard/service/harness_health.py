@@ -119,7 +119,13 @@ class HarnessHealth:
             if row['revision'] != revision:
                 return row
             db.execute("UPDATE harness_health SET status='unhealthy',record_json=?,expires_at=NULL,scan_after=NULL,revision=revision+1 WHERE adapter=?", (canonical_json({**row, "reasonCode": reason, "available": False}), name))
-            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE adapter=?', (reason, name))
+            # ADR-027: a health failure must not erase catalog facts. Rows a
+            # confirmed absence or an effort retirement already grounded stay
+            # with their own reason; health only grounds the rest.
+            from ..catalog.catalog import CATALOG_FACT_REASONS
+            db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                       ' WHERE adapter=? AND unavailable_reason NOT IN (?,?)',
+                       (reason, name, *CATALOG_FACT_REASONS))
             self.board._append_event(db, 'harness.invalidated', payload={'adapter': name, 'reasonCode': reason})
             head = self.board._head_of(db)
         self.board._notify(head)
@@ -165,12 +171,16 @@ class HarnessHealth:
             if not force and not preflight and (old.get('scanAfter') or '') > now:
                 # ADR-027 rule 4: even a throttled scan owes one bounded catalog
                 # re-read once the shelf life passed. The catalog scan marker,
-                # not the health probe schedule, bounds its cadence.
+                # not the health probe schedule, bounds its cadence. The record
+                # after the callback is authoritative: a re-read whose native
+                # call invalidated the harness must not be answered with the
+                # stale pre-reread ready record.
                 if self._stale_catalog(name, now):
                     current = self.get(name)
                     if current['available']:
                         self.catalog_refresh(name, current)
                         self._note_catalog_scan(name)
+                        return self.get(name)
                 return old
             environment = self.environment()
             from ..catalog.accounts import execution_environment
@@ -232,7 +242,21 @@ class HarnessHealth:
                 db.execute('UPDATE harness_health SET status=?,record_json=?,checked_at=?,expires_at=?,scan_after=? WHERE adapter=? AND revision=?',
                            (status, canonical_json(record), now, _later(READY_SECONDS if status == 'ready' else SCAN_SECONDS), _later(SCAN_SECONDS), name, generation))
                 if status != 'ready':
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=? WHERE adapter=?', (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name))
+                    # Same boundary as invalidate: health grounds the rows it
+                    # marks, never the ones a catalog fact already grounded.
+                    from ..catalog.catalog import CATALOG_FACT_REASONS
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?'
+                               ' WHERE adapter=? AND unavailable_reason NOT IN (?,?)',
+                               (record.get('reasonCode') or 'HARNESS_UNHEALTHY', name, *CATALOG_FACT_REASONS))
+                elif old['status'] != 'ready':
+                    # ADR-027: health availability and adopted catalog facts are
+                    # separate. Recovering health restores the model availability
+                    # of the retained confirmed catalog (and of families still
+                    # awaiting disappearance confirmation); confirmed absences,
+                    # retired efforts and native unavailable declarations are
+                    # catalog facts and stay untouched.
+                    from ..catalog.catalog import restore_retained_availability
+                    restore_retained_availability(db, name)
                 self.board._append_event(db, 'harness.checked', payload={'adapter': name, 'status': status, 'revision': generation,
                                           'version': record.get('version'), 'reasonCode': record.get('reasonCode')})
                 head = self.board._head_of(db)

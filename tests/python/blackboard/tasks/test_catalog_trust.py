@@ -3,20 +3,28 @@
 A pending model stays acceptable for an explicitly specified buddy (C02); a
 missing or unavailable route gets exactly one bounded re-read of that harness
 before rejection, and the rejection names the catalog read time and the refresh
-remedy (C05).
+remedy (C05). Health availability and adopted catalog facts stay separate: a
+health failure never masks or resurrects catalog state.
 """
+from datetime import datetime, timedelta, timezone
+
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog, catalog_store
 from hey_my_buddy.errors import BoardError
 
 
-def reading(models=('alpha',), efforts=('max',)):
-    return {'source': 'fixture-native', 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
+def reading(models=('alpha',), efforts=('max',), account_status='confirmed'):
+    return {'source': 'fixture-native', 'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': account_status}],
             'providers': [{'adapter': 'dsh', 'provider': 'fixture',
                            'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]}
 
 
 IDENTITY = {"adapter": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"}
+
+
+def _later(seconds: int) -> str:
+    moment = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    return moment.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 
 class ExplicitCatalogTrustTests(BoardTestCase):
@@ -33,6 +41,18 @@ class ExplicitCatalogTrustTests(BoardTestCase):
 
     def validate(self, identity=None):
         return catalog.validate_configuration(identity or IDENTITY, directory=self.directory)
+
+    def fail_health_then_recover(self, reason='HARNESS_HANDSHAKE_FAILED'):
+        """A harness health failure, then recovery published like a real check."""
+        harnesses = self.board.service.harnesses
+        harnesses.invalidate('dsh', harnesses.get('dsh')['revision'], reason)
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE harness_health SET status='ready',expires_at=?,scan_after=? WHERE adapter='dsh'",
+                       (_later(3600), _later(180)))
+
+    def listed_profile(self):
+        listed = catalog_store.profiles(self.evaluation, {'includeUnavailable': True})
+        return next(item for item in listed['profiles'] if item['model'] == 'alpha')
 
     def test_c02_pending_model_is_still_accepted_explicitly(self):
         self.evaluation.record_catalog(reading())
@@ -147,3 +167,99 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         page = next(item for item in listed["profiles"] if item["profileId"] == "dsh:fixture:alpha:max")
         self.assertEqual(page["catalogStatus"], "pending")
         self.assertEqual(page["pendingSince"], self.clock.value)
+
+    def test_unknown_reread_after_health_recovery_keeps_the_retained_catalog(self):
+        self.evaluation.record_catalog(reading())
+        self.fail_health_then_recover()
+        unknown = reading(models=(), account_status='unknown')
+        unknown['providers'] = []
+        self.evaluation.record_catalog(unknown)
+        profile = self.listed_profile()
+        self.assertTrue(profile['available'], 'Health 0s must not degrade the retained catalog')
+        self.assertEqual(profile['catalogStatus'], 'available')
+        self.assertEqual(profile['catalogState'], 'unknown')
+        self.assertEqual(self.validate(), IDENTITY, 'The retained catalog still admits the buddy')
+
+    def test_confirmed_empty_after_health_recovery_pends_the_known_model(self):
+        self.evaluation.record_catalog(reading())
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE evaluation_profiles SET enabled=1 WHERE adapter='dsh'")
+        self.fail_health_then_recover()
+        self.evaluation.record_catalog(reading(models=()))
+        profile = self.listed_profile()
+        self.assertEqual(profile['catalogStatus'], 'pending')
+        self.assertTrue(profile['available'])
+        self.assertEqual(profile['pendingSince'], self.clock.value)
+        from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
+        with self.board.store.db.read() as db:
+            candidates = [row['profile_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+        self.assertEqual(candidates, ['dsh:fixture:alpha:max'], 'A pending model stays inside the bounds')
+        self.assertEqual(self.validate(), IDENTITY, 'A pending model stays acceptable explicitly')
+
+    def test_pending_survives_health_failure_and_true_unavailability_is_never_restored(self):
+        self.evaluation.record_catalog(reading())
+        self.evaluation.record_catalog(reading(models=()))
+        first_absence = self.clock.value
+        # Health fails inside the window, recovers, and the re-read stays unknown:
+        # the window, its first absence and the model state all survive.
+        self.fail_health_then_recover()
+        unknown = reading(models=(), account_status='unknown')
+        unknown['providers'] = []
+        self.evaluation.record_catalog(unknown)
+        profile = self.listed_profile()
+        self.assertEqual(profile['catalogStatus'], 'pending')
+        self.assertEqual(profile['pendingSince'], first_absence)
+        self.assertTrue(profile['available'])
+        self.assertEqual(self.validate(), IDENTITY)
+        # A confirmed absence after the window is a catalog fact: later health
+        # noise and unknown re-reads must never resurrect it.
+        self.clock.advance(3601)
+        self.evaluation.record_catalog(reading(models=()))
+        self.fail_health_then_recover()
+        self.evaluation.record_catalog(unknown)
+        profile = self.listed_profile()
+        self.assertEqual(profile['catalogStatus'], 'unavailable')
+        self.assertFalse(profile['available'])
+        catalog.register_catalog_reread(self.directory, None)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate()
+        self.assertEqual(rejected.exception.code, "CONFIGURATION_UNAVAILABLE")
+
+    def strip_confirmed_read_meta(self):
+        """A board that adopted catalogs before the ADR-027 keys existed."""
+        with self.board.store.db.write() as db:
+            db.execute("DELETE FROM meta WHERE key IN ('catalog-read-at:dsh','catalog-account-status:dsh')")
+
+    def test_legacy_board_reports_and_keeps_its_old_trusted_read_time(self):
+        self.evaluation.record_catalog(reading())
+        self.strip_confirmed_read_meta()
+        catalog.register_catalog_reread(self.directory, None)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate({**IDENTITY, "model": "beta"})
+        read_at = rejected.exception.details["catalogReadAt"]
+        self.assertEqual(read_at, self.clock.value, 'The legacy catalog record still proves its read time')
+        # Seven hours later an unknown empty reading is not a successful read:
+        # the old trusted time stands and never gets pushed back.
+        self.clock.advance(7 * 3600)
+        unknown = reading(models=(), account_status='unknown')
+        unknown['providers'] = []
+        self.evaluation.record_catalog(unknown)
+        with self.board.store.db.read() as db:
+            self.assertEqual(catalog.catalog_read_at(db, 'dsh'), read_at)
+        with self.assertRaises(BoardError) as rejected:
+            self.validate({**IDENTITY, "model": "beta"})
+        self.assertEqual(rejected.exception.details["catalogReadAt"], read_at)
+
+    def test_account_switch_still_clears_the_legacy_read_time(self):
+        self.evaluation.record_catalog(reading())
+        self.strip_confirmed_read_meta()
+        with self.board.store.db.read() as db:
+            self.assertIsNotNone(catalog.catalog_read_at(db, 'dsh'))
+        with self.board.store.db.write() as db:
+            from hey_my_buddy.blackboard.catalog import accounts
+            db.execute("INSERT INTO meta(key,value) VALUES('account-selection:dsh',"
+                       "'{\"adapter\":\"dsh\",\"source\":\"worker\",\"credentialRevision\":0}')")
+            accounts._invalidate(db, 'dsh', {'adapter': 'dsh', 'source': 'worker', 'credentialRevision': 0})
+        with self.board.store.db.read() as db:
+            self.assertIsNone(catalog.catalog_read_at(db, 'dsh'),
+                              'A switched binding never inherits the old account read time')

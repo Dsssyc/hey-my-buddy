@@ -42,6 +42,14 @@ CATALOG_SHELF_SECONDS = 6 * 3600
 #: ADR-027 rule 2: the unavailable reason of a model whose absence was confirmed.
 CONFIRMED_ABSENCE_REASON = "not present in the latest confirmed native discovery"
 
+#: The unavailable reason of one retired effort whose model remains in the reading.
+RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
+
+#: Unavailable reasons that are catalog facts, never undone by health recovery.
+#: A 0 left behind by a harness health failure is a health fact, not evidence
+#: that the native model disappeared (ADR-027 rules 1 and 2).
+CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
+
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 CATALOG_REMEDY = "Run buddy adapters with refresh:true"
 
@@ -126,9 +134,84 @@ def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[s
 
 
 def catalog_read_at(db, adapter: str) -> str | None:
-    """When this harness catalog was last confirmed (trusted) reading, if ever."""
+    """When this harness catalog was last confirmed (trusted) reading, if ever.
+
+    ADR-027 legacy boards recorded trusted catalogs before the confirmed-read
+    keys existed. Their read time comes from the existing catalog record: the
+    row's own time while the adopted reading is current, otherwise the time of
+    the discovery it still retains. An unknown reading never masquerades as a
+    successful one (it keeps the retained discovery and its time), a switched
+    account binding never inherits the old account's time, and a board without
+    an adopted discovery stays without a read time (cold start).
+    """
     row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
-    return row[0] if row is not None else None
+    if row is not None:
+        return row[0]
+    current = db.execute(
+        "SELECT c.status, c.updated_at, c.discovery_id, d.discovered_at FROM catalog_current c"
+        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
+        (adapter,)).fetchone()
+    if current is None or current["discovery_id"] is None or current["discovered_at"] is None:
+        return None
+    from .accounts import identity, selection
+    saved = db.execute("SELECT value FROM meta WHERE key=?", ("catalog-account:" + adapter,)).fetchone()
+    account = json.loads(saved[0]) if saved else {"source": "native", "credentialRevision": 0}
+    if identity(account) != identity(selection(db, adapter)):
+        return None
+    return current["updated_at"] if current["status"] == "complete" else current["discovered_at"]
+
+
+def families_from_payload(payload_json: Any, adapter: str) -> set[tuple[str, str]]:
+    """Model families a retained confirmed catalog still lists as available.
+
+    A model the retained reading itself declared unavailable is not listed: its
+    unavailability is a native fact, not a health artifact (ADR-027 rule 1).
+    """
+    families: set[tuple[str, str]] = set()
+    if not isinstance(payload_json, str) or not payload_json:
+        return families
+    try:
+        providers = json.loads(payload_json).get("providers")
+    except ValueError:
+        return families
+    if not isinstance(providers, list):
+        return families
+    for entry in providers:
+        if not isinstance(entry, dict) or entry.get("adapter") != adapter:
+            continue
+        for model in entry.get("models") or []:
+            if isinstance(model, dict) and model.get("available", True):
+                families.add((str(entry.get("provider")), str(model.get("id"))))
+    return families
+
+
+def restore_retained_availability(db, adapter: str) -> int:
+    """Restore the model availability of the retained catalog after health noise.
+
+    ADR-027 separates health availability from adopted catalog facts: the 0s a
+    harness health failure left on ``evaluation_profiles`` are never evidence
+    that a native model disappeared. Rows whose family the retained confirmed
+    catalog still lists, or that still await disappearance confirmation, become
+    available again; a confirmed absence, a retired effort and a native
+    unavailable declaration are catalog facts and are never restored here.
+    """
+    row = db.execute(
+        "SELECT d.payload_json FROM catalog_current c"
+        " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
+        (adapter,)).fetchone()
+    retained = families_from_payload(row[0] if row is not None else None, adapter)
+    pending = {tuple(key.partition("\x1f")[::2]) for key in _pending_map(db, adapter)}
+    restored = 0
+    for profile in db.execute(
+            "SELECT profile_id, provider, model, available, unavailable_reason FROM evaluation_profiles WHERE adapter=?",
+            (adapter,)).fetchall():
+        if profile["available"] or profile["unavailable_reason"] in CATALOG_FACT_REASONS:
+            continue
+        if (profile["provider"], profile["model"]) in retained or (profile["provider"], profile["model"]) in pending:
+            db.execute("UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL WHERE profile_id=?",
+                       (profile["profile_id"],))
+            restored += 1
+    return restored
 
 
 def catalog_account_status(db, adapter: str) -> str:

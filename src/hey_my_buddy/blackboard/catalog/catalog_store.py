@@ -82,8 +82,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         applied, stale, changed = [], [], 0
         transitions = []
         from .accounts import identity, selection
-        from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, TRUSTED_ACCOUNT_STATUSES,
-                              _family_key, _parse_time, _pending_map, _write_pending_map, note_confirmed_read)
+        from .catalog import (CONFIRMATION_SECONDS, CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON,
+                              TRUSTED_ACCOUNT_STATUSES, _family_key, _parse_time, _pending_map,
+                              _write_pending_map, families_from_payload, note_confirmed_read,
+                              restore_retained_availability)
         saved_accounts = db.execute('SELECT value FROM meta WHERE key=?', ('catalog-accounts:' + str(observation_id),)).fetchone()
         frozen_accounts = json.loads(saved_accounts[0]) if saved_accounts else {}
         for result in payload['discoveries']:
@@ -92,7 +94,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             if identity(account) != identity(selection(db, name)):
                 stale.append(name)
                 continue
-            prior = db.execute('SELECT * FROM catalog_current WHERE adapter=?', (name,)).fetchone()
+            prior = db.execute('SELECT c.*, d.payload_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?', (name,)).fetchone()
             if prior and int(prior['observation_id']) > observation_id:
                 stale.append(name)
                 continue
@@ -109,6 +111,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             db.execute('INSERT INTO catalog_current(adapter,observation_id,discovery_id,status,reason,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(adapter) DO UPDATE SET observation_id=excluded.observation_id,discovery_id=excluded.discovery_id,status=excluded.status,reason=excluded.reason,updated_at=excluded.updated_at', (name, observation_id, selected_discovery, 'complete' if trusted else 'unknown', stored_reason, now))
             applied.append(name)
             if not trusted:
+                # Health may have recovered while the account fact stayed
+                # unknown: the retained confirmed catalog keeps its model state,
+                # and the 0s health left behind are not a disappearance.
+                restore_retained_availability(db, name)
                 continue
             note_confirmed_read(db, name, now=now, account_status=result.get('accountStatus'))
             if name == 'zcode':
@@ -135,6 +141,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             seen = {p['profileId'] for p in entries}
             families = {(p['provider'], p['model']) for p in entries}
             pending = _pending_map(db, name)
+            # The families the last adopted catalog still listed as available.
+            # Health 0s on profile rows are deliberately absent here: they are
+            # not evidence that a native model disappeared (ADR-027 rule 2).
+            retained = families_from_payload(prior['payload_json'] if prior is not None else None, name)
             existing = db.execute('SELECT profile_id,provider,model,available,unavailable_reason'
                                   ' FROM evaluation_profiles WHERE adapter=?', (name,)).fetchall()
             family_rows: dict[tuple[str, str], list] = {}
@@ -144,7 +154,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                              if rows and all(not row['available'] and row['unavailable_reason'] == CONFIRMED_ABSENCE_REASON
                                              for row in rows)}
             for family, rows in family_rows.items():
-                if family in families or not any(row['available'] for row in rows):
+                if family in families or (_family_key(*family) not in pending and family not in retained):
                     continue
                 # ADR-027 rule 2: disappearance is a model-identity question. An
                 # effort that vanished while its model remains is a metadata
@@ -154,6 +164,14 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 first_absence, moment = _parse_time(since), _parse_time(now)
                 if since is None:
                     pending[key] = now
+                    if any(not row['available'] and row['unavailable_reason'] not in
+                           (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON) for row in rows):
+                        # Health noise masked a model the adopted catalog still
+                        # lists; the pending window keeps it routable.
+                        db.execute('UPDATE evaluation_profiles SET available=1,unavailable_reason=NULL'
+                                   ' WHERE adapter=? AND provider=? AND model=? AND available=0'
+                                   ' AND unavailable_reason NOT IN (?,?)', (name, *family,
+                                   CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON))
                     transitions.append({'kind': 'catalog.model_pending', 'adapter': name,
                                         'provider': family[0], 'model': family[1], 'pendingSince': now})
                 elif (first_absence is not None and moment is not None
@@ -171,7 +189,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             # retirements; enabled remains the user's intent.
             for old in existing:
                 if old['profile_id'] not in seen and (old['provider'], old['model']) in families:
-                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?,updated_revision=? WHERE profile_id=?', ('not present in the latest complete native discovery', revision, old['profile_id']))
+                    db.execute('UPDATE evaluation_profiles SET available=0,unavailable_reason=?,updated_revision=? WHERE profile_id=?', (RETIRED_EFFORT_REASON, revision, old['profile_id']))
             for p in entries:
                 health = db.execute('SELECT status FROM harness_health WHERE adapter=?', (name,)).fetchone()
                 if health is not None and health['status'] != 'ready':

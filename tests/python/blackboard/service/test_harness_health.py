@@ -231,3 +231,65 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.expire_catalog_throttle()
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'A confirmed catalog needs no further re-read')
+
+    def test_stale_reread_failure_returns_the_post_callback_record(self):
+        # Host reproduction: the health scan stays throttled, the catalog is past
+        # its shelf life, and the bounded re-read's native failure invalidates
+        # the harness. refresh must answer with the record after the callback,
+        # never with the stale pre-reread ready record.
+        self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex'])
+        self.set_read_at(6 * 3600 + 1)
+        self.expire_catalog_throttle()
+
+        def failing_refresh(name, record):
+            self.refreshed.append(name)
+            self.health.invalidate(name, record['revision'], 'CATALOG_UNAVAILABLE')
+
+        self.health.catalog_refresh = failing_refresh
+        result = self.health.refresh('codex')
+        self.assertEqual(self.refreshed, ['codex', 'codex'])
+        self.assertFalse(result['available'], 'The post-callback record leads')
+        self.assertEqual(result['reasonCode'], 'CATALOG_UNAVAILABLE')
+        self.assertEqual(self.health.get('codex')['revision'], result['revision'])
+
+
+class StaleRereadServiceCallbackTests(BoardTestCase):
+    """The stale-catalog re-read through the real service callback (rule 4)."""
+
+    def test_native_failure_inside_the_service_callback_invalidates_for_the_caller(self):
+        from types import SimpleNamespace
+        from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
+        from hey_my_buddy.errors import BoardError
+        board = self.board()
+        service = board.service
+        health = HarnessHealth(service.store, catalog_refresh=service._refresh_harness_catalog)
+        health.initialize()
+        snapshot = {'paths': [{'path': '/native/dsh', 'mtimeNs': 1}]}
+        ready = {'adapter': 'dsh', 'status': 'ready', 'version': '1.0',
+                 'command': ['/fixture/dsh'], 'executable': '/fixture/dsh'}
+        good = {'source': 'fixture-native', 'providers': [{'adapter': 'dsh', 'provider': 'fixture',
+                'models': [{'id': 'alpha', 'efforts': ['max'], 'available': True}]}],
+                'discoveries': [{'adapter': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+
+        def discover_models():
+            if calls:
+                raise BoardError('CATALOG_UNAVAILABLE', 'fixture native discovery failed')
+            calls.append(True)
+            return good
+
+        calls: list[bool] = []
+        stub = SimpleNamespace(discover_models=discover_models,
+                               local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
+        with patch('hey_my_buddy.buddy.harnesses.registry.adapter', return_value=stub), \
+             patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value=snapshot), \
+             patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready):
+            first = health.refresh('dsh')
+            self.assertTrue(first['available'])
+            with board.store.db.write() as db:
+                db.execute("UPDATE meta SET value=? WHERE key='catalog-read-at:dsh'", (_stamp(6 * 3600 + 1),))
+                db.execute("DELETE FROM meta WHERE key='catalog-scan-after:dsh'")
+            again = health.refresh('dsh')
+        self.assertFalse(again['available'], 'The failed native re-read speaks through the record')
+        self.assertEqual(again['reasonCode'], 'CATALOG_UNAVAILABLE')
+        self.assertEqual(health.get('dsh')['revision'], again['revision'])
