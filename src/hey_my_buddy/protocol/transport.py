@@ -491,7 +491,7 @@ def _call_service(method: str, params: dict | None, directory: Path) -> dict:
         task = reply.get("task")
         if not isinstance(task, dict):
             raise ServiceError("INVALID_RESPONSE", "The service did not return a task")
-        return {**task, **{key: reply[key] for key in ("duplicate", "alreadyTerminal", "retry") if key in reply}}
+        return {**task, **{key: reply[key] for key in ("duplicate", "alreadyTerminal", "retry", "waitingForHost") if key in reply}}
     if method in DIRECT_TASK_VIEW:
         if not isinstance(reply.get("runId"), str):
             raise ServiceError("INVALID_RESPONSE", "The wait route did not return a task view")

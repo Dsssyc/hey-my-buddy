@@ -210,6 +210,27 @@ class RecoveryCommandTests(unittest.TestCase):
 
 
 class AwaitTests(unittest.TestCase):
+    def test_waiting_counts_use_the_latest_result_at_each_boundary(self):
+        for boundary in ('awaiting-host', 'delivered'):
+            for latest in ({'host': 1, 'review': 3}, None):
+                with self.subTest(boundary=boundary, latest=latest):
+                    clock = VirtualClock()
+
+                    def result_response(run):
+                        result = {key: value for key, value in run.items() if key != 'waitingForHost'}
+                        if latest is not None:
+                            result['waitingForHost'] = latest
+                        return {**result, 'result': {'status': 'ok'}}
+
+                    service = FakeService(clock, result_response=result_response)
+                    service.run.update(status='completed', resultAvailable=True, shutdownConfirmed=True,
+                                       workflowState=boundary, waitingForHost={'host': 1, 'review': 2})
+                    response = await_run({'runId': 'run-fixture', 'waitSeconds': 1},
+                                         Path(os.environ['HMB_STATE_DIR']), clock=clock, service=service)
+                    self.assertEqual(response.get('waitingForHost'), latest)
+                    if latest is None:
+                        self.assertNotIn('waitingForHost', response)
+
     def test_await_resolves_an_existing_run_by_request_id_and_never_starts(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)

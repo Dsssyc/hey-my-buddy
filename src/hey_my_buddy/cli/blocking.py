@@ -160,6 +160,7 @@ def _envelope(
         outcome = COMPLETED_WITHOUT_RESULT_OUTCOME
     return {
         "runId": run.get("runId"),
+        **({"waitingForHost": run["waitingForHost"]} if "waitingForHost" in run else {}),
         "requestId": run.get("requestId", request_id),
         "status": run.get("status"),
         **({"workflowState": run["workflowState"]} if run.get("workflowState") is not None else {}),
@@ -356,6 +357,11 @@ def _host_boundary(
     if run.get("resultAvailable"):
         try:
             full = service("result", {"runId": run_id}, state_dir)
+            if isinstance(full, dict):
+                run = dict(run)
+                run.pop("waitingForHost", None)
+                if "waitingForHost" in full:
+                    run["waitingForHost"] = full["waitingForHost"]
         except ServiceError as failure:
             error = {"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)}
     result = full.get("result") if isinstance(full, dict) else None

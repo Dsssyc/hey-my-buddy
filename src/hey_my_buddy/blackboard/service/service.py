@@ -19,7 +19,7 @@ import re
 
 from ...install import runtime
 from ...protocol import rpc_config, schemas
-from ..tasks import workflow as workflow_module
+from ..tasks import micro_task, workflow as workflow_module
 from ...buddy.harnesses.registry import capability_report
 from ...protocol.contracts import CONTRACT_VERSION
 from ..store.db import SCHEMA_VERSION, utc_now
@@ -180,6 +180,10 @@ class _BaseResource:
                 health = getattr(self, 'harnesses', None)
                 with bound(health.all()) if health and getattr(self, 'automatic_discovery', False) else nullcontext():
                     result = handler(params)
+                if scope['kind'] == workflow_module.SERVICE_KIND:
+                    waiting = self._waiting_for_host(params)
+                    if waiting:
+                        result['waitingForHost'] = waiting
             finally:
                 workflow_module.clear_request_scope()
             return schemas.encode(result)
@@ -195,6 +199,39 @@ class _BaseResource:
             return schemas.encode(
                 {"error": {"code": "INTERNAL_ERROR", "message": f"{operation} failed inside the service{detail}"}}
             )
+
+    def _waiting_for_host(self, params: dict) -> dict:
+        """Count the default Host history filters after the operation has finished."""
+        with self.store.db.read() as connection:
+            host_id = params.get('hostId')
+            if not host_id:
+                run_id = params.get('runId') or params.get('taskId')
+                if run_id:
+                    row = connection.execute(
+                        'SELECT host_id FROM workflow_runs WHERE run_id=?', (run_id,),
+                    ).fetchone()
+                elif params.get('requestId'):
+                    row = connection.execute(
+                        'SELECT r.host_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id '
+                        'WHERE t.request_id=?', (params['requestId'],),
+                    ).fetchone()
+                else:
+                    return {}
+                if row is None:
+                    return {}
+                host_id = row['host_id']
+            if host_id is None:
+                return {}
+            clauses, values = micro_task.history_where(host_id=host_id)
+            counts = ', '.join(
+                f'SUM(CASE WHEN {micro_task.FILTER_SQL[name]} THEN 1 ELSE 0 END) AS {name}'
+                for name in ('host', 'review')
+            )
+            row = connection.execute(
+                f'SELECT {counts} FROM ({micro_task.TASK_HISTORY_SQL}) AS history '
+                f"WHERE {' AND '.join(clauses)}", values,
+            ).fetchone()
+            return {name: row[name] for name in ('host', 'review') if row[name]}
 
     def _authenticate(self, params: dict) -> dict:
         """Every operation carries the private service token, verified here.
