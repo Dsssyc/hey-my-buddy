@@ -27,7 +27,7 @@ The CLI injects Host authority locally. For any mutation that requires it, `cont
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
-| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, aggregate `maxConcurrent`, lane `capacity`, `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, integrity and active work |
+| `health` | none | Protocol/contract/schema versions, service id, state dir, runtime identity and stability, model `capacity` (`totalLimit`, `totalActive`, `models` entries `{adapter, provider, model, limit, active}`), `managedWorkerIds`, `unstartedWorkerIds`, `stoppedWorkerIds`, `surplusWorkerIds`, `surplusDraining`, `surplusRetained`, `waitCapacity`, integrity and active work |
 | `capabilities` / `adapters` | `includeUnavailable` | Adapter report (`adapter`, `available`, `reason`, `capabilities`, `executedBy`), `localCapabilities`, named operations, wait admission and the honest `limitations` map |
 | `runtime` | optional `destination` | Runtime identity, installed-runtime description and source-leak report |
 | `restart` | optional `reason`, `drainSeconds` 0–120 (default 10) | Detaches the daemon without cancelling owned work; independent workers survive. With no running daemon returns `alreadyStopped` and starts nothing |
@@ -161,12 +161,12 @@ Actor fields are `workerId`, `attemptId`, `generation` and `nonce`. Normally the
 | Command | Parameters | Behavior |
 | --- | --- | --- |
 | `console` | `action`: `open` (default), `status`, `close` | Private writable console lifecycle; reports URL, running/read-only flags and whether the built assets exist |
-| `console-snapshot` | none | Current revision, gate, configuration, bounded active profiles and configured selector, cards/preferences/annotations and per-profile counters, latest 200 evidence records, latest 50 decisions and latest 100 tasks; unavailable profile count is separate |
+| `console-snapshot` | none | Current revision, gate, configuration, bounded active profiles and configured selector with their `modelConcurrency`, cards/preferences/annotations and per-profile counters, latest 200 evidence records, latest 50 decisions and latest 100 tasks; unavailable profile count is separate |
 | `model-catalog-refresh` | optional `requestId` (≤128) | Explicit native metadata discovery; one monotone `observationId` per request publishes per-harness facts and preserves existing human state. Each harness reports `status: complete\|unknown` with a reason, plus `appliedAdapters` and `staleAdapters`; only a complete result may confirm absence, and a late older response is skipped. New profiles are disabled and enabled state is never reset. No model call |
-| `model-profiles` | optional `includeUnavailable`, `limit` (1–200, default 100), `after` profile cursor, `query` (≤200 characters, at most 8 terms), `adapter` | Bounded active/unavailable profile page with associated cards/annotations/preferences/sampleCounts, tableRevision and nextCursor; unavailable entries are hidden unless requested |
+| `model-profiles` | optional `includeUnavailable`, `limit` (1–200, default 100), `after` profile cursor, `query` (≤200 characters, at most 8 terms), `adapter` | Bounded active/unavailable profile page with associated cards/annotations/preferences/sampleCounts, per-family `modelConcurrency` (`active` occupancy is read-only observation), tableRevision and nextCursor; unavailable entries are hidden unless requested |
 | `evaluation-write-begin` | `requestId`, `expectedRevision`, optional `kind`: `maintenance` (default) or `human` | Human is restricted to the authenticated console; maintenance to the Host. Fair writer intent returns writerId/generation/writerToken/state/expiry/revision/position |
 | `evaluation-write-renew` | writer fields | Renews an owned intent or active lease, reports state; caller retains the original token |
-| `user-policy-publish` | writer fields, `commandId`, `expectedRevision`, optional `profileSettings`, `preferenceChanges`, `annotationChanges`, `configuration` | Authenticated console only. Lists contain at most 200 field patches; annotations at most 4000 characters. Null preference mode removes, empty annotation clears, omitted fields remain unchanged. Program model/catalog fields and automatic cards cannot be written |
+| `user-policy-publish` | writer fields, `commandId`, `expectedRevision`, optional `profileSettings`, `preferenceChanges`, `annotationChanges`, `modelConcurrency`, `configuration` | Authenticated console only. Lists contain at most 200 field patches; annotations at most 4000 characters; `modelConcurrency` patches are `{adapter, provider, model, limit}` entries that reject `active` and other derived fields. Null preference mode removes, empty annotation clears, omitted fields remain unchanged. Program model/catalog fields and automatic cards cannot be written |
 | `assessment-publish` | writer fields, `commandId`, `expectedRevision`, `cards` | Maintenance Host only. Merge changed automatic cards without modifying human annotations/preferences, enablement or catalog fields; preserve unrelated cards. Both publication operations commit revision/event/receipt and release the writer atomically |
 | `evaluation-write-abort` | writer fields, `commandId` | Fences and releases this writer, leaving the last complete publication unchanged |
 | `evaluation-reader-begin` | optional `kind` (`selection` is the only accepted reader kind) and optional `revision` | Admits one bounded selection reader if no writer intent is present; returns `readerId` and identified revision |
@@ -210,8 +210,8 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed`, 
 | Compact governed view | 5 requests / 10 turns / 32 children / 32 artifacts | `counts`/`truncated` describe omissions |
 | Attempt lease `BUDDY_LEASE_SECONDS` | 120 s | 15–3600 s |
 | Cleanup plan expiry | 900 s | fixed; an expired plan authorizes nothing |
-| Business attempts `BUDDY_MAX_CONCURRENT` | 2 | 1–8 |
-| Decision attempts `BUDDY_MAX_DECISIONS` | 1 | 1–4, independent of business capacity |
+| Concurrent attempts `BUDDY_MAX_CONCURRENT` | 8 | 1–32; one machine-wide ceiling shared by routing and execution |
+| Model-family concurrent attempts | 2 | 1–32 per exact adapter/provider/model; user-set on the model card, hot at the next claim |
 | Wait capacity `BUDDY_WAIT_CAPACITY` | 32 | 1–48; leaves native RPC callbacks available for control operations |
 
 ## Error codes

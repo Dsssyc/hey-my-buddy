@@ -26,7 +26,7 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 
 ## Current references
 
-These pages describe the 0.8.1 source in this checkout (contract 0.8.1, schema 10). Installed runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime` and the [0.8.1 acceptance record](acceptance/optional-deadline-0.8.1.md). Source capacity defaults to two business attempts plus one decision; a deployed board may use different limits.
+These pages describe the 0.9.0 source candidate in this checkout (contract 0.9.0, schema 11). The installed daily runtime and source acceptance are separate facts; check `buddy health`, `buddy runtime`, the [0.9.0 delivery record](acceptance/runtime-refinement-0.9.0.md) and the retained [0.8.1 acceptance record](acceptance/optional-deadline-0.8.1.md). Source capacity is one machine-wide attempt ceiling (default 8) with user-set per-model-family limits (default 2); a deployed board may use different limits.
 
 | Document | Role |
 | --- | --- |
@@ -41,13 +41,15 @@ These pages describe the 0.8.1 source in this checkout (contract 0.8.1, schema 1
 | [reference/decision.md](reference/decision.md) | The bounded tool-free DSH routing helper: selection input/output, cache layout and process ownership |
 | [reference/workers.md](reference/workers.md) | `dsh`/`zcode`/`codex`/`command`/`external` adapters, the public `BoardClient` contract, worker identity, reconciliation, bounded activity and receipts, and supervisors |
 | [reference/runner.md](reference/runner.md) | DSH-specific `harnesses/dsh/scripts/run.mjs` runner and bridge scripts: options, precedence, governed turn protocol, exit codes and attach mode |
-| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 10, independent execution lanes, identity, recovery, catalog observation and packaging |
+| [reference/architecture.md](reference/architecture.md) | Implemented topology, C-Two contract, schema 11, the shared attempt ceiling and model-family concurrency, identity, recovery, catalog observation and packaging |
 
 Detailed commands belong in their owning reference, routed from this page and from [skills/buddy/SKILL.md](../skills/buddy/SKILL.md). The previous implementation contracts under `docs/implementation/` were consolidated into these owning references and removed; there is no compatibility copy.
 
 ## Accepted design direction
 
-[ADR-009: Parallel lanes and local console drafts](decisions/009-parallel-lanes-and-local-console-drafts.md) records independent business/routing capacity, cooperative worker-pool retirement, and local drafting with short publication grants.
+[ADR-011: Shared model concurrency and verified native interaction](decisions/011-runtime-refinement.md) defines the 0.9.0 source candidate: one machine-wide attempt ceiling with user-owned per-model-family concurrency limits replacing the separate business and decision lanes, and whole-goal artifact verification over immutable Git objects. Its delivery status is owned by the [0.9.0 acceptance record](acceptance/runtime-refinement-0.9.0.md).
+
+[ADR-009: Parallel lanes and local console drafts](decisions/009-parallel-lanes-and-local-console-drafts.md) records independent business/routing capacity — superseded for capacity by [ADR-011](decisions/011-runtime-refinement.md)'s shared ceiling and model-family limits — cooperative worker-pool retirement, and local drafting with short publication grants.
 
 [ADR-010: Production workflow repair plan](decisions/010-production-workflow-repair-plan.md) defines the 0.8 repairs: separated user and maintenance publication, task-local routing preferences, catalog history, recovery and activity, Host-owned workspace lifecycle, native Codex execution and lightweight RPC. The owning references describe the implementation and the [acceptance record](acceptance/production-repairs-0.8.0.md) distinguishes verified behavior from installation. ZCode's checked protocol supports observation but not safe correlated live inquiry.
 
@@ -67,7 +69,7 @@ Detailed commands belong in their owning reference, routed from this page and fr
 
 ## History and evidence
 
-Current delivery evidence: [0.8.1 optional execution duration](acceptance/optional-deadline-0.8.1.md), [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.8.1 record owns the new contract's source and installation checks; the earlier installation record identifies the preserved data and unresolved old-artifact integration boundary.
+Current delivery evidence: [0.9.0 runtime refinement](acceptance/runtime-refinement-0.9.0.md) (candidate delivery record), [0.8.1 optional execution duration](acceptance/optional-deadline-0.8.1.md), [0.8 daily installation](acceptance/installed-0.8.0.md), [0.8 source repairs](acceptance/production-repairs-0.8.0.md), [console/evaluation 0.7.0](acceptance/console-evaluation-0.7.0.md) and [parallel dispatch 0.6.2](acceptance/parallel-dispatch-0.6.2.md). The 0.9.0 record owns the candidate's source and installation checks; earlier records keep their own verified scope, and the 0.8 installation record identifies the preserved data and unresolved old-artifact integration boundary.
 
 | Document | Role |
 | --- | --- |
