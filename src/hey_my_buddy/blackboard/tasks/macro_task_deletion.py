@@ -426,7 +426,6 @@ def _delete_rows(store, connection, scope, deletion):
     bindings = {'runId':r, 'targetRunId':r,
                 'requestId':{x['request_id'] for x in _rows(connection,'workflow_requests','run_id',r)},
                 'continuationId':{x['continuation_id'] for x in _rows(connection,'workflow_continuations','run_id',r)},
-                'planId':{x['plan_id'] for x in _rows(connection,'workspace_cleanup_plans','run_id',r)},
                 'artifactId':{x['artifact_id'] for x in _rows(connection,'workflow_artifacts','run_id',r)},
                 'integrationId':{x['integration_id'] for x in _rows(connection,'workflow_integrations','run_id',r)},
                 'conclusionId':{x['conclusion_id'] for x in _rows(connection,'workflow_host_conclusions','run_id',r)},
@@ -436,7 +435,7 @@ def _delete_rows(store, connection, scope, deletion):
     for table,column in (('workflow_requests','decision_command_id'),('workflow_children','decision_command_id'),
                          ('workflow_continuations','command_id'),('workflow_scope_versions','command_id'),
                          ('workflow_workspace_conflicts','command_id'),('workflow_integrations','command_id'),
-                         ('workspace_cleanup_plans','command_id'),('workflow_host_conclusions','command_id')):
+                         ('workflow_host_conclusions','command_id')):
         owner = 'parent_run_id' if table == 'workflow_children' else 'run_id'
         commands.update(x[column] for x in _rows(connection,table,owner,r) if x[column])
     clauses,args = [],[]
@@ -572,7 +571,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     scope.runs,scope.tasks,scope.attempts,scope.decisions), 'Deletion scope grew after its fence'
             head = _delete_rows(store,connection,scope,current)
             result = {**_summary(current,scope,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
-        store._notify(head)
+        store._notify(head, changed_tasks=frozenset(scope.tasks))
         if skipped:
             result['skipped'] = skipped
         return result

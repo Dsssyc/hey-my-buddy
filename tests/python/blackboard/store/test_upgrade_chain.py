@@ -247,3 +247,33 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
             self.assertIn('0.54.1', str(caught.exception))
             self.assertEqual(list(self.db.iterdump()), before)
+
+    def test_cleanup_stock_discards_old_admissions_and_preserves_interrupted_and_completed_journals(self):
+        self.schema31()
+        self.db.executescript((FIXTURE / 'schema-31-cleanup-stock.sql').read_text())
+        before = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')]
+        self.assertEqual({row['state'] for row in before}, {'planned', 'blocked', 'applying', 'applied'})
+        started = next(row for row in before if row['state']=='applying')
+        owner = self.db.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
+                                (started['run_id'],)).fetchone()
+        manifest = json.loads(owner[0])
+        self.assertEqual(started['workspace_id'], manifest['workspaceId'])
+        self.assertEqual(started['path'], manifest['checkoutRoot'])
+        self.assertEqual(started['checkout_id'], manifest['checkoutId'])
+        self.assertTrue(all(row['expires_at'] for row in before))
+        self.assertTrue(all(row['command_id'] for row in before))
+        self.assertGreater(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                          " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
+        inbound = [(table[0], tuple(fk)) for table in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                   for fk in self.db.execute(f'PRAGMA foreign_key_list("{table[0]}")') if fk[2]=='workspace_cleanup_plans']
+        self.assertEqual(inbound, [])
+        self.db.commit()
+        upgrade.upgrade_state(self.state)
+        expected = [{key: value for key, value in row.items() if key not in ('expires_at', 'command_id')}
+                    for row in before if row['state'] in ('applying','applied')]
+        self.assertEqual([dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')], expected)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                        " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
+        deleted = {row['plan_id'] for row in before if row['state'] in ('planned','blocked')}
+        self.assertFalse(any(json.loads(row[0]).get('planId') in deleted for row in self.db.execute('SELECT payload_json FROM events')))
+        self.assert_current_structure()

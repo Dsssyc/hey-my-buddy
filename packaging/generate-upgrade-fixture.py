@@ -1002,6 +1002,41 @@ def populate(args):
         metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
         (output / "metadata.json").write_bytes(
             (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        # Export an interrupted journal through the same released writers,
+        # after the immutable floor stock above has already been captured.
+        # This supplementary scenario precedes the retained deletion mark.
+        # The original exported board still contains that independent stock.
+        with store.db.write() as connection:
+            connection.execute("DELETE FROM macro_task_deletions")
+        future = "2026-01-03T00:00:00.000Z"
+        with patch.object(store.workflow, "now", return_value=future):
+            current_adopted = call("workflow_get", {"runId": adopted["runId"]})
+            started_plan = internal_call("cleanup_plan", {
+                "runId": adopted["runId"], "commandId": "supplement-started-plan",
+                "expectedRevision": current_adopted["revision"], **adopted["control"]})
+            with patch.object(workspace, "cleanup_remove", side_effect=RuntimeError("fixture interrupted before removal")):
+                try:
+                    internal_call("cleanup_apply", {
+                        "runId": adopted["runId"], "commandId": "supplement-started-apply",
+                        "expectedRevision": started_plan["targetRevision"],
+                        "planId": started_plan["plan"]["planId"], "confirmPath": started_plan["plan"]["path"],
+                        **adopted["control"]})
+                except RuntimeError as error:
+                    assert str(error) == "fixture interrupted before removal"
+                else:
+                    raise AssertionError("The floor writer did not enter its interrupted removal")
+        with store.db.read() as connection:
+            journal = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?",
+                                         (started_plan["plan"]["planId"],)).fetchone()
+            assert journal["state"] == "applying"
+            columns = ",".join('"' + name + '"' for name in journal.keys())
+            values = ",".join(connection.execute("SELECT quote(?)", (value,)).fetchone()[0] for value in journal)
+        supplement = ("-- Interrupted cleanup row written by 0.54.1 cleanup_plan and cleanup_apply.\n"
+                      "-- Original floor stock stays unchanged; load this row for 31 -> 32 preservation checks.\n"
+                      "DELETE FROM macro_task_deletions;\n"
+                      f"INSERT INTO workspace_cleanup_plans({columns}) VALUES({values});\n")
+        (output / "schema-31-cleanup-stock.sql").write_text(
+            supplement.replace(str(work), "<fixture-root>"), encoding="utf-8", newline="\n")
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
 
 

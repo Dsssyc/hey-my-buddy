@@ -404,6 +404,17 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
                 reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons))
+    from . import reclamation
+    native = reclamation.native_roots(store)
+    native_tasks = reclamation.native_task_ids(store) if native else {}
+    with store.db.read() as connection:
+        for path in native:
+            task_id = native_tasks.get(path.name)
+            run = reclamation.native_owner(connection, task_id) if task_id is not None else None
+            reasons = reclamation.native_reasons(store, connection, run, datetime.fromisoformat(store.now()))
+            if reasons or private_dirs.linked(path):
+                add('harnesses', path, reasons, runId=run['run_id'] if run is not None else None,
+                    adapter=path.parent.parent.name)
     harnesses = state / 'harnesses'
     sessions = state / 'sessions'
     if sessions.exists():
@@ -551,7 +562,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key in ('session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
+    for key in ('harnesses', 'session-records', 'workspaces', 'runtimes', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,
@@ -600,7 +611,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal is absent from its original plan')
     candidate = matches[0]
     category = candidate.get('category')
-    if (candidate.get('eligible') is not True or category not in ('harnesses', 'runtimes') or
+    if (candidate.get('eligible') is not True or category != 'runtimes' or
             any(pending.get(key) != candidate.get(key) for key in ('id', 'path', 'fingerprint', 'bytes')) or
             not isinstance(pending.get('path'), str) or not is_absolute_path(pending['path']) or
             pending['id'] != hashlib.sha256(pending['path'].encode()).hexdigest()[:24]):
@@ -608,11 +619,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
     original = Path(pending['path'])
     if '..' in original.parts:
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is not a live candidate')
-    if category == 'runtimes':
-        allowed = original.parent == runtime_root().absolute()
-    else:
-        allowed = any(original.parent == Path(state).absolute() / 'harnesses' / adapter / 'micro-tasks'
-                      for adapter in private_dirs.ADAPTERS)
+    allowed = original.parent == runtime_root().absolute()
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
     if (not allowed or pending.get('tomb') != str(tomb) or
             type(pending.get('device')) is not int or type(pending.get('inode')) is not int):
@@ -678,17 +685,14 @@ def apply(store, params: dict) -> dict:
             result = saved
         if result.get('pending'):
             pending = result['pending']
-            runtime_pending = next(row for row in planned['candidates']
-                                   if row['id'] == pending['id'])['category'] == 'runtimes'
             with ExitStack() as removal:
-                if runtime_pending:
-                    original, tomb = Path(pending['path']), Path(pending['tomb'])
-                    removal.enter_context(_runtime_removal_locks(original, create=True))
-                    remaining = original if original.exists() else tomb
-                    if remaining.is_dir():
-                        _, commands, known = process_inventory(store.directory.resolve())
-                        if runtime_usage(remaining, commands, known):
-                            raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
+                original, tomb = Path(pending['path']), Path(pending['tomb'])
+                removal.enter_context(_runtime_removal_locks(original, create=True))
+                remaining = original if original.exists() else tomb
+                if remaining.is_dir():
+                    _, commands, known = process_inventory(store.directory.resolve())
+                    if runtime_usage(remaining, commands, known):
+                        raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
                 _finish_pending(result, receipt)
         # The plan proved Git state before confirmation. The removal paths prove
         # it again under their own deletion fences, after this board inventory.

@@ -193,6 +193,7 @@ class DaemonAdmissionTests(BoardTestCase):
     def test_maintenance_reclaims_at_startup_and_every_sixty_seconds(self):
         daemon = Daemon(self.directory / 'state')
         self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
         clock = [0]
         daemon.stopping = Mock()
         daemon.stopping.is_set.side_effect = lambda: clock[0] >= 64
@@ -207,3 +208,26 @@ class DaemonAdmissionTests(BoardTestCase):
             daemon._maintain()
         self.assertEqual(reclaimed, [0, 60])
         self.assertGreaterEqual(recover.call_count, 1)
+
+    def test_reclamation_exception_keeps_maintenance_and_execution_recovery_alive(self):
+        for failure in (BoardError('STORAGE_UNSAFE', 'fixture storage root'), OSError('fixture I/O'),
+                        RuntimeError('fixture unexpected failure')):
+            with self.subTest(failure=type(failure).__name__):
+                daemon = Daemon(self.directory / type(failure).__name__)
+                self.addCleanup(daemon.store.db.close)
+                daemon.store.initialize()
+                clock = [0]
+                daemon.stopping = Mock()
+                daemon.stopping.is_set.side_effect = lambda: clock[0] >= 20
+                def wait(seconds):
+                    clock[0] += seconds
+                    return False
+                daemon.stopping.wait.side_effect = wait
+                with patch('hey_my_buddy.blackboard.service.daemon.time.monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(daemon, '_reclaim_storage', side_effect=failure), \
+                     patch.object(daemon.store, 'recover_executions') as recover:
+                    daemon._maintain()
+                self.assertEqual(recover.call_count, 1)
+                issues = daemon.store.service_issues()
+                self.assertEqual(issues[0]['stage'], 'storage-reclamation')
+                self.assertEqual(issues[0]['message'], str(failure))

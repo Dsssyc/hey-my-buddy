@@ -15,7 +15,7 @@ from ..store.db import sha256_text
 _CURRENT_VIEW_KINDS = frozenset({
     "workflow.decide", "workflow.continue", "workflow.takeover", "workflow.cancel",
     "workflow.accept", "workflow.conclude", "workflow.scope_amend",
-    "workflow.workspace_resolve", "workflow.cleanup_plan", "workflow.cleanup_apply",
+    "workflow.workspace_resolve",
 })
 
 def stored_response(kind: str, response: dict) -> dict:
@@ -58,8 +58,6 @@ def stored_response(kind: str, response: dict) -> dict:
                       artifactId=response["artifactId"],
                       nextBoundaryRequestId=response["nextBoundaryRequestId"],
                       delivered=response["delivered"])
-    elif kind in ("workflow.cleanup_plan", "workflow.cleanup_apply"):
-        stored.update(targetRunId=response["targetRunId"], planId=response["plan"]["planId"])
     return stored
 
 
@@ -161,12 +159,4 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
             nextBoundaryRequestId=stored["nextBoundaryRequestId"],
             targetRunId=stored["targetRunId"], targetRevision=run["revision"],
         )
-    elif kind in ("workflow.cleanup_plan", "workflow.cleanup_apply"):
-        plan = connection.execute(
-            "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (stored["planId"],)
-        ).fetchone()
-        result.update(plan=coordinator._plan_view(plan),
-                      targetRunId=stored["targetRunId"], targetRevision=run["revision"])
-        if kind == "workflow.cleanup_apply":
-            result.update(removed=True, retention=coordinator._plan_view(plan)["retention"])
     return result

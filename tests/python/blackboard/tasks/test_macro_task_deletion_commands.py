@@ -172,7 +172,7 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         assert_deleted_receipts(self, board, "run:" + submitted["runId"],
                                 {"workflow.workspace_resolve", "workflow.cancel"}, set(), {submitted["runId"]})
 
-    def test_cleanup_plan_and_apply_commands_are_tombstoned(self):
+    def test_cleanup_journal_is_deleted_with_its_micro_task(self):
         board = self.board()
         submitted = self.micro_task_submit(board, request_id="commands-cleanup", scope=(".",), kind="worktree")
         run_id = submitted["runId"]
@@ -191,15 +191,13 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
             })
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
-            "commandId": "commands-plan",
         })
         board.store.workflow.cleanup_apply({
             "runId": run_id,
             "planId": planned["plan"]["planId"],
-            "commandId": "commands-apply",
             "confirmPath": planned["plan"]["path"],
         })
         self.assertFalse(checkout.exists())
         assert_deleted_receipts(self, board, "run:" + run_id,
-                                {"workflow.accept", "workflow.cleanup_plan", "workflow.cleanup_apply"}, set(),
+                                {"workflow.accept"}, set(),
                                 {run_id})

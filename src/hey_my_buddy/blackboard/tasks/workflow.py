@@ -4672,28 +4672,35 @@ class WorkflowCoordinator:
             if not any(item.get("kind") == "worktree" and item.get("checkoutId") == manifest["checkoutId"]
                        and item.get("repositoryId") == manifest["repositoryId"] for item in provenance):
                 return {"removed": False, "reasons": ["not-a-managed-worktree"]}
-        command = "reclaim-" + uuid.uuid4().hex
-        params = {"runId": run_id, "commandId": command}
+        params = {"runId": run_id}
         planned = None
         try:
             planned = self.cleanup_plan(params)
             plan = planned["plan"]
             if plan["state"] != "applied":
                 applied = self.cleanup_apply({
-                    "runId": run_id, "commandId": command + "-apply",
-                    "planId": plan["planId"], "confirmPath": plan["path"],
+                    "runId": run_id, "planId": plan["planId"], "confirmPath": plan["path"],
                 })
                 plan = applied["plan"]
         except BoardError as error:
             if error.code == "TASK_DELETING":
                 raise
+            if error.code == 'WORKSPACE_BUSY':
+                with self.db.read() as connection:
+                    current = connection.execute(
+                        "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=? AND state='applied'",
+                        (run_id, manifest['checkoutId'])).fetchone()
+                if current is not None:
+                    done = self._plan_view(current)
+                    return {'removed': True, 'alreadyRemoved': True, 'path': done['path'],
+                            'planId': done['planId'], 'retention': done['retention']}
             result = {"removed": False, "reasons": error.details.get("reasons") or [error.code]}
             if planned is not None:
                 result.update(planId=planned["plan"]["planId"], path=planned["plan"]["path"])
             if error.code == "NOT_READY":
                 result.update({key: value for key, value in error.details.items()
                                if key in ("attachedBranch", "reason") or key.startswith("unsealedPaths")})
-            else:
+            elif error.code != 'WORKSPACE_BUSY':
                 result["detail"] = error.message
             return result
         return {"removed": True, "alreadyRemoved": bool((plan["result"] or {}).get("alreadyRemoved")),
@@ -5242,7 +5249,7 @@ class WorkflowCoordinator:
         """
         rows = connection.execute(
             "WITH candidates(body, source, position) AS ("
-            " SELECT manifest_json, 0, rowid FROM workflow_artifacts WHERE run_id=:run_id"
+            " SELECT manifest_json, 0, rowid FROM workflow_artifacts WHERE run_id=:run_id AND kind='input'"
             " UNION ALL SELECT json_extract(input_json,'$.executionWorkspace'), 1, turn_index"
             " FROM workflow_turns WHERE run_id=:run_id"
             " UNION ALL SELECT workspace_manifest_json, 2, rowid"
@@ -5333,12 +5340,8 @@ class WorkflowCoordinator:
 
     def cleanup_plan(self, params: dict) -> dict:
         """Name one allocation in the internal journal; deletion proves live facts."""
-        run_id, command_id = params["runId"], params["commandId"]
-        request_key = {"runId": run_id}
+        run_id = params["runId"]
         with self.db.read() as connection:
-            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
-            if receipt is not None:
-                return {**receipt, "duplicate": True}
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"])
@@ -5373,18 +5376,28 @@ class WorkflowCoordinator:
                 "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=? ORDER BY rowid DESC LIMIT 1",
                 (run_id, manifest["checkoutId"]),
             ).fetchone()
-            if existing is not None:
+            fields = ('workspace_id', 'repository_id', 'path', 'kind')
+            identity = (workspace['workspaceId'], workspace['repositoryId'], workspace['path'], workspace['kind'])
+            if existing is not None and (existing['state'] in ('applying', 'applied')
+                                         or tuple(existing[field] for field in fields) == identity):
                 return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
-            plan_id = "cln-" + uuid.uuid4().hex
-            connection.execute(
-                "INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,repository_id,path,"
-                "kind,state,evidence_json,retention_json,reasons_json,command_id,created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (plan_id, run_id, workspace["workspaceId"], workspace["checkoutId"], workspace["repositoryId"],
-                 workspace["path"], workspace["kind"], "blocked" if reasons else "planned",
-                 canonical_json(evidence), canonical_json(retention), canonical_json(reasons), command_id, now),
-            )
+            plan_id = existing['plan_id'] if existing is not None else "cln-" + uuid.uuid4().hex
+            if existing is not None:
+                connection.execute(
+                    "UPDATE workspace_cleanup_plans SET workspace_id=?,repository_id=?,path=?,kind=?,state=?,"
+                    "evidence_json=?,retention_json=?,reasons_json=?,revision=revision+1 WHERE plan_id=?",
+                    (*identity, "blocked" if reasons else "planned", canonical_json(evidence), canonical_json(retention),
+                     canonical_json(reasons), plan_id))
+            else:
+                connection.execute(
+                    "INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,repository_id,path,"
+                    "kind,state,evidence_json,retention_json,reasons_json,created_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (plan_id, run_id, workspace["workspaceId"], workspace["checkoutId"], workspace["repositoryId"],
+                     workspace["path"], workspace["kind"], "blocked" if reasons else "planned",
+                     canonical_json(evidence), canonical_json(retention), canonical_json(reasons), now),
+                )
             self.board._append_event(connection, "workflow.cleanup_planned", task_id=run_id,
                                      revision=run_row["revision"] + 1,
                                      payload={"planId": plan_id, "path": workspace["path"],
@@ -5393,7 +5406,6 @@ class WorkflowCoordinator:
             plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
             response = {**self.compact(connection, run_row), "duplicate": False, "plan": self._plan_view(plan),
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
-            self.board._store_receipt(connection, command_id, "workflow.cleanup_plan", request_key, response, task_id=run_id)
             head = self.board._head_of(connection)
         self.board._notify(head)
         return response
@@ -5414,8 +5426,7 @@ class WorkflowCoordinator:
 
     def cleanup_apply(self, params: dict) -> dict:
         """Prove a terminal allocation once under its lock, fence, then remove it."""
-        run_id, command_id, plan_id = params["runId"], params["commandId"], params["planId"]
-        request_key = {"runId": run_id, "planId": plan_id, "confirmPath": params["confirmPath"]}
+        run_id, plan_id = params["runId"], params["planId"]
         with self.db.read() as connection:
             plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=? AND run_id=?",
                                       (plan_id, run_id)).fetchone()
@@ -5427,9 +5438,6 @@ class WorkflowCoordinator:
         with self._cleanup_allocation_lock(self.board.directory, {"workspaceId": plan["workspace_id"]}):
             with self.db.read() as connection:
                 reject_deleting_run(connection, run_id)
-                receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
-                if receipt is not None:
-                    return {**receipt, "duplicate": True}
                 run_row = self._run_row(connection, run_id)
                 snapshot_revision = run_row["revision"]
                 plan = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (plan_id,)).fetchone()
@@ -5496,8 +5504,8 @@ class WorkflowCoordinator:
                 if state != plan["state"] or reasons != json.loads(plan["reasons_json"]) or detail_changed:
                     connection.execute(
                         "UPDATE workspace_cleanup_plans SET state=?,evidence_json=?,retention_json=?,reasons_json=?,"
-                        "command_id=?,revision=revision+1 WHERE plan_id=?",
-                        (state, canonical_json(evidence), canonical_json(retention), canonical_json(reasons), command_id, plan_id))
+                        "revision=revision+1 WHERE plan_id=?",
+                        (state, canonical_json(evidence), canonical_json(retention), canonical_json(reasons), plan_id))
                     self.board._append_event(connection, "workflow.cleanup_blocked" if reasons else "workflow.cleanup_applying",
                                              task_id=run_id, payload={"planId": plan_id, "reasons": reasons})
                 head = self.board._head_of(connection)
@@ -5525,7 +5533,6 @@ class WorkflowCoordinator:
                 response = {**self.compact(connection, run_row), "duplicate": False, "plan": plan_view,
                             "removed": True, "retention": plan_view["retention"],
                             "targetRunId": run_id, "targetRevision": run_row["revision"]}
-                self.board._store_receipt(connection, command_id, "workflow.cleanup_apply", request_key, response, task_id=run_id)
                 head = self.board._head_of(connection)
             self.board._notify(head)
             return response
@@ -6088,7 +6095,7 @@ class WorkflowCoordinator:
             "SELECT r.* FROM workflow_runs r JOIN workflow_children c ON c.child_task_id=r.run_id"
             " WHERE c.parent_run_id=?", (run_row["run_id"],)
         ):
-            provenance.extend(self._allocation_provenance(connection, child))
+            provenance.extend([json.loads(child["workspace_manifest_json"]), *self._allocation_provenance(connection, child)])
         digests = {item["manifestSha256"] for item in provenance
                    if item.get("checkoutId") == checkout_id
                    and item.get("repositoryId") == manifest["repositoryId"]

@@ -264,7 +264,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         planned = board.store.workflow.cleanup_plan({
             "runId": view["runId"],
-            "commandId": "plan-before-takeover",
         })
         taken = board.call("workflow_takeover", {
             "runId": view["runId"], "commandId": "planned-reclaim-takeover",
@@ -273,7 +272,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         current = self.view(board, view["runId"])
         applied = board.store.workflow.cleanup_apply({
             "runId": view["runId"],
-            "commandId": "apply-after-takeover",
             "planId": planned["plan"]["planId"],
             "confirmPath": str(checkout),
         })
@@ -327,7 +325,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         planned = board.store.workflow.cleanup_plan({
             "runId": submitted["runId"],
-            "commandId": "plan-before-missing",
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         (checkout / "tracked.txt").unlink()
@@ -335,7 +332,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             with self.assertRaises(BoardError) as refused:
                 board.store.workflow.cleanup_apply({
                     "runId": submitted["runId"],
-                    "commandId": "apply-after-missing",
                     "planId": planned["plan"]["planId"],
                     "confirmPath": str(checkout),
                 })
@@ -359,7 +355,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
 
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
-            "commandId": "plan-attached",
         })
         plan = planned["plan"]
         self.assertEqual(plan["state"], "planned")
@@ -422,7 +417,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         run_id = submitted["runId"]
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
-            "commandId": "plan-before-branch",
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         # The branch appears between planning and applying.
@@ -435,7 +429,6 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             board.store.workflow.cleanup_apply({
                 "runId": run_id,
                 "planId": planned["plan"]["planId"],
-                "commandId": "apply-attached",
                 "confirmPath": planned["plan"]["path"],
             })
         self.assertEqual(raised.exception.code, "NOT_READY")

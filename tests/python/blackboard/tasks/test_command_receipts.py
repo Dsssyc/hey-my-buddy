@@ -268,7 +268,7 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         self.assertEqual(replayed["integrationId"], first["integrationId"])
         self.assertEqual(replayed["resolutionDelivery"], first["resolutionDelivery"])
 
-    def test_cleanup_plan_replay_reads_the_applied_journal(self):
+    def test_cleanup_idempotency_uses_the_journal_without_command_receipts(self):
         board = self.board()
         submitted = self.micro_task_submit(board, request_id="receipt-cleanup", scope=(".",), kind="worktree")
         run_id = submitted["runId"]
@@ -287,25 +287,22 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             })
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
-            "commandId": "receipt-plan",
         })
         applied = board.store.workflow.cleanup_apply({
             "runId": run_id,
             "planId": planned["plan"]["planId"],
-            "commandId": "receipt-apply",
             "confirmPath": planned["plan"]["path"],
         })
         self.assertFalse(checkout.exists())
-        for kind, original in (("workflow.cleanup_plan", planned), ("workflow.cleanup_apply", applied)):
-            with self.subTest(kind=kind):
-                stored, rebuilt, current = replay(board, kind, original)
-                self.assertEqual(rebuilt["revision"], current["revision"])
-                self.assertEqual(rebuilt["plan"], applied["plan"])
-                self.assertEqual(stored["planId"], planned["plan"]["planId"])
-                self.assertNotIn("workspace", stored)
-        _, applied_replay, _ = replay(board, "workflow.cleanup_apply", applied)
-        self.assertTrue(applied_replay["removed"])
-        self.assertEqual(applied_replay["retention"], applied["retention"])
+        repeated = board.store.workflow.cleanup_plan({'runId': run_id})
+        replayed = board.store.workflow.cleanup_apply({'runId': run_id, 'planId': planned['plan']['planId'],
+                                                      'confirmPath': planned['plan']['path']})
+        self.assertEqual(repeated['plan'], applied['plan'])
+        self.assertTrue(replayed['removed'])
+        self.assertTrue(replayed['duplicate'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
+                                               " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
 
     def test_cleanup_apply_accepts_an_already_gone_allocation(self):
         board = self.board()
@@ -326,7 +323,6 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             })
         planned = board.store.workflow.cleanup_plan({
             "runId": run_id,
-            "commandId": "missing-allocation-plan",
         })
         shutil.rmtree(self.directory / "workspaces" / manifest["workspaceId"])
         with board.store.db.read() as connection:
@@ -337,7 +333,6 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         applied = board.store.workflow.cleanup_apply({
             "runId": run_id,
             "planId": planned["plan"]["planId"],
-            "commandId": "missing-allocation-apply",
             "confirmPath": planned["plan"]["path"],
         })
         self.assertTrue(applied["removed"])
@@ -354,12 +349,10 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         operations = (
             lambda: board.store.workflow.cleanup_plan({
                 'runId': run_id,
-                'commandId': 'gone-replan',
             }),
             lambda: board.store.workflow.cleanup_apply({
                 'runId': run_id,
                 'planId': planned['plan']['planId'],
-                'commandId': 'gone-reapply',
                 'confirmPath': planned['plan']['path'],
             }),
             lambda: board.call('workflow_reclaim',{'runId':run_id,**self.control(accepted)}),

@@ -269,15 +269,16 @@ class LeadShutdownTests(WorkflowTestCase):
             self.conclude(board, lead, "Lead has no further work")
         self.assertEqual(caught.exception.code, "SHUTDOWN_UNCONFIRMED")
         self.finish_turn(board, {"claim": claim}, runner_status="cancelled", seal=False)
-        self.conclude(board, lead, "Lead has no further work")
+        concluded = self.conclude(board, lead, "Lead has no further work")
+        reclaims = {item['runId']: item for item in concluded['ownedReclaims']}
         for name, child in cases.items():
             with self.subTest(outcome=name):
                 view = self.get(board, child)
                 self.assertEqual(view["state"], "concluded")
                 self.assertIsNone(view["hostConclusion"]["note"])
                 self.assertEqual(view["hostConclusion"]["reason"], {"code": "lead.owned-concluded", "params": {"leadRunId": lead["runId"]}})
-                self.assertNotIn("not-accepted", view["cleanup"]["reasons"])
-                self.assertEqual(view["cleanup"]["evidence"]["acceptance"]["state"], "concluded")
+                self.assertIsNone(view["cleanup"])
+                self.assertEqual(reclaims[child['runId']]['reasons'], ['not-a-managed-worktree'])
         accepted = self.get(board, accepted_child)
         self.assertEqual(accepted["state"], "accepted")
         self.assertIsNone(accepted["hostConclusion"])

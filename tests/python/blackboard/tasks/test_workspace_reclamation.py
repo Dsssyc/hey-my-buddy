@@ -226,7 +226,7 @@ class ReclamationTests(LifecycleTestCase):
         self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
         with patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             terminal = board.call('storage_plan', {})
-        self.assertFalse(any(row['runId'] == submitted['runId'] for row in terminal['candidates'] if row.get('runId')))
+        self.assertFalse(any(row['runId'] == submitted['runId'] for row in terminal['candidates'] if row.get('runId') and row['category'] == 'workspaces'))
         self.assertTrue(checkout.exists())
 
     def test_macro_deletion_removes_worker_commits_and_retains_unproven_ownership_for_inventory(self):
@@ -266,3 +266,209 @@ class ReclamationTests(LifecycleTestCase):
                     orphan = next(row for row in inventory['candidates'] if row['path'] == str(checkout))
                     self.assertTrue(orphan['orphan'])
                     self.assertFalse(orphan['eligible'])
+
+    def test_unregistered_allocation_retained_by_an_independent_integration_is_not_deleted(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_allocation
+        from unittest.mock import patch
+        board = self.board()
+        _, _, _, _, _, view, artifact = self.run_worktree(board, request_id='integration-owner')
+        intent = {'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+                  'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
+        manifest = workspace.prepare(board.directory, 'unregistered-integration-target', intent)
+        checkout = Path(manifest['checkoutRoot'])
+        before = git(checkout, 'rev-parse', 'HEAD').strip()
+        git(checkout, 'apply', '--index', artifact['diffPath'])
+        git(checkout, 'commit', '-qm', 'Independent detached integration')
+        integration_head = git(checkout, 'rev-parse', 'HEAD').strip()
+        accepted = self.accept(board, view, artifact, target={'path': checkout, 'ref': 'HEAD', 'before': before})
+        self.assertEqual(accepted['state'], 'accepted')
+        directory = board.directory / 'workspaces' / manifest['workspaceId']
+        refs = git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                   'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/')
+        with patch.object(workspace, 'cleanup_remove', side_effect=AssertionError('Referenced target deleted')):
+            reclaim_allocation(board.store, directory)
+        self.assertTrue(checkout.exists())
+        self.assertEqual(git(checkout, 'rev-parse', 'HEAD').strip(), integration_head)
+        self.assertEqual(git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)',
+                             'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
+
+    def test_unproven_allocation_is_retained_without_a_service_issue(self):
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim
+        board = self.board()
+        directories = []
+        for request_id, request in (('unproven-request', {'requestId': 'someone-else'}),
+                                    ('nonobject-request', []), ('linked-lock', {'requestId': 'linked-lock'})):
+            _, directory = workspace._workspace_directory(board.directory, request_id)
+            if request_id == 'linked-lock':
+                (directory / 'ordinary-file').touch()
+                (directory / '.lock').symlink_to('ordinary-file')
+            else:
+                (directory / '.lock').touch()
+            (directory / 'request.json').write_bytes(workspace._json(request))
+            directories.append(directory)
+        reclaim(board.store)
+        self.assertTrue(all(directory.exists() for directory in directories))
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_warm_maintenance_does_not_revisit_reclaimed_history(self):
+        from hey_my_buddy.blackboard.tasks import reclamation
+        from unittest.mock import patch
+        board = self.board()
+        submitted, _, _, _, _, view, artifact = self.run_worktree(board)
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (submitted['runId'],))
+        maintenance = reclamation.Reclamation(board.store)
+        board.store.on_change = maintenance.changed
+        maintenance.run()
+        with patch.object(board.store.workflow, '_allocation_provenance', side_effect=AssertionError('Historical allocation parsed')), \
+             patch.object(board.store.workflow, 'shutdown_summary', side_effect=AssertionError('Historical stop recomputed')), \
+             patch.object(reclamation, 'native_task_ids', side_effect=AssertionError('Historical task ids scanned')), \
+             patch.object(workspace, '_record', side_effect=AssertionError('Historical allocation directory read')):
+            maintenance.run()
+            maintenance.run()
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_maintenance_releases_storage_lock_between_objects_and_stops_after_current_object(self):
+        import threading
+        from hey_my_buddy.blackboard.tasks import reclamation, storage
+        from unittest.mock import patch
+        board = self.board()
+        for request_id in ('shell-one', 'shell-two'):
+            _, directory = workspace._workspace_directory(board.directory, request_id)
+            (directory / '.lock').touch()
+            (directory / 'request.json').write_bytes(workspace._json({'requestId': request_id}))
+        real = reclamation.reclaim_allocation
+        unlocked = []
+        def remove(store, directory):
+            result = real(store, directory)
+            with storage.locked(store):
+                unlocked.append(directory.name)
+            return result
+        with patch.object(reclamation, 'reclaim_allocation', side_effect=remove):
+            reclamation.Reclamation(board.store).run()
+        self.assertEqual(len(unlocked), 2)
+        stopped = threading.Event()
+        def finish_one(**kwargs):
+            stopped.set()
+            return {'removed': True}
+        with patch.object(reclamation, 'workspace_candidates', return_value=['one', 'two']), \
+             patch.object(board.store.workflow, '_reclaim_checkout', side_effect=finish_one) as cleanup, \
+             patch.object(reclamation, 'reclaim_native', side_effect=AssertionError('Started next object')):
+            reclamation.Reclamation(board.store).run(stopping=stopped.is_set)
+        self.assertEqual(cleanup.call_count, 1)
+
+    def test_task_deletion_invalidates_cached_allocation_ownership_without_a_retained_event(self):
+        from hey_my_buddy.blackboard.tasks import reclamation
+        board = self.board()
+        submitted, _, manifest, _, _, view, artifact = self.run_worktree(board)
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        maintenance = reclamation.Reclamation(board.store)
+        board.store.on_change = maintenance.changed
+        maintenance.run()
+        directory = board.directory / 'workspaces' / manifest['workspaceId']
+        original = (directory / 'request.json').read_bytes()
+        (directory / 'request.json').write_bytes(workspace._json({'requestId': 'unknown-owner'}))
+        target = 'run:' + submitted['runId']
+        preview = board.console_call('macro_task_deletion_preview', {'macroTaskId': target})
+        deleted = board.console_call('macro_task_delete', {'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True})
+        self.assertEqual(deleted['state'], 'deleted')
+        self.assertTrue(directory.exists())
+        maintenance.run()
+        self.assertEqual(board.store.service_issues(), [])
+        (directory / 'request.json').write_bytes(original)
+        maintenance.run()
+        self.assertFalse(directory.exists())
+
+    def test_native_reclamation_and_macro_deletion_share_the_storage_lock(self):
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.tasks import macro_task_deletion, reclamation
+        from unittest.mock import patch
+        board = self.board()
+        submitted, _, _, _, _, view, artifact = self.run_worktree(board)
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
+        run_id = submitted['runId']
+        root = private_dirs.ensure_private_dir(private_dirs.micro_task_root(board.directory, 'dsh', run_id))
+        (root / 'evidence.log').write_text('preserve until the owning removal', encoding='utf-8')
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
+        remove = macro_task_deletion._delete_private_roots
+        serialized = []
+        def delete_native(store, scope):
+            reclamation.reclaim_native(store)
+            self.assertTrue(root.exists())
+            serialized.append(True)
+            return remove(store, scope)
+        target = 'run:' + run_id
+        preview = board.console_call('macro_task_deletion_preview', {'macroTaskId': target})
+        with patch.object(macro_task_deletion, '_delete_private_roots', side_effect=delete_native):
+            result = board.console_call('macro_task_delete', {'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True})
+        self.assertEqual(result['state'], 'deleted')
+        self.assertEqual(serialized, [True])
+        self.assertFalse(root.exists())
+        reclamation.reclaim_native(board.store)
+
+    def test_continuation_selects_a_new_manifest_host_seal_and_ignores_another_checkout(self):
+        board = self.board()
+        submitted, claim, _, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
+        run_id = submitted['runId']
+        board.call('workflow_continue', {'runId': run_id, 'commandId': 'prepare-before-cancel',
+                                        'expectedRevision': view['revision'], 'input': 'prepare', 'helperPolicy': 'keep', **self.control(view)})
+        board.store.workflow.prepare_continuation_workspace({'runId': run_id})
+        board.call('workflow_cancel', {'runId': run_id, **self.control(view)})
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            current = json.loads(run['workspace_manifest_json'])
+        (checkout / 'host-stage.txt').write_text('Host progress after preparation', encoding='utf-8')
+        attempt_id = claim['claim']['attempt']['attemptId']
+        host_seal = workspace.host_seal(board.directory, current, run_id, attempt_id)
+        foreign = workspace.prepare(board.directory, 'foreign-handoff', {
+            'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}})
+        foreign_seal = workspace.host_seal(board.directory, foreign, run_id, attempt_id)
+        with board.store.db.write() as connection:
+            pin = board.store.workflow._pin_artifact
+            pin(connection, run_id=run_id, kind='partial-output', manifest=host_seal,
+                attempt_id=attempt_id, turn_id=None, now=board.store.now())
+            pin(connection, run_id=run_id, kind='input', manifest=foreign,
+                attempt_id=None, turn_id=None, now=board.store.now())
+            pin(connection, run_id=run_id, kind='partial-output', manifest=foreign_seal,
+                attempt_id=attempt_id, turn_id=None, now=board.store.now())
+            chosen = board.store.workflow._latest_handoff(connection, run, current)
+        self.assertEqual(chosen['commit'], host_seal['commit'])
+        cancelled = self.view(board, run_id)
+        board.call('workflow_continue', {'runId': run_id, 'commandId': 'continue-host-seal',
+                                        'expectedRevision': cancelled['revision'], 'input': 'finish', **self.control(cancelled)})
+        board.store.workflow.prepare_continuation_workspace({'runId': run_id})
+        with board.store.db.read() as connection:
+            prepared = json.loads(board.store.workflow._run_row(connection, run_id)['workspace_manifest_json'])
+        self.assertEqual(prepared['inputCommit'], host_seal['commit'])
+        self.assertEqual(prepared['checkoutId'], current['checkoutId'])
+
+    def test_current_unstarted_journal_refreshes_its_physical_binding(self):
+        board, submitted, manifest, checkout, _, _ = self.accepted_worktree()
+        coordinator = board.store.workflow
+        plan = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workspace_cleanup_plans SET state='blocked',workspace_id='stale-id',path='stale-path' WHERE plan_id=?", (plan['planId'],))
+        refreshed = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
+        self.assertEqual(refreshed['planId'], plan['planId'])
+        self.assertEqual(refreshed['workspaceId'], manifest['workspaceId'])
+        self.assertEqual(refreshed['path'], str(checkout))
+        self.assertTrue(self.reclaim(board, self.view(board, submitted['runId']))['removed'])
+        self.assertFalse(checkout.exists())
+
+    def test_busy_result_converges_if_a_competing_cleanup_already_committed(self):
+        from unittest.mock import patch
+        from hey_my_buddy.errors import BoardError
+        board, submitted, _, checkout, _, _ = self.accepted_worktree()
+        coordinator = board.store.workflow
+        real_apply = coordinator.cleanup_apply
+        def completed_elsewhere(params):
+            real_apply(params)
+            raise BoardError('WORKSPACE_BUSY', 'The competing operation held the lock')
+        with patch.object(coordinator, 'cleanup_apply', side_effect=completed_elsewhere):
+            result = self.reclaim(board, self.view(board, submitted['runId']))
+        self.assertTrue(result['removed'])
+        self.assertTrue(result['alreadyRemoved'])
+        self.assertFalse(checkout.exists())

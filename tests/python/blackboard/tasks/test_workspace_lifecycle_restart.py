@@ -105,7 +105,6 @@ class RestartLifecycleTests(LifecycleTestCase):
             accepted = self.accept(board, delivered, artifact, target=target)
         planned = board.store.workflow.cleanup_plan({
             "runId": submitted["runId"],
-            "commandId": "restart-plan",
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         files = self.fixed_files()
@@ -125,7 +124,6 @@ class RestartLifecycleTests(LifecycleTestCase):
         removed = board.store.workflow.cleanup_apply({
             "runId": submitted["runId"],
             "planId": planned["plan"]["planId"],
-            "commandId": "restart-apply-plan",
             "confirmPath": planned["plan"]["path"],
         })
         self.assertTrue(removed["removed"])

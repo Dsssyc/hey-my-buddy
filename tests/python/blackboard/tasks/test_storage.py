@@ -68,7 +68,9 @@ class StorageTests(BoardTestCase):
              mock.patch.object(storage, 'tree_info', side_effect=growing):
             report = storage.inspect(board.store)
         records = [row for row in report['candidates'] if row['category'] == 'session-records']
-        self.assertFalse(any(row['category'] == 'harnesses' for row in report['candidates']))
+        parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
+        self.assertEqual(parent['reasons'], ['owner-unproven'])
+        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
         self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
         self.assertEqual(category['bytes'], native_path(first).stat().st_size + native_path(second).stat().st_size)
@@ -456,11 +458,13 @@ class StorageTests(BoardTestCase):
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             candidates = storage.inspect(board.store)['candidates']
         self.assertFalse(any(Path(row['path']).is_relative_to(user_home) for row in candidates))
-        self.assertFalse(any(row.get('adapter') == 'codex' for row in candidates))
+        private = next(row for row in candidates if row.get('adapter') == 'codex')
+        self.assertEqual(private['bytes'], 0)
+        self.assertFalse(private['eligible'])
         private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'fixture-task'))
         self.assertEqual(session.read_bytes(), b'user-owned native session')
 
-    def test_native_micro_task_roots_are_owned_by_service_reclamation(self):
+    def test_native_roots_without_an_owner_remain_visible_and_protected(self):
         board = self.board()
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
@@ -469,7 +473,8 @@ class StorageTests(BoardTestCase):
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             micro_tasks = [row for row in planned['candidates'] if row['category'] == 'harnesses']
-            self.assertEqual(micro_tasks, [])
+            self.assertEqual({row['adapter'] for row in micro_tasks}, {'codex', 'claude', 'dsh', 'zcode'})
+            self.assertTrue(all(row['reasons'] == ['owner-unproven'] and not row['eligible'] for row in micro_tasks))
             board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-micro-tasks', 'confirm':True})
 
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
