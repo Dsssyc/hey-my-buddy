@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
 import { createTimelineLayout, TIMELINE_FOLD_THRESHOLD_MS } from "./objective-timeline-layout";
 import { scaleTimeline } from "./objective-timeline-scale";
 import type { SpanOutcome, TimelineItem } from "./objective-display";
 import {
-  buildChronology, clockSeconds, clockTime, configurationLabel, durationShort, eventVocab, outcomeLabel,
+  buildChronology, clockSeconds, clockTime, configurationLabel, displayTitle, durationShort, eventVocab, outcomeLabel,
   paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem, eventItem, toMs, configurationPalette,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
@@ -37,7 +37,8 @@ export type ObjectiveTimelineProps = {
   openedRunId: string | null;
   /** The pinned inspector selection; a refresh never clears it. */
   selection: InspectorSelection | null;
-  locked: boolean;
+  /** Objective-level actions rendered in the overview header (停止目标, U4). */
+  headerActions?: ReactNode;
   expandedGapIds: ReadonlySet<string>;
   onToggleGap: (gapId: string) => void;
   onSetExpanded: (gapIds: Set<string>) => void;
@@ -94,7 +95,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
     };
     const update = () => {
       const width = element.clientWidth;
-      if (width > 0) setViewport(Math.max(120, Math.round(width - labelWidth())));
+      // Track viewport floor 380 (design §1): with the label column the
+      // timeline content stays ≥560 and scrolls horizontally below that.
+      if (width > 0) setViewport(Math.max(380, Math.round(width - labelWidth())));
     };
     update();
     if (typeof ResizeObserver === "undefined") return;
@@ -566,6 +569,9 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
               {timeline.rows.map(row => {
                 const state = rowStateInfo(row);
                 const label = rowLabelItem(row);
+                // One line of ~40 characters for a task first-line fallback,
+                // with the 取自任务首行 note instead of the full text (U3).
+                const title = displayTitle(row.titleSource, row.title);
                 const unplaced = (spansByRun.get(row.runId) ?? []).filter(span => {
                   const facts = factsBySpan.get(span.spanId);
                   return !facts || facts.item.atMs === null || facts.endMs === null
@@ -581,7 +587,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
                     style={{ "--depth": row.depth } as CSSProperties}
                     data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
-                    title={row.title} aria-label={itemAria(label)}
+                    title={title.fromTask ? `${title.text}（完整任务见详情）` : row.title} aria-label={itemAria(label)}
                     onFocus={() => setFocusKey(label.key)}
                     onMouseEnter={() => setHoverKey(label.key)}
                     onMouseLeave={() => setHoverKey(current => (current === label.key ? null : current))}
@@ -591,10 +597,10 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                       {row.kind === "helper" && <span aria-hidden="true" className="muted">↳</span>}
                       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
                       {props.newRunIds.has(row.runId) && <span className="new-mark">新</span>}
-                      <span className="lbl-name">{row.title}</span>
+                      <span className="lbl-name">{title.text}</span>
                       {runOpened && <span className="opened-mark">详情</span>}
                     </span>
-                    <span className="lbl-sub">{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{configurationLabel(row.configuration)}</span>
+                    <span className="lbl-sub">{title.fromTask ? "取自任务首行 · " : ""}{state.label} · {row.kind === "helper" ? "协助任务 · " : ""}{configurationLabel(row.configuration)}</span>
                     {unplaced > 0 && <span className="trunc-chip" title="这些片段的时间缺失或颠倒，未在时间轴上放置">⚠ {unplaced} 段时间缺失</span>}
                   </button>
                   <div className="tl-track">
@@ -625,7 +631,6 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
             previewClusterHead={activeCluster ? activeCluster.head : null}
             timeline={timeline} itemsByKey={itemsByKey}
             truncatedEvents={!!timeline.truncated.events}
-            locked={props.locked} lockedRunId={openedRunId}
             onOpen={props.onOpenItem} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun}
             onUnpin={props.onClearSelection} />
         </div>
@@ -634,8 +639,13 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
   return <div className="timeline-view" ref={rootRef} hidden={hidden}>
     <ObjectiveOverview summary={props.summary} timeline={timeline} loading={loading} stale={stale}
       selectedRunId={selectedRunId} onSelectRun={props.onSelectRun} onOpenRun={props.onOpenRun}
-      onBackToList={props.onBackToList} />
+      onBackToList={props.onBackToList} headerActions={props.headerActions} />
     <div className="tl-toolbar">
+      <div className="legend hierarchy-legend" aria-label="层级图例"
+        title="工作目标归档一组受治理的委派；委派是一次 Host 授权的执行；协助任务由委派派生；回合是委派内的每次执行片段。">
+        <span className="legend-title">层级</span>
+        <span className="legend-item">工作目标 ▸ 委派 ▸ 协助任务 ▸ 回合</span>
+      </div>
       <div className="legend" aria-label="执行配置图例">
         <span className="legend-title">执行配置</span>
         {palette.length ? palette.map(entry => <span key={entry.key} className="legend-item">

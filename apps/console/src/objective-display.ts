@@ -18,6 +18,7 @@ import type {
 } from "./objective-types";
 import { TIMELINE_FOLD_THRESHOLD_MS, parseTimelineInstant } from "./objective-timeline-layout";
 import type { TimelineGap } from "./objective-timeline-layout";
+import { excerpt } from "./task-state";
 
 export type SectionId = "overview" | "routing" | "assistance" | "artifacts" | "execution";
 
@@ -146,6 +147,35 @@ export function rowStateInfo(row: TimelineRow): { label: string; tone: "green" |
 export const TITLE_SOURCE_LABEL: Record<string, string> = {
   objective: "工作目标标题", title: "Host 标题", task: "原始任务首行", none: "未命名委派",
 };
+
+/* ---- one-line title presentation (0.15.1 U3) ---- */
+
+/** `titleSource: task` labels cap at roughly this many characters on one line. */
+export const TASK_TITLE_CHARS = 40;
+/** Annotation shown wherever a task-first-line title is displayed. */
+export const TASK_SOURCE_NOTE = "取自任务首行";
+
+export type TitleLine = {
+  /** The text lists, labels and cards show; single line. */
+  text: string;
+  /** True when the recorded title was longer than the display cap. */
+  clipped: boolean;
+  /** True for `titleSource: "task"`; callers add the 取自任务首行 note. */
+  fromTask: boolean;
+};
+
+/**
+ * One-line title for lists, timeline labels, chronology and cards. A task
+ * first-line fallback is capped at ~40 characters so a whole task paragraph
+ * never masquerades as a title; explicit objective/Host titles keep their
+ * recorded bounded text. Full task/title content is only shown in detail, so
+ * callers must not put the full text into a `title` tooltip either.
+ */
+export function displayTitle(titleSource: string, title: string): TitleLine {
+  const fromTask = titleSource === "task";
+  const text = fromTask ? excerpt(title, TASK_TITLE_CHARS) : title;
+  return { text, clipped: text !== title, fromTask };
+}
 
 /* ---- configuration identity and colour assignment ---- */
 
@@ -307,7 +337,7 @@ export function spanFacts(
   const outcome = spanOutcome(span);
   const { startMs, recordedEndMs, endMs } = spanPlacement(span, observedAtMs);
   const head = spanHead(span.kind);
-  const parts: string[] = [row.title];
+  const parts: string[] = [displayTitle(row.titleSource, row.title).text];
   if (span.kind === "execution" || span.kind === "routing") {
     if (span.turnIndex !== null && span.turnIndex !== undefined) parts.push(`第 ${span.turnIndex} 轮`);
     if (span.kind === "routing" && span.decisionTaskId) parts.push(`内部路由计算 ${span.decisionTaskId}`);
@@ -348,13 +378,14 @@ export function rowLabelItem(row: TimelineRow): TimelineItem {
   const state = rowStateInfo(row);
   const level = row.depth + 1;
   const hierarchy = row.kind === "helper" ? `层级 ${level}，协助任务，` : "";
+  const title = displayTitle(row.titleSource, row.title);
   return {
     key: `row:${row.runId}`,
     runId: row.runId,
     section: "overview",
     head: "委派",
-    parts: [row.title, `${hierarchy}${state.label}`, `标题来源：${TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource}`],
-    locator: `委派 · ${row.title}`,
+    parts: [title.text, `${hierarchy}${state.label}`, `标题来源：${TITLE_SOURCE_LABEL[row.titleSource] || row.titleSource}`],
+    locator: `委派 · ${title.text}`,
     atMs: null,
   };
 }
@@ -377,7 +408,7 @@ export function settleItem(row: TimelineRow): TimelineItem | null {
 export function eventItem(event: TimelineEvent, rowsById: Map<string, TimelineRow>): TimelineItem {
   const vocab = eventVocab(event.kind);
   const row = rowsById.get(event.runId);
-  const title = row?.title ?? `委派 ${event.runId}`;
+  const title = row ? displayTitle(row.titleSource, row.title).text : `委派 ${event.runId}`;
   return {
     key: `event:${event.seq}`,
     runId: event.runId,

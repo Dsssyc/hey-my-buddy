@@ -6,19 +6,16 @@ import { Empty, formatDate, Status } from "./ui";
 import { excerpt, needsReview, taskStatus, taskTitle } from "./task-state";
 import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
-import { RecordDrafts } from "./record-drafts";
 import { SplitView } from "./SplitView";
 import { mergeLiveTasks, useTaskHistory } from "./use-task-history";
-import type { AuthorityLatch } from "./console-session";
 
-export function Tasks({ snapshot, api, refresh, active = true, authority, writesAvailable = true }: {
+export function Tasks({ snapshot, api, refresh, active = true }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active?: boolean;
-  authority?: AuthorityLatch; writesAvailable?: boolean;
 }) {
   const [filter, setFilter] = useState<TaskQuery["filter"]>("all"), [query, setQuery] = useState("");
   const [projectId, setProjectId] = useState(""), [hostId, setHostId] = useState(""), [internal, setInternal] = useState(false);
   const [selected, setSelected] = useState<string | null>(null), [remote, setRemote] = useState<Task | null>(null);
-  const [detailError, setDetailError] = useState(""), [locked, setLocked] = useState(false);
+  const [detailError, setDetailError] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const history = useTaskHistory(api, { rootsOnly: !internal, query, projectId, hostId, filter }, active);
   const tasks = mergeLiveTasks(history.runs, snapshot.tasks.runs);
@@ -62,7 +59,6 @@ export function Tasks({ snapshot, api, refresh, active = true, authority, writes
     return () => { current = false; };
   }, [api, selected, active, !!task]);
   function selectTask(id: string | null) {
-    if (locked) return;
     const next = tasks.find(t => t.runId === id) || snapshot.tasks.runs.find(t => t.runId === id);
     setRemote(next || null);
     setSelected(id); setDetailError("");
@@ -111,7 +107,7 @@ export function Tasks({ snapshot, api, refresh, active = true, authority, writes
           // window agrees with the open detail; badges and filters keep the row.
           const rowTask = task && row.runId === task.runId ? task : row;
           return <li key={row.runId} data-run-id={row.runId}>
-          <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} disabled={locked && selected !== row.runId} onClick={() => selectTask(row.runId)}>
+          <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
             <strong className="task-title">{excerpt(taskTitle(rowTask), 100)}</strong>
             <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
@@ -126,8 +122,8 @@ export function Tasks({ snapshot, api, refresh, active = true, authority, writes
     </div>
   </section>;
   const detail = <aside className="panel detail-panel" aria-label="任务详情">
-    {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onLockChange={setLocked} onTaskUpdate={updateSelected} navigationLocked={locked} authority={authority} writesAvailable={writesAvailable} /> :
+    {task ? <TaskDetails key={task.runId} task={task} snapshot={snapshot} api={api} refresh={reload} selectTask={selectTask} active={active} onTaskUpdate={updateSelected} /> :
       <div className="detail-placeholder"><h2>{selected ? "正在读取委派…" : "选择一项委派"}</h2><p>{detailError || "按项目查看目标、委派方与执行结果。协助任务保留在所属目标的详情中。"}</p></div>}
   </aside>;
-  return <RecordDrafts><SplitView selected={!!selected} list={list} detail={detail} /></RecordDrafts>;
+  return <SplitView selected={!!selected} list={list} detail={detail} />;
 }

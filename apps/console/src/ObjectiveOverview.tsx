@@ -1,23 +1,41 @@
 import { useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { ObjectiveSummary, ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
-import type { TimelineRow } from "./objective-types";
 import { Badge } from "./ui";
 import { excerpt } from "./task-state";
 import {
-  CATEGORY_LABEL, COUNT_ORDER, categoryTone, clockSeconds, clockTime, durationText, rowStateInfo, totalDelegations,
+  CATEGORY_LABEL, TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
+  relativeTime, rowStateInfo,
 } from "./objective-display";
 import { buildInspectorCard } from "./inspector-card";
-import { latestExecutionResult, objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
+import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
 
-/** One root delegation's honest one-line rollup: result, acceptance, pending. */
-function rollupFacts(rollup: RunRollup): { result: string; acceptance: string; pending: number; rounds: number } {
-  const latest = latestExecutionResult(rollup);
-  const result = latest ? latest.label : "未执行";
-  const acceptance = rollup.row.acceptanceVerdict === "rejected" ? "验收问题"
-    : rollup.row.acceptanceVerdict === "accepted" ? "已验收"
-      : rollup.row.category === "review" ? "待验收" : "—";
-  return { result, acceptance, pending: rollup.pending.length, rounds: rollup.executions.length };
+/** One labeled single-line row of an overview card (0.15.1 U2). */
+function CardRow({ label, text, title }: { label: string; text: string; title?: string }) {
+  return <span className="card-row">
+    <span className="card-row-label">{label}</span>
+    <span className="card-row-text" title={title}>{text}</span>
+  </span>;
+}
+
+/**
+ * The fixed three-row delegation overview (design §4): 做什么 / 目标摘要 /
+ * 结果摘要. Rows always render — missing facts use their placeholders — so
+ * cards never jump. The 目标摘要 carries the 任务开头 prefix and the 结果摘要
+ * the Worker 自述，非验收 suffix; both stay single lines.
+ */
+export function DelegationThreeRows({ title, titleSource, taskSummary, resultSummary }: {
+  title: string | null | undefined;
+  titleSource: string | null | undefined;
+  taskSummary: string | null | undefined;
+  resultSummary: string | null | undefined;
+}) {
+  const titleLine = displayTitle(titleSource ?? "none", title || "未命名委派");
+  return <div className="card-rows three-rows">
+    <CardRow label="做什么" text={titleLine.text + (titleLine.fromTask ? `（${TASK_SOURCE_NOTE}）` : "")} />
+    <CardRow label="目标摘要" text={taskSummary ?? "未记录任务原文"} />
+    <CardRow label="结果摘要" text={(resultSummary ?? "尚无 Worker 结论") + (resultSummary ? "（Worker 自述，非验收）" : "")} />
+  </div>;
 }
 
 function DelegationCard({ rollup, index, selected, tabbable, onSelect, onOpen }: {
@@ -25,26 +43,20 @@ function DelegationCard({ rollup, index, selected, tabbable, onSelect, onOpen }:
   onSelect: (runId: string) => void; onOpen: (runId: string) => void;
 }) {
   const state = rowStateInfo(rollup.row);
-  const facts = rollupFacts(rollup);
-  const execution = rollup.executionMs !== null ? durationText(rollup.executionMs) : null;
   return <button type="button" className={"delegation-card" + (selected ? " selected" : "")}
     aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
-    title={`${rollup.row.title}（单击选中，双击打开详情）`}
+    title={`#${index + 1} ${displayTitle(rollup.row.titleSource, rollup.row.title).text}（单击选中，双击打开详情）`}
     onClick={() => onSelect(rollup.row.runId)}
     onDoubleClick={() => onOpen(rollup.row.runId)}>
     <span className="delegation-card-head">
       <span className="muted">#{index + 1}</span>
       <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
-      <span className="delegation-card-title">{excerpt(rollup.row.title, 80)}</span>
+      <span className="delegation-state muted">{state.label}</span>
+      {rollup.helpers.length ? <span className="muted">协助 {rollup.helpers.length}</span> : null}
     </span>
-    <span className="delegation-card-facts">
-      结果 {facts.result} · 验收 {facts.acceptance} · 待决 {facts.pending}
-      {rollup.helpers.length ? ` · 含 ${rollup.helpers.length} 个协助` : ""}
-    </span>
-    <span className="delegation-card-meta muted">
-      执行 {execution ?? "未记录"} · {facts.rounds} 轮{rollup.limitations.length ? " · 已记录部分" : ""}
-    </span>
+    <DelegationThreeRows title={rollup.row.title} titleSource={rollup.row.titleSource}
+      taskSummary={rollup.row.taskSummary} resultSummary={rollup.row.summary} />
   </button>;
 }
 
@@ -52,14 +64,18 @@ function SingleDelegationCard({ rollup, timeline, onOpen }: {
   rollup: RunRollup; timeline: ObjectiveTimelineData; onOpen: (runId: string) => void;
 }) {
   const card = useMemo(() => buildInspectorCard({ type: "run", runId: rollup.row.runId }, timeline, new Map()), [rollup.row.runId, timeline]);
-  const execution = rollup.executionMs !== null ? durationText(rollup.executionMs) : null;
+  const state = rowStateInfo(rollup.row);
   if (!card) return null;
   return <div className="delegation-card single expanded">
     <div className="inspector-card-head">
-      <strong>{excerpt(rollup.row.title, 100)}</strong>
-      <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
+      <strong>{excerpt(displayTitle(rollup.row.titleSource, rollup.row.title).text, 100)}</strong>
+      <span className="chip-row">
+        <span className={"st " + state.glyphClass} aria-hidden="true">{state.glyph}</span>
+        <button type="button" className="button small-button" onClick={() => onOpen(rollup.row.runId)}>打开详情</button>
+      </span>
     </div>
-    <p className="delegation-metrics">执行占用 {execution ?? "未记录"}{rollup.executions.length ? ` · ${rollup.executions.length} 轮` : ""}{rollup.limitations.length ? " · 已记录部分" : ""}</p>
+    <DelegationThreeRows title={rollup.row.title} titleSource={rollup.row.titleSource}
+      taskSummary={rollup.row.taskSummary} resultSummary={rollup.row.summary} />
     {card.groups.map(group => <div key={group.label} className="inspector-group">
       <span className="inspector-group-label">{group.label}</span>
       <span className="inspector-group-lines">
@@ -71,12 +87,13 @@ function SingleDelegationCard({ rollup, timeline, onOpen }: {
 }
 
 /**
- * The overview header of the timeline view (0.15 C5/C6): recorded facts, the
- * three distinct duration numbers, root delegation cards in creation order —
- * or one expanded card for a single root. Everything derives from the bounded
- * read; missing facts say 未记录 / 不完整 and are never repaired.
+ * The overview header of the timeline view (design §3): beneath a one-line
+ * title and the optional description it shows only the status badge, accepted
+ * progress (x = counts.accepted accepted delegations of y = counts.roots) and
+ * latest activity, plus the hierarchy note. The durations live in a collapsed
+ * 时间统计 disclosure written as plain sentences with their honest caveats.
  */
-export function ObjectiveOverview({ summary, timeline, loading, stale, selectedRunId, onSelectRun, onOpenRun, onBackToList }: {
+export function ObjectiveOverview({ summary, timeline, loading, stale, selectedRunId, onSelectRun, onOpenRun, onBackToList, headerActions }: {
   summary: ObjectiveSummary | null;
   timeline: ObjectiveTimelineData | null;
   loading: boolean;
@@ -85,6 +102,8 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
   onSelectRun: (runId: string) => void;
   onOpenRun: (runId: string) => void;
   onBackToList: () => void;
+  /** Objective-level actions (停止目标 and its honest status). */
+  headerActions?: ReactNode;
 }) {
   const shown = timeline?.objective ?? summary;
   const roots = useMemo(() => (timeline ? rootRollups(timeline) : []), [timeline]);
@@ -107,58 +126,67 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, selectedR
   }
 
   if (!shown) return null;
-  const limitationTitle = metrics?.limitations.map(entry => entry.label).join("；") ?? "";
-  const recordedPart = metrics && metrics.limitations.length > 0;
-  const cumulative = metrics && metrics.unionMs !== null && metrics.sumMs !== null && metrics.sumMs !== metrics.unionMs
+  const title = displayTitle(shown.titleSource, shown.title);
+  const titleAttr = title.fromTask
+    ? `${title.text}（完整任务见详情）`
+    : shown.title;
+  const cumulative = metrics && metrics.sumMs !== null && metrics.unionMs !== null && metrics.sumMs !== metrics.unionMs
     ? metrics.sumMs : null;
 
   return <header className="detail-header tl-head">
     <div className="row-between">
-      <button type="button" className="button small-button narrow-back" onClick={onBackToList}>返回工作目标</button>
-      <span className="small muted truncate" title={shown.project.path || shown.project.id}>{shown.project.label}</span>
+      <button type="button" className="button small-button narrow-back" onClick={onBackToList}>‹ 工作目标列表</button>
       <span className="chip-row">
         {shown.kind === "standalone" && <Badge tone="neutral">未归档委派</Badge>}
-        <Badge tone={categoryTone(shown.state)}>{CATEGORY_LABEL[shown.state]}</Badge>
+        {headerActions}
       </span>
     </div>
-    <h2 title={shown.title}>{excerpt(shown.title, 100)}</h2>
-    {shown.summary && <p className="objective-summary-line" title={shown.summary}>结果：{excerpt(shown.summary, 120)}</p>}
-    <p className="assignment-line">
-      <span>来源 Host：{shown.sourceHostId || "未记录"}</span>
-      <span>当前 Host：{shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</span>
-      <span>共 {totalDelegations(shown.counts)} 个委派{shown.counts.helpers ? `（含 ${shown.counts.helpers} 个协助任务）` : ""}</span>
-      <span>最近活动 {clockSeconds(shown.lastActivityAt)}</span>
+    <h2 className="one-line-title" title={titleAttr}>{excerpt(title.text, 100)}</h2>
+    {shown.description && <p className="objective-description">{shown.description}</p>}
+    <p className="objective-vitals">
+      <Badge tone={categoryTone(shown.state)}>{CATEGORY_LABEL[shown.state]}</Badge>
+      <span>{shown.counts.accepted} / {shown.counts.roots} 个委派已验收</span>
+      <span>最近活动 {clockTime(shown.lastActivityAt)}（{relativeTime(shown.lastActivityAt, Date.now())}）</span>
     </p>
-    <span className="count-line">
-      {COUNT_ORDER.filter(entry => shown.counts[entry.key] > 0).map(entry =>
-        <span key={entry.key} className={`cnt cnt-${entry.key}`}><span aria-hidden="true">{entry.glyph}</span>{entry.label} {shown.counts[entry.key]}</span>)}
-      <span className="muted">共 {totalDelegations(shown.counts)} 个委派</span>
-    </span>
-    <p className="metric-line">
-      {!timeline
-        ? loading ? <span className="muted">跨度与执行时长：读取中</span> : <span className="muted">跨度与执行时长：未记录</span>
-        : <>
-          <span>总跨度 {metrics?.totalSpanMs !== null && metrics?.totalSpanMs !== undefined ? durationText(metrics.totalSpanMs) ?? "未记录" : "未记录"}</span>
-          <span>执行占用 {metrics?.unionMs != null ? durationText(metrics.unionMs) : "未记录"}</span>
-          {cumulative !== null && <span>累计 {durationText(cumulative)}（{metrics!.segmentCount} 段，含并发）</span>}
-          {metrics!.runningCount > 0 && <span className="muted">含进行中 {metrics!.runningCount} 段（计至读取时刻）</span>}
-          {metrics!.unknownEndCount > 0 && <span className="muted">含 {metrics!.unknownEndCount} 段结束未确认，未计入执行时长</span>}
-          {recordedPart && <span className="metric-warn" title={limitationTitle} tabIndex={0}>不完整（已记录部分）</span>}
-          {stale && <span className="muted">按 {clockSeconds(timeline.observedAt)} 的数据</span>}
-        </>}
+    <p className="hierarchy-line">
+      工作目标 › 委派 › 协助任务 › 回合
+      <details className="hierarchy-help">
+        <summary aria-label="层级说明">?</summary>
+        <span className="hierarchy-help-body">
+          工作目标：用户的一项议程，只用于归档与浏览，本身不执行、不验收。<br />
+          委派：Host 为该议程提交的一项工作，单独验收。<br />
+          协助任务：委派执行中派生的子工作，由所属委派整合，不单独验收。<br />
+          回合：委派或协助任务的一次执行；接续会增加回合。
+        </span>
+      </details>
     </p>
+    <details className="time-stats">
+      <summary>时间统计</summary>
+      <div className="time-stats-body">
+        {!timeline
+          ? <p className="small muted">{loading ? "时间统计：读取中" : "时间统计：未记录"}</p>
+          : <>
+            <p className="time-stat">从开始到最近一次活动：{metrics?.totalSpanMs !== null && metrics?.totalSpanMs !== undefined ? durationText(metrics.totalSpanMs) ?? "未记录" : "未记录"}</p>
+            <p className="time-stat">其间至少有一项在运行的时间：{metrics?.unionMs != null ? durationText(metrics.unionMs) ?? "未记录" : "未记录"}</p>
+            {cumulative !== null && <p className="time-stat">各回合运行时间相加：{durationText(cumulative)}（有回合同时运行，所以更长）</p>}
+            {metrics!.runningCount > 0 && <p className="small muted">还有 {metrics!.runningCount} 个回合在运行，时间算到 {clockTime(timeline.observedAt)}。</p>}
+            {metrics!.unknownEndCount > 0 && <p className="small muted">有 {metrics!.unknownEndCount} 个回合没确认何时结束，没有计入。</p>}
+            {metrics!.limitations.length > 0 && <p className="small metric-warn" tabIndex={0}
+              title={metrics!.limitations.map(entry => entry.label).join("；")}>只统计了已读取到的记录：{metrics!.limitations.map(entry => entry.label).join("；")}</p>}
+            {stale && <p className="small muted">按 {timeline.observedAt} 的数据。</p>}
+          </>}
+        <p className="small muted record-source">记录来源：项目 {shown.project.label}{shown.project.path ? `（${shown.project.path}）` : ""} · 来源 Host {shown.sourceHostId || "未记录"} · 当前 Host {shown.currentHostIds.length ? shown.currentHostIds.join("、") : "未记录"}</p>
+      </div>
+    </details>
     {timeline && roots.length >= 2 && <div className="delegation-strip" ref={stripRoot} role="group"
-      aria-label="根委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
+      aria-label="委派卡（按创建顺序）" onKeyDown={onStripKeyDown}>
       {roots.map((rollup, index) => <DelegationCard key={rollup.row.runId} rollup={rollup} index={index}
         selected={selectedRunId === rollup.row.runId} tabbable={index === Math.min(cardFocus, roots.length - 1)}
         onSelect={onSelectRun} onOpen={onOpenRun} />)}
       {(timeline.truncated.rows || timeline.filtered) && <span className="muted strip-bound">
-        显示 {timeline.rows.filter((row: TimelineRow) => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
+        显示 {timeline.rows.filter(row => row.parentRunId === null).length} / {timeline.totals.rows} 个委派{timeline.truncated.rows ? " · 已截断" : ""}
       </span>}
     </div>}
     {timeline && roots.length === 1 && <SingleDelegationCard rollup={roots[0]!} timeline={timeline} onOpen={onOpenRun} />}
-    <p className="tl-note">{shown.kind === "standalone"
-      ? "这条委派提交时没有指定工作目标，按记录单独显示，不与其他记录合并。"
-      : "工作目标只用于归档与浏览，不调度任务，也不作为验收条件。"}</p>
   </header>;
 }

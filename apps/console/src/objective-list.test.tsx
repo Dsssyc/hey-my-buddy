@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveList } from "./ObjectiveList";
@@ -14,7 +14,7 @@ const props = () => ({
       { id: "p2", label: "dsh-harness", path: "~/Desktop/codespace/dsh-harness" }],
     hosts: ["codex-desktop", "dsh-host-02"],
   },
-  selected: null, locked: false,
+  selected: null, rail: false, onExpand: vi.fn(), collapsible: false, onCollapse: vi.fn(),
   onFilterChange: vi.fn(), onQueryChange: vi.fn(), onProjectChange: vi.fn(), onHostChange: vi.fn(),
   onSelect: vi.fn(), onRefresh: vi.fn(), onRetry: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
 });
@@ -125,13 +125,50 @@ describe("objective list", () => {
     expect(screen.getByText("没有匹配的工作目标")).toBeTruthy();
   });
 
-  it("disables switching objectives while a detail holds an unconfirmed operation, keeping the selected one live", () => {
-    const p = { ...props(), selected: "obj-1", locked: true };
+  it("switching objectives stays free while a detail is open — no navigation lock (U4)", () => {
+    const p = { ...props(), selected: "obj-1" };
     render(<ObjectiveList {...p} />);
     const selected = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
     expect(selected).toHaveProperty("disabled", false);
     const other = screen.getByRole("button", { name: /0.13 控制台入口候选版收尾与文档/ });
-    expect(other).toHaveProperty("disabled", true);
-    expect(other.getAttribute("title")).toContain("核对前不切换");
+    expect(other).toHaveProperty("disabled", false);
+    expect(other.getAttribute("title")).toBeNull();
+  });
+
+  it("renders the 48px rail strip with the expand control and the state icon (U1)", () => {
+    const onToggleRail = vi.fn();
+    const view = render(<ObjectiveList { ...{ ...props(), rail: true, railState: rows[0], onToggleRail } } />);
+    const expand = screen.getByRole("button", { name: /工作目标/ });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(expand.textContent).toContain("›");
+    // The rail shows only the strip: no filters, no rows.
+    expect(view.container.querySelector(".list-filters")).toBeNull();
+    expect(view.container.querySelector(".task-list")).toBeNull();
+    expect(view.container.querySelector(".rail-state")!.getAttribute("aria-label")).toBe("当前工作目标：进行中");
+    fireEvent.click(expand);
+    expect(onToggleRail).toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("shows a task first-line fallback as one ~40-character line with the 取自任务首行 note (U3)", async () => {
+    const user = userEvent.setup();
+    render(<ObjectiveList {...props()} />);
+    await user.click(screen.getByRole("button", { name: /未归档委派（已加载 1）/ }));
+    const standalone = screen.getByRole("button", { name: /修复标题回退在 CRLF 输入下的显示/ });
+    const title = standalone.querySelector("strong.task-title") as HTMLElement;
+    expect(title.className).toContain("single-line");
+    expect(title.textContent).toContain("取自任务首行");
+    // One line of ~40 characters: the clipped label, not the whole task line.
+    expect(title.textContent!.replace("取自任务首行", "").length).toBeLessThanOrEqual(45);
+    expect(title.textContent).not.toBe(listFixture()[2]!.title);
+    // §5: the tooltip carries the clipped line plus the pointer to detail.
+    const tooltip = title.getAttribute("title")!;
+    expect(tooltip).not.toBe(listFixture()[2]!.title);
+    expect(tooltip.endsWith("（完整任务见详情）")).toBe(true);
+    expect(tooltip.length).toBeLessThanOrEqual(60);
+    // An explicit objective title keeps its recorded bounded text and tooltip.
+    const objective = screen.getByRole("button", { name: /工作目标时间轴：设计、接口与实现/ });
+    expect(objective.querySelector("strong.task-title")!.getAttribute("title")).toBe("工作目标时间轴：设计、接口与实现");
+    expect(objective.querySelector(".title-source-note")).toBeNull();
   });
 });

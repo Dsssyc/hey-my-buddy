@@ -1,5 +1,7 @@
 import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
-import type { ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveTimeline } from "./objective-types";
+import type {
+  ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
+} from "./objective-types";
 import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
 
 export class ApiError extends Error {
@@ -71,6 +73,25 @@ export function uncertainResponse(error: unknown): boolean {
 
 export function isAbortError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
+}
+
+/**
+ * Strict shape checks for the 0.15.1 objective read projections: `description`
+ * and `taskSummary` are nullable strings and `counts.accepted` is a number, so
+ * a malformed field refuses the read instead of reaching presentation.
+ */
+function validObjectiveSummary(value: unknown): boolean {
+  const summary = value as ObjectiveSummary | null;
+  return !!summary && typeof summary === "object"
+    && (summary.description === null || typeof summary.description === "string")
+    && !!summary.counts && Number.isFinite(summary.counts.accepted);
+}
+
+function validTimelineRows(rows: unknown): boolean {
+  return Array.isArray(rows) && rows.every(row => {
+    const entry = row as TimelineRow | null;
+    return !!entry && (entry.taskSummary === null || typeof entry.taskSummary === "string");
+  });
 }
 
 export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
@@ -170,7 +191,8 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       const data = await request(`/objectives?${query}`, { signal }) as ObjectivePage;
       if (!data || !Array.isArray(data.objectives) || !Number.isInteger(data.total)
         || !(data.nextCursor === null || typeof data.nextCursor === "string")
-        || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean") {
+        || !Number.isInteger(data.cursor) || typeof data.changed !== "boolean"
+        || !data.objectives.every(validObjectiveSummary)) {
         throw new ApiError("INVALID_RESPONSE", "工作目标列表响应不完整，请检查服务版本。");
       }
       return data;
@@ -190,7 +212,9 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       ) as ObjectiveTimeline;
       if (!data || typeof data.observedAt !== "string"
         || !data.objective || typeof data.objective.objectiveId !== "string"
+        || !validObjectiveSummary(data.objective)
         || !Array.isArray(data.rows) || !Array.isArray(data.spans) || !Array.isArray(data.events)
+        || !validTimelineRows(data.rows)
         || !data.totals || !Number.isInteger(data.totals.rows) || !Number.isInteger(data.totals.allRows)
         || !Number.isInteger(data.totals.spans) || !Number.isInteger(data.totals.events)
         || !data.truncated || typeof data.truncated.rows !== "boolean"

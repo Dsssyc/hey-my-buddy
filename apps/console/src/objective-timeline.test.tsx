@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
 import type { ObjectiveTimelineProps } from "./ObjectiveTimeline";
-import { objectiveTimelineFixture } from "./objective-fixtures";
+import { objectiveTimelineFixture, LONG_TASK_LINE } from "./objective-fixtures";
 import type { ObjectiveTimeline as ObjectiveTimelineData } from "./objective-types";
 import type { InspectorSelection } from "./inspector-card";
 import type { TimelineItem } from "./objective-display";
@@ -12,7 +12,7 @@ import type { TimelineItem } from "./objective-display";
 function baseProps(timeline: ObjectiveTimelineData | null, overrides: Record<string, unknown> = {}): ObjectiveTimelineProps {
   const props: ObjectiveTimelineProps = {
     summary: timeline?.objective ?? null, timeline, loading: false, error: "", stale: false,
-    newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null, locked: false,
+    newRunIds: new Set<string>(), hidden: false, openedKey: null, openedRunId: null, selection: null,
     expandedGapIds: new Set<string>(), onToggleGap: vi.fn(), onSetExpanded: vi.fn(),
     onSelectItem: vi.fn(), onOpenItem: vi.fn(), onSelectRun: vi.fn(), onOpenRun: vi.fn(),
     onClearSelection: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(),
@@ -59,24 +59,36 @@ describe("objective timeline rendering", () => {
     expect(item("span:s-r5-e")!.className).not.toContain("failed");
   });
 
-  it("shows the recorded header facts, distinct duration numbers and the archival note", () => {
+  it("shows the vitals header, folded time statistics and the archival note", () => {
     const timeline = objectiveTimelineFixture();
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const head = document.querySelector(".tl-head") as HTMLElement;
     expect(within(head).getByText("工作目标时间轴：设计、接口与实现")).toBeTruthy();
-    expect(within(head).getByText("来源 Host：codex-desktop")).toBeTruthy();
-    expect(within(head).getByText("当前 Host：codex-desktop")).toBeTruthy();
-    expect(within(head).getByText(/共 6 个委派（含 1 个协助任务）/)).toBeTruthy();
-    expect(within(head).getByText(/最近活动/)).toBeTruthy();
-    expect(within(head).getByText("进行中 1")).toBeTruthy();
-    expect(within(head).getByText(/工作目标只用于归档与浏览，不调度任务，也不作为验收条件/)).toBeTruthy();
-    // Three distinct duration numbers; the fixture has overlapping executions,
-    // so the cumulative sum exceeds the union.
-    const metricLine = head.querySelector(".metric-line") as HTMLElement;
-    expect(metricLine.textContent).toMatch(/总跨度/);
-    expect(metricLine.textContent).toMatch(/执行占用/);
-    expect(metricLine.textContent).toMatch(/累计 .+（\d+ 段，含并发）/);
-    expect(metricLine.textContent).toContain("含 1 段结束未确认，未计入执行时长");
+    // U2: the header beneath the title shows only status, accepted progress
+    // and latest activity; the description sits right under the title.
+    expect(within(head).getByText(/按用户认可的第 X 节设计工作目标时间轴/)).toBeTruthy();
+    const vitals = head.querySelector(".objective-vitals") as HTMLElement;
+    expect(vitals.textContent).toContain("进行中");
+    expect(vitals.textContent).toContain("2 / 5 个委派已验收");
+    expect(vitals.textContent).toMatch(/最近活动 \d{2}:\d{2}（/);
+    // The plain-sentence durations and the record source fold into 时间统计 (§3).
+    const stats = head.querySelector(".time-stats") as HTMLElement;
+    expect(within(stats).getByText("时间统计")).toBeTruthy();
+    const body = stats.querySelector(".time-stats-body") as HTMLElement;
+    expect(body.textContent).toMatch(/从开始到最近一次活动：\S+/);
+    expect(body.textContent).toMatch(/其间至少有一项在运行的时间：\S+/);
+    // The fixture has overlapping executions, so the cumulative sum exceeds
+    // the union and gets its own plain sentence.
+    expect(body.textContent).toMatch(/各回合运行时间相加：.+（有回合同时运行，所以更长）/);
+    expect(body.textContent).toContain("有 1 个回合没确认何时结束，没有计入");
+    expect(body.textContent).toContain("还有 1 个回合在运行");
+    expect(body.textContent).toMatch(/记录来源：项目 hey-my-buddy/);
+    expect(body.textContent).toContain("来源 Host codex-desktop");
+    expect(body.textContent).toContain("当前 Host codex-desktop");
+    // The hierarchy note carries the four levels with their explanations (§0/§3).
+    const hierarchy = head.querySelector(".hierarchy-line") as HTMLElement;
+    expect(hierarchy.textContent).toContain("工作目标 › 委派 › 协助任务 › 回合");
+    expect(hierarchy.querySelector(".hierarchy-help-body")!.textContent).toContain("不单独验收");
   });
 
   it("labels a standalone root honestly and keeps its note distinct", () => {
@@ -84,7 +96,6 @@ describe("objective timeline rendering", () => {
     timeline.objective = { ...timeline.objective, kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示" };
     render(<ObjectiveTimeline {...baseProps(timeline)} />);
     expect(screen.getByText("未归档委派")).toBeTruthy();
-    expect(screen.getByText(/这条委派提交时没有指定工作目标，按记录单独显示，不与其他记录合并/)).toBeTruthy();
   });
 
   it("renders every span kind and terminal state with non-colour markers", () => {
@@ -150,6 +161,30 @@ describe("objective timeline rendering", () => {
     expect(helper.getAttribute("aria-label")).toContain("标题来源：Host 标题");
   });
 
+  it("caps a task first-line title at ~40 characters, annotates it and keeps the tooltip clean", () => {
+    const timeline = objectiveTimelineFixture({
+      rows: [{
+        ...objectiveTimelineFixture().rows[0]!, runId: "r-task", title: LONG_TASK_LINE, titleSource: "task",
+      }],
+      spans: [], events: [],
+      totals: { rows: 1, spans: 0, events: 0, allRows: 1 },
+    });
+    const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
+    const label = container.querySelector('[data-key="row:r-task"]') as HTMLButtonElement;
+    // ~40 characters on one line with the 取自任务首行 note, never the full text.
+    expect(label.querySelector(".lbl-name")!.textContent!.length).toBeLessThanOrEqual(41);
+    expect(label.querySelector(".lbl-name")!.textContent).not.toBe(LONG_TASK_LINE);
+    expect(label.textContent).toContain("取自任务首行");
+    expect(label.getAttribute("title")).not.toBe(LONG_TASK_LINE);
+    // §5: the tooltip carries only the ~40-character line plus the pointer to detail.
+    expect(label.getAttribute("title")).toBe(`${label.querySelector(".lbl-name")!.textContent}（完整任务见详情）`);
+    // The overview card annotates the same clipped 做什么 row.
+    const single = container.querySelector(".delegation-card.single") as HTMLElement;
+    expect(single.textContent).toContain("做什么");
+    expect(single.textContent).toContain("取自任务首行");
+    expect(single.textContent).not.toContain(LONG_TASK_LINE);
+  });
+
   it("folds long idle stretches, expands one break and offers expand/collapse all", async () => {
     const user = userEvent.setup();
     const timeline = objectiveTimelineFixture();
@@ -191,19 +226,21 @@ describe("objective timeline rendering", () => {
     expect(second.queryByRole("button", { name: /已折叠，展开/ })).toBeNull();
   });
 
-  it("keeps the overview cards in creation order with per-root result, acceptance and pending", () => {
+  it("keeps the overview cards in creation order with the three single-line rows", () => {
     const timeline = objectiveTimelineFixture();
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
     const strip = container.querySelector(".delegation-strip") as HTMLElement;
-    const cards = [...strip.querySelectorAll(".delegation-card")];
+    const cards = [...strip.querySelectorAll<HTMLElement>(".delegation-card")];
     expect(cards.length).toBe(5);
-    expect(cards[0]!.textContent).toContain("设计工作目标时间轴视图与交互规范");
-    expect(cards[0]!.textContent).toContain("结果 成功");
-    expect(cards[0]!.textContent).toContain("验收 已验收");
-    expect(cards[0]!.textContent).toContain("待决 0");
-    // r2 roots after r1 by creation; the executing root shows no invented success.
+    const rows = (card: HTMLElement) => [...card.querySelectorAll<HTMLElement>(".card-row")].map(row => row.textContent);
+    // U2: 做什么 / 目标摘要 / 结果摘要 — the Worker summary or 暂无结果.
+    expect(rows(cards[0]!)).toEqual([
+      "做什么设计工作目标时间轴视图与交互规范",
+      "目标摘要设计只读的工作目标时间轴视图、交互规范与验收标准。",
+      "结果摘要已完成时间轴视图与交互规范设计并交付审阅。（Worker 自述，非验收）",
+    ]);
     const executing = cards.find(card => card.textContent!.includes("时间轴界面带截图的视觉与交互审查"))!;
-    expect(executing.textContent).toContain("结果 未记录");
+    expect(executing.textContent).toContain("结果摘要尚无 Worker 结论");
     expect(cards.at(-1)!.textContent).toContain("修正折叠区间展开后的键盘焦点顺序");
   });
 
@@ -212,7 +249,7 @@ describe("objective timeline rendering", () => {
       rows: [objectiveTimelineFixture().rows[0]!, objectiveTimelineFixture().rows[2]!],
       spans: objectiveTimelineFixture().spans.filter(span => ["s-r1-q", "s-r1-e"].includes(span.spanId)),
       events: [],
-      objective: { ...objectiveTimelineFixture().objective, counts: { roots: 1, helpers: 1, active: 0, host: 0, review: 0, ended: 2 } },
+      objective: { ...objectiveTimelineFixture().objective, counts: { roots: 1, helpers: 1, accepted: 0, active: 0, host: 0, review: 0, ended: 2 } },
     });
     timeline.rows[1] = { ...timeline.rows[1]!, parentRunId: "r1", rootRunId: "r1", depth: 1, kind: "helper" };
     const { container } = render(<ObjectiveTimeline {...baseProps(timeline)} />);
@@ -251,7 +288,7 @@ describe("objective timeline rendering", () => {
   it("treats unknown shutdown as outranking a recorded failure, keeping the failure text", () => {
     const timeline = objectiveTimelineFixture({
       rows: [{
-        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", summary: null,
+        runId: "r7", parentRunId: null, rootRunId: "r7", title: "失败但停止未确认的委派", titleSource: "title", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: false, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
       }],
@@ -276,7 +313,7 @@ describe("objective timeline rendering", () => {
   it("says the end time is missing for a terminal span instead of borrowing now", () => {
     const timeline = objectiveTimelineFixture({
       rows: [{
-        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", summary: null,
+        runId: "r8", parentRunId: null, rootRunId: "r8", title: "结束时间缺失的委派", titleSource: "task", taskSummary: null, summary: null,
         createdAt: "2026-09-26T07:00:00Z", state: "failed", status: "failed", category: "ended",
         shutdownConfirmed: true, depth: 0, kind: "goal", configuration: null, acceptedAt: null, acceptanceVerdict: null,
       }],
@@ -447,7 +484,7 @@ describe("timeline selection, inspector and popover (C1–C3)", () => {
     expect(item("span:s-r1-e")!.className).not.toContain("run-member");
     const inspector = document.querySelector(".timeline-inspector") as HTMLElement;
     expect(inspector.textContent).toContain("任务");
-    expect(inspector.textContent).toContain("根委派");
+    expect(inspector.textContent).toContain("委派");
     expect(inspector.textContent).toContain("轮次");
     expect(inspector.textContent).toContain("第 1 轮");
     expect(inspector.textContent).toContain("第 2 轮");

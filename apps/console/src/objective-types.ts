@@ -1,14 +1,21 @@
 export type ObjectiveFilter = "all" | "active" | "host" | "review";
 /** Disjoint member states in display priority 待决定 (host) > 进行中 (active) > 待验收 (review) > 已结束 (ended). */
 export type ObjectiveCategory = "host" | "active" | "review" | "ended";
-export type ObjectiveCounts = { roots: number; helpers: number; active: number; host: number; review: number; ended: number };
+export type ObjectiveCounts = {
+  roots: number; helpers: number;
+  /** Accepted governed members (roots + helpers); the denominator of accepted progress. */
+  accepted: number;
+  active: number; host: number; review: number; ended: number;
+};
 export type ObjectiveSummary = {
-  /** `obj-<id>` for an explicit objective, `run:<rootRunId>` for a standalone root delegation. */
+  /** `obj-<id>` for an explicit objective, or `run:<rootRunId>` for a standalone root delegation. */
   objectiveId: string;
   kind: "objective" | "standalone";
   /** Objective title, or the root's display title; `titleSource: "none"` means the 未命名委派 fallback. */
   title: string;
   titleSource: "objective" | "title" | "task" | "none";
+  /** Immutable creation-time description in the user's words; omitted historic descriptions stay null. */
+  description: string | null;
   /** Latest recorded own result, separate from intent; groups do not synthesize one. */
   summary: string | null;
   project: { id: string; path: string | null; label: string };
@@ -42,6 +49,8 @@ export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;
   title: string;
   titleSource: "title" | "task" | "none";
+  /** First nonempty task line (at most 200 characters); the 做什么/目标摘要 source. */
+  taskSummary: string | null;
   summary: string | null;
   createdAt: string;
   /** Governed workflow state (for example executing, awaiting-host, delivered, accepted). */
@@ -93,4 +102,14 @@ export type ObjectiveTimeline = {
   truncated: { rows: boolean; spans: boolean; events: boolean };
   filtered: boolean;
   scopeComplete: boolean;
+};
+/** Reply of `objective_stop`: the affected scope and per-root cancellation results. */
+export type ObjectiveStopResult = {
+  objectiveId: string;
+  /** Roots and helpers whose cancellation was requested in this stop. */
+  runIds: string[];
+  /** Accepted roots retained by the stop; they keep their recorded outcome. */
+  acceptedRunIds: string[];
+  /** Per-root cancellation results; acknowledgement is not termination evidence. */
+  results: ReadonlyArray<{ runId: string; result: string }>;
 };

@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 describe("console interactions", () => {
-  it("retries a never-claimed cancellation without asking to accept nonexistent output", async () => {
+  it("renders a never-claimed cancellation read-only, without retry or acceptance controls", async () => {
     const state = initial();
     state.tasks = {
       total: 1,
@@ -98,15 +98,11 @@ describe("console interactions", () => {
     await user.click(
       await screen.findByRole("button", { name: /未执行的测试任务/ }),
     );
-    const retry = await screen.findByRole("button", { name: "重新尝试" });
-    expect(retry).toHaveProperty("disabled", false);
+    // 0.15.1 U4: task_retry/task_cancel/task_acknowledge are gone from the browser.
+    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "记录验收" })).toBeNull();
-    await user.click(retry);
-    expect(api.command).toHaveBeenCalledWith(
-      "task_retry",
-      { runId: "cancelled-before-claim" },
-      "fixture-csrf",
-    );
+    expect(api.command).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "待验收" }));
     expect(
       await screen.findByRole("heading", { name: "没有匹配的委派" }),

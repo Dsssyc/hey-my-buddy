@@ -256,23 +256,24 @@ describe("desktop console", () => {
     expect(await screen.findByRole("button", { name: /目标 first/ })).toBeTruthy();
   });
 
-  it("retains each delegation's unsubmitted inputs when switching records and hiding the page", async () => {
+  it("keeps record details read-only: no delegation drafts, no writes when switching records or pages", async () => {
     const f = fixture([goal("one"), goal("two")]);
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /目标 one/ }));
-    await user.type(await screen.findByLabelText("决定理由"), "one 的决定草稿");
-    await user.type(screen.getByLabelText("交给下一回合的输入"), "one 的接续草稿");
+    await screen.findByRole("tab", { name: "协作与待办" });
+    // The delegation detail exposes no Host input or write action (0.15.1 U4).
+    for (const label of ["决定理由", "交给下一回合的输入", "实际检查依据"]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+    expect(screen.queryByRole("button", { name: "提交接续输入" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "批准所列协助" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /目标 two/ }));
-    expect(await screen.findByLabelText("决定理由")).toHaveProperty("value", "");
-    await user.type(screen.getByLabelText("决定理由"), "two 的决定草稿");
+    expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     await user.click(screen.getByRole("link", { name: "委派记录" }));
-    expect(screen.getByLabelText("决定理由")).toHaveProperty("value", "two 的决定草稿");
-    await user.click(screen.getByRole("button", { name: /目标 one/ }));
-    expect(await screen.findByLabelText("决定理由")).toHaveProperty("value", "one 的决定草稿");
-    expect(screen.getByLabelText("交给下一回合的输入")).toHaveProperty("value", "one 的接续草稿");
+    expect((await screen.findAllByText(/协助 two/)).length).toBeGreaterThan(0);
     expect(f.command.mock.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });
 
@@ -339,6 +340,7 @@ describe("desktop console", () => {
     expect(row.querySelector("strong.task-title")!.textContent).toBe("历史记录的最新结论结果");
     // The raw task text keeps its detail access and tooltip.
     expect(within(detail).getByRole("heading", { level: 2 }).getAttribute("title")).toBe(record.task);
-    expect(within(detail).getByText(/不该成为标题/)).toBeTruthy();
+    // The three-row overview and the raw task text both carry the full words.
+    expect((await within(detail).findAllByText(/不该成为标题/)).length).toBeGreaterThan(0);
   });
 });

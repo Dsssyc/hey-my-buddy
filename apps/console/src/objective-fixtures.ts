@@ -29,6 +29,7 @@ export function objectiveSummary(overrides: Partial<ObjectiveSummary> = {}): Obj
     kind: "objective",
     title: "工作目标时间轴：设计、接口与实现",
     titleSource: "objective",
+    description: "按用户认可的第 X 节设计工作目标时间轴。本目标覆盖只读接口、前端呈现与离线升级验证。",
     summary: null,
     project: project("p1", "hey-my-buddy", "~/Desktop/codespace/mememe/hey-my-buddy"),
     sourceHostId: "codex-desktop",
@@ -37,7 +38,7 @@ export function objectiveSummary(overrides: Partial<ObjectiveSummary> = {}): Obj
     lastActivityAt: "2026-09-26T08:12:00Z",
     lastActivitySeq: 41,
     state: "active",
-    counts: { roots: 5, helpers: 1, active: 1, host: 0, review: 1, ended: 4 },
+    counts: { roots: 5, helpers: 1, accepted: 2, active: 1, host: 0, review: 1, ended: 4 },
     matchingRuns: 6,
     rootRunIds: ["r1", "r2", "r5", "r4", "r6"],
     ...overrides,
@@ -51,6 +52,7 @@ function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
     rootRunId: runId,
     title: `委派 ${runId}`,
     titleSource: "title",
+    taskSummary: null,
     summary: null,
     createdAt: "2026-09-26T01:12:00Z",
     state: "delivered",
@@ -84,17 +86,23 @@ function event(seq: number, runId: string, kind: TimelineEvent["kind"], at: stri
 /** Six delegations, folding gaps, every span kind and terminal marker. */
 export function objectiveTimelineFixture(overrides: Partial<ObjectiveTimeline> = {}): ObjectiveTimeline {
   const rows: TimelineRow[] = [
-    row("r1", { title: "设计工作目标时间轴视图与交互规范", createdAt: "2026-09-26T01:12:00Z", state: "accepted", status: "completed",
+    row("r1", { title: "设计工作目标时间轴视图与交互规范", taskSummary: "设计只读的工作目标时间轴视图、交互规范与验收标准。",
+      summary: "已完成时间轴视图与交互规范设计并交付审阅。", createdAt: "2026-09-26T01:12:00Z", state: "accepted", status: "completed",
       configuration: OPUS, acceptedAt: "2026-09-26T02:20:00Z", acceptanceVerdict: "accepted" }),
-    row("r2", { title: "实现 objectives 表、objective_list 与只读时间轴接口", createdAt: "2026-09-26T01:20:00Z", state: "accepted", status: "completed",
+    row("r2", { title: "实现 objectives 表、objective_list 与只读时间轴接口", taskSummary: "实现 objectives 表与 objective_list、objective_timeline 两个只读接口。",
+      summary: null, createdAt: "2026-09-26T01:20:00Z", state: "accepted", status: "completed",
       configuration: CODEX, acceptedAt: "2026-09-26T03:30:00Z", acceptanceVerdict: "accepted" }),
-    row("r3", { title: "补充 schema 升级离线副本的验证测试", createdAt: "2026-09-26T01:38:00Z", state: "completed", status: "completed",
+    row("r3", { title: "补充 schema 升级离线副本的验证测试", taskSummary: "为离线副本升级补充验证测试，覆盖行数与哈希不变。",
+      summary: "已补充离线副本验证测试，全部通过。", createdAt: "2026-09-26T01:38:00Z", state: "completed", status: "completed",
       parentRunId: "r2", rootRunId: "r2", depth: 1, kind: "helper", configuration: GLM }),
-    row("r5", { title: "按设计稿实现 ObjectiveTimeline 组件与布局计算", createdAt: "2026-09-26T05:30:00Z", state: "cancelled", status: "cancelled",
+    row("r5", { title: "按设计稿实现 ObjectiveTimeline 组件与布局计算", taskSummary: "按设计稿实现 ObjectiveTimeline 组件与折叠布局计算。",
+      summary: null, createdAt: "2026-09-26T05:30:00Z", state: "cancelled", status: "cancelled",
       configuration: GLM }),
-    row("r4", { title: "时间轴界面带截图的视觉与交互审查", createdAt: "2026-09-26T06:38:00Z", state: "executing", status: "running",
+    row("r4", { title: "时间轴界面带截图的视觉与交互审查", taskSummary: "带截图审查时间轴界面的视觉与交互问题。",
+      summary: null, createdAt: "2026-09-26T06:38:00Z", state: "executing", status: "running",
       category: "active", shutdownConfirmed: false, configuration: SONNET }),
-    row("r6", { title: "修正折叠区间展开后的键盘焦点顺序", createdAt: "2026-09-26T07:05:00Z", state: "delivered", status: "completed",
+    row("r6", { title: "修正折叠区间展开后的键盘焦点顺序", taskSummary: "修正折叠区间展开后的键盘焦点顺序。",
+      summary: "已修正键盘焦点顺序，等待复核。", createdAt: "2026-09-26T07:05:00Z", state: "delivered", status: "completed",
       category: "review", configuration: GLM }),
   ];
   const spans: TimelineSpan[] = [
@@ -155,16 +163,20 @@ export function objectivePageFixture(objectives: ObjectiveSummary[] = [objective
 export function listFixture(): ObjectiveSummary[] {
   return [
     objectiveSummary({ objectiveId: "obj-1", lastActivitySeq: 41, lastActivityAt: "2026-09-26T08:12:00Z", state: "active" }),
-    objectiveSummary({ objectiveId: "obj-2", title: "0.13 控制台入口候选版收尾与文档", lastActivitySeq: 30,
+    objectiveSummary({ objectiveId: "obj-2", title: "0.13 控制台入口候选版收尾与文档", description: null, lastActivitySeq: 30,
       lastActivityAt: "2026-09-26T04:40:00Z", state: "review",
-      counts: { roots: 6, helpers: 0, active: 0, host: 0, review: 1, ended: 5 } }),
-    objectiveSummary({ objectiveId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示",
-      titleSource: "task", lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
+      counts: { roots: 6, helpers: 0, accepted: 5, active: 0, host: 0, review: 1, ended: 5 } }),
+    objectiveSummary({ objectiveId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案",
+      titleSource: "task", description: null, lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
       sourceHostId: "codex-cli",
-      counts: { roots: 1, helpers: 0, active: 0, host: 0, review: 0, ended: 1 } }),
+      counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1 } }),
     objectiveSummary({ objectiveId: "obj-4", title: "DSH 插件在 Windows 路径下的沙箱回归排查",
       project: project("p2", "dsh-harness", "~/Desktop/codespace/dsh-harness"),
       sourceHostId: "dsh-host-02", lastActivitySeq: 39, lastActivityAt: "2026-09-26T08:11:00Z", state: "host",
-      counts: { roots: 2, helpers: 0, active: 1, host: 1, review: 0, ended: 0 } }),
+      counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 1, review: 0, ended: 0 } }),
   ];
 }
+
+/** A task-first-line title long enough to exercise the ~40-character one-line clamp. */
+export const LONG_TASK_LINE =
+  "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案是否一致";

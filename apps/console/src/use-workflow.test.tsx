@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import type { ConsoleApi } from "./api";
 import { useWorkflow } from "./use-workflow";
-import { createAuthorityLatch } from "./console-session";
 import type { Snapshot, Task } from "./types";
 import type { Workflow } from "./workflow-types";
 
@@ -27,101 +26,50 @@ function fixture() {
   };
   const snapshot = {
     csrfToken: "csrf",
-    consoleSession: { id: "session-a", canWrite: true, reason: null },
+    consoleSession: { id: "session-a", canWrite: false, reason: "superseded" },
   } as Snapshot;
-  const failures: unknown[] = [];
   const calls: [string, Record<string, unknown>][] = [];
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {
     calls.push([operation, params]);
     if (operation === "workflow_get") return structuredClone(workflow);
-    const failure = failures.shift();
-    if (failure) throw failure;
-    return {};
+    throw new Error(`Unexpected mutation: ${operation}`);
   });
   const api = { command } as unknown as ConsoleApi;
-  const refresh = vi.fn(async () => snapshot);
-  const mutations = () => calls.filter(([operation]) => operation === "workflow_continue");
-  return { api, command, calls, failures, mutations, refresh, snapshot, task, workflow };
+  return { api, command, calls, snapshot, task, workflow };
 }
 
-describe("workflow command authority", () => {
-  it("checks a shared refusal before a sibling hook has rerendered", async () => {
+describe("read-only workflow read (0.15.1 U4)", () => {
+  it("polls workflow_get only and never exposes a mutation entry point", async () => {
     const f = fixture();
-    const authority = createAuthorityLatch();
-    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, f.refresh, true, true, authority));
+    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, true));
     await waitFor(() => expect(result.current.value).not.toBeNull());
-    const staleCommand = result.current.command;
-    authority.lose("session-a");
-    await act(async () => { await staleCommand("workflow_continue", { input: "x" }); });
-    expect(f.mutations()).toHaveLength(0);
-    expect(result.current.error).toContain("新窗口已取得写权限");
+    expect(result.current.value!.runId).toBe("parent");
+    expect(f.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
+    expect(Object.keys(result.current).sort()).toEqual(["error", "reload", "value"]);
   });
 
-  it("keeps an ambiguous command unknown when its retry is refused and never replays it", async () => {
+  it("keeps polling through a read-only session and surfaces read errors honestly", async () => {
     const f = fixture();
-    f.failures.push(
-      new ApiError("NETWORK", "lost reply"),
-      new ApiError("CONSOLE_READ_ONLY", "board refused the older session"),
-    );
-    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, f.refresh));
-    await waitFor(() => expect(result.current.value).not.toBeNull());
-    // Captured before any refusal: a stale closure must not dispatch either.
-    const staleCommand = result.current.command;
-
-    await act(async () => { await staleCommand("workflow_continue", { input: "Host 补充" }); });
-    expect(f.mutations()).toHaveLength(1);
-    expect(result.current.uncertain).toBe(true);
-    const first = f.mutations()[0][1];
-
-    // The retry reuses the exact command identity, but the board refuses it
-    // because a newer window now owns authority. That refusal proves only that
-    // this request was denied: the earlier attempt may have committed.
-    await act(async () => { await result.current.command(""); });
-    expect(f.mutations()).toHaveLength(2);
-    expect(f.mutations()[1][1]).toEqual(first);
-    expect(result.current.uncertain).toBe(true);
-    expect(result.current.error).toContain("可能已经生效");
-    expect(result.current.sessionWritable).toBe(false);
-    expect(result.current.writable).toBe(false);
-
-    // The snapshot prop still says canWrite:true, but the refusal latched the
-    // session: neither the live nor the stale closure dispatches again.
-    await act(async () => { await staleCommand(""); });
-    expect(f.mutations()).toHaveLength(2);
-    expect(result.current.error).toContain("可能已经生效");
-
-    // `workflow_get` polling remains available read-only.
-    expect(f.calls.some(([operation]) => operation === "workflow_get")).toBe(true);
+    let failures = 1;
+    f.command.mockImplementation(async (operation: string) => {
+      if (operation !== "workflow_get") throw new Error(`Unexpected mutation: ${operation}`);
+      if (failures > 0) { failures -= 1; throw new ApiError("NETWORK", "连接中断"); }
+      return structuredClone(f.workflow);
+    });
+    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, true));
+    await waitFor(() => expect(result.current.error).toContain("连接中断"));
+    // The 3-second poll retries the read and clears the error.
+    await waitFor(() => expect(result.current.value).not.toBeNull(), { timeout: 4500 });
+    expect(result.current.error).toBe("");
   });
 
-  it("blocks every mutation when the polling snapshot reports a read-only session", async () => {
+  it("re-reads on demand through reload without any write", async () => {
     const f = fixture();
-    const { result, rerender } = renderHook(
-      ({ snapshot }: { snapshot: Snapshot }) => useWorkflow(f.api, f.task, snapshot, f.refresh),
-      { initialProps: { snapshot: f.snapshot } },
-    );
+    const { result } = renderHook(() => useWorkflow(f.api, f.task, f.snapshot, true));
     await waitFor(() => expect(result.current.value).not.toBeNull());
-    rerender({ snapshot: { ...f.snapshot, consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } } });
-    await act(async () => { await result.current.command("workflow_continue", { input: "x" }); });
-    expect(f.mutations()).toHaveLength(0);
-    expect(result.current.sessionWritable).toBe(false);
-    expect(result.current.error).toContain("新窗口已取得写权限");
-  });
-
-  it("blocks mutations when the authenticated poll failed while the snapshot is still writable", async () => {
-    const f = fixture();
-    const { result } = renderHook(
-      ({ writesAvailable }: { writesAvailable: boolean }) =>
-        useWorkflow(f.api, f.task, f.snapshot, f.refresh, true, writesAvailable),
-      { initialProps: { writesAvailable: false } },
-    );
-    await waitFor(() => expect(result.current.value).not.toBeNull());
-    await act(async () => { await result.current.command("workflow_continue", { input: "x" }); });
-    expect(f.mutations()).toHaveLength(0);
-    expect(result.current.sessionWritable).toBe(true);
-    expect(result.current.writable).toBe(false);
-    expect(result.current.error).toContain("连接已中断");
-    // Reading the workflow record keeps working.
-    expect(f.calls.some(([operation]) => operation === "workflow_get")).toBe(true);
+    const before = f.calls.length;
+    await act(async () => { result.current.reload(); });
+    await waitFor(() => expect(f.calls.length).toBeGreaterThan(before));
+    expect(f.calls.every(([operation]) => operation === "workflow_get")).toBe(true);
   });
 });

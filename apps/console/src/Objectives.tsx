@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
-import type { ObjectiveFilter, ObjectiveSummary } from "./objective-types";
+import type { ObjectiveFilter, ObjectiveSummary, TimelineRow } from "./objective-types";
 import type { TimelineItem } from "./objective-display";
+import { CATEGORY_LABEL, categoryTone } from "./objective-display";
 import type { InspectorSelection } from "./inspector-card";
 import { Tasks } from "./Tasks";
-import { RecordDrafts } from "./record-drafts";
 import { SplitView } from "./SplitView";
 import { ObjectiveList } from "./ObjectiveList";
 import { ObjectiveTimeline } from "./ObjectiveTimeline";
@@ -14,49 +14,111 @@ import { RunDetailPane } from "./RunDetailPane";
 import type { DetailTarget } from "./RunDetailPane";
 import { useObjectiveList } from "./use-objective-list";
 import { useObjectiveTimeline } from "./use-objective-timeline";
+import { stopStatus, stoppableSummary, useObjectiveStop } from "./objective-stop";
 import type { AuthorityLatch } from "./console-session";
+import { READ_ONLY_ACTION_REFUSAL } from "./console-session";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
-/** Right-pane width at which a docked detail gains its own column. */
-const DOCK_SIDE_MIN_PX = 1000;
-const DOCK_DETAIL_MIN_PX = 440;
-const DOCK_DETAIL_MAX_PX = 640;
-const DOCK_DETAIL_DEFAULT_PX = 520;
+/* 0.15.1 U1 geometry (docs/design/objective-browser-0.15.1.md §1–2): the
+   viewport picks the layout; above 760px an open detail collapses the list to
+   a 48px rail and docks the detail beside the timeline. D = detail column,
+   R = measured right-column width. */
+const RAIL_PX = 48;
+const DIVIDER_PX = 10;
+const DETAIL_MIN_PX = 360;
+const DETAIL_DEFAULT_MAX_PX = 600;
+const DETAIL_HARD_MAX_PX = 720;
+const TIMELINE_MIN_PX = 320;
 
-/** The docked detail's resizable separator; reuses SplitView's divider rules. */
-function DockDivider({ orientation, min, max, value, onChange, label }: {
-  orientation: "vertical" | "horizontal";
-  min: number; max: number; value: number;
+const clamp = (value: number, min: number, max: number) => Math.round(Math.max(min, Math.min(value, max)));
+
+function detailDefault(rightWidth: number): number {
+  return clamp(Math.round(rightWidth * 0.4), DETAIL_MIN_PX, DETAIL_DEFAULT_MAX_PX);
+}
+function detailMax(rightWidth: number): number {
+  return Math.max(DETAIL_MIN_PX, Math.min(DETAIL_HARD_MAX_PX, rightWidth - DIVIDER_PX - TIMELINE_MIN_PX));
+}
+
+/**
+ * The timeline|detail separator (§2): pointer drag with live clamping,
+ * keyboard ←/→ 20px (Shift 80px), Home/End to the bounds, Enter or a
+ * double-click back to the viewport default. The remembered width lives in
+ * page memory only.
+ */
+function TimelineDetailDivider({ min, max, value, timelineWidth, onChange, onReset }: {
+  min: number; max: number; value: number; timelineWidth: number;
   onChange: (value: number) => void;
-  label: string;
+  onReset: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const container = () => root.current?.parentElement;
-  const resize = (next: number) => onChange(Math.round(Math.max(min, Math.min(next, max))));
-  const move = (clientX: number, clientY: number) => {
+  const move = (clientX: number) => {
     const rect = container()?.getBoundingClientRect();
     if (!rect) return;
-    if (orientation === "vertical") resize(Math.min(max, rect.right - clientX));
-    // The divider sits above the detail pane, so the pointer's distance from
-    // the container's bottom edge is the detail height it controls.
-    else resize(Math.min(max, rect.bottom - clientY));
+    onChange(clamp(rect.right - clientX - DIVIDER_PX / 2, min, max));
   };
-  const arrows = orientation === "vertical" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
-  const grow = orientation === "vertical" ? "ArrowLeft" : "ArrowDown";
-  return <div ref={root} className={`dock-divider ${orientation}`} role="separator"
-    aria-label={label} aria-orientation={orientation === "vertical" ? "vertical" : "horizontal"}
-    aria-valuemin={min} aria-valuemax={max} aria-valuenow={value} tabIndex={0}
+  const step = (event: { key: string; shiftKey: boolean }) => {
+    const delta = event.shiftKey ? 80 : 20;
+    if (event.key === "ArrowLeft") return clamp(value + delta, min, max); // 详情加宽
+    if (event.key === "ArrowRight") return clamp(value - delta, min, max);
+    return null;
+  };
+  return <div ref={root} className="dock-divider vertical" role="separator" id="timeline-detail-separator"
+    aria-orientation="vertical" aria-controls="timeline-detail-column"
+    aria-label="调整时间轴与详情宽度"
+    aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}
+    aria-valuetext={`详情 ${value} 像素，时间轴 ${timelineWidth} 像素`}
+    tabIndex={0}
     onKeyDown={event => {
-      if (!arrows.includes(event.key)) return;
-      event.preventDefault();
-      resize(value + (event.key === grow ? 20 : -20));
+      if (event.key === "Home") { event.preventDefault(); onChange(min); return; }
+      if (event.key === "End") { event.preventDefault(); onChange(max); return; }
+      if (event.key === "Enter") { event.preventDefault(); onReset(); return; }
+      const next = step(event);
+      if (next !== null) { event.preventDefault(); onChange(next); }
     }}
+    onDoubleClick={onReset}
     onPointerDown={event => { dragging.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
-    onPointerMove={event => { if (dragging.current) move(event.clientX, event.clientY); }}
+    onPointerMove={event => { if (dragging.current) move(event.clientX); }}
     onPointerUp={() => { dragging.current = false; }}
     onLostPointerCapture={() => { dragging.current = false; }} />;
+}
+
+/** The objective stop's explicit confirmation: names the objective and its scope. */
+function StopDialog({ summary, onConfirm, onCancel }: {
+  summary: ObjectiveSummary;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { cancelRef.current?.focus(); }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+  const roots = summary.counts.roots;
+  const helpers = summary.counts.helpers;
+  const scope = summary.kind === "standalone"
+    ? "将请求取消这条未归档委派及其协助任务。"
+    : `将请求取消该目标当前全部未验收委派和协助任务（${roots} 个委派中已验收 ${summary.counts.accepted} 个保留${helpers ? `，另有 ${helpers} 个协助任务` : ""}）。`;
+  return <div className="dialog-backdrop">
+    <div className="dialog stop-dialog" role="dialog" aria-modal="true" aria-labelledby="stop-objective-title" aria-describedby="stop-objective-body">
+      <h2 id="stop-objective-title">停止工作目标</h2>
+      <p id="stop-objective-body">
+        目标：{summary.title}。{scope}服务器按记录解析完整范围，不受当前筛选或截断影响；取消以真实停止证据为准，确认前显示“正在停止”。
+      </p>
+      <div className="actions">
+        <button type="button" className="button danger" onClick={onConfirm}>确认停止目标</button>
+        <button ref={cancelRef} type="button" className="button" onClick={onCancel}>取消</button>
+      </div>
+    </div>
+  </div>;
 }
 
 /**
@@ -85,8 +147,7 @@ export function Objectives({ snapshot, api, refresh, active = true, authority, w
         active={active && view === "objectives"} authority={authority} writesAvailable={writesAvailable} />
     </div>
     <div className="history-view" hidden={view !== "records"}>
-      <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"}
-        authority={authority} writesAvailable={writesAvailable} />
+      <Tasks snapshot={snapshot} api={api} refresh={refresh} active={active && view === "records"} />
     </div>
   </div>;
 }
@@ -101,7 +162,6 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // The pinned inspector selection, kept per objective so switching back restores it.
   const [selectionByObjective, setSelectionByObjective] = useState<Map<string, InspectorSelection>>(() => new Map());
-  const [locked, setLocked] = useState(false);
   const [expandedByObjective, setExpandedByObjective] = useState<Map<string, Set<string>>>(() => new Map());
   const list = useObjectiveList(api, { query, projectId, hostId, filter }, active);
   const timeline = useObjectiveTimeline(api, selected, active);
@@ -123,10 +183,11 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     hosts: [...new Set(list.rows.map(row => row.sourceHostId).filter((id): id is string => !!id))].sort(),
   }), [list.rows]);
 
-  // Detail placement: the right pane keeps the timeline visible above 760px —
-  // side by side once it is wide enough, stacked otherwise. Only the ≤760px
-  // viewport keeps the layer switch where the detail replaces the timeline.
+  // The viewport (never the pane) picks the layout (§1). Above 760px an open
+  // detail docks beside the timeline and the list collapses to the rail; at
+  // 760px or below the detail layers over the chronological view.
   const paneRef = useRef<HTMLElement>(null);
+  const railButtonRef = useRef<HTMLButtonElement>(null);
   const [paneWidth, setPaneWidth] = useState<number | null>(null);
   const [narrowViewport, setNarrowViewport] = useState(false);
   useEffect(() => {
@@ -146,12 +207,38 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const [dockDetailWidth, setDockDetailWidth] = useState(DOCK_DETAIL_DEFAULT_PX);
-  const [dockDetailHeight, setDockDetailHeight] = useState<number | null>(null);
   const detailOpen = !!detail;
-  const dockSide = detailOpen && !narrowViewport && (paneWidth ?? 0) >= DOCK_SIDE_MIN_PX;
-  const dockStack = detailOpen && !narrowViewport && !dockSide;
-  const dockDetailMax = Math.max(DOCK_DETAIL_MIN_PX, Math.min(DOCK_DETAIL_MAX_PX, (paneWidth ?? DOCK_SIDE_MIN_PX) - 530));
+  // R = the timeline|detail stage width = pane minus the rail column.
+  const rightWidth = Math.max((paneWidth ?? 0) - RAIL_PX, 0);
+  const [detailWidth, setDetailWidth] = useState<number | null>(null);
+  const maxDetail = detailMax(rightWidth > 0 ? rightWidth : 800);
+  const dockDetailWidth = clamp(detailWidth ?? detailDefault(rightWidth > 0 ? rightWidth : 800), DETAIL_MIN_PX, maxDetail);
+
+  // Opening a detail above 760px collapses the list to the expandable rail;
+  // closing it restores the full list. The drawer itself is a transient
+  // overlay that never changes the right-column geometry.
+  const [listRail, setListRail] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const railActive = listRail && !narrowViewport;
+  const wasDocking = useRef(false);
+  useEffect(() => {
+    const docking = detailOpen && !narrowViewport;
+    if (docking && !wasDocking.current) { setListRail(true); setDrawerOpen(false); }
+    if (!docking && wasDocking.current) { setListRail(false); setDrawerOpen(false); }
+    wasDocking.current = docking;
+  }, [detailOpen, narrowViewport]);
+
+  // Objective-level stop: the one retained write, with its explicit
+  // confirmation and a retained command identity. Nothing here locks browsing.
+  const reload = async () => {
+    const result = await refresh();
+    list.reset();
+    void timeline.retry();
+    return result;
+  };
+  const stop = useObjectiveStop(api, snapshot, writesAvailable, authority, reload);
+  const stopEntry = selected ? stop.entries.get(selected) : undefined;
+  const stopState = stopStatus(stopEntry, timeline.timeline);
 
   function setSelection(next: InspectorSelection | null) {
     if (!selected) return;
@@ -165,38 +252,36 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
   const selection = selected ? selectionByObjective.get(selected) ?? null : null;
 
   function selectObjective(objectiveId: string | null) {
-    // While a detail holds an unconfirmed operation, no selection change — not
-    // even re-clicking the selected objective — may unmount it.
-    if (locked) return;
+    if (drawerOpen) {
+      // Inside the drawer: the same objective only closes the drawer; another
+      // objective also closes the detail and restores the full list (§1).
+      setDrawerOpen(false);
+      railButtonRef.current?.focus();
+      if (objectiveId === selected) return;
+      setListRail(false);
+    }
     setSelected(objectiveId);
     setDetail(null);
   }
   function selectItem(item: TimelineItem) {
-    // Selection is read-only and always allowed, including while locked.
     setSelection({ type: "item", key: item.key });
   }
   function selectRun(runId: string) {
     setSelection({ type: "run", runId });
   }
   function openItem(item: TimelineItem) {
-    // Locked blocks another delegation's detail; the same delegation's other
-    // sections stay reachable.
-    if (locked && detail && detail.runId !== item.runId) return;
     setSelection({ type: "item", key: item.key });
     setDetail({ runId: item.runId, section: item.section, locator: item.locator, key: item.key });
   }
   function openRun(runId: string) {
-    if (locked && detail && detail.runId !== runId) return;
     const row = timeline.timeline?.rows.find(candidate => candidate.runId === runId) ?? null;
     setSelection({ type: "run", runId });
     setDetail({ runId, section: "overview", key: `row:${runId}`, locator: row ? `委派 · ${row.title}` : undefined });
   }
   function backToTimeline() {
-    if (locked) return;
     setDetail(null);
   }
   function navigateRun(runId: string) {
-    if (locked) return;
     setDetail({ runId });
   }
   function toggleGap(gapId: string) {
@@ -211,37 +296,81 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     setExpandedByObjective(previous => new Map(previous).set(selected ?? "", gapIds));
   }
 
-  // Esc closes the detail while this tab owns the page and the keystroke did
-  // not start inside a field, a dialog, or the timeline canvas (whose Escape
-  // only hands focus to the toolbar).
+  // Esc closes the transient drawer first, then the detail, while this tab
+  // owns the page and the keystroke did not start inside a field or a dialog.
   useEffect(() => {
-    if (!detail || !active) return;
+    if ((!detail && !drawerOpen) || !active) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || locked) return;
+      if (event.key !== "Escape") return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select")) return;
       if (document.querySelector(".dialog-backdrop")) return;
-      if (target?.closest(".timeline-view") && !target.closest(".run-view")) return;
       event.preventDefault();
-      setDetail(null);
+      if (drawerOpen) {
+        setDrawerOpen(false);
+        railButtonRef.current?.focus();
+        return;
+      }
+      if (narrowViewport && detail) setDetail(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [detail, active, locked]);
-
-  const reload = async () => {
-    const result = await refresh();
-    list.reset();
-    void timeline.retry();
-    return result;
-  };
+  }, [detail, drawerOpen, narrowViewport, active]);
+  // Clicking outside the expanded drawer closes it and restores focus (§1).
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".list-drawer, .rail-panel")) return;
+      setDrawerOpen(false);
+      railButtonRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [drawerOpen]);
 
   const expanded = selected ? expandedByObjective.get(selected) ?? EMPTY_SET : EMPTY_SET;
+
+  // The header's stop control: one objective-level action, its honest status,
+  // and the replay entry for a lost reply. Read-only sessions see the reason.
+  let stopControl: ReactNode = null;
+  if (selectedSummary) {
+    const stopping = stopEntry?.phase === "stopping";
+    const showButton = stoppableSummary(selectedSummary);
+    stopControl = <span className="stop-control">
+      {showButton && <button type="button" className="button small-button danger"
+        disabled={!stop.writable || stopping}
+        title={!stop.writable ? READ_ONLY_ACTION_REFUSAL : stopping ? "停止请求已发出，等待回复。" : "请求取消该目标全部未验收委派及协助任务（需确认）。"}
+        onClick={() => stop.requestStop(selectedSummary)}>停止目标</button>}
+      {stopState && <span className={`stop-status stop-${stopState.phase}`} role="status"
+        title={stopState.detail}>{stopState.label}</span>}
+      {stopState?.phase === "unknown" && stop.writable && !stopping
+        && <button type="button" className="button small-button"
+          title="按原命令 ID 重试；服务会去重，不会扩大取消范围。"
+          onClick={() => stop.retryStop(selectedSummary)}>重试停止</button>}
+      {stopState?.phase === "refused"
+        && <button type="button" className="button small-button" onClick={() => stop.dismissStop(selectedSummary.objectiveId)}>知道了</button>}
+    </span>;
+  }
+  // The same honest status line also appears in a docked detail's overview.
+  const stopStatusNode = stopState
+    ? <p className={`stop-status stop-${stopState.phase} detail-stop-status`} role="status" title={stopState.detail}>
+      停止状态：{stopState.label}。{stopState.detail}
+    </p>
+    : null;
+
   const listPane = <ObjectiveList
     rows={list.rows} total={list.total} loading={list.loading} error={list.error}
     nextCursor={list.nextCursor} reorder={list.reorder}
     filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
-    selected={selected} locked={locked}
+    selected={selected}
+    rail={railActive} railState={selectedSummary} railButtonRef={railButtonRef}
+    onToggleRail={() => {
+      setDrawerOpen(current => {
+        if (current) railButtonRef.current?.focus();
+        return !current;
+      });
+    }}
     onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
     onSelect={selectObjective} onRefresh={list.reset} onRetry={list.retry} onMore={list.more}
     onApplyReorder={list.applyReorder} />;
@@ -254,11 +383,11 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     error={timeline.error}
     stale={timeline.stale}
     newRunIds={timeline.newRunIds}
-    hidden={detailOpen && !dockSide && !dockStack}
+    hidden={detailOpen && narrowViewport}
     openedKey={detail?.key ?? null}
     openedRunId={detail?.runId ?? null}
     selection={selection}
-    locked={locked}
+    headerActions={stopControl}
     expandedGapIds={expanded}
     onToggleGap={toggleGap}
     onSetExpanded={setExpanded}
@@ -269,39 +398,56 @@ function ObjectivesWorkspace({ snapshot, api, refresh, active, authority, writes
     onClearSelection={() => setSelection(null)}
     onRetry={() => void timeline.retry()}
     onBackToList={() => selectObjective(null)} /> : null;
+
+  // The detail's fixed three-row overview comes from the timeline's own row
+  // read when the run is in scope; the raw fallback lives in WorkflowPanel.
+  const detailRow = detail ? timeline.timeline?.rows.find(row => row.runId === detail.runId) ?? null : null;
   const detailNode = detail && selectedSummary ? <RunDetailPane
     objectiveTitle={selectedSummary.title}
     target={detail}
     snapshot={snapshot} api={api} refresh={reload} active={active}
-    authority={authority} writesAvailable={writesAvailable}
-    mode={dockSide || dockStack ? "dock" : "layer"}
-    locked={locked} onBack={backToTimeline} onNavigate={navigateRun} onLockChange={setLocked}
+    mode={narrowViewport ? "layer" : "dock"}
+    onBack={backToTimeline} onNavigate={navigateRun}
+    stopStatusNode={stopStatusNode} overviewRow={detailRow}
     rowTitleFor={runId => timeline.timeline?.rows.find(row => row.runId === runId)?.title ?? null} /> : null;
 
-  // One persistent wrapper (with keys per pane) so crossing the layer/dock
-  // threshold reconciles instead of remounting: the timeline keeps its scroll
-  // and focus, and the open detail keeps its ambiguous-command identity.
-  const stageClass = dockSide ? "right-dock side" : dockStack ? "right-dock stack" : "right-stage";
+  // One persistent wrapper so crossing the layer/dock threshold reconciles
+  // instead of remounting: the timeline keeps its scroll and focus.
+  const stageStyle = detailOpen && !narrowViewport
+    ? ({ "--dock-detail-width": `${dockDetailWidth}px` } as CSSProperties)
+    : undefined;
   const detailPane = <aside className="panel detail-panel" ref={paneRef} aria-label="工作目标详情">
     {selected
-      ? <div className={stageClass}
-        style={dockSide
-          ? ({ "--dock-detail-width": `${Math.min(dockDetailWidth, dockDetailMax)}px` } as CSSProperties)
-          : dockStack && dockDetailHeight !== null
-            ? ({ "--dock-detail-height": `${dockDetailHeight}px` } as CSSProperties)
-            : undefined}>
+      ? <div className={detailOpen && !narrowViewport ? "right-dock side" : "right-stage"} style={stageStyle}>
         <div key="timeline" className="right-stage-pane">{timelinePane}</div>
-        {dockSide && <DockDivider key="divider" orientation="vertical" min={DOCK_DETAIL_MIN_PX} max={dockDetailMax}
-          value={Math.min(dockDetailWidth, dockDetailMax)} onChange={setDockDetailWidth} label="调整详情列宽度" />}
-        {dockStack && <DockDivider key="divider" orientation="horizontal" min={180} max={Math.max(220, (paneRef.current?.clientHeight ?? 600) * 0.75)}
-          value={dockDetailHeight ?? Math.round((paneRef.current?.clientHeight ?? 600) * 0.45)}
-          onChange={setDockDetailHeight} label="调整详情高度" />}
-        {detailNode && <div key="detail" className="right-stage-pane detail-stage">{detailNode}</div>}
+        {detailOpen && !narrowViewport && <TimelineDetailDivider key="divider"
+          min={DETAIL_MIN_PX} max={maxDetail} value={dockDetailWidth}
+          timelineWidth={Math.max(0, rightWidth - DIVIDER_PX - dockDetailWidth)}
+          onChange={setDetailWidth} onReset={() => setDetailWidth(null)} />}
+        {detailNode && <div key="detail" id="timeline-detail-column" className="right-stage-pane detail-stage">{detailNode}</div>}
       </div>
       : <div className="detail-placeholder">
         <h2>选择一个工作目标</h2>
         <p>查看各委派的排队、执行、等待 Host 与验收时间。只读，不调用模型。</p>
       </div>}
   </aside>;
-  return <RecordDrafts><SplitView selected={!!selected} list={listPane} detail={detailPane} /></RecordDrafts>;
+  return <>
+    <div className="workspace-wrap">
+      <SplitView selected={!!selected} rail={railActive} list={listPane} detail={detailPane} />
+      {railActive && drawerOpen && <div className="list-drawer" role="dialog" aria-label="工作目标列表（抽屉）">
+        <ObjectiveList
+          rows={list.rows} total={list.total} loading={list.loading} error={list.error}
+          nextCursor={list.nextCursor} reorder={list.reorder}
+          filter={filter} query={query} projectId={projectId} hostId={hostId} choices={choices}
+          selected={selected}
+          rail={false} railState={null}
+          onFilterChange={setFilter} onQueryChange={setQuery} onProjectChange={setProjectId} onHostChange={setHostId}
+          onSelect={selectObjective} onRefresh={list.reset} onRetry={list.retry} onMore={list.more}
+          onApplyReorder={list.applyReorder} />
+      </div>}
+    </div>
+    {stop.confirming && <StopDialog summary={stop.confirming}
+      onConfirm={() => stop.confirmStop(stop.confirming!)}
+      onCancel={stop.cancelConfirm} />}
+  </>;
 }

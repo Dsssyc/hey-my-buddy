@@ -15,7 +15,12 @@ Safety boundary:
 * All mutation POSTs are refused. ``POST /api/command`` serves the same five
   read-only operations the real console allows (``workflow_get``,
   ``selection_get``, ``selection_list``, ``model_profiles``,
-  ``evaluation_history``) with fixed-shape fixture payloads.
+  ``evaluation_history``) with fixed-shape fixture payloads. Operations the
+  0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
+  per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
+  the real console; the still-allowed writes (settings operations and
+  ``objective_stop``) are refused here with ``CONSOLE_READ_ONLY`` because the
+  preview never mutates.
 * Fixture records reuse the same field names as the console DTOs
   (``apps/console/src/objective-types.ts`` and the console snapshot/task views).
   Read pages are one fixed page: ``cursor`` is a constant event head and
@@ -106,10 +111,16 @@ MARKER_SUMMARY = {"dispatch": "synthetic dispatch · preview fixture",
                   "cancel": "cancelled · synthetic Host cancellation",
                   "takeover": "takeover · synthetic host handover"}
 
-CONSOLE_OPERATIONS = (
+#: The 0.15.1 browser command allowlist: five reads plus settings operations
+#: and objective_stop (console.md). Everything else is METHOD_NOT_FOUND.
+ALLOWED_OPERATIONS = (
     "evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get",
     "evaluation_write_begin", "evaluation_write_renew", "user_policy_publish", "evaluation_write_abort",
-    "model_catalog_refresh", "task_cancel", "task_retry", "task_acknowledge", "workflow_submit",
+    "model_catalog_refresh", "objective_stop",
+)
+#: Operations the 0.15.1 read-only repair removed from the browser surface.
+REMOVED_OPERATIONS = (
+    "task_cancel", "task_retry", "task_acknowledge", "workflow_submit",
     "workflow_decide", "workflow_continue", "workflow_takeover", "workflow_cancel",
     "workflow_acknowledge", "workflow_scope_amend", "workflow_workspace_resolve",
     "workflow_integration_record", "workspace_cleanup_plan", "workspace_cleanup_apply", "workflow_suggest",
@@ -592,9 +603,10 @@ def build_runs() -> dict[str, dict]:
 FIXTURES = build_runs()
 OBJECTIVES = {
     OBJ_A: {"title": long_title("工作目标时间轴：设计、接口与合成预览夹具的实现与核对（含超长标题与折叠区间）："),
+            "description": "按用户认可的第 X 节设计工作目标时间轴。本目标覆盖只读接口、前端呈现与合成预览夹具的自检。",
             "project": "alpha", "host": HOST_A, "createdAt": instant(6, 0)},
-    OBJ_B: {"title": "0.13 控制台入口候选版收尾与文档", "project": "beta", "host": HOST_B,
-            "createdAt": instant(3, 0)},
+    OBJ_B: {"title": "0.13 控制台入口候选版收尾与文档", "description": None, "project": "beta",
+            "host": HOST_B, "createdAt": instant(3, 0)},
 }
 
 
@@ -771,6 +783,15 @@ def workflow_view(entry: dict) -> dict:
     }
 
 
+def task_first_line(task_text: str) -> str | None:
+    """The bounded first nonempty task line, like the 0.15.1 read projection."""
+    for line in task_text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:200]
+    return None
+
+
 def timeline_row(entry: dict, depth: int) -> dict:
     attempts = entry["attempts"]
     confirmed = sum(1 for item in attempts if item["state"] == "finished" and item["shutdownConfirmed"])
@@ -778,6 +799,7 @@ def timeline_row(entry: dict, depth: int) -> dict:
     return {
         "runId": entry["runId"], "parentRunId": entry["parentRunId"], "rootRunId": entry["rootRunId"],
         "title": entry["title"] or UNTITLED, "titleSource": entry["titleSource"],
+        "taskSummary": task_first_line(entry["task"]),
         "summary": "合成记录：已提交输出，等待按记录核对。" if entry["status"] == "completed" else None,
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
@@ -790,23 +812,30 @@ def timeline_row(entry: dict, depth: int) -> dict:
 
 def objective_summary(group: str, matching: set[str]) -> dict:
     entries = [FIXTURES["runs"][run_id] for run_id in FIXTURES["groups"][group]]
-    counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0}
+    counts = {"roots": 0, "helpers": 0, "accepted": 0, "active": 0, "host": 0, "review": 0, "ended": 0}
     for entry in entries:
         counts[entry["category"]] += 1
         counts["helpers" if entry["parentRunId"] else "roots"] += 1
+        # 0.15.1 Host correction: accepted counts accepted ROOTS only; helpers
+        # count through their root's acceptance, and the denominator is roots.
+        if entry["parentRunId"] is None and entry["acceptanceVerdict"] == "accepted":
+            counts["accepted"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group.startswith("obj-"):
         meta = OBJECTIVES[group]
         title, title_source, project = meta["title"], "objective", meta["project"]
+        description = meta.get("description")
         source_host, created, kind = meta["host"], meta["createdAt"], "objective"
         roots = [entry["runId"] for entry in entries if entry["parentRunId"] is None]
     else:
         root = FIXTURES["runs"][group[len("run:"):]]
         title, title_source, project = root["title"], root["titleSource"], root["project"]
+        description = None
         source_host, created, kind, roots = root["sourceHostId"], root["createdAt"], "standalone", [root["runId"]]
     seq, at = FIXTURES["group_activity"][group]
     return {
         "objectiveId": group, "kind": kind, "title": title or UNTITLED, "titleSource": title_source,
+        "description": description,
         "summary": "合成记录：保留独立委派的结果摘要。" if kind == "standalone" else None,
         "project": PROJECTS[project], "sourceHostId": source_host,
         "currentHostIds": sorted({entry["currentHostId"] for entry in entries}),
@@ -1100,10 +1129,26 @@ def command_result(scenario: str, operation: str, params: Any) -> dict:
     """Only reads are served; every known mutation is refused and nothing is written."""
     if not isinstance(params, dict):
         raise PreviewError("INVALID_ARGUMENT", "params must be an object")
-    if operation not in CONSOLE_OPERATIONS:
+    if operation in REMOVED_OPERATIONS:
         raise PreviewError("METHOD_NOT_FOUND",
                            f"Operation {operation!r} is not available through the console")
+    if operation not in ALLOWED_OPERATIONS:
+        raise PreviewError("METHOD_NOT_FOUND",
+                           f"Operation {operation!r} is not available through the console")
+    if operation == "objective_stop":
+        unknown = sorted(set(params) - {"objectiveId", "commandId", "reason"})
+        if unknown:
+            raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
+        if not isinstance(params.get("objectiveId"), str) or not OBJECTIVE_ID.match(params.get("objectiveId", "")):
+            raise PreviewError("INVALID_ARGUMENT", "objectiveId must be an objective or run:<rootRunId> identifier")
+        if not isinstance(params.get("commandId"), str) or not params.get("commandId"):
+            raise PreviewError("INVALID_ARGUMENT", "commandId is required")
+        if len(str(params.get("reason") or "")) > 500:
+            raise PreviewError("INVALID_ARGUMENT", "reason is too long")
     if operation not in READ_OPERATIONS:
+        # Includes objective_stop: allowed by the 0.15.1 contract for the current
+        # writer, but this preview never mutates, so it answers the same refusal
+        # the board would give a session without write authority.
         raise PreviewError("CONSOLE_READ_ONLY",
                            "This synthetic preview never performs mutations; only read-only operations are served")
     if operation == "workflow_get":
@@ -1140,7 +1185,7 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/objectives/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
         f"GET  {base}/api/tasks/preview-run-a1",
         f"POST {base}/api/command  workflow_get · selection_get · selection_list · "
-        f"model_profiles · evaluation_history   (all mutations refused)",
+        f"model_profiles · evaluation_history   (removed ops: 404; writes incl. objective_stop: 403)",
     )
 
 
@@ -1378,16 +1423,16 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 # --------------------------------------------------------------------------- #
 REQUIRED_KEYS = {
     "ObjectivePage": {"objectives", "total", "nextCursor", "cursor", "changed"},
-    "ObjectiveSummary": {"objectiveId", "kind", "title", "titleSource", "project", "sourceHostId",
-                         "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq", "state",
-                         "counts", "matchingRuns", "rootRunIds"},
-    "ObjectiveCounts": {"roots", "helpers", "active", "host", "review", "ended"},
+    "ObjectiveSummary": {"objectiveId", "kind", "title", "titleSource", "description", "project",
+                         "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
+                         "state", "counts", "matchingRuns", "rootRunIds"},
+    "ObjectiveCounts": {"roots", "helpers", "accepted", "active", "host", "review", "ended"},
     "TimelineSpan": {"spanId", "runId", "kind", "startAt", "endAt", "state", "attemptId", "turnId",
                      "turnIndex", "requestId", "configuration", "shutdownConfirmed", "uncertain",
                      "clockSkew"},
-    "TimelineRow": {"runId", "parentRunId", "rootRunId", "title", "titleSource", "createdAt", "state",
-                    "status", "category", "shutdownConfirmed", "depth", "kind", "configuration",
-                    "acceptedAt", "acceptanceVerdict"},
+    "TimelineRow": {"runId", "parentRunId", "rootRunId", "title", "titleSource", "taskSummary", "summary",
+                    "createdAt", "state", "status", "category", "shutdownConfirmed", "depth", "kind",
+                    "configuration", "acceptedAt", "acceptanceVerdict"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "label", "summary", "actor", "attemptId",
                       "requestId", "artifactId"},
     "ObjectiveTimeline": {"objective", "observedAt", "cursor", "rows", "spans", "events", "totals",
@@ -1468,6 +1513,29 @@ def validate_fixtures() -> list[str]:
         problems.append("normal scope must be complete")
     if not objective_timeline({"objectiveId": OBJ_A}, "truncated")["truncated"]["rows"]:
         problems.append("truncated scenario must report row truncation")
+    summary_a = page["objectives"][0] if page["objectives"][0]["objectiveId"] == OBJ_A else next(
+        item for item in page["objectives"] if item["objectiveId"] == OBJ_A)
+    if not summary_a["description"] or len(summary_a["description"]) > 300:
+        problems.append("objective A must carry a bounded description")
+    if any(item["description"] is not None and item["kind"] == "standalone"
+           for item in page["objectives"]):
+        problems.append("standalone groups must not carry a description")
+    if not all(isinstance(item["counts"]["accepted"], int) for item in page["objectives"]):
+        problems.append("counts.accepted must be present on every summary")
+    accepted_a = sum(1 for run_id in FIXTURES["groups"][OBJ_A]
+                     if FIXTURES["runs"][run_id]["parentRunId"] is None
+                     and FIXTURES["runs"][run_id]["acceptanceVerdict"] == "accepted")
+    for item in page["objectives"]:
+        if item["counts"]["accepted"] > item["counts"]["roots"]:
+            problems.append(f"{item['objectiveId']}: accepted exceeds roots")
+    if summary_a["counts"]["accepted"] != accepted_a:
+        problems.append("counts.accepted does not match the accepted members")
+    if not all(row["taskSummary"] == task_first_line(FIXTURES["runs"][row["runId"]]["task"])
+               for row in timeline["rows"]):
+        problems.append("taskSummary must be the first nonempty task line")
+    standalone_rows = objective_timeline({"objectiveId": STANDALONE_GROUP}, "normal")["rows"]
+    if not any(row["taskSummary"] is None for row in standalone_rows):
+        problems.append("the blank-task helper must keep a null taskSummary")
     categories = {entry["category"] for entry in FIXTURES["runs"].values() if entry["governed"]}
     if categories != {"host", "active", "review", "ended"}:
         problems.append(f"fixture categories are {sorted(categories)}")
@@ -1591,8 +1659,20 @@ def smoke(assets: Path, scenario: str) -> int:
                   f"status={status}")
         status, denied, _headers = call("POST", "/api/command", payload={"operation": "workflow_cancel",
                                                                "params": {"runId": "preview-run-a1"}})
-        check("mutation POST is refused", status == 403
-              and denied["error"]["code"] == "CONSOLE_READ_ONLY", f"status={status}")
+        check("removed Host operation is METHOD_NOT_FOUND", status == 404
+              and denied["error"]["code"] == "METHOD_NOT_FOUND", f"status={status}")
+        status, stop, _headers = call("POST", "/api/command", payload={
+            "operation": "objective_stop",
+            "params": {"objectiveId": OBJ_A, "commandId": "synthetic-stop-command-1"}})
+        check("objective_stop is allowed-but-refused by the preview", status == 403
+              and stop["error"]["code"] == "CONSOLE_READ_ONLY", f"status={status}")
+        status, bad_stop, _headers = call("POST", "/api/command", payload={
+            "operation": "objective_stop", "params": {"objectiveId": "obj-not-a-real-group",
+                                                     "commandId": "synthetic-stop-command-2"}})
+        check("objective_stop validates its identifiers first", status in (400, 403), f"status={status}")
+        if scenario != "error":
+            check("timeline rows carry the 0.15.1 taskSummary", any(
+                row.get("taskSummary") for row in timeline.get("rows", [])))
         status, unknown, _headers = call("POST", "/api/command", payload={"operation": "nope", "params": {}})
         check("unknown operation is METHOD_NOT_FOUND", status == 404
               and unknown["error"]["code"] == "METHOD_NOT_FOUND", f"status={status}")

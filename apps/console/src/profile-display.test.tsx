@@ -2,11 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
-import { HelperForm } from "./HelperForm";
 import { RoutingPanel } from "./RoutingPanel";
 import type { ConsoleApi } from "./api";
 import type { Profile, Snapshot, WriterGrant } from "./types";
-import type { HelperDraft, Workflow } from "./workflow-types";
+import type { Workflow } from "./workflow-types";
 import {
   effortText,
   profileName,
@@ -246,35 +245,8 @@ describe("model list display", () => {
   });
 });
 
-describe("helper and routing selectors", () => {
-  it("labels helper options once and keeps the raw profile id as the value", () => {
-    const helper: HelperDraft = {
-      id: "helper-1",
-      profileId: "",
-      task: "",
-      cwd: "/repo",
-      kind: "worktree",
-      access: "write",
-      writeScope: "",
-      includeUntracked: "",
-    };
-    render(
-      <HelperForm
-        helper={helper}
-        index={0}
-        profiles={[flashOff, proMax]}
-        onChange={vi.fn()}
-        onRemove={vi.fn()}
-      />,
-    );
-    expect(optionEntries(screen.getByLabelText("执行配置"))).toEqual([
-      ["", "自动路由：由固定决策 Buddy 选择"],
-      [flashOffId, "dsh · DeepSeek-V41-Flash · 非思考"],
-      [proMaxId, "dsh · DeepSeek-V4-Pro · max"],
-    ]);
-  });
-
-  it("fills the routing form from the same display while keeping raw effort values", async () => {
+describe("read-only routing panel (0.15.1 U4)", () => {
+  it("shows the recorded configuration and routing facts without any retry form", () => {
     const workflow: Workflow = {
       governed: true,
       runId: "parent",
@@ -325,40 +297,16 @@ describe("helper and routing selectors", () => {
         acceptanceVerdict: null,
       },
     };
-    const command = vi.fn(async () => undefined);
-    const user = userEvent.setup();
-    render(
-      <RoutingPanel
-        value={workflow}
-        profiles={[flashOff, proMax]}
-        locked={false}
-        command={command}
-      />,
-    );
+    render(<RoutingPanel value={workflow} />);
     expect(
       screen.getByText("dsh / deepseek-official / deepseek-flash / 非思考"),
     ).toBeTruthy();
-    const select = screen.getByLabelText("填入已启用配置");
+    expect(screen.getByText("needs-host")).toBeTruthy();
     expect(
-      optionEntries(select).find(([value]) => value === flashOffId),
-    ).toEqual([flashOffId, "dsh · DeepSeek-V41-Flash · 非思考"]);
-
-    await user.selectOptions(select, flashOffId);
-    expect(screen.getByLabelText("Thinking effort")).toHaveProperty(
-      "value",
-      "off",
-    );
-    await user.click(screen.getByRole("button", { name: "使用此配置接续" }));
-    expect(command).toHaveBeenCalledWith(
-      "workflow_continue",
-      expect.objectContaining({
-        configuration: {
-          adapter: "dsh",
-          provider: "deepseek-official",
-          model: "deepseek-flash",
-          effort: "off",
-        },
-      }),
-    );
+      screen.getByText(/路由需要 Host 补充配置：控制台不再提供补齐或重试表单/),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("填入已启用配置")).toBeNull();
+    expect(screen.queryByRole("button", { name: "使用此配置接续" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试同一目标的路由" })).toBeNull();
   });
 });

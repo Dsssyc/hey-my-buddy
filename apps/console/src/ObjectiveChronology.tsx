@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { TimelineSpan } from "./objective-types";
 import type { ChronoEntry, ConfigurationStyle, SpanOutcome, TimelineItem } from "./objective-display";
-import { clockTime, configurationLabel, durationText, eventVocab, outcomeLabel, paletteIndex } from "./objective-display";
+import { clockTime, configurationLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex } from "./objective-display";
 
 const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", cancelled: "⊘", unknown: "?", running: "▸" };
 
@@ -32,7 +32,10 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
       if (entry.kind === "event") {
         const vocab = eventVocab(entry.event.kind);
         const helper = entry.row?.kind === "helper" ? "↳ 协助 · " : "";
-        const title = entry.row?.title ?? `委派 ${entry.event.runId}`;
+        // Task first-line fallbacks stay one ~40-character line here too, and
+        // the full text never leaks into the tooltip (0.15.1 U3).
+        const line = entry.row ? displayTitle(entry.row.titleSource, entry.row.title) : null;
+        const title = line ? line.text : `委派 ${entry.event.runId}`;
         return <button key={entry.item.key} data-key={entry.item.key}
           className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "") + (openedKey === entry.item.key ? " opened" : "")}
           onClick={() => onSelectItem(entry.item)}
@@ -46,7 +49,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
           aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
           <time>{clockTime(entry.atMs)}</time>
           <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
-          <span className="e-title" title={title}>Host {entry.event.label || vocab.label} · {helper}{title}</span>
+          <span className="e-title single-line" title={line?.fromTask ? `${title}（完整任务见详情）` : title}>Host {entry.event.label || vocab.label} · {helper}{title}</span>
           <span className="e-meta"><span>{entry.item.parts.slice(1).join(" · ")}</span></span>
         </button>;
       }
@@ -59,6 +62,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
         ? <span className="swatch" style={{ "--c": `var(--cfg-${style.color})` } as CSSProperties} aria-hidden="true" />
         : <span className={"swatch " + (span.kind === "queue" ? "queue" : span.kind === "routing" ? "routing" : "wait")} aria-hidden="true" />;
       const duration = durationText(entry.endMs !== null ? entry.endMs - entry.atMs : null);
+      const titleLine = displayTitle(entry.row.titleSource, entry.row.title);
       return <button key={entry.item.key} data-key={entry.item.key}
         className={"tl-entry" + (selectedKey === entry.item.key ? " selected" : "") + (openedKey === entry.item.key ? " opened" : "")}
         onClick={() => onSelectItem(entry.item)}
@@ -72,7 +76,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
         aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
         <time>{clockTime(entry.atMs)}</time>
         {swatch}
-        <span className="e-title" title={entry.row.title}>{entry.item.head} · {helper}{entry.row.title}</span>
+        <span className="e-title single-line" title={titleLine.fromTask ? `${titleLine.text}（完整任务见详情）` : titleLine.text}>{entry.item.head} · {helper}{titleLine.text}</span>
         <span className="e-meta">
           {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}

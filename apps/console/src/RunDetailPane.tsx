@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
+import type { TimelineRow } from "./objective-types";
 import { TaskDetails } from "./TaskDetails";
 import { taskTitle } from "./task-state";
-import type { AuthorityLatch } from "./console-session";
 import type { SectionId } from "./objective-display";
-
-const LOCK_NOTE = "有结果未确认的操作：核对前不切换，以免丢失操作标识。";
 
 export type DetailTarget = {
   runId: string;
-  /** Existing detail tab to preselect (written into the run's section draft). */
+  /** Existing detail tab to preselect once on open. */
   section?: SectionId;
   /** Short span facts for the locator's 来自时间轴 line. */
   locator?: string;
@@ -20,12 +19,14 @@ export type DetailTarget = {
 };
 
 /**
- * Right pane, layer two: the locator bar plus the existing TaskDetails for the
- * delegation opened from the timeline. No control set is duplicated here. In
- * dock mode the timeline stays visible beside or above this pane, so the
- * return control reads as closing the detail instead of going back.
+ * Right pane, layer two: the locator bar plus the existing read-only
+ * TaskDetails for the delegation opened from the timeline. No control set is
+ * duplicated here, and nothing locks navigation: record browsing is free even
+ * while an objective-level stop has an unconfirmed reply. In dock mode the
+ * timeline stays visible beside or above this pane, so the return control
+ * reads as closing the detail instead of going back.
  */
-export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot, api, refresh, active, authority, writesAvailable, locked, onBack, onNavigate, onLockChange, rowTitleFor }: {
+export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot, api, refresh, active, onBack, onNavigate, stopStatusNode, overviewRow, rowTitleFor }: {
   /** "layer" replaces the timeline; "dock" keeps it visible beside/above. */
   mode?: "layer" | "dock";
   objectiveTitle: string;
@@ -34,12 +35,12 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   api: ConsoleApi;
   refresh: () => Promise<Snapshot | null>;
   active: boolean;
-  authority?: AuthorityLatch;
-  writesAvailable: boolean;
-  locked: boolean;
   onBack: () => void;
   onNavigate: (runId: string) => void;
-  onLockChange: (value: boolean) => void;
+  /** The objective-level stop status line shown in the overview tab (§4/§7). */
+  stopStatusNode?: ReactNode;
+  /** The timeline's own row for the fixed three-row overview block. */
+  overviewRow?: TimelineRow | null;
   /** The timeline read's own resolved title for a run, when it knows the run. */
   rowTitleFor?: (runId: string) => string | null;
 }) {
@@ -61,21 +62,18 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
   const crumbs = remote ? `${objectiveTitle} › ${rowTitleFor?.(remote.runId) ?? taskTitle(remote)}` : `${objectiveTitle} › ${target.runId}`;
   return <div className="run-view">
     <div className="locator">
-      <button type="button" className="button small-button" aria-disabled={locked || undefined}
-        title={locked ? LOCK_NOTE : undefined}
-        onClick={() => { if (!locked) onBack(); }}>{mode === "dock" ? "× 关闭详情" : "‹ 返回时间轴"}</button>
+      <button type="button" className="button small-button"
+        onClick={onBack}>{mode === "dock" ? "× 关闭详情" : "‹ 返回时间轴"}</button>
       <span className="crumbs" title={crumbs}>{crumbs}</span>
       {target.locator && <span className="from">来自时间轴：{target.locator}</span>}
-      {locked && <span className="lock-note" role="status">{LOCK_NOTE} 当前委派的其他栏目仍可浏览。</span>}
     </div>
     {remote
       ? <TaskDetails key={remote.runId} task={remote} snapshot={snapshot} api={api} refresh={refresh}
-        selectTask={runId => { if (runId && !locked) onNavigate(runId); }} active={active}
-        onLockChange={onLockChange} onTaskUpdate={next => setRemote(previous =>
+        selectTask={runId => { if (runId) onNavigate(runId); }} active={active}
+        onTaskUpdate={next => setRemote(previous =>
           previous?.runId === next.runId && previous.revision === next.revision
           && previous.workflow?.revision === next.workflow?.revision ? previous : next)}
-        navigationLocked={locked} authority={authority} writesAvailable={writesAvailable}
-        hideBackButton initialSection={target.section} />
+        hideBackButton initialSection={target.section} stopStatusNode={stopStatusNode} overviewRow={overviewRow} />
       : error
         ? <div className="detail-placeholder">
           <h2>读取委派失败</h2>

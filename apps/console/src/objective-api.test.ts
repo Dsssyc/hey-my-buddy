@@ -39,6 +39,28 @@ describe("work-objective reads", () => {
     }
   });
 
+  it("accepts the 0.15.1 nullable description and accepted count, refusing malformed ones", async () => {
+    const good = objectiveTimelineFixture();
+    const withDescription = { ...good, objective: { ...good.objective, description: "用户口述的目标描述。", counts: { ...good.objective.counts, accepted: 2 } } };
+    const api = createApi("/private", vi.fn(async () => new Response(JSON.stringify(withDescription))) as typeof fetch);
+    await expect(api.objectiveTimeline("obj-1", {})).resolves.toMatchObject({
+      objective: { description: "用户口述的目标描述。", counts: { accepted: 2 } },
+      rows: expect.any(Array),
+    });
+    for (const malformed of [
+      { ...good, objective: { ...good.objective, description: 7 } },
+      { ...good, objective: { ...good.objective, counts: { ...good.objective.counts, accepted: "2" } } },
+      { ...good, objective: { ...good.objective, counts: { roots: 1, helpers: 0, active: 0, host: 0, review: 0, ended: 0 } } },
+      { ...good, rows: good.rows.map(row => ({ ...row, taskSummary: 5 })) },
+    ]) {
+      const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify(malformed))) as typeof fetch);
+      await expect(reader.objectiveTimeline("obj-1", {})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+    const badList = { objectives: [{ ...good.objective, description: [] }], total: 1, nextCursor: null, cursor: 0, changed: false };
+    const listApi = createApi("/private", vi.fn(async () => new Response(JSON.stringify(badList))) as typeof fetch);
+    await expect(listApi.objectives({})).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+
   it("reads one objective's timeline from its encoded path with the bounded limit", async () => {
     const timeline = objectiveTimelineFixture();
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(timeline)));

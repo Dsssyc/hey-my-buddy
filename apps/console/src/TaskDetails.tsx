@@ -1,38 +1,38 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText, isReadOnlyRefusal } from "./api";
+import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
+import type { TimelineRow } from "./objective-types";
 import { WorkflowPanel } from "./WorkflowPanel";
-import { useRecordDraft } from "./record-drafts";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
-import { canRetry, excerpt, needsReview, resultText, taskStatus, taskTitle } from "./task-state";
+import { excerpt, resultText, taskStatus, taskTitle } from "./task-state";
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
-import { READ_ONLY_ACTION_REFUSAL, createAuthorityLatch } from "./console-session";
-import type { AuthorityLatch } from "./console-session";
 
-export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onLockChange, onTaskUpdate, navigationLocked, authority, writesAvailable = true, hideBackButton = false, initialSection }: {
+/**
+ * One delegation's detail (0.15.1 U4): read-only browsing of the recorded
+ * facts. The task_cancel/task_retry/task_acknowledge controls and their record
+ * drafts are gone — execution history stays inspectable and navigation is
+ * never locked; the objective-level 停止目标 lives on the work-objective
+ * header instead.
+ */
+export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, onTaskUpdate, hideBackButton = false, initialSection, stopStatusNode, overviewRow }: {
   task: Task; snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>;
-  selectTask: (runId: string | null) => void; active: boolean; onLockChange: (value: boolean) => void;
-  onTaskUpdate: (value: Task) => void; navigationLocked: boolean;
-  authority?: AuthorityLatch; writesAvailable?: boolean;
+  selectTask: (runId: string | null) => void; active: boolean;
+  onTaskUpdate: (value: Task) => void;
   /** Timeline context: the locator bar is the return entry, so hide the built-in back button. */
   hideBackButton?: boolean;
   /** Section of the existing detail tabs to preselect once on open. */
   initialSection?: string;
+  /** Objective-level stop status for the overview tab (timeline context only). */
+  stopStatusNode?: ReactNode;
+  /** The timeline's own row for the fixed three-row overview block. */
+  overviewRow?: TimelineRow | null;
 }) {
   const [detail, setDetail] = useState<unknown>(null), [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const [routingRequest, setRoutingRequest] = useState(0);
-  const [note, setNote] = useRecordDraft(task.runId, "executionNote", "");
-  const localLatch = useRef<AuthorityLatch | null>(null);
-  if (!localLatch.current) localLatch.current = createAuthorityLatch();
-  const latch = authority ?? localLatch.current;
-  // A superseded session, a failed authenticated poll or a latched refusal keeps
-  // reading this record but may not mutate it. Connection loss is not presented
-  // as a new-window takeover; the controls simply stay disabled.
-  const writable = writesAvailable && latch.writable(snapshot);
   useEffect(() => {
     if (!active || task.workflow) return;
     let current = true;
@@ -44,22 +44,6 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
       .catch(reason => { if (current) setError(errorText(reason)); });
     return () => { current = false; };
   }, [api, active, task.runId, task.revision, !!task.workflow, onTaskUpdate]);
-  async function command(operation: string, params: Record<string, unknown>) {
-    if (!writable || !latch.writable(snapshot)) {
-      // No automatic or manual mutation retry from a read-only session.
-      setError(READ_ONLY_ACTION_REFUSAL);
-      return;
-    }
-    setBusy(true); onLockChange(true); setError("");
-    try { await api.command(operation, params, snapshot.csrfToken); await refresh(); }
-    catch (reason) {
-      // A definite read-only refusal latches the session, so the next click is
-      // refused locally instead of dispatching another write before the poll.
-      if (isReadOnlyRefusal(reason)) latch.lose(snapshot.consoleSession?.id);
-      setError(errorText(reason));
-    }
-    finally { setBusy(false); onLockChange(false); }
-  }
   const project = taskProject(task);
   const decision = task.spec?.decision as { decisionId?: string } | undefined;
   const recordInfo = <details className="detail-section"><summary>来源与标识</summary><dl className="facts">
@@ -69,7 +53,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
   </dl></details>;
   return <>
     <header className="detail-header">
-      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" disabled={busy || navigationLocked} onClick={() => selectTask(null)}>返回委派列表</button>}
+      <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回委派列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
       <h2 title={task.task}>{excerpt(taskTitle(task), 100)}</h2>
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>
@@ -77,29 +61,19 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
           <span>→ {taskExecutor(task)}</span><span>查看选择依据</span></button> : <span title={taskExecutor(task)}>→ {taskExecutor(task)}</span>}</p>
     </header>
     {task.workflow ? <WorkflowPanel task={task} snapshot={snapshot} api={api} refresh={refresh}
-        selectTask={selectTask} active={active} onLockChange={onLockChange} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
-        authority={latch} writesAvailable={writesAvailable} initialSection={initialSection} /> : <div className="detail-body">
+        selectTask={selectTask} active={active} onTaskUpdate={onTaskUpdate} recordInfo={recordInfo} routingRequest={routingRequest}
+        initialSection={initialSection} stopStatusNode={stopStatusNode} overviewRow={overviewRow} /> : <div className="detail-body">
       {error && <p role="alert" className="error-message">{error}</p>}
       <h3>{task.spec?.adapter === "decision" ? "内部决策计算" : "执行记录"}</h3>
-      <p className="small muted">来源字段只展示已记录的信息；执行结束与验收分别记录。</p>
+      <p className="small muted">来源字段只展示已记录的信息；执行结束与验收分别记录。此页只读，取消与重试由 Host 通过既有 CLI 流程完成。</p>
       {recordInfo}
       <details className="detail-section"><summary>原始任务</summary><p className="read-text">{task.task}</p></details>
       <TaskActivityView task={task} />
       <section className="detail-section"><h3>交付结果</h3><pre className="result-text">{detail ? resultText(detail) : "正在读取结果…"}</pre></section>
-      <div className="actions">
-        {["queued", "running", "cancelling"].includes(task.status) && <button className="button danger" disabled={busy || !writable || task.status === "cancelling"}
-          onClick={() => void command("task_cancel", { runId: task.runId })}>取消任务</button>}
-        {canRetry(task) && <button className="button" disabled={busy || !writable} onClick={() => void command("task_retry", { runId: task.runId })}>重新尝试</button>}
-      </div>
       {task.spec?.adapter === "decision" && <section className="detail-section">
         <p className="small muted">此计算记录无需业务验收。</p>
         {decision?.decisionId ? <DecisionDetails decisionId={decision.decisionId} api={api} csrfToken={snapshot.csrfToken} active={active} refreshKey={task.status} />
           : <p className="small muted">未记录关联的决策 ID。</p>}
-      </section>}
-      {needsReview(task) && <section className="detail-section"><h3>记录验收</h3>
-        <label className="field"><span>检查依据</span><textarea rows={3} value={note} maxLength={2000} readOnly={!writable} onChange={e => setNote(e.target.value)} /></label>
-        <div className="actions">{(["accepted", "rejected"] as const).map(verdict => <button key={verdict} className="button" disabled={busy || !writable || !note.trim() || task.shutdownConfirmed !== true}
-          onClick={() => void command("task_acknowledge", { runId: task.runId, verdict, note: note.trim() })}>{verdict === "accepted" ? "接受交付" : "记录验收问题"}</button>)}</div>
       </section>}
     </div>}
   </>;

@@ -344,9 +344,11 @@ describe("superseded console session", () => {
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
-    const cancel = await screen.findByRole("button", { name: "取消任务" });
-    expect(cancel).toHaveProperty("disabled", true);
-    await user.click(cancel);
+    await screen.findByRole("heading", { name: "只读普通任务" });
+    // 0.15.1 U4: the browser exposes no task mutation at all, so a read-only
+    // session has nothing to refuse — the detail simply stays read-only.
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     // Discovery, drafting and task control never reached the board.
     expect(f.operations).toEqual([]);
   });
@@ -521,7 +523,7 @@ describe("superseded console session", () => {
     }
   });
 
-  it("disables ordinary and governed task controls while read-only and keeps them live for the writer", async () => {
+  it("keeps task details read-only for every record kind, read-only session or writer alike (U4)", async () => {
     const plain = goal("plain-task", "普通待执行任务", { workflow: undefined });
     const failed = retryable("failed-task", "可重试任务");
     const awaiting = goal("governed-task", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
@@ -549,25 +551,26 @@ describe("superseded console session", () => {
     await screen.findByRole("button", { name: /普通待执行任务/ });
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(screen.getByRole("button", { name: /普通待执行任务/ }));
-    expect(await screen.findByRole("button", { name: "取消任务" })).toHaveProperty("disabled", true);
+    await screen.findByRole("heading", { name: "普通待执行任务" });
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
-    expect(await screen.findByRole("button", { name: "重新尝试" })).toHaveProperty("disabled", true);
+    await screen.findByRole("heading", { name: "可重试任务" });
+    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /待协助目标/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
     await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
-    expect(within(detail).getByRole("group", { name: "用户决定" })).toHaveProperty("disabled", true);
-    expect(within(detail).getByRole("group", { name: "手工接续" })).toHaveProperty("disabled", true);
-    const controls = [...detail.querySelectorAll<HTMLFieldSetElement>("fieldset.workflow-controls")];
-    expect(controls.length).toBeGreaterThanOrEqual(3);
-    expect(controls.every(fieldset => fieldset.disabled)).toBe(true);
+    expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
+    expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
+    expect(detail.querySelectorAll("fieldset.workflow-controls").length).toBe(0);
     await user.click(screen.getByRole("button", { name: /已交付目标/ }));
     await user.click(await screen.findByRole("tab", { name: "产物与验收" }));
-    expect(await within(detail).findByRole("group", { name: "最终验收" })).toHaveProperty("disabled", true);
+    expect(within(detail).queryByRole("group", { name: "最终验收" })).toBeNull();
     // Reading the governed record is allowed; no mutation reached the board.
     expect(readOnly.operations.every(operation => operation === "workflow_get")).toBe(true);
     cleanup();
 
-    // Baseline: the same fixture with a writer session has live controls.
+    // The writer session gets the same read-only detail: no browser control
+    // writes to a delegation anymore (0.15.1 U4).
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
@@ -575,10 +578,12 @@ describe("superseded console session", () => {
     await screen.findByRole("tab", { name: "协作与待办" });
     const writerDetail = screen.getByRole("complementary", { name: "任务详情" });
     await waitFor(() => expect(within(writerDetail).getByText("V1")).toBeTruthy());
-    expect(within(writerDetail).getByRole("group", { name: "用户决定" })).toHaveProperty("disabled", false);
-    expect(within(writerDetail).getByRole("group", { name: "手工接续" })).toHaveProperty("disabled", false);
+    expect(within(writerDetail).queryByRole("group", { name: "用户决定" })).toBeNull();
+    expect(within(writerDetail).queryByRole("group", { name: "手工接续" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /可重试任务/ }));
-    expect(await screen.findByRole("button", { name: "重新尝试" })).toHaveProperty("disabled", false);
+    await screen.findByRole("heading", { name: "可重试任务" });
+    expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
+    expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
   });
 
   it("keeps browsing, task details, routing and evaluation history readable while read-only", async () => {
@@ -616,12 +621,11 @@ describe("superseded console session", () => {
     ["unreadable snapshot", new ApiError("INVALID_RESPONSE", "console descriptor missing")],
   ];
 
-  it.each(failedPolls)("pauses task and workflow mutations after a failed poll (%s)", async (_label, failure) => {
+  it.each(failedPolls)("keeps details readable with no writes after a failed poll (%s)", async (_label, failure) => {
     const plain = goal("gated-plain", "断线可取消任务", { workflow: undefined });
-    const failedTask = retryable("gated-retry", "断线可重试任务");
     const awaiting = goal("gated-governed", "断线待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["gated-governed", workflow(awaiting)]]);
-    const f = fixture({ records: [plain, failedTask, awaiting], workflows, failAfter: 1, failWith: failure });
+    const f = fixture({ records: [plain, awaiting], workflows, failAfter: 1, failWith: failure });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -635,30 +639,21 @@ describe("superseded console session", () => {
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
     await user.click(await screen.findByRole("button", { name: /断线可取消任务/ }));
-    expect(await screen.findByRole("button", { name: "取消任务" })).toHaveProperty("disabled", false);
+    await screen.findByRole("heading", { name: "断线可取消任务" });
+    // The browser never offered task control in the first place (0.15.1 U4).
+    expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /断线待协助目标/ }));
     await screen.findByRole("tab", { name: "协作与待办" });
     await waitFor(() => expect(within(detail).getByText("V1")).toBeTruthy());
-    expect(within(detail).getByRole("group", { name: "用户决定" })).toHaveProperty("disabled", false);
 
-    // The authenticated poll now fails. useConsole retains the last snapshot,
-    // which still says canWrite: true, so the write gate must come from the poll
-    // state rather than that stale descriptor.
+    // The authenticated poll now fails; the detail stays readable and empty of
+    // write controls, and no mutation is dispatched from either session state.
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     expect(await screen.findByText("连接中断")).toBeTruthy();
-    expect(within(detail).getByRole("group", { name: "用户决定" })).toHaveProperty("disabled", true);
-    expect(within(detail).getByRole("group", { name: "手工接续" })).toHaveProperty("disabled", true);
-    // A failed poll is not a new-window takeover, and the panel says so.
+    expect(within(detail).queryByRole("group", { name: "用户决定" })).toBeNull();
+    expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
+    // A failed poll is not a new-window takeover.
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    expect(within(detail).getByText(/连接已中断：任务与协作操作暂时不能提交/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /断线可取消任务/ }));
-    const cancel = screen.getByRole("button", { name: "取消任务" });
-    expect(cancel).toHaveProperty("disabled", true);
-    await user.click(cancel);
-    await user.click(screen.getByRole("button", { name: /断线可重试任务/ }));
-    const retry = await screen.findByRole("button", { name: "重新尝试" });
-    expect(retry).toHaveProperty("disabled", true);
-    await user.click(retry);
     expect(f.operations.every(operation => readOnlySessionAllows(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
     await user.click(screen.getByRole("link", { name: "模型卡片" }));

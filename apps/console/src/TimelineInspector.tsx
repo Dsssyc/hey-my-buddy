@@ -4,7 +4,6 @@ import type { ObjectiveTimeline } from "./objective-types";
 import type { TimelineItem } from "./objective-display";
 import { buildInspectorCard, type CardLink, type InspectorCard, type InspectorSelection } from "./inspector-card";
 
-const LOCK_TITLE = "有结果未确认的操作：核对前不能打开其他委派的详情";
 const MISSING_TITLE = "该记录不在当前读取范围内（可能已截断或被筛选），不能从这张卡片打开";
 
 export type TimelineInspectorProps = {
@@ -15,9 +14,6 @@ export type TimelineInspectorProps = {
   timeline: ObjectiveTimeline | null;
   itemsByKey: ReadonlyMap<string, TimelineItem>;
   truncatedEvents: boolean;
-  /** Locked with a detail open: opening another delegation's detail is disabled. */
-  locked: boolean;
-  lockedRunId: string | null;
   onOpen: (item: TimelineItem) => void;
   onSelectItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -38,13 +34,11 @@ function LinkButton({ link, onSelectItem, onSelectRun }: {
   return <button type="button" className="inspector-link" onClick={() => onSelectRun(link.runId)}>{link.label}</button>;
 }
 
-function CardView({ card, truncatedEvents, openDisabled, openTitle, relatedDisabled, onOpen, onSelectItem, onSelectRun, onUnpin, missing }: {
+function CardView({ card, truncatedEvents, openDisabled, openTitle, onOpen, onSelectItem, onSelectRun, onUnpin, missing }: {
   card: InspectorCard;
   truncatedEvents: boolean;
   openDisabled: boolean;
   openTitle: string | undefined;
-  /** Per-run disable state for related-event navigation from this card. */
-  relatedDisabled: (runId: string) => { disabled: boolean; title: string | undefined };
   onOpen: (item: TimelineItem) => void;
   onSelectItem: (item: TimelineItem) => void;
   onSelectRun: (runId: string) => void;
@@ -73,15 +67,12 @@ function CardView({ card, truncatedEvents, openDisabled, openTitle, relatedDisab
     {card.relatedEvents.length > 0 && <div className="inspector-group">
       <span className="inspector-group-label">相关 Host 事件</span>
       <span className="inspector-group-lines inspector-events">
-        {card.relatedEvents.map(({ item }) => {
-          const state = relatedDisabled(item.runId);
-          return <span key={item.key} className="inspector-event">
+        {card.relatedEvents.map(({ item }) => <span key={item.key} className="inspector-event">
           <button type="button" className="inspector-link" onClick={() => onSelectItem(item)}>{item.head} · {item.parts[1] ?? ""}</button>
           <button type="button" className="button small-button" aria-label={`打开 ${item.head}`}
-            aria-disabled={state.disabled || undefined} title={state.title}
-            onClick={() => { if (!state.disabled) onOpen(item); }}>打开</button>
-        </span>;
-        })}
+            aria-disabled={missing || undefined} title={missing ? MISSING_TITLE : undefined}
+            onClick={() => { if (!missing) onOpen(item); }}>打开</button>
+        </span>)}
         {truncatedEvents && <span className="trunc-chip">Host 事件已截断，此列表可能不完整</span>}
       </span>
     </div>}
@@ -120,16 +111,11 @@ export function TimelineInspector(props: TimelineInspectorProps) {
     previewRow = <span className="inspector-preview muted">指向：{preview}</span>;
   }
 
-  // A record that left the read can no longer be opened; a locked detail only
-  // blocks other delegations' details. Every navigation action from a stale
-  // card is disabled, each with its own accurate reason.
-  const openDisabled = missing || (props.locked && !!card?.openItem && card.openItem.runId !== props.lockedRunId);
-  const openTitle = missing ? MISSING_TITLE : openDisabled ? LOCK_TITLE : undefined;
-  const relatedDisabled = (runId: string): { disabled: boolean; title: string | undefined } => {
-    if (missing) return { disabled: true, title: MISSING_TITLE };
-    if (props.locked && runId !== props.lockedRunId) return { disabled: true, title: LOCK_TITLE };
-    return { disabled: false, title: undefined };
-  };
+  // A record that left the read can no longer be opened; record browsing
+  // itself is never locked (0.15.1 U4), so every navigation action from a
+  // live card stays available.
+  const openDisabled = missing;
+  const openTitle = missing ? MISSING_TITLE : undefined;
 
   return <div className="inspector timeline-inspector">
     {previewRow && <div className="inspector-preview-row">{previewRow}
@@ -137,7 +123,6 @@ export function TimelineInspector(props: TimelineInspectorProps) {
     </div>}
     {card
       ? <CardView card={card} truncatedEvents={props.truncatedEvents} openDisabled={openDisabled} openTitle={openTitle}
-        relatedDisabled={relatedDisabled}
         onOpen={props.onOpen} onSelectItem={props.onSelectItem} onSelectRun={props.onSelectRun} onUnpin={props.onUnpin}
         missing={missing} key={key} />
       : selection && !resolved

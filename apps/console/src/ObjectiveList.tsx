@@ -3,7 +3,7 @@ import type { ObjectiveFilter, ObjectiveSummary } from "./objective-types";
 import { Badge, Empty } from "./ui";
 import { excerpt } from "./task-state";
 import {
-  CATEGORY_LABEL, COUNT_ORDER, categoryTone, dayClock, relativeTime, totalDelegations,
+  CATEGORY_LABEL, COUNT_ORDER, TASK_SOURCE_NOTE, categoryTone, dayClock, displayTitle, relativeTime, totalDelegations,
 } from "./objective-display";
 
 export type ObjectiveListProps = {
@@ -19,7 +19,13 @@ export type ObjectiveListProps = {
   hostId: string;
   choices: { projects: { id: string; label: string; path: string | null }[]; hosts: string[] };
   selected: string | null;
-  locked: boolean;
+  /** Collapsed 48px rail while a detail is open above 760px (0.15.1 U1). */
+  rail: boolean;
+  /** The selected objective whose state icon the rail carries. */
+  railState?: ObjectiveSummary | null;
+  /** Focus target restored when the drawer closes. */
+  railButtonRef?: React.RefObject<HTMLButtonElement | null>;
+  onToggleRail?: () => void;
   onFilterChange: (filter: ObjectiveFilter) => void;
   onQueryChange: (query: string) => void;
   onProjectChange: (projectId: string) => void;
@@ -31,18 +37,17 @@ export type ObjectiveListProps = {
   onApplyReorder: () => void;
 };
 
-const LOCK_TITLE = "有结果未确认的操作：核对前不切换";
 type ShowKind = "objectives" | "standalone" | "all";
 const SHOW_OPTIONS: [ShowKind, string][] = [["objectives", "工作目标"], ["standalone", "未归档委派"], ["all", "全部"]];
 
-function EntryRow({ row, selected, locked, onSelect }: {
-  row: ObjectiveSummary; selected: string | null; locked: boolean; onSelect: (objectiveId: string) => void;
+function EntryRow({ row, selected, onSelect }: {
+  row: ObjectiveSummary; selected: string | null; onSelect: (objectiveId: string) => void;
 }) {
   const now = Date.now();
   const chosen = selected === row.objectiveId;
+  const title = displayTitle(row.titleSource, row.title);
   return <li key={row.objectiveId} data-objective-id={row.objectiveId}>
     <button className={"task-row objective-row" + (chosen ? " selected" : "")} aria-pressed={chosen}
-      disabled={locked && !chosen} title={locked && !chosen ? LOCK_TITLE : undefined}
       onClick={() => onSelect(row.objectiveId)}>
       <span className="row-between">
         <span className="chip-row">
@@ -51,7 +56,11 @@ function EntryRow({ row, selected, locked, onSelect }: {
         </span>
         <time className="small muted" dateTime={row.lastActivityAt} title={dayClock(row.lastActivityAt)}>{relativeTime(row.lastActivityAt, now)}</time>
       </span>
-      <strong className="task-title" title={row.title}>{excerpt(row.title, 100)}</strong>
+      <strong className={"task-title" + (title.fromTask ? " single-line" : "")}
+        title={title.fromTask ? `${title.text}（完整任务见详情）` : row.title}>
+        {excerpt(title.text, 100)}
+        {title.fromTask && <span className="title-source-note">{TASK_SOURCE_NOTE}</span>}
+      </strong>
       {row.summary !== null && <span className="task-summary muted" title={row.summary}>结果：{excerpt(row.summary, 80)}</span>}
       <span className="count-line">
         {COUNT_ORDER.filter(entry => row.counts[entry.key] > 0).map(entry =>
@@ -63,12 +72,11 @@ function EntryRow({ row, selected, locked, onSelect }: {
   </li>;
 }
 
-function ProjectGroups({ rows, collapsed, toggle, selected, locked, onSelect, headingNoun }: {
+function ProjectGroups({ rows, collapsed, toggle, selected, onSelect, headingNoun }: {
   rows: ObjectiveSummary[];
   collapsed: ReadonlySet<string>;
   toggle: (projectId: string) => void;
   selected: string | null;
-  locked: boolean;
   onSelect: (objectiveId: string) => void;
   headingNoun: string;
 }) {
@@ -86,7 +94,7 @@ function ProjectGroups({ rows, collapsed, toggle, selected, locked, onSelect, he
       <span className="small">已加载 {group.runs.length} 个{headingNoun}</span>
     </button>
     {!collapsed.has(group.project.id) && <ul className="task-list">{group.runs.map(row =>
-      <EntryRow key={row.objectiveId} row={row} selected={selected} locked={locked} onSelect={onSelect} />)}</ul>}
+      <EntryRow key={row.objectiveId} row={row} selected={selected} onSelect={onSelect} />)}</ul>}
   </section>)}</>;
 }
 
@@ -95,8 +103,10 @@ function ProjectGroups({ rows, collapsed, toggle, selected, locked, onSelect, he
  * ordered by latest activity. The default view lists `kind = objective` only;
  * unarchived standalone delegations fold into their own section whose count
  * covers only the loaded page (0.15 A4). Titles are the recorded intent with
- * the nullable summary as a second line (A5). Reads only; there is no join or
- * archive write anywhere in this list.
+ * the nullable summary as a second line (A5); a task first-line fallback is
+ * one line of ~40 characters annotated 取自任务首行, without the full text in
+ * its tooltip (0.15.1 U3). Reads only — and while a detail is open the column
+ * can collapse into an expandable narrow rail (U1).
  */
 export function ObjectiveList(props: ObjectiveListProps) {
   const { rows, total, loading, error, nextCursor, reorder } = props;
@@ -115,6 +125,17 @@ export function ObjectiveList(props: ObjectiveListProps) {
       return next;
     });
   }
+  if (props.rail) {
+    const state = props.railState ?? null;
+    return <section className="panel list-panel rail-panel" aria-label="工作目标列表（已收起）">
+      <button ref={props.railButtonRef} type="button" className="rail-expand" onClick={props.onToggleRail}
+        aria-expanded={false} title="展开工作目标列表">
+        <span className="rail-text" aria-hidden="true">工作目标 ›</span>
+      </button>
+      {state && <span className={`rail-state st ${categoryTone(state.state)}`} title={CATEGORY_LABEL[state.state]}
+        aria-label={`当前工作目标：${CATEGORY_LABEL[state.state]}`}>●</span>}
+    </section>;
+  }
   function loadMore() {
     if (loading || !nextCursor || !scroll.current) return;
     scrollIntent.current = false;
@@ -125,7 +146,9 @@ export function ObjectiveList(props: ObjectiveListProps) {
     ? `已加载 ${rows.length} 个记录 · 可能还有更多 · 按最近活动排序`
     : `已加载 ${rows.length} / ${total} 个记录 · 按最近活动排序`;
   return <section className="panel list-panel" aria-label="工作目标列表">
-    <div className="panel-toolbar"><h2>工作目标</h2><button className="button small-button" disabled={loading} onClick={props.onRefresh}>刷新记录</button></div>
+    <div className="panel-toolbar"><h2>工作目标</h2>
+      <button className="button small-button" disabled={loading} onClick={props.onRefresh}>刷新记录</button>
+    </div>
     <div className="list-filters">
       <div className="segmented" aria-label="按委派状态筛选">{([["all", "全部"], ["active", "进行中"], ["host", "待决定"], ["review", "待验收"]] as const).map(([key, label]) =>
         <button key={key} aria-pressed={props.filter === key} onClick={() => props.onFilterChange(key)}>{label}</button>)}</div>
@@ -150,7 +173,7 @@ export function ObjectiveList(props: ObjectiveListProps) {
         if (scrollIntent.current && element.scrollHeight - element.scrollTop - element.clientHeight < 140) loadMore();
       }}>
       <ProjectGroups rows={mainRows} collapsed={collapsed} toggle={toggle}
-        selected={props.selected} locked={props.locked} onSelect={props.onSelect}
+        selected={props.selected} onSelect={props.onSelect}
         headingNoun={show === "standalone" ? "未归档委派" : "工作目标"} />
       {show === "objectives" && standalone.length > 0 && <section className="project-group standalone-group">
         <button className="group-heading" aria-expanded={standaloneOpen} onClick={() => setStandaloneOpen(current => !current)}>
@@ -159,7 +182,7 @@ export function ObjectiveList(props: ObjectiveListProps) {
         {standaloneOpen && <>
           <p className="small muted standalone-note">这些委派提交时没有指定工作目标，按记录单独显示。</p>
           <ProjectGroups rows={standalone} collapsed={collapsed} toggle={toggle}
-            selected={props.selected} locked={props.locked} onSelect={props.onSelect} headingNoun="未归档委派" />
+            selected={props.selected} onSelect={props.onSelect} headingNoun="未归档委派" />
         </>}
       </section>}
       {show !== "standalone" && !mainRows.length && !loading && !error && (filtersIdle

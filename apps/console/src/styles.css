@@ -288,7 +288,7 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 .refresh-state.stale::before { color: var(--warning); }
 .trunc-banner { margin: 8px 20px 0; background: var(--warning-wash); color: var(--warning); border: 1px solid var(--warning-line); }
 .timeline-body { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
-.tl-scroll { --label-w: 240px; flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; margin-top: 8px; border-top: 1px solid var(--line); }
+.tl-scroll { --label-w: 180px; flex: 1; min-height: 0; overflow: auto; position: relative; overscroll-behavior: contain; margin-top: 8px; border-top: 1px solid var(--line); }
 .tl-grid { position: relative; }
 .tl-row { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr); height: 40px; border-bottom: 1px solid var(--line); }
 .tl-row.axis { position: sticky; top: 0; z-index: 6; height: 40px; background: var(--surface); }
@@ -379,8 +379,9 @@ button.tl-label:hover { background: var(--subtle); }
 .locator .from { flex-basis: 100%; font-size: 11px; color: var(--muted); }
 .lock-note { flex-basis: 100%; color: var(--warning); font-size: 11px; }
 
-@media (min-width: 761px) and (max-width: 1100px) {
-  .tl-scroll { --label-w: 180px; }
+.tl-scroll { --label-w: 180px; }
+@container (min-width: 760px) {
+  .tl-scroll { --label-w: 240px; }
 }
 @media (max-width: 760px) {
   .history-switch-bar > span { display: none; }
@@ -448,26 +449,80 @@ button.tl-label:hover { background: var(--subtle); }
 .delegation-card.single.expanded { width: auto; flex: 1 1 auto; }
 .delegation-metrics { margin: 0 0 4px; font-size: 11px; color: var(--muted); }
 .strip-bound { align-self: center; flex-shrink: 0; font-size: 10px; padding: 0 4px; }
-/* Dock modes: the detail shares the right pane with the timeline. One stable
-   wrapper keeps children mounted across layer/dock threshold changes. Each
-   pane is explicitly sized so the timeline canvas keeps positive height. */
+/* Dock (0.15.1 §1): the viewport picks the layout; above 760px an open detail
+   docks beside the timeline with an adjustable separator. One stable wrapper
+   keeps children mounted across threshold changes. */
+.workspace-wrap { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; }
 .right-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .right-stage-pane { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+/* The timeline column is a size container so the label column follows its own
+   width (§1): 240px at ≥760px, 180px otherwise. */
+.right-stage-pane { container-type: inline-size; }
 /* In layer mode the timeline is hidden, so its pane must not claim space. */
 .right-stage-pane:has(> [hidden]) { display: none; }
 .right-dock { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.right-dock.side { display: grid; grid-template-columns: minmax(0, 1fr) 10px min(var(--dock-detail-width, 520px), 56%); }
-.right-dock.side .dock-divider { width: 10px; }
-.right-dock.side .tl-scroll { --label-w: 180px; }
-.right-dock.stack .detail-stage { flex: 0 0 min(var(--dock-detail-height, 45%), 72%); min-height: 150px; }
-.right-dock.stack .dock-divider { flex: 0 0 10px; }
+.right-dock.side { display: grid; grid-template-columns: minmax(320px, minmax(0, 1fr)) 10px var(--dock-detail-width, 520px); }
 .dock-divider { position: relative; touch-action: none; }
 .dock-divider.vertical { cursor: col-resize; }
-.dock-divider.horizontal { cursor: row-resize; }
-.dock-divider::after { content: ""; position: absolute; border-radius: 2px; background: var(--line-strong); }
-.dock-divider.vertical::after { top: 42%; bottom: 42%; left: 4px; width: 2px; }
-.dock-divider.horizontal::after { left: 42%; right: 42%; top: 4px; height: 2px; }
+.dock-divider.vertical::after { content: ""; position: absolute; top: 42%; bottom: 42%; left: 4px; width: 2px; border-radius: 2px; background: var(--line-strong); }
 .dock-divider:hover::after, .dock-divider:focus-visible::after { background: var(--accent); }
+
+/* ---- 0.15.1 U1: the 48px list rail and its overlay drawer ---- */
+.workspace-grid.list-rail { grid-template-columns: 48px 0 minmax(0, 1fr); }
+.workspace-grid.list-rail > .pane-divider { display: none; }
+.rail-panel { padding: 0; border-right: 1px solid var(--line); }
+.rail-expand { display: flex; align-items: center; justify-content: center; width: 100%; flex: 1 1 auto; padding: 14px 0; border: 0; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .14em; }
+.rail-expand:hover { background: var(--subtle); color: var(--accent); }
+.rail-text { writing-mode: vertical-rl; }
+.rail-state { flex: 0 0 auto; padding-bottom: 14px; font-size: 12px; }
+.rail-state.green { color: var(--accent); } .rail-state.amber { color: var(--warning); } .rail-state.neutral { color: var(--muted); }
+.list-drawer { position: absolute; left: 48px; top: 0; bottom: 0; z-index: 24; width: min(320px, calc(100vw - 48px - 200px)); display: flex; flex-direction: column; border: 1px solid var(--line-strong); border-radius: 0 6px 6px 0; background: var(--surface); box-shadow: 0 6px 24px color-mix(in srgb, var(--ink) 22%, transparent); }
+.list-drawer > .list-panel { border: 0; border-radius: 0; flex: 1; }
+
+/* ---- 0.15.1 §3: the objective header ---- */
+.one-line-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.objective-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.objective-vitals { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: 0; font-size: 12px; }
+.hierarchy-line { margin: 0; color: var(--faint); font-size: 11px; display: flex; align-items: baseline; gap: 8px; }
+.hierarchy-help { display: inline-flex; }
+.hierarchy-help > summary { list-style: none; padding: 0 5px; border: 1px solid var(--line); border-radius: 50%; width: 16px; height: 16px; line-height: 14px; text-align: center; font-size: 10px; }
+.hierarchy-help[open] { position: relative; }
+.hierarchy-help-body { position: absolute; left: 0; top: 20px; z-index: 12; max-width: 46ch; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px color-mix(in srgb, var(--ink) 16%, transparent); color: var(--muted); font-size: 11px; line-height: 1.7; }
+.time-stats { border-block: 1px solid var(--line); }
+.time-stats > summary { padding: 5px 0; font-weight: 550; }
+.time-stats-body { padding: 4px 0 10px; }
+.time-stat { margin: 3px 0; font-size: 12px; color: var(--ink); }
+.record-source { margin: 8px 0 0; }
+
+/* ---- 0.15.1 §4: the fixed three-row delegation overview ---- */
+.card-rows { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.card-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 11px; }
+.card-row-label { flex: 0 0 3.4em; color: var(--faint); }
+.card-row-text { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delegation-card { width: 262px; gap: 4px; }
+.delegation-card-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; }
+.delegation-state { flex-shrink: 0; }
+.record-facts > summary { font-weight: 550; }
+.record-facts-body { padding: 4px 0 8px; }
+
+/* ---- 0.15.1 U3: one-line task-first-line titles ---- */
+.task-title.single-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; }
+.title-source-note { margin-left: 6px; padding: 0 4px; border-radius: 3px; background: var(--subtle); color: var(--muted); font-size: 10px; font-weight: 500; }
+.tl-entry .e-title.single-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; }
+h2 .title-source-note { font-size: 10px; font-weight: 500; vertical-align: middle; }
+
+/* ---- 0.15.1 §7: objective stop control and honest stop status ---- */
+.stop-control { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.stop-status { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.stop-stopping, .stop-in-progress { color: var(--accent); }
+.stop-unknown, .stop-unconfirmed-stop, .stop-refused { color: var(--warning); }
+.stop-acknowledged, .stop-stopped { color: var(--muted); }
+.detail-stop-status { margin: 8px 0 0; }
+.stop-dialog .actions { flex-direction: column; align-items: stretch; }
+@media (max-width: 760px) {
+  .stop-dialog { width: calc(100vw - 32px); }
+  .stop-dialog .actions button { width: 100%; }
+}
 /* List: A4/A5 additions */
 .task-summary { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .standalone-note { margin: 6px 0 0 10px; }

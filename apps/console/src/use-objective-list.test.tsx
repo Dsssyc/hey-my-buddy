@@ -5,10 +5,10 @@ import type { ObjectivePage, ObjectiveQuery, ObjectiveSummary } from "./objectiv
 import { useObjectiveList } from "./use-objective-list";
 
 const summary = (objectiveId: string, lastActivitySeq: number, overrides: Partial<ObjectiveSummary> = {}): ObjectiveSummary => ({
-  objectiveId, kind: "objective", title: objectiveId, titleSource: "objective", summary: null,
+  objectiveId, kind: "objective", title: objectiveId, titleSource: "objective", description: null, summary: null,
   project: { id: "p1", label: "项目一", path: "/p1" }, sourceHostId: "host-a", currentHostIds: [],
   createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T01:00:00Z", lastActivitySeq,
-  state: "active", counts: { roots: 1, helpers: 0, active: 1, host: 0, review: 0, ended: 0 },
+  state: "active", counts: { roots: 1, helpers: 0, accepted: 0, active: 1, host: 0, review: 0, ended: 0 },
   matchingRuns: 1, rootRunIds: [objectiveId], ...overrides,
 });
 const page = (objectives: ObjectiveSummary[], nextCursor: string | null = null, changed = false): ObjectivePage =>

@@ -10,7 +10,7 @@
 import type { ObjectiveTimeline, TimelineEvent, TimelineRow, TimelineSpan } from "./objective-types";
 import type { SpanOutcome, TimelineItem } from "./objective-display";
 import {
-  clockTime, configurationLabel, durationText, outcomeLabel, rangeText, rowLabelItem,
+  clockTime, configurationLabel, displayTitle, durationText, outcomeLabel, rangeText, rowLabelItem,
   rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
 } from "./objective-display";
 import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./objective-metrics";
@@ -89,12 +89,15 @@ function rollupGroups(rollup: RunRollup, rowsById: Map<string, TimelineRow>): Ca
   const { row } = rollup;
   const scopeLimited = hasScopeLimitations(rollup.limitations);
   const task: CardLine[] = [
-    { text: row.title },
-    ...(row.summary ? [{ text: `结果：${row.summary}`, tone: "muted" as const }] : [{ text: "摘要未记录", tone: "muted" as const }]),
-    { text: row.kind === "helper" ? `第 ${row.depth + 1} 层协助任务` : "根委派" },
+    // U3: a task first-line fallback stays a clipped one-liner here too.
+    { text: displayTitle(row.titleSource, row.title).text },
+    ...(row.taskSummary ? [{ text: `任务开头：${row.taskSummary}`, tone: "muted" as const }] : []),
+    ...(row.summary ? [{ text: `结果：${row.summary}（Worker 自述，非验收）`, tone: "muted" as const }] : [{ text: "尚无 Worker 结论", tone: "muted" as const }]),
+    { text: row.kind === "helper" ? `第 ${row.depth + 1} 层协助任务` : "委派" },
   ];
   const taskLink: CardLink | undefined = row.parentRunId
-    ? { kind: "run", runId: row.parentRunId, label: rowsById.get(row.parentRunId)?.title ?? row.parentRunId }
+    ? { kind: "run", runId: row.parentRunId, label: rowsById.get(row.parentRunId)
+        ? displayTitle(rowsById.get(row.parentRunId)!.titleSource, rowsById.get(row.parentRunId)!.title).text : row.parentRunId }
     : undefined;
   if (rollup.helpers.length) task.push({ text: `协助任务 ${rollup.helpers.length} 个` });
 
@@ -204,7 +207,7 @@ export function buildInspectorCard(
     }
     return {
       key: selection.key,
-      head: `${spanHead(span.kind)} · ${row.title}`,
+      head: `${spanHead(span.kind)} · ${displayTitle(row.titleSource, row.title).text}`,
       groups,
       openItem: item,
       relatedEvents: relatedEventsForSpan(span, timeline.events)
@@ -224,7 +227,7 @@ export function buildInspectorCard(
       groups: [
         { label: "事件", lines: [{ text: clockTime(event.at) }, ...lines(event.actor ? `actor ${event.actor}` : null), ...lines(event.summary)] },
         { label: "记录标识", lines: recordIdentityLines(event).length ? recordIdentityLines(event) : [{ text: UNRECORDED, tone: "muted" }] },
-        { label: "所属委派", lines: [{ text: row?.title ?? `委派 ${event.runId}` }], link: row ? { kind: "run", runId: row.runId, label: row.title } : undefined },
+        { label: "所属委派", lines: [{ text: row ? displayTitle(row.titleSource, row.title).text : `委派 ${event.runId}` }], link: row ? { kind: "run", runId: row.runId, label: displayTitle(row.titleSource, row.title).text } : undefined },
       ],
       openItem: item,
       relatedEvents: [],
@@ -243,7 +246,7 @@ export function buildInspectorCard(
           { text: row.acceptanceVerdict === "rejected" ? "验收问题" : row.acceptanceVerdict === "accepted" ? "已验收" : row.acceptanceVerdict ?? UNRECORDED },
           { text: row.acceptedAt ? clockTime(row.acceptedAt) : UNRECORDED, tone: "muted" },
         ] },
-        { label: "所属委派", lines: [{ text: row.title }], link: { kind: "run", runId: row.runId, label: row.title } },
+        { label: "所属委派", lines: [{ text: displayTitle(row.titleSource, row.title).text }], link: { kind: "run", runId: row.runId, label: displayTitle(row.titleSource, row.title).text } },
       ],
       openItem: itemsByKey.get(settleItem(row)?.key ?? "") ?? item,
       relatedEvents: [],
