@@ -138,6 +138,53 @@ class HarnessHealthTests(BoardTestCase):
         self.native.assert_called_once()
         self.assertEqual(len(self.refreshed), 1)
 
+    def test_location_fingerprint_ignores_absent_candidates_without_rereading_catalog(self):
+        from hey_my_buddy.buddy.harnesses import discovery
+        self.scan.stop()
+        binaries = [self.directory / name for name in ('bin-a', 'bin-b')]
+        empty = [self.directory / name for name in ('empty-a', 'empty-b')]
+        missing = [self.directory / name for name in ('missing-a', 'missing-b')]
+        for directory in [*binaries, *empty]:
+            directory.mkdir()
+        for directory in binaries:
+            executable = directory / 'codex'
+            executable.write_text('fixture')
+            executable.chmod(0o755)
+        caller_paths = [
+            [empty[0], binaries[0], missing[0], binaries[1]],
+            [missing[1], binaries[0], empty[1], binaries[1], missing[0], empty[0]],
+        ]
+        environments = [{'PATH': os.pathsep.join(map(str, paths))} for paths in caller_paths]
+        # Supply caller PATHs directly: add_path_hint already filters empty
+        # directories and would hide a regression in the service fingerprint.
+        with patch.object(discovery, '_home', return_value=self.directory), \
+             patch.object(discovery, '_common_dirs', return_value=[]), \
+             patch.object(discovery, '_app_paths', return_value=[]), \
+             patch.object(discovery, '_registry_paths', return_value=[]), \
+             patch.object(self.health, 'environment', return_value=environments[0]) as environment:
+            self.assertNotEqual(
+                discovery.candidate_snapshot('codex', environment=environments[0]),
+                discovery.candidate_snapshot('codex', environment=environments[1]))
+            first = self.health.refresh('codex', preflight=True)
+            environment.return_value = environments[1]
+            second = self.health.refresh('codex', preflight=True)
+            self.assertEqual(second['locationFingerprint'], first['locationFingerprint'])
+            self.assertEqual(second['revision'], first['revision'])
+            self.native.assert_called_once()
+            self.assertEqual(len(self.refreshed), 1)
+
+            added = self.directory / 'bin-c'
+            added.mkdir()
+            executable = added / 'codex'
+            executable.write_text('fixture')
+            executable.chmod(0o755)
+            environment.return_value = {'PATH': os.pathsep.join([str(added), environments[1]['PATH']])}
+            third = self.health.refresh('codex', preflight=True)
+            self.assertNotEqual(third['locationFingerprint'], first['locationFingerprint'])
+            self.assertEqual(third['revision'], first['revision'] + 1)
+            self.assertEqual(self.native.call_count, 2)
+            self.assertEqual(len(self.refreshed), 2)
+
     def test_preflight_checks_fingerprints_without_reprobing_unchanged_binary(self):
         self.health.refresh('codex')
         self.health.refresh('codex', preflight=True)
