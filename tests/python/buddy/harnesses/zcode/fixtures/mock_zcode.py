@@ -30,6 +30,7 @@ instance = hashlib.sha256(os.environ["ZCODE_LOG_DIR"].encode()).hexdigest()[:16]
 session_id = "sess-fixture-" + instance
 turn_id = "turn-fixture-" + instance
 selection = {"providerId": "fixture-api", "modelId": "fixture-model", "options": {"reasoningLevel": "low"}}
+session_mode = "yolo"
 workspace = {}
 mcp = []
 pending_create = None
@@ -72,7 +73,8 @@ def snapshot():
         "properties": {"inputFormat": {"supportsText": True}}}]
     result = {"session": {"sessionId": session_id, "sessionKind": "interactive", "workspace": workspace},
             "settings": {"model": {"current": selection, "available": available},
-                         "thoughtLevel": {"current": selection["options"]["reasoningLevel"]}}}
+                         "thoughtLevel": {"current": selection["options"]["reasoningLevel"]},
+                         "mode": {"current": session_mode}}}
     if case == "config-unrecognized":
         result["settings"]["model"]["current"] = None
         result["settings"]["thoughtLevel"]["current"] = None
@@ -424,7 +426,7 @@ def interactive_attention():
 
 
 def handle_message(message):
-    global pending_create, workspace, mcp, session_id, selection, prompt_input_id, sequence
+    global pending_create, workspace, mcp, session_id, selection, prompt_input_id, sequence, session_mode
     if "method" not in message:
         if pending_create:
             send({"id": pending_create, "result": snapshot()})
@@ -452,12 +454,24 @@ def handle_message(message):
             stored = json.loads(state.read_text())
             if stored["sessionId"] != params["sessionId"] or not mcp:
                 raise RuntimeError("native resume lost its exact identity or MCP reinjection")
-            session_id, selection = stored["sessionId"], stored["selection"]
+            session_id, selection, session_mode = stored["sessionId"], stored["selection"], stored["mode"]
             if case == "resume-wrong-root":
                 session_id = "sess-different-root"
+        else:
+            session_mode = params.get("mode", "build")
         pending_create = request_id
         send({"id": "server-preferences", "method": "session/requestRuntimePreferences", "params": {"sessionId": session_id, "scope": "runtime-materialization"}})
         return
+    elif method == "session/setMode":
+        assert params == {"sessionId": session_id, "mode": params["mode"]}
+        session_mode = params["mode"]
+        result = snapshot()
+        if case == "mode-mismatch":
+            result["settings"]["mode"]["current"] = "plan" if session_mode == "yolo" else "yolo"
+        elif case == "mode-unrecognized":
+            result["settings"]["mode"] = {"unrecognized": session_mode}
+        elif case == "mode-foreign-session":
+            result["session"]["sessionId"] = "foreign-session"
     elif method == "session/setModel":
         if case != "config-mismatch":
             selection = params["model"]
@@ -472,7 +486,7 @@ def handle_message(message):
         prompt_input_id = params["inputId"]
         send({"id": request_id, "result": {"sessionId": session_id, "accepted": True, "stateRevision": 1}})
         state.parent.mkdir(parents=True, exist_ok=True)
-        state.write_text(json.dumps({"sessionId": session_id, "selection": selection}))
+        state.write_text(json.dumps({"sessionId": session_id, "selection": selection, "mode": session_mode}))
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})

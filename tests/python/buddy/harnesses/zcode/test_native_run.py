@@ -565,12 +565,76 @@ class WorkerSeamTests(MockNativeCase):
                 with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
                     result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
                 self.assertEqual(result.end.status, "ok", result.end.message)
+                native_mode = "plan" if level == "read" else "yolo"
                 self.assertEqual(opened.call_args.kwargs["create_params"],
-                                 {"mode": "yolo", "mcpServers": list(services.mount.mcp_servers)})
-                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
+                                 {"mode": native_mode, "mcpServers": list(services.mount.mcp_servers)})
+                self.assertEqual(result.effective_policy.tools.requested.value, {"mode": native_mode})
                 self.assertEqual(result.value.schema_status, "valid")
                 self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
-                self.assertEqual(permission.enforcement, "enforced" if level == "full" else "convention")
+                self.assertEqual(permission.enforcement, "convention" if level == "write" else "enforced")
+
+    def resume_with_levels(self, first_level, second_level, *, case="ok"):
+        from hey_my_buddy.buddy.harnesses.registry import worker_permission
+        os.environ.update(self.environment)
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = "ok"
+        request, services = self.worker_request(self.turn_input())
+        permission = worker_permission("zcode", first_level)
+        request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
+        first = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(first.end.status, "ok", first.end.message)
+        session = first.native_identity.session_id
+        request, services = self.worker_request(self.turn_input(previous=session),
+            continuation=RunContinuation(mode="native-session", previous_session_id=session))
+        permission = worker_permission("zcode", second_level)
+        request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
+        os.environ["BUDDY_ZCODE_TEST_CASE"] = case
+        calls = []
+        original = native_run.NativeConnection.call
+
+        def call(connection, method, params):
+            calls.append((method, params))
+            return original(connection, method, params)
+
+        with mock.patch.object(native_run.NativeConnection, "call", call):
+            second = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        return first, second, calls
+
+    def check_resumed_level(self, first_level, second_level, native_mode):
+        first, second, calls = self.resume_with_levels(first_level, second_level)
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(second.native_identity.session_id, first.native_identity.session_id)
+        self.assertEqual([params for method, params in calls if method == "session/setMode"],
+                         [{"sessionId": first.native_identity.session_id, "mode": native_mode}])
+        methods = [method for method, _ in calls]
+        self.assertLess(methods.index("session/resume"), methods.index("session/setMode"))
+        self.assertLess(methods.index("session/setMode"), methods.index("session/setModel"))
+        self.assertLess(methods.index("session/setMode"), methods.index("session/send"))
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": native_mode})
+        self.assertEqual(second.value.schema_status, "valid")
+
+    def test_read_to_write_resume_sets_yolo_on_the_same_session(self):
+        self.check_resumed_level("read", "write", "yolo")
+
+    def test_write_to_read_resume_sets_plan_on_the_same_session(self):
+        self.check_resumed_level("write", "read", "plan")
+
+    def test_resume_mode_mismatch_fails_before_model_input_and_retains_requested_mode(self):
+        _first, second, calls = self.resume_with_levels("write", "read", case="mode-mismatch")
+        self.assertEqual(second.end.reason_code, "configuration-mismatch")
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "plan"})
+        self.assertNotIn("session/send", [method for method, _ in calls])
+        self.assertEqual(second.stop_evidence.native.group_state, "gone")
+
+    def test_unrecognized_resume_mode_is_a_fact_and_the_turn_can_complete(self):
+        _first, second, _calls = self.resume_with_levels("read", "write", case="mode-unrecognized")
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(dict(second.native_evidence.unknown_events.counts_by_type)["permission-mode-readback-unconfirmed"], 1)
+        self.assertEqual(second.effective_policy.tools.requested.value, {"mode": "yolo"})
+
+    def test_resume_mode_readback_from_another_session_is_refused(self):
+        _first, second, calls = self.resume_with_levels("read", "write", case="mode-foreign-session")
+        self.assertEqual(second.end.reason_code, "wrong-native-session")
+        self.assertNotIn("session/send", [method for method, _ in calls])
 
     def turn_input(self, *, previous=None, mode=None):
         return {"version": 1, "taskId": "goal-1", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",

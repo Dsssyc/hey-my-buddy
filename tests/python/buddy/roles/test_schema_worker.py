@@ -52,7 +52,7 @@ class CodexSchemaTests(unittest.TestCase):
                       "full": ("full", "enforced")},
             "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
             "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
-            "zcode": {"read": ("write", "convention"), "write": ("write", "convention"), "full": ("full", "enforced")},
+            "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"), "full": ("full", "enforced")},
         }
         for harness, levels in expected.items():
             for level, (scope, strength) in levels.items():
@@ -66,7 +66,7 @@ class CodexSchemaTests(unittest.TestCase):
 
     def test_every_worker_path_carries_the_frozen_workspace_access(self):
         for harness in ("codex", "claude", "dsh", "zcode"):
-            for access in (("read", "write", "full") if harness == "codex" else ("read", "write")):
+            for access in (("read", "write", "full") if harness in ("codex", "zcode") else ("read", "write")):
                 with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,

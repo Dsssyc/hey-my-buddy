@@ -10,8 +10,11 @@ Reuses zcode_native.py's private HOME, provider configuration, session roots
 and loopback-only sandbox; never reads the user's ZCode configuration or
 calls a paid provider. Each fresh session requests Write, Bash, Read and the
 mounted finish tool in that order, even if a tool is absent from the model's
-advertised list. The last stdout line is JSON with native evidence, observed
-effects and settlement for both modes. Errors are observations, not skips.
+advertised list, plus a read-only ls command before finishing. Resumes the
+settled plan session, switches it to yolo and attempts another write and
+finish. The last stdout line is JSON with native evidence, observed effects
+and settlement for both modes and the resumed session. Errors are observations,
+not skips.
 """
 from __future__ import annotations
 
@@ -27,6 +30,7 @@ from unittest import mock
 from zcode_native import InstalledZcodeTests
 from buddy.harnesses.zcode.test_native_run import MockNativeCase
 from hey_my_buddy.buddy.harnesses.registry import worker_permission
+from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from hey_my_buddy.errors import BoardError
@@ -79,9 +83,9 @@ class ModeProbe(InstalledZcodeTests):
 
                 # ZCode's native title requests omit tools. They must not
                 # consume one of the four root-turn operations.
-                if "tools" in data and probe.next_operation < 4:
+                if "tools" in data and probe.next_operation < len(probe.operations):
                     operation, name, arguments = probe.operations[probe.next_operation]
-                    call_id = f"call_probe_{operation}"
+                    call_id = f"{probe.call_prefix}_{operation}"
                     probe.observations.append({"operation": operation, "tool": name,
                                                "callId": call_id, "advertised": name in tools,
                                                "advertisedTools": tools,
@@ -98,22 +102,31 @@ class ModeProbe(InstalledZcodeTests):
 
         return Handler
 
-    def measure(self, mode, timeout):
-        turn_input = self.context(timeout=timeout).turn["input"]
-        request, services = MockNativeCase.worker_request(self, turn_input, timeout=timeout)
+    def measure(self, mode, timeout, *, previous=None):
+        self.observations, self.native_events, self.next_operation = [], [], 0
+        turn_input = self.context(index=2 if previous else 1, previous=previous, timeout=timeout).turn["input"]
+        continuation = RunContinuation(mode="native-session", previous_session_id=previous) if previous else None
+        request, services = MockNativeCase.worker_request(self, turn_input, timeout=timeout, continuation=continuation)
         permission = worker_permission("zcode", "write")
         request = request.model_copy(update={
             "configuration": request.configuration.model_copy(update={"model": "GLM-5.3-Flash"}),
             "worker_permission": permission})
         finish = next(name for name in request.session_services[0].tool_names if name.endswith("__buddy_finish_turn"))
+        self.call_prefix = "call_probe_" + request.identity.invocation_id[:12]
+        if previous:
+            self.write_target = self.cwd / "resumed-written.txt"
         self.operations = [
             ("write", "Write", {"file_path": str(self.write_target), "content": MARKERS["write"]}),
             ("command", "Bash", {"command": "printf %s " + shlex.quote(MARKERS["command"])
                                  + " > " + shlex.quote(str(self.command_target)), "description": "Write probe marker"}),
             ("read", "Read", {"file_path": str(self.read_target)}),
+            ("read_command", "Bash", {"command": "ls " + shlex.quote(str(self.cwd)),
+                                       "description": "List the probe directory without writing"}),
             ("finish", finish, {"disposition": "completed", "summary": "Local mode probe completed",
                                 "remaining": [], "decisions": [], "artifacts": [], "request": None}),
         ]
+        if previous:
+            self.operations = [self.operations[0], self.operations[-1]]
         original = native_run.ZcodeToolFacts.observe
 
         def observe(collector, message):
@@ -123,17 +136,47 @@ class ModeProbe(InstalledZcodeTests):
                 self.native_events.append(json.loads(json.dumps(message)))
             return original(collector, message)
 
-        # This deliberate probe changes only the session/create mode; it does
-        # not change the production read-only mapping before Host measurement.
+        mode_calls = []
+        original_call = native_run.NativeConnection.call
+
+        def call(connection, method, params):
+            response = original_call(connection, method, params)
+            if method in ("session/create", "session/resume", "session/setMode"):
+                settings = response.get("settings")
+                mode_calls.append({"method": method, "params": {key: params[key]
+                                   for key in ("sessionId", "mode") if key in params},
+                                   "readback": settings.get("mode") if isinstance(settings, dict) else settings,
+                                   "session": response.get("session")})
+            return response
+
+        # The deliberate probe selects the mode in this process and exercises
+        # the product's normal create/resume/setMode and completion paths.
         with mock.patch.dict(os.environ, self.environment, clear=True), \
                 mock.patch.object(native_run, "_session_mode", return_value=mode), \
-                mock.patch.object(native_run.ZcodeToolFacts, "observe", observe):
+                mock.patch.object(native_run.ZcodeToolFacts, "observe", observe), \
+                mock.patch.object(native_run.NativeConnection, "call", call):
             result = native_run.run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.last_result = result
         effects = {"write": self.write_target.read_text() if self.write_target.exists() else None,
                    "command": self.command_target.read_text() if self.command_target.exists() else None}
         completed = bool(result.end.status == "ok" and result.value is not None
                          and result.value.schema_status == "valid"
                          and result.stop_evidence.native.group_state == "gone")
+        items = self.operation_reports(effects, completed)
+        denied_refs = [json.loads(Path(ref.location).read_text()) for ref in result.evidence_refs
+                       if ref.kind == "denied-interactions"]
+        stderr = services.native_stderr
+        if stderr is None:
+            stderr = next((ref.location for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
+        return {"mode": mode, "harnessVersion": result.harness_version, "operations": items, "turnCompleted": completed,
+                "previousSessionId": previous, "sameSession": result.native_identity.session_id == previous
+                if previous and result.native_identity else None, "modeCalls": mode_calls,
+                "end": result.end.to_payload(), "stopEvidence": result.stop_evidence.to_payload(),
+                "effectivePolicy": result.effective_policy.to_payload(), "nativeIdentity":
+                result.native_identity.to_payload() if result.native_identity else None,
+                "deniedInteractions": denied_refs, "nativeStderr": Path(stderr).read_text()[-16000:] if stderr else ""}
+
+    def operation_reports(self, effects, completed):
         items = []
         for operation, name, _arguments in self.operations:
             observed = next((item for item in self.observations if item["operation"] == operation), None)
@@ -144,20 +187,13 @@ class ModeProbe(InstalledZcodeTests):
             evidence = json.dumps([observed["modelToolResults"], events])
             allowed = (effects.get(operation) == MARKERS.get(operation) if operation in effects
                        else MARKERS["read"] in json.dumps(observed["modelToolResults"]) if operation == "read"
+                       else self.read_target.name in json.dumps(observed["modelToolResults"]) if operation == "read_command"
                        else completed)
-            denied = bool(re.search(r"denied|not allowed|not permitted|not available in plan|read.only mode", evidence, re.I))
+            denied = bool(re.search(r"denied|not allowed|not permitted|not available in plan|read.only mode|"
+                                    r"Plan mode only allows read-only, non-destructive tools", evidence, re.I))
             items.append({**observed, "handling": "allowed" if allowed else "denied" if denied else "other",
                           "nativeEvents": events, "fileContent": effects.get(operation)})
-        denied_refs = [json.loads(Path(ref.location).read_text()) for ref in result.evidence_refs
-                       if ref.kind == "denied-interactions"]
-        stderr = services.native_stderr
-        if stderr is None:
-            stderr = next((ref.location for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
-        return {"mode": mode, "harnessVersion": result.harness_version, "operations": items, "turnCompleted": completed,
-                "end": result.end.to_payload(), "stopEvidence": result.stop_evidence.to_payload(),
-                "effectivePolicy": result.effective_policy.to_payload(), "nativeIdentity":
-                result.native_identity.to_payload() if result.native_identity else None,
-                "deniedInteractions": denied_refs, "nativeStderr": Path(stderr).read_text()[-16000:] if stderr else ""}
+        return items
 
 
 def main():
@@ -172,10 +208,21 @@ def main():
             probe.setUp()
             stage = "native-session-run"
             report["modes"].append(probe.measure(mode, args.timeout))
+            if mode == "plan":
+                if report["modes"][-1]["turnCompleted"]:
+                    stage = "native-session-resume"
+                    report["resumePlanToYolo"] = probe.measure("yolo", args.timeout,
+                        previous=probe.last_result.native_identity.session_id)
+                else:
+                    report["resumePlanToYolo"] = {"turnCompleted": False, "handling": "not-run",
+                                                   "reason": "the plan turn did not complete"}
         except (OSError, ValueError, AssertionError, TypeError, BoardError, native_run.NativeError) as error:
-            report["modes"].append({"mode": mode, "turnCompleted": False,
-                                    "stage": stage,
-                                    "probeError": {"type": type(error).__name__, "message": str(error)}})
+            failure = {"mode": mode, "turnCompleted": False, "stage": stage,
+                       "probeError": {"type": type(error).__name__, "message": str(error)}}
+            if stage == "native-session-resume":
+                report["resumePlanToYolo"] = failure
+            else:
+                report["modes"].append(failure)
             if stage == "private-fixture-setup":
                 # A denied setup cannot measure either mode. Do not retry it
                 # in a second private root or through another launcher.
@@ -183,7 +230,8 @@ def main():
         finally:
             probe.doCleanups()
     print(json.dumps(report, ensure_ascii=False))
-    return 0 if len(report["modes"]) == 2 and all(item.get("turnCompleted") for item in report["modes"]) else 1
+    return 0 if (len(report["modes"]) == 2 and all(item.get("turnCompleted") for item in report["modes"])
+                 and report.get("resumePlanToYolo", {}).get("turnCompleted")) else 1
 
 
 if __name__ == "__main__":

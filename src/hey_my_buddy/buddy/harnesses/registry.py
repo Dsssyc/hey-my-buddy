@@ -142,7 +142,7 @@ _WORKER_PERMISSIONS = {
               "full": ("full", "enforced")},
     "claude": {"read": ("read", "enforced"), "write": ("write", "enforced")},
     "dsh": {"read": ("write", "convention"), "write": ("write", "enforced")},
-    "zcode": {"read": ("write", "convention"), "write": ("write", "convention"), "full": ("full", "enforced")},
+    "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"), "full": ("full", "enforced")},
 }
 
 

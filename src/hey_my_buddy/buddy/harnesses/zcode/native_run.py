@@ -132,6 +132,22 @@ def _readable_ref(row: object) -> bool:
                     for key in ("providerId", "modelId")))
 
 
+def configure_mode(connection: NativeConnection, session_id: str, mode: str) -> None:
+    """Set this resumed turn's native mode and retain an unreadable readback."""
+    snapshot = connection.call("session/setMode", {"sessionId": session_id, "mode": mode})
+    session = snapshot.get("session")
+    returned_id = session.get("sessionId") if isinstance(session, dict) else None
+    if isinstance(returned_id, str) and returned_id != session_id:
+        raise NativeError("wrong-native-session", "native mode readback belongs to another session")
+    settings = snapshot.get("settings")
+    setting = settings.get("mode") if isinstance(settings, dict) else None
+    actual = setting.get("current") if isinstance(setting, dict) else None
+    if not isinstance(actual, str) or not actual.strip() or len(actual.encode()) > 128:
+        connection.on_unknown("permission-mode-readback-unconfirmed")
+    elif actual != mode:
+        raise NativeError("configuration-mismatch", "native ZCode did not retain the requested permission mode")
+
+
 def configure_session(connection: NativeConnection, snapshot: dict, spec: dict, *,
                       note_unknown: Callable[[str], None] = lambda _label: None) -> dict:
     session_id = snapshot["session"]["sessionId"]
@@ -902,6 +918,8 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     """
     session_id = _checked_root_session(snapshot, request.cwd, previous=previous, mode=mode,
                                        require_interactive=require_interactive)
+    if request.worker_permission is not None and mode == "native-session":
+        configure_mode(connection, session_id, state.create_params["mode"])
     resolved = configure_session(connection, snapshot, spec, note_unknown=connection.on_unknown)
     if on_configured is not None:
         # The run keeps its configuration facts the moment the native readback
@@ -1004,7 +1022,7 @@ class _CarrierOutcome:
 def _session_mode(request: RunRequest) -> str:
     """Map the turn's permission independently of its completion carrier."""
     if request.worker_permission is not None:
-        return {"read": "yolo", "write": "yolo", "full": "yolo"}[request.worker_permission.level]
+        return {"read": "plan", "write": "yolo", "full": "yolo"}[request.worker_permission.level]
     return "yolo"
 
 

@@ -21,6 +21,9 @@ class PlanProbeModelTests(unittest.TestCase):
         self.probe = self.module.ModeProbe()
         self.probe.next_operation = 0
         self.probe.observations = []
+        self.probe.native_events = []
+        self.probe.call_prefix = "call_probe_fixture"
+        self.probe.read_target = Path("/tmp/read.txt")
         self.probe.operations = [("write", "Write", {"file_path": "/tmp/probe", "content": "marker"}),
                                  ("command", "Bash", {"command": "printf marker"}),
                                  ("read", "Read", {"file_path": "/tmp/probe"}),
@@ -64,3 +67,62 @@ class PlanProbeModelTests(unittest.TestCase):
         self.assertEqual([item["operation"] for item in self.probe.observations], ["write", "command", "read", "finish"])
         self.assertEqual([item["advertised"] for item in self.probe.observations], [False, False, True, True])
         self.assertEqual([item["modelToolResults"] for item in self.probe.observations], [[result] for result in results])
+
+    def test_hosts_native_plan_denial_is_classified_as_denied(self):
+        self.probe.observations = [
+            {"operation": operation, "callId": "call_" + operation, "modelToolResults": [
+                {"role": "tool", "content": "Plan mode only allows read-only, non-destructive tools"}]}
+            for operation in ("write", "command")]
+        reports = self.probe.operation_reports({"write": None, "command": None}, False)
+        self.assertEqual([item["handling"] for item in reports[:2]], ["denied", "denied"])
+
+    def test_read_only_command_uses_its_native_result_instead_of_file_effects(self):
+        self.probe.operations = [("read_command", "Bash", {"command": "ls /tmp"})]
+        self.probe.observations = [{"operation": "read_command", "callId": "call_read_command",
+                                    "modelToolResults": [{"role": "tool", "content": "read.txt\n"}]}]
+        report = self.probe.operation_reports({"write": None, "command": None}, False)[0]
+        self.assertEqual(report["handling"], "allowed")
+
+    def test_resume_sequence_ignores_the_previous_turns_tool_results(self):
+        self.probe.operations = [self.probe.operations[0], self.probe.operations[-1]]
+        self.probe.call_prefix = "call_probe_resumed"
+        old = {"role": "tool", "tool_call_id": "call_probe_previous_write", "content": "old result"}
+        first = self.request(["Write", "mcp__probe__buddy_finish_turn"], [old])["tool_calls"][0]
+        current = {"role": "tool", "tool_call_id": first["id"], "content": "new result"}
+        second = self.request(["Write", "mcp__probe__buddy_finish_turn"], [old, current])["tool_calls"][0]
+        self.assertEqual(second["function"]["name"], "mcp__probe__buddy_finish_turn")
+        self.assertEqual(self.probe.observations[0]["modelToolResults"], [current])
+        self.assertEqual(len(self.probe.observations), 2)
+
+    def test_probe_can_resume_the_same_plan_session_through_the_offline_native_path(self):
+        from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+        probe = self.module.ModeProbe()
+        self.addCleanup(probe.doCleanups)
+        ZcodeFixtureCase.setUp(probe)
+        probe.base = probe.root
+        probe.write_target = probe.cwd / "written.txt"
+        probe.command_target = probe.cwd / "command.txt"
+        probe.read_target = probe.cwd / "read.txt"
+        probe.read_target.write_text(self.module.MARKERS["read"])
+        original = self.module.native_run.run
+
+        def offline(request, **kwargs):
+            # Only the model ID differs between the installed and offline
+            # fixtures; the probe's own session/service/mode path is exercised.
+            request = request.model_copy(update={"configuration":
+                request.configuration.model_copy(update={"model": "fixture-model"})})
+            return original(request, **kwargs)
+
+        with mock.patch.object(self.module.native_run, "run", side_effect=offline):
+            first = probe.measure("plan", 10)
+            second = probe.measure("yolo", 10, previous=probe.last_result.native_identity.session_id)
+        self.assertTrue(first["turnCompleted"], first["end"])
+        self.assertTrue(second["turnCompleted"], second["end"])
+        self.assertTrue(second["sameSession"])
+        self.assertEqual(second["previousSessionId"], first["nativeIdentity"]["sessionId"])
+        switched = [call for call in second["modeCalls"] if call["method"] == "session/setMode"]
+        self.assertEqual(switched[0]["params"], {"sessionId": second["previousSessionId"], "mode": "yolo"})
+        self.assertEqual(switched[0]["readback"], {"current": "yolo"})
+        self.assertEqual([item["operation"] for item in first["operations"]],
+                         ["write", "command", "read", "read_command", "finish"])
+        self.assertEqual([item["operation"] for item in second["operations"]], ["write", "finish"])
