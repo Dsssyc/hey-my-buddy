@@ -15,7 +15,7 @@ import c_two as cc
 import psutil
 from pathlib import Path
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, request_private_service_stop, wait_for
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol import rpc_config, transport
 from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
@@ -318,8 +318,19 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 "processIdentity"), timeout=20))
             attempt_id = client.get(runId=run_id)["selectedAttemptId"]
             try:
-                reply = client.call("service_control", {"action": "stop", "drainSeconds": 0})
+                reply = {}
+
+                def stop(operation, params):
+                    reply.update(client.call(operation, params))
+                    return reply
+
+                # Zero drain initiates cancellation but cannot confirm the still
+                # executing attempt. The shared entry must reject that reply.
+                with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                    request_private_service_stop(self.directory, stop, drainSeconds=0)
                 self.assertEqual(reply["cancelRequested"], 1)
+                self.assertFalse(reply["stopped"])
+                self.assertTrue(reply["unresolvedAttempts"])
                 first.wait(timeout=20)
                 self.assertTrue(wait_for(lambda: self.native_stopped(int((self.directory / "zero-drain.pid").read_text(encoding="utf-8"))),
                                          timeout=12), "zero-drain stop never reached the running command")

@@ -320,6 +320,7 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
         child.finished = finished
         child.job.handle = object()
         child.job.active.return_value = active
+        child.job.api.process_identities.return_value = [{"pid": 456, "startedAt": 134000000000000003}]
         checks._windows_suite_children[self.root] = [child]
         return child
 
@@ -330,14 +331,29 @@ class WindowsOwnedCleanupTests(unittest.TestCase):
         self.assertEqual(processes[0]["startedAt"], 134000000000000001)
         self.assertEqual(processes[0]["activeProcesses"], 2)
         self.assertFalse(processes[0]["rootRunning"])
+        self.assertEqual(processes[0]["members"], [{"pid": 456, "startedAt": 134000000000000003}])
+        child.job.api.process_identities.assert_called_once_with(child.job.handle)
         child.job.active.return_value = 0
         self.assertEqual(checks.observed_processes(self.root), ([], [], []))
+
+    def test_unreadable_member_identity_keeps_the_job_evidence_and_root(self):
+        child = self.child(active=2)
+        child.job.api.process_identities.side_effect = OSError("member creation time denied")
+        evidence = checks.teardown_private_root(self.root, drain_seconds=0)
+        self.assertTrue(self.root.exists())
+        self.assertEqual(evidence["processes"][0]["activeProcesses"], 2)
+        self.assertEqual(evidence["processes"][0]["members"], [])
+        self.assertIn("member creation time denied", evidence["observation"]["problems"][0])
+        child.terminate.assert_not_called()
+        child.job.terminate.assert_not_called()
 
     def test_empty_job_does_not_replace_the_creating_process_handle(self):
         self.child(active=0, finished=False)
         processes, problems, _ = checks.observed_processes(self.root)
         self.assertTrue(processes[0]["rootRunning"])
         self.assertEqual(problems, [])
+        self.assertEqual(processes[0]["members"], [])
+        checks._windows_suite_children[self.root][0].job.api.process_identities.assert_not_called()
 
     def test_closed_or_unqueryable_job_is_unknown_even_if_its_name_is_gone(self):
         for closed in (False, True):
@@ -426,8 +442,12 @@ class NativeWindowsOwnedCleanupTests(unittest.TestCase):
 
         root = checks.create_private_root()
         release = root / "release"
-        descendant = ("import sys,time; from pathlib import Path; "
+        recorded = root / "descendant.json"
+        descendant = ("import json,os,sys,time; from pathlib import Path; "
+                      "from hey_my_buddy.protocol.process_start import process_start; "
                       "release=Path(sys.argv[1]); "
+                      f"Path({str(recorded)!r}).write_text(json.dumps({{'pid':os.getpid(),"
+                      "'startedAt':process_start(os.getpid(),include_exited=True)}),encoding='utf-8'); "
                       "exec('while not release.exists(): time.sleep(0.02)')")
         parent = ("import subprocess,sys; "
                   f"subprocess.Popen([sys.executable,'-c',{descendant!r},{str(release)!r}])")
@@ -437,10 +457,13 @@ class NativeWindowsOwnedCleanupTests(unittest.TestCase):
         )
         try:
             self.assertEqual(outcome.returncode, 0, outcome.stderr)
+            self.assertTrue(wait_until(lambda: recorded.exists()))
+            expected = json.loads(recorded.read_text(encoding="utf-8"))
             processes, problems, _ = checks.observed_processes(root)
             self.assertEqual(problems, [])
             self.assertTrue(processes[0]["activeProcesses"])
             self.assertFalse(processes[0]["rootRunning"])
+            self.assertIn(expected, processes[0]["members"])
             self.assertTrue(root.exists())
         finally:
             release.touch()

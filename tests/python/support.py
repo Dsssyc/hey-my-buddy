@@ -121,13 +121,27 @@ def _lock_held(path: Path) -> bool:
         os.close(fd)
 
 
+_confirmed_private_stops: set[Path] = set()
+
+
+def request_private_service_stop(directory: Path, call, **params) -> dict:
+    """Confirm one private service's stop reply for its later lock drain."""
+    directory = Path(directory).resolve()
+    _confirmed_private_stops.discard(directory)
+    reply = call("service_control", {"action": "stop", **params})
+    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
+        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
+    _confirmed_private_stops.add(directory)
+    return reply
+
+
 def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
     """Stop the daemon attached to this exact test directory and await its locks."""
     from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
 
-    directory = Path(directory)
+    directory = Path(directory).resolve()
     deadline = time.monotonic() + timeout
-    requested = False
+    requested = directory in _confirmed_private_stops
     observed_running = False
     while True:
         starting = _lock_held(directory / "control-start.lock")
@@ -135,21 +149,21 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
         if not starting and not running:
             if os.name == "nt" and observed_running and not requested:
                 raise AssertionError(f"Test service stop reply unconfirmed; preserved {directory}")
+            _confirmed_private_stops.discard(directory)
             return
         if running and not requested:
             observed_running = True
             endpoint = _read_endpoint(directory)
             if endpoint is not None:
                 try:
-                    reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
-                                                                    'note': "private test cleanup"}, state_dir=directory)
+                    request_private_service_stop(directory,
+                        lambda operation, params: _request(endpoint, operation, params, state_dir=directory),
+                        drainSeconds=20, note="private test cleanup")
                 except ServiceError:
                     # The endpoint may have disappeared during a restart. Recheck
                     # the lifetime locks and attach to its replacement if needed.
                     pass
                 else:
-                    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
-                        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
                     requested = True
         if time.monotonic() >= deadline:
             raise AssertionError(f"Test service still owns state; preserved {directory}")
@@ -552,6 +566,7 @@ class BoardTestCase(unittest.TestCase):
 
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.directory)
+        _confirmed_private_stops.discard(self.directory.resolve())
         environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']

@@ -4,10 +4,13 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 
+from .process_start import windows_handle_start
+
 TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 PROCESS_DUP_HANDLE = 0x0040
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ALREADY_EXISTS = 183
 
@@ -86,6 +89,18 @@ class WindowsAPI:
 
     def process_ids(self, job):
         return list(self._call(self.job.QueryInformationJobObject, job, self.job.JobObjectBasicProcessIdList))
+
+    def process_identities(self, job):
+        """Observe members of the held Job through query-only process handles."""
+        identities = []
+        for pid in self.process_ids(job):
+            process = self._call(self.api.OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            try:
+                if self._call(self.job.IsProcessInJob, process, job):
+                    identities.append({"pid": pid, "startedAt": windows_handle_start(int(process), kernel=self.kernel)})
+            finally:
+                self.close(process)
+        return identities
 
     def assign(self, job, process):
         # Popen retains this exact process handle; no OpenProcess/PID recovery.

@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
-    remove_private_test_root, stop_private_service, wait_for, write_catalog_fixture,
+    remove_private_test_root, request_private_service_stop, stop_private_service, wait_for, write_catalog_fixture,
 )
 from hey_my_buddy import locking
 from hey_my_buddy.protocol.transport import _read_endpoint
@@ -50,6 +50,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 process.terminate.side_effect = lambda: events.append("terminate")
                 process.wait.side_effect = lambda **kwargs: events.append("wait")
                 try:
+                    support._confirmed_private_stops.add(fixture.directory.resolve())
                     with (patch.object(support, "os", wraps=os) as native,
                           patch.object(support.subprocess, "Popen", return_value=process),
                           patch("hey_my_buddy.protocol.rpc_config.configure_client"),
@@ -65,6 +66,7 @@ class FixtureCleanupTests(unittest.TestCase):
                             self.assertEqual(fixture._cleanup_failures, [failure])
                         else:
                             with fixture.daemon():
+                                self.assertNotIn(fixture.directory.resolve(), support._confirmed_private_stops)
                                 events.append("body")
                     expected = (["body", "stop", "terminate", "wait"] if fail_stop else
                                 ["body", "stop", "wait"] if platform == "nt" else
@@ -142,6 +144,40 @@ class FixtureCleanupTests(unittest.TestCase):
                 windows.name = "nt"
                 with self.assertRaisesRegex(AssertionError, "stop reply unconfirmed"):
                     stop_private_service(root)
+
+    def test_test_stop_confirmation_is_reused_while_windows_locks_are_releasing(self):
+        with private_state_dir() as root:
+            reply = {"stopped": True, "unresolvedAttempts": []}
+            call = Mock(return_value=reply)
+            self.assertIs(request_private_service_stop(root, call, drainSeconds=0), reply)
+            call.assert_called_once_with("service_control", {"action": "stop", "drainSeconds": 0})
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=[False, True, False, False, False]),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=AssertionError("second stop request")),
+                  patch.object(support.time, "sleep") as sleep):
+                windows.name = "nt"
+                stop_private_service(root)
+            sleep.assert_called_once_with(.05)
+            self.assertNotIn(root.resolve(), support._confirmed_private_stops)
+
+    def test_unconfirmed_test_stop_cannot_be_reused_as_a_confirmation(self):
+        with private_state_dir() as root:
+            for reply in ({"stopped": False}, {"stopped": True, "unresolvedAttempts": ["attempt"]}):
+                with self.subTest(reply=reply):
+                    request_private_service_stop(root, Mock(return_value={"stopped": True}))
+                    with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                        request_private_service_stop(root, Mock(return_value=reply))
+                    self.assertNotIn(root.resolve(), support._confirmed_private_stops)
+
+    def test_confirmed_stop_still_requires_windows_locks_to_release(self):
+        with private_state_dir() as root:
+            request_private_service_stop(root, Mock(return_value={"stopped": True}))
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=AssertionError("second stop request"))):
+                windows.name = "nt"
+                with self.assertRaisesRegex(AssertionError, "still owns state"):
+                    stop_private_service(root, timeout=0)
 
     def test_unconfirmed_shutdown_preserves_private_state(self):
         directory = None
