@@ -41,7 +41,7 @@ function fixture(records: Task[] = []) {
   const snapshot: Snapshot = { csrfToken: "csrf",
     consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 1, routerProfileId: profiles[0].profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [profiles[0].profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles, cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, origin: "maintenance",
       summary: `原评价 ${p.model} ${p.effort}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),

@@ -73,7 +73,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: revision,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId: decisionId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: live,
     // `unavailableProfileCount` counts every unavailable row in the table,
     // including a listed one such as the retained decision profile; the console

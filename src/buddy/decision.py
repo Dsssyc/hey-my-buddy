@@ -1835,12 +1835,27 @@ class DecisionCoordinator:
 
     # -- views ---------------------------------------------------------------
     def health_summary(self) -> dict:
-        """Bounded, model-free health over settled selection events, not task prose.
+        """Bounded, model-free health: the request overview plus per-buddy facts.
 
-        Only an adopted Router success resets the failure streak. Neutral events
-        and program selections cannot prove recovery. Immutable event codes and
+        The total window keeps its original diagnostic meaning: one settled
+        business request is one window entry however many dispatch attempts it
+        had, and ``attemptCount`` names the entries that reached a model. Only an
+        adopted Router success resets the failure streak; neutral events and
+        program selections cannot prove recovery, and immutable event codes and
         bound attempt receipts survive late changes to the retained output.
+
+        ``available``, ``reasonCode`` and ``currentRouterProfileId`` come from the
+        one ordered-list resolution entry and its skip periods, never from the old
+        three-failure diagnostic threshold. Each ``routers`` entry is projected by
+        the R2 history interfaces from that buddy's own immutable facts and
+        receipts: a success recovers only its own buddy, a valid abstention is an
+        answer, the consecutive count ignores the display window, and budget
+        exhaustion (including timeout codes and the read-only variant) counts as
+        failures too. Records whose attribution or nature cannot be proven are
+        listed under ``unattributed`` and never guessed onto any buddy. Reading
+        writes no events, timers, settings or probe sessions.
         """
+        from .router_history import profile_timeline, router_state, unattributed_records
         limit = 20
         kinds = "('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale')"
         source = (
@@ -1856,9 +1871,11 @@ class DecisionCoordinator:
             " AND json_extract(a.result_json,'$.result.modelStarted') IS NOT 0"
         )
         with self.db.read() as connection:
+            now = self._now()
             rows = connection.execute(
                 "SELECT e.kind,e.created_at,e.payload_json,r.decision_id,r.task_id,r.output_json,"
                 " a.result_json AS receipt_json,(" + router_success + ") AS router_success,"
+                " (a.attempt_id IS NOT NULL) AS has_attempt,"
                 " (SELECT w.run_id FROM workflow_routes w WHERE w.decision_id=r.decision_id LIMIT 1) AS goal_id"
                 + source + " ORDER BY e.seq DESC LIMIT ?", (limit,),
             ).fetchall()
@@ -1866,51 +1883,100 @@ class DecisionCoordinator:
                 "SELECT e.created_at,r.decision_id" + source
                 + " AND " + router_success + " ORDER BY e.seq DESC LIMIT 1",
             ).fetchone()
-        failed = []
-        streak = 0
-        still_failing = True
-        all_timeouts = True
-        timeout_codes = {"timeout", "call-timeout", "deadline", "router-timeout"}
-        abstentions = cancellations = stale = 0
-        special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
-        for row in rows:
-            payload = json.loads(row["payload_json"])
-            receipt = json.loads(row["receipt_json"]) if row["receipt_json"] else {}
-            # The request output may be replaced by a late, fenced result. Prefer
-            # the immutable receipt; old events without one retain their output.
-            if receipt:
-                output = receipt.get("result")
-            else:
-                output = json.loads(row["output_json"]) if row["output_json"] else {}
-            output = output if isinstance(output, dict) else {}
-            code = payload.get("errorCode") or output.get("code")
-            if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", code):
-                code = "needs-host" if row["kind"] == "decision.needs_host" else "call-failed"
-            decision = output.get("decision") or {}
-            abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
-                         and isinstance(decision, dict) and decision.get("profileId", False) is None
-                         and set(decision) == {"profileId", "reason", "evidence"})
-            special = row["kind"] in ("decision.failed", "decision.needs_host") and code in special_counts
-            if special:
-                special_counts[code] += 1
-            # Bounds and input changes remain independent diagnostic counters.
-            # Budget exhaustion also means the Router failed to return an answer.
-            is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (row["kind"] == "decision.failed" or
-                         (row["kind"] == "decision.needs_host" and not abstained))
-            if still_failing and is_failure:
-                streak += 1
-                all_timeouts = all_timeouts and (code in timeout_codes or receipt.get("terminationReason") == "deadline")
-            elif row["router_success"]:
-                still_failing = False
-            abstentions += int(abstained)
-            cancellations += int(row["kind"] == "decision.cancelled")
-            stale += int(row["kind"] == "decision.stale")
-            if is_failure:
-                failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
-                               "at":row["created_at"], "code":code})
-        reason_code = ("router-consecutive-timeouts" if all_timeouts else "router-consecutive-failures") if streak >= 3 else None
-        return {"available":streak < 3, "reasonCode":reason_code,
+            resolution = router.current_router(connection, now=now)
+            failed = []
+            streak = 0
+            still_failing = True
+            all_timeouts = True
+            timeout_codes = {"timeout", "call-timeout", "deadline", "router-timeout"}
+            abstentions = cancellations = stale = 0
+            special_counts = {"router-budget-exhausted": 0, "router-out-of-bounds": 0, "router-input-changed": 0}
+            for row in rows:
+                payload = json.loads(row["payload_json"])
+                receipt = json.loads(row["receipt_json"]) if row["receipt_json"] else {}
+                # The request output may be replaced by a late, fenced result. Prefer
+                # the immutable receipt; old events without one retain their output.
+                if receipt:
+                    output = receipt.get("result")
+                else:
+                    output = json.loads(row["output_json"]) if row["output_json"] else {}
+                output = output if isinstance(output, dict) else {}
+                code = payload.get("errorCode") or output.get("code")
+                if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", code):
+                    code = "needs-host" if row["kind"] == "decision.needs_host" else "call-failed"
+                decision = output.get("decision") or {}
+                abstained = (row["kind"] == "decision.needs_host" and output.get("status") == "ok"
+                             and isinstance(decision, dict) and decision.get("profileId", False) is None
+                             and set(decision) == {"profileId", "reason", "evidence"})
+                special = row["kind"] in ("decision.failed", "decision.needs_host") and code in special_counts
+                if special:
+                    special_counts[code] += 1
+                # Bounds and input changes remain independent diagnostic counters.
+                # Budget exhaustion also means the Router failed to return an answer.
+                is_failure = code not in ("router-out-of-bounds", "router-input-changed") and (row["kind"] == "decision.failed" or
+                             (row["kind"] == "decision.needs_host" and not abstained))
+                if still_failing and is_failure:
+                    streak += 1
+                    all_timeouts = all_timeouts and (code in timeout_codes or receipt.get("terminationReason") == "deadline")
+                elif row["router_success"]:
+                    still_failing = False
+                abstentions += int(abstained)
+                cancellations += int(row["kind"] == "decision.cancelled")
+                stale += int(row["kind"] == "decision.stale")
+                if is_failure:
+                    failed.append({"decisionId":row["decision_id"], "runId":row["goal_id"] or row["task_id"],
+                                   "at":row["created_at"], "code":code})
+            facts = resolution.facts
+            interval = facts.get("routerRetryIntervalSeconds")
+            mode = facts.get("routingMode")
+            ids = facts.get("routerProfileIds") or []
+            identities = facts.get("routerIdentities") or []
+            inspected = {entry["index"]: entry for entry in resolution.inspections}
+            budget_codes = frozenset({*timeout_codes, "router-budget-exhausted", "readonly-budget-exhausted"})
+            routers = []
+            for index, profile_id in enumerate(ids):
+                # A nonempty list always carries validated settings, so the
+                # interval is an integer; an absent one has no entries to project.
+                state = router_state(connection, profile_id=profile_id,
+                                     interval_seconds=interval if isinstance(interval, int) else 1, now=now)
+                window = profile_timeline(connection, profile_id=profile_id)[-limit:]
+                inspection = inspected.get(index)
+                if inspection is not None:
+                    eligible, code = inspection["eligible"], inspection["code"]
+                elif state["inSkipWindow"]:
+                    eligible, code = False, "router-skip-window"
+                else:
+                    profile, code, _reason = router.profile_problem(connection, profile_id, mode)
+                    eligible = profile is not None
+                last_error = next((entry for entry in reversed(window) if entry["outcome"] == "no_answer"), None)
+                routers.append({
+                    "profileId": profile_id, "index": index,
+                    "identity": identities[index] if index < len(identities) else None,
+                    "eligible": eligible, "code": code,
+                    "inSkipWindow": state["inSkipWindow"], "skipUntil": state["skipUntil"],
+                    "retryAt": state["retryAt"], "retryInProgress": state["retryInProgress"],
+                    "answeredCount": state["answeredCount"], "noAnswerCount": state["noAnswerCount"],
+                    "lastAnsweredAt": state["lastAnsweredAt"], "lastNoAnswerAt": state["lastNoAnswerAt"],
+                    "consecutiveNoAnswers": state["consecutiveNoAnswers"],
+                    "windowSize": limit, "windowEntries": len(window),
+                    "windowAnsweredCount": sum(entry["outcome"] == "answered" for entry in window),
+                    "windowFailureCount": sum(entry["outcome"] == "no_answer" for entry in window),
+                    "windowBudgetExhaustedCount": sum(entry["outcome"] == "no_answer"
+                                                      and entry.get("code") in budget_codes for entry in window),
+                    "windowBoundsRejectedCount": sum(entry["outcome"] == "no_answer"
+                                                     and entry.get("code") == "router-out-of-bounds"
+                                                     for entry in window),
+                    "windowAttemptCount": sum(entry.get("attemptId") is not None for entry in window),
+                    "lastError": None if last_error is None else {
+                        "code": last_error.get("code"), "at": last_error["at"], "phase": last_error.get("phase")},
+                })
+            unattributed = unattributed_records(connection)
+        return {"available":resolution.profile_id is not None,
+                "reasonCode":resolution.problem["code"] if resolution.problem else None,
+                "currentRouterProfileId":resolution.profile_id,
+                "routers":routers,
                 "windowSize":limit, "sampleCount":len(rows), "failureCount":len(failed),
+                "attemptCount":sum(bool(row["has_attempt"]) for row in rows),
                 "budgetExhaustedCount":special_counts["router-budget-exhausted"],
                 "boundsRejectedCount":special_counts["router-out-of-bounds"],
                 "inputChangedCount":special_counts["router-input-changed"],
@@ -1918,7 +1984,11 @@ class DecisionCoordinator:
                 "cancelledCount":cancellations, "staleCount":stale,
                 "lastSuccessAt":success["created_at"] if success else None,
                 "lastSuccessDecisionId":success["decision_id"] if success else None,
-                "recentFailures":failed[:5]}
+                "recentFailures":failed[:5],
+                "unattributedCount":len(unattributed),
+                "unattributed":[{"decisionId":entry["decisionId"], "at":entry["at"],
+                                 "outcome":entry["outcome"], "code":entry["code"]}
+                                for entry in reversed(unattributed[-5:])]}
 
     def _request_response(self, connection: sqlite3.Connection | None, row: sqlite3.Row, *, duplicate: bool) -> dict:
         view = self._view(connection, row, include_audit=False)

@@ -85,7 +85,9 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     autoPages.current += 1;
     history.loadMore();
   }, [showUnavailable, history.error, history.loading, history.hasMore, history.loadMore]);
-  const routerIds = new Set([snapshot.configuration === null ? null : data.configuration?.routerProfileId]);
+  // The family mark keeps the list-membership fact: every family holding a
+  // buddy in the configured Router list is marked, not only the role holder.
+  const routerIds = new Set(snapshot.configuration === null ? [] : data.configuration?.routerProfileIds ?? []);
   const family = selected ? families.find(g => g.key === selected) : undefined;
   // A refusal recorded by 发现模型 is stale once the page can act again: it is
   // shown only while the action would still be refused, never as a lingering

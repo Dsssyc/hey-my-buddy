@@ -20,7 +20,7 @@ function snapshot(records: Task[] = []): Snapshot {
   return {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 99,
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
-    configuration: { revision: 9, routerProfileId: worker.profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 9, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles: [{ ...worker, label: "现在已改名的模型 · max" }],
     preferences: [{ profileId: worker.profileId, mode: "exclude", reason: "当前已改为排除" }],
     familyPreferences: [], preferenceOverrides: [],

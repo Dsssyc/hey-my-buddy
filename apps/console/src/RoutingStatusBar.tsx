@@ -4,7 +4,9 @@ import type { Editor } from "./use-editor";
 import { Badge, Help } from "./ui";
 import { dayClock } from "./objective-display";
 import { profileTitle } from "./profile-display";
+import { ROUTER_RETRY_INTERVAL_MAX, retryIntervalSeconds } from "./console-data";
 import { isDecisionCandidate, isFastRouterCandidate, routerAttention } from "./policy";
+import { routerListEqual } from "./draft";
 
 export const BUDGET_LABEL: Record<RoutingBudget, string> = { brief: "简要", standard: "标准", deep: "深入" };
 const BUDGET_HELP = "审阅预算用于后续路由；快速路由固定 60 秒。";
@@ -85,24 +87,36 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expande
 }) {
   const [open, setOpen] = useState(false);
   const configuration = snapshot.configuration === null ? null : data.configuration;
-  const routerId = configuration?.routerProfileId;
-  const router = data.profiles.find(p => p.profileId === routerId);
-  const name = router ? profileTitle(router) : routerId || (configuration ? "尚未指定，请选择" : "升级不可用");
+  const list = configuration?.routerProfileIds ?? [];
+  // The current Router is the health projection's role holder; the list head is
+  // only the fallback when this snapshot carries no health facts at all.
+  const routerId = snapshot.routingHealth && "currentRouterProfileId" in snapshot.routingHealth
+    ? snapshot.routingHealth.currentRouterProfileId ?? null
+    : list[0] ?? null;
+  const router = routerId ? data.profiles.find(p => p.profileId === routerId) : undefined;
+  const name = router ? profileTitle(router) : routerId || (configuration ? (list.length ? "当前不可用" : "尚未指定，请选择") : "升级不可用");
   const defaultMode = configuration?.defaultRoutingMode;
   const candidate = defaultMode === "fast" ? isFastRouterCandidate(router) : isDecisionCandidate(router);
   const budget = configuration?.routingBudget;
-  const routerDirty = !!editor.draft && snapshot.configuration?.routerProfileId !== routerId;
-  const modeDirty = !!editor.draft && snapshot.configuration?.defaultRoutingMode !== defaultMode;
-  const budgetDirty = !!editor.draft && snapshot.configuration?.routingBudget !== budget;
+  const interval = configuration?.routerRetryIntervalSeconds;
+  const intervalValid = retryIntervalSeconds(interval) !== null;
+  const recorded = snapshot.configuration;
+  const routerDirty = !!editor.draft && !routerListEqual(recorded?.routerProfileIds, list);
+  const modeDirty = !!editor.draft && recorded?.defaultRoutingMode !== defaultMode;
+  const budgetDirty = !!editor.draft && recorded?.routingBudget !== budget;
+  const intervalDirty = !!editor.draft && recorded?.routerRetryIntervalSeconds !== interval;
   const health = healthSummary(snapshot.routingHealth);
   const warning = !configuration ? `Router 设置升级不可用${snapshot.configurationError?.message ? `：${snapshot.configurationError.message}` : ""}`
-    : !routerId ? "未指定 Router；请在档位菜单中选择。"
+    : !routerId ? (list.length ? "列表中的 buddy 当前都不可担任；请查看详情。" : "未指定 Router；请在档位菜单中选择。")
       : routerAttention(data)?.message || health.warning;
   function setBudget(value: RoutingBudget) {
     editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, routingBudget: value } }) : d);
   }
   function setMode(value: RoutingMode) {
     editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, defaultRoutingMode: value } }) : d);
+  }
+  function setInterval(value: number) {
+    editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, routerRetryIntervalSeconds: value } }) : d);
   }
   return <section className={"routing-status-bar" + (warning ? " warning" : "")} aria-label="路由状态">
     <div className="routing-status-line">
@@ -123,13 +137,14 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expande
     </div>
     <div id="routing-details" className="routing-details" hidden={!open && !expanded}>
       <div className="routing-detail-block">
-        <h3>Router <Help label="Router 说明">快速模式需支持无工具调用；审阅模式需具备本地只读资格。请在已启用档位的菜单中设置。</Help></h3>
+        <h3>Router <Help label="Router 说明">快速模式需支持无工具调用；审阅模式需具备本地只读资格。请在已启用档位的菜单中设置；菜单只替换列表第一项并保留其余顺序。</Help></h3>
         {!configuration && <p className="small" role="status">{warning}</p>}
         <p className="router-line" id="router-current" tabIndex={-1}>
           <span>Router：</span><strong>{name}</strong>
           {routerId && <Badge tone={candidate ? "green" : "amber"}>{candidate ? "可担任" : "需要处理"}</Badge>}
           {router && <button type="button" className="button small-button" onClick={() => onShowRouter(router.profileId)}>查看所在家族</button>}
         </p>
+        <p className="small">列表顺序：{list.length ? list.join(" → ") : "（空）"}</p>
       </div>
       <div className="routing-detail-block">
         <h3>默认模式 <Help label="路由数据流向">需要 Router 判断时，任务包发送给 Router 的模型提供方；审阅模式还发送冻结代码副本。单一候选由程序选择。DSH/ZCode 无系统沙盒，不能保证阻止副本外读取或外传。</Help></h3>
@@ -148,6 +163,23 @@ export function RoutingStatusBar({ data, snapshot, editor, onShowRouter, expande
               disabled={!editor.editing || !configuration} onChange={() => setBudget(value)} />
             {BUDGET_LABEL[value]}
           </label>)}
+        </div>
+      </div>
+      <div className="routing-detail-block">
+        <h3>重试间隔 <Help label="重试间隔说明">一个 Router 没有给出答案后，经过这段秒数才会再次使用它；各列表项依次补位。1–2147483647 的整数秒。</Help></h3>
+        <div className="concurrency-row">
+          <input type="number" inputMode="numeric" min={1} max={ROUTER_RETRY_INTERVAL_MAX}
+            step={1} value={interval === undefined || Number.isNaN(interval) ? "" : interval}
+            disabled={!editor.editing || !configuration}
+            aria-label="重试间隔秒数" aria-invalid={!intervalValid || undefined}
+            onChange={(event) => {
+              const raw = event.target.value;
+              setInterval(raw === "" ? NaN : Number(raw));
+            }} />
+          <span className="small muted" aria-live="polite">
+            {intervalValid ? "秒" : "需要 1–2147483647 的整数秒；当前修改不会保存"}
+          </span>
+          {intervalDirty && <span className="unsaved-mark">未保存</span>}
         </div>
       </div>
       <RoutingHealthDetails health={snapshot.routingHealth} />

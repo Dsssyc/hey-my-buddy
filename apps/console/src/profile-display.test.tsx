@@ -48,7 +48,7 @@ function catalogSnapshot(): Snapshot {
     gate: { phase: "open", readers: 0, writer: null, waitingWriters: 0 },
     configuration: {
       revision: 1,
-      routerProfileId: proMaxId, defaultRoutingMode: "review" as const, routingBudget: "standard",
+      routerProfileIds: [proMaxId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard",
     },
     profiles: [flashOff, proMax],
     preferences: [],
@@ -200,7 +200,7 @@ describe("decision profile selector", () => {
 
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
-    expect(published!.configuration.routerProfileId).toBe(flashOffId);
+    expect(published!.configuration.routerProfileIds?.[0]).toBe(flashOffId);
     expect(published!.configuration).not.toHaveProperty("autoMaintain");
     // Only the decision selector changed, so nothing else is sent: no full table,
     // no provider/model/effort/available field and no card.

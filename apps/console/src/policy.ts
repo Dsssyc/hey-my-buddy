@@ -6,7 +6,7 @@ import {
   preferenceChanges,
   profileSettings,
 } from "./draft";
-import { concurrencyLimit, familyKey } from "./console-data";
+import { concurrencyLimit, familyKey, retryIntervalSeconds } from "./console-data";
 import { profileName, profileTitle } from "./profile-display";
 
 /** The two capabilities have distinct authority and cannot stand in for each other. */
@@ -185,9 +185,19 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
       });
     }
   }
-  if (draft.configuration && (routerFieldChanged(baseline, draft, "routerProfileId")
+  // The interval is checked like the concurrency field: an invalid draft value
+  // blocks saving so a save can never publish an earlier valid prefix.
+  if (draft.configuration && retryIntervalSeconds(draft.configuration.routerRetryIntervalSeconds) === null) {
+    issues.push({
+      profileId: "", label: "重试间隔",
+      message: "重试间隔须为 1–2147483647 的整数秒；请修改。",
+    });
+  }
+  if (draft.configuration && (routerFieldChanged(baseline, draft, "routerProfileIds")
     || routerFieldChanged(baseline, draft, "defaultRoutingMode"))) {
-    const target = draft.configuration.routerProfileId;
+    // Only the replaced head needs current legality: a tail buddy may stay in
+    // the list while temporarily unavailable, per the board's list settings.
+    const target = draft.configuration.routerProfileIds[0] ?? null;
     const mode = draft.configuration.defaultRoutingMode;
     if (target) {
       const profile = profiles.get(target);
@@ -201,7 +211,7 @@ export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
 
 /** The Router is checked again by the service before each routing run. */
 export function routerAttention(source: Pick<Draft, "configuration" | "profiles">, mode = source.configuration?.defaultRoutingMode): PolicyIssue | null {
-  const id = source.configuration?.routerProfileId;
+  const id = source.configuration?.routerProfileIds[0] ?? null;
   if (!id || !mode) return null;
   const profile = source.profiles.find(p => p.profileId === id);
   const refusal = profile ? routerRefusal(profile, mode) : "已不在目录中";

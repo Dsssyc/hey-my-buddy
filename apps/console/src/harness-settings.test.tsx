@@ -62,7 +62,7 @@ function snapshot(options: { harnesses?: HarnessHealth[] } = {}): HarnessSnapsho
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId: mediumId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: { revision: 1, routerProfileIds: [mediumId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: [
       profile({ profileId: mediumId, label: "Claude Sonnet 5 · medium", ...sonnet, effort: "medium",
         enabled: true, capabilities: ["execution:claude", "decision"], contextWindow: 200_000 }),

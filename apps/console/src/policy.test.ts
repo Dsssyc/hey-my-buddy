@@ -59,7 +59,7 @@ function snapshot(profiles: Profile[] = [worker], extra: Partial<Snapshot> = {})
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 3,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId: worker.profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [worker.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     preferences: [],
     familyPreferences: [],
@@ -90,9 +90,9 @@ describe("decision capability", () => {
     expect(routerRefusal(fast, "review")).toContain("所属 Harness 尚不具备本地只读路由资格");
     expect(routerRefusal(worker, "fast")).toContain("所属 Harness 尚不支持无工具路由调用");
     const baseline = makeDraft(snapshot([worker, fast]));
-    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileId: fast.profileId, defaultRoutingMode: "fast" } })).toEqual([]);
+    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [fast.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast" } })).toEqual([]);
     expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, defaultRoutingMode: "fast" } })[0].message).toContain("不支持无工具路由调用");
-    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileId: fast.profileId } })[0].message).toContain("所属 Harness 尚不具备本地只读路由资格");
+    expect(blockingIssues(baseline, { ...baseline, configuration: { ...baseline.configuration!, routerProfileIds: [fast.profileId], routerRetryIntervalSeconds: 600} })[0].message).toContain("所属 Harness 尚不具备本地只读路由资格");
   });
   it("accepts a declared decision capability and never infers it from coding ability", () => {
     expect(hasDecisionCapability(worker)).toBe(true);
@@ -251,7 +251,7 @@ describe("blocking new changes", () => {
     const baseline = makeDraft(snapshot([worker, retired, disabled, coder]));
     const select = (profileId: string) => ({
       ...baseline,
-      configuration: { ...baseline.configuration!, routerProfileId: profileId},
+      configuration: { ...baseline.configuration!, routerProfileIds: [profileId], routerRetryIntervalSeconds: 600},
     });
     expect(blockingIssues(baseline, select(retired.profileId))[0].message).toContain("无法担任 Router");
     expect(blockingIssues(baseline, select(disabled.profileId))[0].message).toContain("未启用");
@@ -259,7 +259,7 @@ describe("blocking new changes", () => {
     expect(blockingIssues(baseline, select(worker.profileId))).toEqual([]);
     expect(blockingIssues(baseline, {
       ...baseline,
-      configuration: { ...baseline.configuration!, routerProfileId: null},
+      configuration: { ...baseline.configuration!, routerProfileIds: [] },
     })).toEqual([]);
   });
 });
@@ -267,7 +267,7 @@ describe("blocking new changes", () => {
 describe("stale settings needing attention", () => {
   it("reports a stale Router with its resolving action without blocking an unrelated note", () => {
     const baseline = makeDraft(snapshot([worker, retired], {
-      configuration: { revision: 2, routerProfileId: retired.profileId , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { revision: 2, routerProfileIds: [retired.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     const attention = decisionAttention(baseline)!;
     expect(attention.router).toBe(true);
@@ -302,7 +302,7 @@ describe("stale settings needing attention", () => {
     expect(attentionIssues(healthy)).toEqual([]);
     const stale = makeDraft(snapshot([{ ...worker, enabled: false }, low], {
       familyPreferences: [{ ...family, mode: "pin", reason: "" }],
-      configuration: { revision: 1, routerProfileId: null , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     const issues = attentionIssues(stale);
     expect(issues).toHaveLength(1);
@@ -318,10 +318,31 @@ describe("stale settings needing attention", () => {
 
   it("treats a missing decision profile as needing attention, not as an error", () => {
     const baseline = makeDraft(snapshot([worker], {
-      configuration: { revision: 2, routerProfileId: "gone:model:off" , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+      configuration: { revision: 2, routerProfileIds: ["gone:model:off"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     }));
     expect(decisionAttention(baseline)?.message).toContain("已不在目录中");
     expect(blockingIssues(baseline, baseline)).toEqual([]);
+  });
+});
+
+describe("the Router retry interval", () => {
+  it("blocks an out-of-range interval while every legal value stays publishable", () => {
+    const baseline = makeDraft(snapshot([worker]));
+    for (const seconds of [0, -5, 2.5, 2147483648, NaN]) {
+      const invalid = {
+        ...baseline,
+        configuration: { ...baseline.configuration!, routerRetryIntervalSeconds: seconds },
+      };
+      const issues = blockingIssues(baseline, invalid);
+      expect(issues).toHaveLength(1);
+      expect(issues[0].message).toContain("1–2147483647");
+    }
+    const changed = {
+      ...baseline,
+      configuration: { ...baseline.configuration!, routerRetryIntervalSeconds: 300 },
+    };
+    expect(blockingIssues(baseline, changed)).toEqual([]);
+    expect(publication(baseline, changed, grant(), "i").configuration).toEqual({ routerRetryIntervalSeconds: 300 });
   });
 });
 

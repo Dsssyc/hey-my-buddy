@@ -15,7 +15,12 @@ export function BuddyStatusBar({ data, snapshot, onNavigate }: { data: ConsoleVi
   const quotaRows = rows.filter(row => quotaView(row.quota)?.alert);
   return <div className="buddy-status" role="region" aria-label="全局状态">
     {(() => {
-      const id = configuration?.routerProfileId;
+      // The status names the current Router from the health projection; the
+      // list head is only the fallback when no health facts exist.
+      const healthId = snapshot.routingHealth && "currentRouterProfileId" in snapshot.routingHealth
+        ? snapshot.routingHealth.currentRouterProfileId ?? null
+        : null;
+      const id = healthId ?? configuration?.routerProfileIds[0] ?? null;
       const mode = configuration?.defaultRoutingMode;
       const profile = data.profiles.find(p => p.profileId === id);
       const row = rows.find(item => item.adapter === profile?.adapter);

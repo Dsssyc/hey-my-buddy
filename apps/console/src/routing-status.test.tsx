@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RoutingStatusBar } from "./RoutingStatusBar";
@@ -21,7 +21,7 @@ function snapshot(routingHealth: RoutingHealth | undefined, extra: Partial<Snaps
   return {
     csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: null }, tableRevision: 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId: router.profileId, defaultRoutingMode: "review", routingBudget: "standard" },
+    configuration: { revision: 1, routerProfileIds: [router.profileId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     profiles: [router], cards: [], preferences: [], familyPreferences: [], preferenceOverrides: [],
     familyAnnotations: [], evidence: [], decisions: [],
     sampleCounts: {}, modelConcurrency: [], tasks: { runs: [], total: 0 }, capabilities: {},
@@ -119,7 +119,7 @@ describe("routing health details (R4)", () => {
 describe("the one-line routing status", () => {
   it("edits the default mode and review budget while showing read-only limits and data flow", async () => {
     const state = snapshot(healthy, { configuration: {
-      revision: 1, routerProfileId: router.profileId,
+      revision: 1, routerProfileIds: [router.profileId], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review", routingBudget: "standard",
       routingBudgetLimits: { preset: "standard", timeoutSeconds: 300, toolCalls: 24, bytesRead: 524288 },
     } });
@@ -173,7 +173,7 @@ describe("the one-line routing status", () => {
   });
 
   it("warns when no Router is set and when routing keeps failing", () => {
-    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, routerProfileId: null , defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
+    const view = renderBar(snapshot(healthy, { configuration: { revision: 1, routerProfileIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"} }));
     expect(bar().textContent).toContain("Router：尚未指定，请选择");
     expect(bar().querySelector(".routing-warning")!.textContent).toContain("未指定 Router");
     view.unmount();
@@ -226,4 +226,55 @@ describe("the one-line routing status", () => {
     expect(bar().textContent).not.toContain("状态：不可用");
   });
 
+});
+
+describe("the ordered Router list and retry interval", () => {
+  const tail = { ...router, profileId: "claude:anthropic:backup:medium", model: "backup", effort: "medium" };
+  const listState = (routingHealth: RoutingHealth | undefined) => snapshot(routingHealth, {
+    profiles: [router, tail],
+    configuration: { revision: 1, routerProfileIds: [router.profileId, tail.profileId],
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
+  });
+
+  it("names the current Router from health facts instead of defaulting to the list head", () => {
+    renderBar(listState({ ...healthy, currentRouterProfileId: tail.profileId }));
+    // The head is skipped, so the tail buddy holds the role.
+    expect(bar().textContent).toContain("Router：Test · medium");
+    expect(bar().textContent).toContain(`列表顺序：${router.profileId} → ${tail.profileId}`);
+  });
+
+  it("falls back to the list head only when the snapshot carries no health facts", () => {
+    renderBar(listState(undefined));
+    expect(bar().textContent).toContain("Router：Test · high");
+  });
+
+  it("says the list is unavailable when health reports no current Router", () => {
+    renderBar(listState({ ...healthy, available: false, reasonCode: "router-skip-window", currentRouterProfileId: null }));
+    expect(bar().textContent).toContain("Router：当前不可用");
+    expect(bar().querySelector(".routing-warning")!.textContent).toContain("当前都不可担任");
+  });
+
+  it("binds the retry seconds input to the settings and marks out-of-range values", async () => {
+    const user = userEvent.setup();
+    const state = listState(healthy);
+    const changes: ReturnType<typeof makeDraft>[] = [];
+    const writable = { ...editor, editing: true, update: vi.fn(fn => changes.push(fn(makeDraft(state)))) } as unknown as Editor;
+    render(<RoutingStatusBar data={state as ConsoleView} snapshot={state} editor={writable} onShowRouter={vi.fn()} expanded />);
+    const input = screen.getByLabelText("重试间隔秒数") as HTMLInputElement;
+    expect(input.value).toBe("600");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    // One change event per edit: the mocked editor does not re-render, so the
+    // controlled value would be restored between keystrokes.
+    fireEvent.change(input, { target: { value: "" } });
+    expect(changes[0].configuration!.routerRetryIntervalSeconds).toBe(NaN);
+    fireEvent.change(input, { target: { value: "45" } });
+    expect(changes[1].configuration!.routerRetryIntervalSeconds).toBe(45);
+    // An out-of-range recorded value renders as invalid with the bounded hint.
+    const broken = { ...state, configuration: { ...state.configuration!, routerRetryIntervalSeconds: 0 } };
+    cleanup();
+    render(<RoutingStatusBar data={broken as ConsoleView} snapshot={broken} editor={writable} onShowRouter={vi.fn()} expanded />);
+    const invalid = screen.getByLabelText("重试间隔秒数");
+    expect(invalid.getAttribute("aria-invalid")).toBe("true");
+    expect(bar().textContent).toContain("需要 1–2147483647 的整数秒");
+  });
 });

@@ -27,6 +27,21 @@ export function concurrencyLimit(value: unknown): number | null {
     ? value
     : null;
 }
+/**
+ * The Router retry interval in seconds: a plain number input, so there are no
+ * product tiers beyond the 10-minute default. Only a strict integer within
+ * 1–2147483647 is a setting (the bound keeps the value representable in time
+ * math and storage); anything else is not one.
+ */
+export const ROUTER_RETRY_INTERVAL_MIN = 1;
+export const ROUTER_RETRY_INTERVAL_MAX = 2147483647;
+
+export function retryIntervalSeconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value)
+    && value >= ROUTER_RETRY_INTERVAL_MIN && value <= ROUTER_RETRY_INTERVAL_MAX
+    ? value
+    : null;
+}
 export type ModelFamilyGroup = { key: string; name: string; adapter: string; provider: string; profiles: Profile[] };
 export function modelFamilies(profiles: Profile[]): ModelFamilyGroup[] {
   const groups = new Map<string, ModelFamilyGroup>();

@@ -101,7 +101,9 @@ function snapshot(options: Options = {}): HarnessSnapshot {
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: options.configurationUnavailable ? null : { revision: 1, routerProfileId: options.routerProfileId === undefined ? mediumId : options.routerProfileId, defaultRoutingMode: "review" as const, routingBudget: "standard" },
+    configuration: options.configurationUnavailable ? null : { revision: 1,
+      routerProfileIds: options.routerProfileId === undefined ? [mediumId] : options.routerProfileId === null ? [] : [options.routerProfileId],
+      routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
     configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置", revision: 1 } : null,
     profiles: profiles(),
     preferences: [],
@@ -453,7 +455,7 @@ describe("the Router menu", () => {
     expect(screen.getByRole("region", { name: "全局状态" }).textContent).toContain("Router：可用");
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("已发布新版本");
-    expect(f.published[0].configuration).toEqual({ routerProfileId: mediumId });
+    expect(f.published[0].configuration).toEqual({ routerProfileIds: [mediumId] });
   });
   it("disables only Router setting actions when configuration requires upgrade", async () => {
     const f = fixture({ configurationUnavailable: true });

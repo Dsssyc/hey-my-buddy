@@ -6,6 +6,7 @@ import {
   setFamilyAnnotation,
   setFamilyPreference,
   setPreferenceOverride,
+  withFirstRouter,
 } from "./draft";
 import type { Editor } from "./use-editor";
 import type {
@@ -214,7 +215,7 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
   const enabledCount = efforts.filter(p => p.enabled).length;
   const available = efforts.some(p => p.available);
   const configuration = recorded.configuration === null ? null : data.configuration;
-  const routerId = configuration?.routerProfileId;
+  const routerId = configuration?.routerProfileIds[0] ?? null;
   const currentRouterId = routerId;
   const currentRouter = currentRouterId ? data.profiles.find(p => p.profileId === currentRouterId) : undefined;
   const familyPreference = data.familyPreferences.find(p => familyKey(p) === key);
@@ -246,7 +247,9 @@ export function FamilyDetail({ family, data, recorded, editor, isNew = false, on
 
   function setRouter(profile: Profile) {
     if (!configuration) return;
-    editor.update(d => d.configuration ? ({ ...d, configuration: { ...d.configuration, routerProfileId: profile.profileId } }) : d);
+    // The menu only ever replaces the first list item: the user's tail order
+    // stays and the new head's old duplicate goes (draft.withFirstRouter).
+    editor.update(d => d.configuration ? ({ ...d, configuration: withFirstRouter(d.configuration, profile.profileId) }) : d);
   }
   function requestRouter(profile: Profile) {
     if (!configuration) return;

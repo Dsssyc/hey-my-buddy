@@ -38,7 +38,7 @@ function fixture(options: { discoveryLimit?: number } = {}) {
   let state: Snapshot = {
     csrfToken: "csrf", consoleSession: { id: "fixture-session", canWrite: true, reason: null }, tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId: flashOff , defaultRoutingMode: "review" as const, routingBudget: "standard"},
+    configuration: { revision: 1, routerProfileIds: [flashOff], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     profiles,
     cards: profiles.map(p => ({ profileId: p.profileId, revision: 2, summary: `评价 ${p.model}`,
       strengths: [], limitations: [], risks: [], evidenceIds: [], updatedAt: null })),

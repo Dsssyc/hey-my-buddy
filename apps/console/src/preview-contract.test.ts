@@ -245,10 +245,12 @@ describe("synthetic preview fixtures through the real console parsers", () => {
     // schema the current console requires (the original schema-13 defect).
     const snapshotFacts = snapshots[0].facts as { configuration: Record<string, unknown>; harnesses: unknown[] };
     expect(snapshotFacts.configuration).toMatchObject({
-      routerProfileId: expect.any(String),
+      routerProfileIds: expect.any(Array),
+      routerRetryIntervalSeconds: expect.any(Number),
       defaultRoutingMode: "fast", routingBudget: "standard",
     });
     expect("decisionProfileId" in snapshotFacts.configuration).toBe(false);
+    expect("routerProfileId" in snapshotFacts.configuration).toBe(false);
 
     // Recorded quota: normal, stale and unknown observations stay distinct.
     const quotaFacts = snapshotFacts.harnesses as { adapter: string; quota: ReturnType<typeof quotaView> }[];

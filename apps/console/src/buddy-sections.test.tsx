@@ -81,7 +81,7 @@ function snapshot(routerProfileId: string | null = solMediumId): SnapshotWithHar
     consoleSession: { id: "fixture-session", canWrite: true, reason: null },
     tableRevision: 4,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
-    configuration: { revision: 1, routerProfileId,
+    configuration: { revision: 1, routerProfileIds: routerProfileId ? [routerProfileId] : [], routerRetryIntervalSeconds: 600,
       defaultRoutingMode: "review" as const, routingBudget: "standard" },
     profiles: profiles(),
     preferences: [], familyPreferences: [], preferenceOverrides: [], familyAnnotations: [],
