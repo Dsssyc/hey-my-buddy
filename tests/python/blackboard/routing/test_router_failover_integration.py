@@ -352,7 +352,7 @@ class FailoverTests(RouterDispatchTestCase):
     def test_preflight_outcomes_on_the_selection_retry_have_distinct_receipts(self):
         with self.board_.store.db.write() as db:
             arguments = dict(buddy_id=A, plane="work", request_id="selection-retry-fixture",
-                             task_id=None, attempt_id=None, outcome="no_answer", code="router-unavailable",
+                             task_id=None, attempt_id=None, outcome="no_answer", code="router-disabled",
                              phase="preflight", now=T0)
             original = router_history.record_outcome(db, **arguments, facts={"routerIndex": 0})
             retry = router_history.record_outcome(
@@ -512,7 +512,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_model_started_false_does_not_substitute_for_spawn_or_native_stop_proof(self):
         request, first = self.start()
-        output = {"status": "error", "code": "router-unavailable", "modelStarted": False}
+        output = {"status": "error", "code": "router-no-answer", "modelStarted": False}
         self.assert_boundary(request, first, output, outcome="stop-unconfirmed", status="failed")
 
     def test_release_cancelled_parent_never_advances_despite_never_spawned_proof(self):

@@ -188,14 +188,14 @@ class EvaluationStore:
 
     @staticmethod
     def _decision_view(row: sqlite3.Row) -> dict:
+        from ..routing.decision import DecisionCoordinator
         keys = row.keys()
         view = {
             "decisionId": row["decision_id"],
             "status": row["status"],
             "task": row["task"],
             "buddyId": row["buddy_id"],
-            "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                       if row["reason_code"] is not None else None),
+            "reason": DecisionCoordinator._reason(row),
             "note": row["note"],
             "createdAt": row["created_at"],
         }

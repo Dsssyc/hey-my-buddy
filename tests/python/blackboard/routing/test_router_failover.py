@@ -13,7 +13,8 @@ class RouterFailoverTests(unittest.TestCase):
 
     def test_stopped_unavailable_preflight_and_unusable_runtime_answers_allow_next_router(self):
         cases = {
-            "preflight": ("router-unavailable", "router-quota-exhausted", "router-review-unsupported",
+            "preflight": ("router-disabled", "router-catalog-unavailable", "router-harness-unavailable",
+                          "router-not-published-at-freeze", "router-quota-exhausted", "router-review-unsupported",
                           "router-no-tool-unsupported"),
             "runtime": ("timeout", "provider-error", "native-error", "empty-answer",
                         "answer-invalid-json", "answer-shape", "readonly-budget-exhausted"),

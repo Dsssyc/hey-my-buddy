@@ -160,6 +160,21 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertEqual(replayed["status"], "cancelled")
         self.assertTrue(replayed["duplicate"])
 
+    def test_admission_boundaries_do_not_count_as_router_failures(self):
+        board = self.board()
+        self.seed(board, decision_buddy=None)
+        for index in range(3):
+            request = self.request(board, request_id=f"no-router-{index}")
+            self.assertEqual(request["status"], "needs-host")
+        no_candidate = board.call("selection_request", {"requestId":"no-candidates", "task":"task",
+                                                        "requiredCapabilities":["missing:capability"]})
+        self.assertEqual(no_candidate["status"], "needs-host")
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", 1):
+            oversized = self.request(board, request_id="oversized-admission")
+        self.assertEqual(oversized["status"], "needs-host")
+        health = board.store.decisions.health_summary()
+        self.assertEqual((health["sampleCount"], health["failureCount"], health["consecutiveFailures"]), (0, 0, 0))
+
     def test_cancel_without_note_does_not_append_an_empty_explanation(self):
         board = self.board()
         self.seed(board)

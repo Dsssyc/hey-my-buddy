@@ -372,8 +372,7 @@ class WorkflowCoordinator:
         payload = json.loads(row["payload_json"])
         boundary = None
         decision_id = row["decision_id"]
-        request_reason = ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                          if row["reason_code"] is not None else None)
+        request_reason = self.board.decisions._reason(row)
         if connection is not None and payload.get("source") == "routing" and decision_id:
             # Proxy rows retain the leaf's frozen decision. Only command fencing
             # is refreshed from the current owned lineage, never its frozen packet.
@@ -1512,16 +1511,12 @@ class WorkflowCoordinator:
             connection.execute("UPDATE workflow_routes SET state='needs-host',updated_at=? WHERE decision_id=?",
                                (now, run["current_routing_id"]))
         request_id = f"routing-{uuid.uuid4()}"
-        if reason is None and not run["current_routing_id"]:
-            reason = make_reason("no-legal-candidate")
         decision_id = run["current_routing_id"]
         payload = {"source": "routing"}
-        self._record_system_request(connection, run, reason, payload, now,
-                                    request_id=request_id, decision_id=decision_id, sync=False)
-        connection.execute("UPDATE workflow_runs SET state='awaiting-host',active_request_id=?,updated_at=?,revision=revision+1 WHERE run_id=?",
+        connection.execute("UPDATE workflow_runs SET state='awaiting-host',active_request_id=?,updated_at=? WHERE run_id=?",
                            (request_id, now, run["run_id"]))
-        connection.execute("UPDATE tasks SET queue_reason='awaiting-host' WHERE task_id=?", (run["run_id"],))
-        self._propagate_boundary(connection, self._request_row(connection, run["run_id"], request_id), now)
+        self._record_system_request(connection, run, reason, payload, now,
+                                    request_id=request_id, decision_id=decision_id)
         self.board._append_event(connection, "workflow.routing_needs_host", task_id=run["run_id"],
                                  payload={"requestId": request_id, "decisionId": run["current_routing_id"]})
 
@@ -2071,8 +2066,7 @@ class WorkflowCoordinator:
                     "taskId": row["decision_task_id"],
                     "selectedBuddy": json.loads(row["selected_json"]) if row["selected_json"] else None,
                     "source": selection_source(requested),
-                    "reason": ({"code": row["reason_code"], "params": json.loads(row["reason_params_json"])}
-                               if row["reason_code"] is not None else None),
+                    "reason": self.board.decisions._reason(row),
                     "note": row["note"],
                     "createdAt": row["created_at"],
                     "ownerGeneration": int(row["owner_generation"]),
@@ -3398,7 +3392,7 @@ class WorkflowCoordinator:
                 if self._cancel_routes(connection, owned_id, make_reason("routing-taken-over"), now):
                     owned = self._run_row(connection, owned_id)
                     if owned["state"] == "executing":
-                        self._routing_attention(connection, owned, now)
+                        self._routing_attention(connection, owned, now, make_reason("routing-taken-over"))
             self.board._append_event(
                 connection,
                 "workflow.takeover",
@@ -7440,7 +7434,7 @@ class WorkflowCoordinator:
 
     def _record_system_request(self, connection, run_row, reason: dict | None, payload: dict, now: str, *,
                                kind: str = "attention", turn_row=None, request_id: str | None = None,
-                               decision_id: str | None = None, sync: bool = True) -> str:
+                               decision_id: str | None = None) -> str:
         """Open one system boundary and propagate the same form to its owners."""
         request_id = request_id or f"req-{uuid.uuid4()}"
         connection.execute(
@@ -7455,9 +7449,8 @@ class WorkflowCoordinator:
         if turn_row is not None:
             connection.execute("UPDATE workflow_runs SET current_turn_id=?,current_attempt_id=NULL WHERE run_id=?",
                                (turn_row["turn_id"], run_row["run_id"]))
-        if sync:
-            self._sync_boundary(connection, run_row["run_id"], now)
-            self._propagate_boundary(connection, self._request_row(connection, run_row["run_id"], request_id), now)
+        self._sync_boundary(connection, run_row["run_id"], now)
+        self._propagate_boundary(connection, self._request_row(connection, run_row["run_id"], request_id), now)
         return request_id
 
     def _record_request(self, connection, run_row, turn_row, turn, disposition, now) -> str:

@@ -35,11 +35,6 @@ _NATIVE_SOURCES = {
     'zcode': 'zcode-native-app-server',
     'claude': 'claude-code-initialize',
 }
-_DISPATCH_REJECTION_ERRORS = frozenset((
-    'BUDDY_UNAVAILABLE', 'CATALOG_UNAVAILABLE', 'HARNESS_UNAVAILABLE',
-    'INVALID_ARGUMENT', 'INVALID_BUDDY', 'PERMISSION_DENIED', 'UNSUPPORTED_ADAPTER',
-    'UNSUPPORTED_CAPABILITY', 'UNSUPPORTED_HARNESS',
-))
 _DISCOVERY_ERRORS = frozenset((
     'BUDDY_UNAVAILABLE', 'CATALOG_INVALID', 'CATALOG_LIMIT', 'CATALOG_UNAVAILABLE',
     'CONFLICT', 'HARNESS_DISCOVERY_STOP_UNCONFIRMED', 'HARNESS_RECORD_INVALID',
@@ -383,6 +378,17 @@ _SYSTEM_REQUEST_TEXT_KEYS = frozenset((
 ))
 
 
+def _recorded_takeover(connection: sqlite3.Connection, run_id: str, at: str,
+                       owner_generation: int) -> bool:
+    return connection.execute(
+        "WITH RECURSIVE owners(run_id) AS (SELECT ? UNION "
+        "SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id) "
+        "SELECT 1 FROM events e JOIN owners o ON e.task_id=o.run_id "
+        "WHERE e.kind='workflow.takeover' AND e.created_at>=?"
+        " AND (e.task_id<>? OR json_extract(e.payload_json,'$.previousOwnerGeneration')=?) LIMIT 1",
+        (run_id, at, run_id, owner_generation)).fetchone() is not None
+
+
 def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
     cursor = connection.execute('SELECT * FROM workflow_requests ORDER BY rowid')
     columns = [column[0] for column in cursor.description]
@@ -415,17 +421,25 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
                 system = True
         elif payload.get('source') == 'routing':
             decision_id = payload.get('decisionId')
-            if decision_id is None:
-                diagnostic = row['summary'].split(':', 1)[0] if isinstance(row['summary'], str) else ''
-                structured = (make_reason('dispatch.buddy-rejected', errorCode=diagnostic)
-                              if diagnostic in _DISPATCH_REJECTION_ERRORS else
-                              make_reason('history.reason-unavailable', recordId=record_id))
-            elif (not isinstance(decision_id, str) or not decision_id or
-                  connection.execute('SELECT 1 FROM evaluation_decisions WHERE decision_id=?',
-                                     (decision_id,)).fetchone() is None):
+            if decision_id is not None and (not isinstance(decision_id, str) or not decision_id or
+                    connection.execute('SELECT 1 FROM evaluation_decisions WHERE decision_id=?',
+                                       (decision_id,)).fetchone() is None):
                 raise BoardError('UPGRADE_INVALID_BOARD', 'Routing request has no decision owner')
+            takeover = connection.execute(
+                "SELECT owner_generation FROM workflow_routes WHERE run_id=? AND state='fenced'"
+                " AND reason='Host takeover fenced model selection' AND updated_at=? LIMIT 1",
+                (row['run_id'], row['created_at'])).fetchone()
+            if takeover is not None and _recorded_takeover(
+                    connection, row['run_id'], row['created_at'], takeover['owner_generation']):
+                structured = make_reason('routing-taken-over')
+                row['decision_id'] = decision_id
+            elif decision_id is None:
+                match = (re.match(r'^([A-Z][A-Z0-9_]*): .+', row['summary'])
+                         if isinstance(row['summary'], str) else None)
+                structured = (make_reason('dispatch.buddy-rejected', errorCode=match[1]) if match else
+                              make_reason('history.reason-unavailable', recordId=record_id))
             else:
-                route = connection.execute('SELECT run_id,state FROM workflow_routes WHERE decision_id=?',
+                route = connection.execute('SELECT run_id,state,reason FROM workflow_routes WHERE decision_id=?',
                                            (decision_id,)).fetchone()
                 if route is None or route['run_id'] != row['run_id']:
                     raise BoardError('UPGRADE_INVALID_BOARD', 'Routing request lacks route provenance')
@@ -435,11 +449,13 @@ def _upgrade_workflow_requests(connection: sqlite3.Connection) -> None:
                 if decision['status'] == 'completed':
                     if route['state'] != 'needs-host':
                         raise BoardError('UPGRADE_INVALID_BOARD', 'Completed routing request lacks validation boundary')
-                    diagnostic = row['summary'].split(':', 1)[0] if isinstance(row['summary'], str) else ''
-                    if diagnostic in _DISPATCH_REJECTION_ERRORS:
+                    diagnostic = route['reason'].split(':', 1)[0] if isinstance(route['reason'], str) else ''
+                    if isinstance(route['reason'], str) and re.match(r'^[A-Z][A-Z0-9_]*: .+', route['reason']):
                         structured = make_reason('dispatch.buddy-rejected', errorCode=diagnostic)
-                    else:
+                    elif route['reason'] == 'No legal coding buddy was selected':
                         structured = make_reason('routing-unusable-selection')
+                    else:
+                        raise BoardError('UPGRADE_INVALID_BOARD', 'Completed routing request has unknown validation outcome')
                 elif decision['status'] in ('queued', 'running') and route['state'] != 'fenced':
                     raise BoardError('UPGRADE_INVALID_BOARD', 'Routing request has unknown failure ownership')
             payload = {'source': 'routing'}
@@ -701,25 +717,29 @@ def _upgrade_host_conclusions(connection: sqlite3.Connection) -> None:
 
 
 _ROUTER_UNAVAILABLE_OLD = (
-    ('冻结时尚未发布', 'router-not-published-at-freeze'),
-    ('已禁用', 'router-disabled'),
-    ('已发布目录中不可用', 'router-catalog-unavailable'),
-    ('harness ', 'router-harness-unavailable'),
     ('之后没有更多 Router', 'router-list-exhausted'),
     ('项当前都不可用', 'router-all-unavailable'),
+    ('冻结时尚未发布', 'router-not-published-at-freeze'),
+    ('已发布目录中不可用', 'router-catalog-unavailable'),
+    ('已禁用', 'router-disabled'),
+    ('harness ', 'router-harness-unavailable'),
 )
 _RELEASE_REASON_CODES = {
     'service stopped before execution launch': 'service-stopped-before-launch',
     'execution launch failed before process creation': 'execution-launch-failed',
-    'Execution process could not be started': 'execution-process-not-created',
     'No execution process was created': 'execution-process-not-created',
 }
+
+
+def _old_router_unavailable(value: str, record_id: str) -> dict:
+    code = next((new for phrase, new in _ROUTER_UNAVAILABLE_OLD if phrase in value), None)
+    return {'code': code, 'params': {}} if code else make_reason('history.reason-unavailable', recordId=record_id)
 
 
 def _upgrade_router_snapshot(value, *, record_id: str):
     """Convert board-authored, unsent routing snapshots only."""
     if not isinstance(value, dict):
-        return value
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Old Router snapshot has unknown ownership')
     def issue(item):
         if not isinstance(item, dict):
             raise BoardError('UPGRADE_INVALID_BOARD', 'Old Router issue has unknown ownership')
@@ -728,8 +748,7 @@ def _upgrade_router_snapshot(value, *, record_id: str):
         if result.get('code') == 'router-unavailable':
             if not isinstance(old, str):
                 raise BoardError('UPGRADE_INVALID_BOARD', 'Old Router inspection has unknown ownership')
-            result['code'] = next((new for phrase, new in _ROUTER_UNAVAILABLE_OLD if phrase in old),
-                                  'history.reason-unavailable')
+            result['code'] = _old_router_unavailable(old, record_id)['code']
             if result['code'] == 'history.reason-unavailable':
                 result['recordId'] = record_id
         return result
@@ -741,7 +760,7 @@ def _upgrade_router_snapshot(value, *, record_id: str):
             if not isinstance(result[key], list):
                 raise BoardError('UPGRADE_INVALID_BOARD', 'Old Router inspections have unknown ownership')
             result[key] = [issue(item) for item in result[key]]
-    if 'routerProblem' in result and isinstance(result['routerProblem'], dict):
+    if 'routerProblem' in result:
         result['routerProblem'] = issue(result['routerProblem'])
     return result
 
@@ -750,6 +769,11 @@ def _oversize_reason(connection: sqlite3.Connection, decision_id: str, request: 
     documents = []
     if request is not None and request['input_json']:
         documents.append(json.loads(request['input_json']))
+    if request is not None:
+        requested = json.loads(request['requested_json'])
+        reference = requested.get('taskReference') if isinstance(requested, dict) else None
+        if isinstance(reference, dict) and isinstance(reference.get('bytes'), int) and reference['bytes'] > 8192:
+            return make_reason('router-input-too-large', bytes=reference['bytes'], limit=8192)
     snapshot = connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
                                   (decision_id,)).fetchone()
     if snapshot is not None:
@@ -773,33 +797,40 @@ def _oversize_reason(connection: sqlite3.Connection, decision_id: str, request: 
 def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
                      request: sqlite3.Row | None) -> tuple[dict | None, str | None]:
     old, error, status = row['reason'], row['error'], row['status']
-    route = connection.execute('SELECT state,reason,run_id FROM workflow_routes WHERE decision_id=?',
+    if status in ('queued', 'running'):
+        return None, None
+    route = connection.execute('SELECT state,reason,run_id,owner_generation,updated_at FROM workflow_routes WHERE decision_id=?',
                                (row['decision_id'],)).fetchone()
-    if route is not None and route['state'] == 'fenced' and status in ('queued', 'running', 'cancelled'):
+    if route is not None and route['state'] == 'fenced' and status == 'cancelled':
         run = connection.execute('SELECT state FROM workflow_runs WHERE run_id=?', (route['run_id'],)).fetchone()
-        if route['reason'] == 'Host takeover fenced model selection':
+        if (route['reason'] == 'Host takeover fenced model selection' and
+                _recorded_takeover(connection, route['run_id'], route['updated_at'], route['owner_generation'])):
             return make_reason('routing-taken-over'), None
         if route['reason'] == 'Owning Micro task cancelled' and run is not None and run['state'] == 'cancelled':
             return make_reason('micro-task-cancelled'), None
         return make_reason('history.reason-unavailable', recordId=row['decision_id']), None
-    if request is not None and request['task_id'] is not None:
-        for (raw,) in connection.execute("SELECT payload_json FROM events WHERE kind='attempt.released' AND task_id=?",
-                                         (request['task_id'],)):
-            release = json.loads(raw)
-            code = _RELEASE_REASON_CODES.get(release.get('reason')) if isinstance(release, dict) else None
-            if code is not None and status in ('failed', 'needs-host', 'cancelled'):
-                return {'code': code, 'params': {}}, None
-    if (status == 'failed' and request is not None and request['attempt_id'] is not None and
-            old == 'the execution ended before result delivery; no delivered answer can become a current recommendation'
-            and connection.execute('SELECT 1 FROM attempt_interruptions WHERE attempt_id=?',
-                                   (request['attempt_id'],)).fetchone() is not None):
-        return make_reason('interrupted-before-delivery'), None
     if status == 'cancelled' and old.startswith('the decision run was cancelled') and request is not None:
         cancelled = connection.execute(
             "SELECT 1 FROM events WHERE task_id=? AND kind IN ('task.cancelled','task.cancel_requested') LIMIT 1",
             (request['task_id'],)).fetchone() if request['task_id'] is not None else None
         if cancelled is not None:
             return make_reason('decision-cancelled'), None
+    if status == 'cancelled' and old == 'The routing request was cancelled; no recommendation is published':
+        return make_reason('decision-cancelled'), None
+    if (error == 'router-unavailable' and request is not None and
+            request['task_id'] is not None and request['attempt_id'] is not None):
+        for (raw,) in connection.execute(
+                "SELECT payload_json FROM events WHERE kind='attempt.released' AND task_id=? AND attempt_id=?",
+                (request['task_id'], request['attempt_id'])):
+            release = json.loads(raw)
+            code = _RELEASE_REASON_CODES.get(release.get('reason')) if isinstance(release, dict) else None
+            if code is not None and status in ('failed', 'needs-host'):
+                return {'code': code, 'params': {}}, None
+    if (status == 'failed' and request is not None and request['attempt_id'] is not None and
+            old == 'the execution ended before result delivery; no delivered answer can become a current recommendation'
+            and connection.execute('SELECT 1 FROM attempt_interruptions WHERE attempt_id=?',
+                                   (request['attempt_id'],)).fetchone() is not None):
+        return make_reason('interrupted-before-delivery'), None
     output = json.loads(request['output_json']) if request is not None and request['output_json'] else None
     if output is not None and not isinstance(output, dict):
         raise BoardError('UPGRADE_INVALID_BOARD', 'Decision output has unknown ownership')
@@ -818,12 +849,18 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
             raise BoardError('UPGRADE_INVALID_BOARD', 'Decision reason has ambiguous Router ownership')
     if status == 'completed':
         raise BoardError('UPGRADE_INVALID_BOARD', 'Completed decision lacks adopted output provenance')
-    if status in ('queued', 'running'):
-        return None, None
+    if (status == 'needs-host' and error is None and request is not None and request['attempt_id'] is not None
+            and output is None):
+        if old.startswith('the model output could not be adopted ('):
+            match = re.match(r'^the model output could not be adopted \(([A-Za-z][A-Za-z0-9._-]*): ', old)
+            if match:
+                return (_oversize_reason(connection, row['decision_id'], request) if match[1] == 'router-input-too-large'
+                        else make_reason('decision-publication-failed', errorCode=match[1])), None
+            return make_reason('history.reason-unavailable', recordId=row['decision_id']), None
+    if old == 'the decision result could not be processed; no recommendation is published' and error:
+        return make_reason('decision-publication-failed'), None
     if error:
         code = error if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', error) else error.split(':', 1)[0]
-        if code in _DISPATCH_REJECTION_ERRORS:
-            return make_reason('decision-publication-failed', errorCode=code), None
         if re.fullmatch(r'[A-Za-z][A-Za-z0-9._-]*', code) and code in _REGISTERED_REASON_PARAMETERS:
             if code == 'router-out-of-bounds':
                 bounds = {
@@ -847,6 +884,17 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
         return make_reason('no-legal-candidate'), None
     if preflight_owner and old.startswith('Router 不可用：尚未设置'):
         return make_reason('router-not-configured'), None
+    if preflight_owner and old.startswith('The complete Micro task contains '):
+        return _oversize_reason(connection, row['decision_id'], request), None
+    if (status == 'needs-host' and request is not None and request['attempt_id'] is None and
+            isinstance(output, dict) and output.get('status') == 'error' and
+            output.get('code') == 'router-unavailable' and error):
+        return _old_router_unavailable(old, row['decision_id']), None
+    if preflight_owner and old.startswith('Router 不可用：'):
+        return _old_router_unavailable(old, row['decision_id']), None
+    if old in ('No frozen Router request snapshot is recorded for this dispatch',
+               'No frozen Router dispatch is recorded'):
+        return make_reason('router-dispatch-unverified'), None
     if old and status in ('failed', 'cancelled') and request is not None:
         return make_reason('history.reason-unavailable', recordId=row['decision_id']), None
     if (old and status == 'needs-host' and (preflight_owner or
@@ -893,10 +941,10 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
             if converted != json.loads(raw):
                 connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?',
                                    (canonical_json(converted), record_id))
-    for seq, kind, task_id, attempt_id, raw, actor_role in connection.execute(
-        'SELECT seq,kind,task_id,attempt_id,payload_json,actor_role FROM events'
+    for seq, kind, task_id, attempt_id, raw, actor_role, actor_id in connection.execute(
+        'SELECT seq,kind,task_id,attempt_id,payload_json,actor_role,actor_id FROM events'
     ):
-        if kind.startswith('decision.') or kind in ('workflow.routing_needs_host', 'workflow.routing_settled'):
+        if kind.startswith('decision.') or kind == 'workflow.routing_needs_host':
             payload = json.loads(raw)
             if not isinstance(payload, dict):
                 raise BoardError('UPGRADE_INVALID_BOARD', 'Routing event has unknown ownership')
@@ -915,7 +963,7 @@ def _upgrade_routing_copies(connection: sqlite3.Connection) -> None:
                     'SELECT 1 FROM workflow_routes WHERE decision_id=? AND run_id=?',
                     (decision['decisionId'], owning_run_id)).fetchone() if owning_run_id is not None else None)
                 if (owned_route is not None or payload.get('phase') == 'queued' and
-                        payload.get('actor') == {'role': 'service', 'id': 'service'}):
+                        actor_role == 'service' and actor_id == 'service'):
                     payload.pop('reason', None)
                     payload['decisionId'] = decision['decisionId']
                     connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
@@ -971,8 +1019,9 @@ def upgrade_schema_24_to_25(state: Path) -> None:
             connection.execute('ALTER TABLE commands ADD COLUMN ' + COMMAND_DELETION_COLUMN)
             _upgrade_catalog_and_health(connection)
             _upgrade_decisions(connection)
-            _upgrade_routing_copies(connection)
+            connection.execute('DROP INDEX events_router_outcome_idx')
             _upgrade_workflow_requests(connection)
+            _upgrade_routing_copies(connection)
             _upgrade_notes(connection)
             _upgrade_host_conclusions(connection)
             connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")

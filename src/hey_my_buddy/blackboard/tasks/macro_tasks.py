@@ -685,6 +685,7 @@ def _turn_buddy(input_json: Any) -> dict | None:
 
 
 def _run_spans(store, connection, row) -> list[dict]:
+    from ..routing.decision import DecisionCoordinator
     """Queue, execution and waiting-Host spans of one micro-task run, from recorded rows."""
     run_id = row["task_id"]
     spans: list[dict] = []
@@ -777,13 +778,13 @@ def _run_spans(store, connection, row) -> list[dict]:
             None if open_request else (closed_at or None), request["state"],
             request_id=request["request_id"], requestKind=request["kind"], decisionId=request["decision_id"],
             summary=(request["summary"][:SUMMARY_LIMIT] if request["summary"] is not None else None),
-            reason=({"code": request["reason_code"], "params": json.loads(request["reason_params_json"])}
-                    if request["reason_code"] is not None else None),
+            reason=DecisionCoordinator._reason(request),
         ))
     return spans
 
 
 def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list[dict]:
+    from ..routing.decision import DecisionCoordinator
     # Resolve every Router task through its immutable dispatch, including tasks
     # replaced by a later Router in the same decision.
     record = connection.execute(
@@ -800,8 +801,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     routing = {
         **router.routing_facts(json.loads(record["requested_json"]) if record else {}),
         "selectedBuddy": json.loads(record["selected_json"]) if record and record["selected_json"] else None,
-        "reason": ({"code": record["reason_code"], "params": json.loads(record["reason_params_json"])}
-                   if record and record["reason_code"] is not None else None),
+        "reason": DecisionCoordinator._reason(record) if record else None,
         "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
         "budget": output.get("budget"),

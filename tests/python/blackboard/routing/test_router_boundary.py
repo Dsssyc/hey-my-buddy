@@ -11,7 +11,7 @@ RETRY = "2026-01-01T00:10:00.000Z"
 
 class RouterBoundaryTests(unittest.TestCase):
     def build(self, **changes):
-        return build_boundary(**(dict(kind="router-unavailable", code="router-unavailable",
+        return build_boundary(**(dict(kind="router-unavailable", code="router-no-answer",
             reason={"code": "router-no-answer", "params": {}}, candidates=[CANDIDATE], facts={"policyFacts": {"candidateCount": 1}},
             router_trials=[{"buddyId": "router-a", "outcome": "no_answer", "code": "timeout"}],
             retry_at=RETRY, decision_id="dec-1", run_id="run-1", revision=7, shutdown_confirmed=True) | changes))

@@ -407,8 +407,8 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
         kind = "routing-changed"
     else:
         kind = "router-unavailable"
-    reason = ({"code": row["reason_code"], "params": _json(row["reason_params_json"], {})}
-              if row["reason_code"] is not None else None)
+    from .decision import DecisionCoordinator
+    reason = DecisionCoordinator._reason(row)
     if request.get("selectionRetry"):
         facts = deepcopy(_json(row["input_json"], {}))
         facts.update(deepcopy(request))

@@ -92,7 +92,8 @@ def validate_answer(answer: object, buddy_ids: list[str], routing_mode: str = "r
         raise BoardError("answer-shape", "Router answer must contain buddyId, note and evidence")
     buddy_id = answer["buddyId"]
     if buddy_id is not None and (not isinstance(buddy_id, str) or buddy_id not in buddy_ids):
-        raise BoardError("router-out-of-bounds", "Router selected a buddy outside its frozen candidates")
+        raise BoardError("router-out-of-bounds", "Router selected a buddy outside its frozen candidates",
+                         bound="not-a-candidate")
     note, evidence = answer["note"], answer["evidence"]
     if not isinstance(note, str) or not note.strip() or len(note) > MAX_NOTE:
         raise BoardError("answer-shape", "Router note must be nonempty and bounded")
@@ -137,7 +138,7 @@ def _identity(row) -> dict | None:
     return {key: row[key] for key in BUDDY_FIELDS}
 
 
-def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[dict | None, str | None]:
+def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[dict | None, str | None, dict]:
     """Cached eligibility of one listed buddy: no probing, model calls or settings mutation.
 
     Enabled, availability, harness health, native quota and the mode mechanism are
@@ -147,8 +148,8 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     from ...buddy.harnesses.registry import adapter
     from ..service.harness_health import read_health
     from ...buddy.harnesses.runtime_selection import bound
-    def unavailable(code):
-        return None, code
+    def unavailable(code, **facts):
+        return None, code, facts
 
     if not buddy_id:
         return unavailable("router-not-configured")
@@ -160,13 +161,16 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     if not row["enabled"]:
         return unavailable("router-disabled")
     if not row["available"]:
-        return unavailable("router-catalog-unavailable")
+        cause = ({"code": row["unavailable_code"], "params": json.loads(row["unavailable_params_json"])}
+                 if row["unavailable_code"] else None)
+        return unavailable("router-catalog-unavailable", **({"cause": cause} if cause else {}))
     health = read_health(connection, row["harness"])
     if not health["available"]:
-        return unavailable("router-harness-unavailable")
+        return unavailable("router-harness-unavailable", **({"cause": health["reason"]} if health.get("reason") else {}))
     from ..evaluation.native_observations import exhausted
     if exhausted(connection, dict(row)) is not None:
         return unavailable("router-quota-exhausted")
+    check = None
     try:
         with bound([health]):
             native = adapter(row["harness"])
@@ -175,12 +179,13 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
             else:
                 check = native.local_read_only_check()
                 eligible = check["eligible"]
-    except BoardError:
-        eligible = False
+    except BoardError as error:
+        code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
+        return unavailable(code, errorCode=error.code)
     if not eligible:
         code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
-        return unavailable(code)
-    return dict(row), None
+        return unavailable(code, **({"cause": check["reason"]} if check and check.get("reason") else {}))
+    return dict(row), None, {}
 
 
 def _write_settings(connection, settings: dict) -> None:
@@ -362,10 +367,10 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})
             continue
-        buddy, code = buddy_problem(connection, buddy_id, mode)
+        buddy, code, problem_facts = buddy_problem(connection, buddy_id, mode)
         if buddy is None:
             inspections.append({"index": index, "buddyId": buddy_id, "identity": identity,
-                                "eligible": False, "code": code,
+                                "eligible": False, "code": code, **problem_facts,
                                 "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})

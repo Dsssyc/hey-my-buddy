@@ -163,11 +163,15 @@
   "router-abstained": [],
   "router-all-unavailable": [],
   "router-budget-exhausted": [],
-  "router-catalog-unavailable": [],
+  "router-catalog-unavailable": [
+    "cause"
+  ],
   "router-disabled": [],
   "router-dispatch-unverified": [],
   "router-evidence-out-of-bounds": [],
-  "router-harness-unavailable": [],
+  "router-harness-unavailable": [
+    "cause"
+  ],
   "router-incomplete": [],
   "router-input-changed": [],
   "router-input-too-large": [
@@ -178,7 +182,9 @@
   ],
   "router-list-exhausted": [],
   "router-no-answer": [],
-  "router-no-tool-unsupported": [],
+  "router-no-tool-unsupported": [
+    "errorCode"
+  ],
   "router-not-configured": [],
   "router-not-published": [],
   "router-not-published-at-freeze": [],
@@ -187,7 +193,10 @@
   ],
   "router-quota-exhausted": [],
   "router-review-unavailable": [],
-  "router-review-unsupported": [],
+  "router-review-unsupported": [
+    "cause",
+    "errorCode"
+  ],
   "router-skip-window": [
     "buddyId",
     "retryAt"

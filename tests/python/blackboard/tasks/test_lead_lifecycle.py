@@ -225,9 +225,19 @@ class LeadLifecycleTests(WorkflowTestCase):
         child = self.owned(board, claim)
         self.wait(board, claim)
         with board.store.db.write() as db:
-            board.store.workflow._routing_attention(db, board.store.workflow._run_row(db, child["runId"]), board.store.now(), "No eligible buddy")
+            board.store.workflow._routing_attention(db, board.store.workflow._run_row(db, child["runId"]), board.store.now(),
+                {"code": "dispatch.buddy-rejected", "params": {"errorCode": "INVALID_BUDDY"}})
         self.assertEqual(self.current(board, lead)["state"], "executing")
-        self.assertEqual(json.loads(self.wakeups(board, lead)[0]["trigger_event_json"])["kind"], "workflow.routing_needs_host")
+        wakeups = self.wakeups(board, lead)
+        self.assertEqual(len(wakeups), 1)
+        trigger = json.loads(wakeups[0]["trigger_event_json"])
+        self.assertEqual(trigger["kind"], "workflow.boundary_updated")
+        child_view = self.current(board, child)
+        self.assertEqual(child_view["activeRequest"]["reason"],
+                         {"code": "dispatch.buddy-rejected", "params": {"errorCode": "INVALID_BUDDY"}})
+        with board.store.db.read() as db:
+            payload = json.loads(db.execute("SELECT payload_json FROM events WHERE seq=?", (trigger["seq"],)).fetchone()[0])
+        self.assertEqual(payload["activeRequestId"], child_view["activeRequest"]["requestId"])
 
     def test_helper_attention_propagates_through_owned_micro_task_and_wakes_lead(self):
         board = self.board()

@@ -1070,7 +1070,7 @@ class DecisionCoordinator:
         snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
         dispatch = router_sequence.dispatch(connection, task["task_id"])
         checked = {"answer_valid": False, "abstained": False, "changed": False,
-                   "code": (output or {}).get("code", "router-no-answer") if released else "router-no-answer",
+                   "code": output["code"] if released else "router-no-answer",
                    "params": {}, "note": None,
                    "output": output, "buddy_id": None, "selected": None, "evidence": []}
         completion_event = connection.execute(
@@ -1123,7 +1123,7 @@ class DecisionCoordinator:
         if outcome == "changed" and checked["code"] == "router-out-of-bounds" and stopped:
             request = json.loads(row["requested_json"])
             if not request.get("selectionRetry"):
-                self._retry_selection(connection, row, now=now)
+                self._retry_selection(connection, row, reason={"code": checked["code"], "params": checked["params"]}, now=now)
                 outcome = "rerouted"
             else:
                 self._finish(connection, row, status="needs-host", now=now,
@@ -1169,7 +1169,7 @@ class DecisionCoordinator:
                 "reason": self._reason(current), "note": current["note"]}
 
 
-    def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, now: str) -> None:
+    def _retry_selection(self, connection: sqlite3.Connection, row: sqlite3.Row, *, reason: dict, now: str) -> None:
         """Route the same micro task once with fresh bounds and Router settings.
 
         Each dispatch keeps its immutable input; the first request snapshot remains
@@ -1199,7 +1199,7 @@ class DecisionCoordinator:
                                            candidate=candidates[0], request=request, now=now)
             else:
                 self._finish(connection, row, status="needs-host", now=now,
-                             reason=make_reason("no-legal-candidate"), output={"code": "no-legal-candidate"})
+                             reason=reason, output={"code": reason["code"]})
             return
         resolution = router.current_router(connection, now=now)
         request.update(resolution.facts)
@@ -1313,7 +1313,7 @@ class DecisionCoordinator:
             code = output.get("code")
             code = code if (isinstance(code, str) and code.strip() and len(code) <= 128
                             and not any(ord(c) < 32 or ord(c) == 127 for c in code)) else "router-no-answer"
-            return refuse(code, **({"bound": "constraints-or-quota"} if code == "router-out-of-bounds" else {}))
+            return refuse(code, **({"bound": "not-a-candidate"} if code == "router-out-of-bounds" else {}))
         if review and (not isinstance(verification, dict) or verification.get("unchanged") is not True
                        or not isinstance(verification.get("snapshotSha256"), str) or not verification["snapshotSha256"]
                        or "manifestSha256" not in verification):
@@ -1340,7 +1340,7 @@ class DecisionCoordinator:
         try:
             decision = router.validate_answer(output.get("decision"), [item["buddyId"] for item in buddies], document.get("routingMode", "review"))
         except BoardError as failure:
-            return refuse(failure.code, **({"bound": "constraints-or-quota"} if failure.code == "router-out-of-bounds" else {}))
+            return refuse(failure.code, **failure.details)
         note, buddy_id = decision["note"], decision["buddyId"]
         if buddy_id is None:
             return {**checked, "answer_valid": True, "abstained": True, "note": note,
@@ -1516,9 +1516,10 @@ class DecisionCoordinator:
         source = (
             " FROM evaluation_decisions d JOIN decision_requests r ON r.decision_id=d.decision_id"
             " WHERE r.kind='select' AND d.status IN ('completed','needs-host','failed','cancelled')"
+            " AND EXISTS(SELECT 1 FROM router_dispatches dispatched WHERE dispatched.decision_id=d.decision_id)"
         )
         router_success = (
-            "d.status='completed' AND d.note IS NOT NULL AND EXISTS(SELECT 1 FROM router_outcomes o"
+            "d.status='completed' AND EXISTS(SELECT 1 FROM router_outcomes o"
             " WHERE o.plane='work' AND o.request_id=r.request_id AND o.outcome='answered'"
             " AND o.task_id=r.task_id AND o.attempt_id=r.attempt_id)"
         )
@@ -1578,7 +1579,7 @@ class DecisionCoordinator:
                 elif state["inSkipWindow"]:
                     eligible, code = False, "router-skip-window"
                 else:
-                    buddy, code = router.buddy_problem(connection, buddy_id, mode)
+                    buddy, code, _facts = router.buddy_problem(connection, buddy_id, mode)
                     eligible = buddy is not None
                 last_error = next((entry for entry in reversed(window) if entry["outcome"] == "no_answer"), None)
                 routers.append({

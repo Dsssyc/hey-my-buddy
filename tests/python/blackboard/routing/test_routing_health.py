@@ -12,6 +12,7 @@ from support import BoardTestCase, FakeClock
 
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.blackboard.routing.router_history import record_outcome
+from hey_my_buddy.blackboard.routing import router_sequence
 
 
 class RoutingHealthTests(BoardTestCase):
@@ -61,6 +62,12 @@ class RoutingHealthTests(BoardTestCase):
                 " task_id,attempt_id,generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (decision_id, decision_id, kind, sha256_text(decision_id), task_id, attempt_id,
                  1 if invoked else None, now, now))
+            if invoked:
+                router_sequence.freeze_request(connection, decision_id,
+                    snapshot={"facts": {}, "baseInput": {}, "inspections": []}, now=now)
+                router_sequence.reserve_dispatch(connection, decision_id=decision_id, task_id=task_id,
+                    router_index=0, buddy={"buddyId":"fixture-router", "harness":"dsh", "provider":"fixture",
+                                           "model":"fixture", "effort":"max"}, document={}, now=now)
             self.coordinator._finish(connection, self.coordinator._row(connection, decision_id),
                                      status=status, now=now, output=output,
                                      reason=({"code": code or output.get("code") or "router-no-answer", "params": {}}

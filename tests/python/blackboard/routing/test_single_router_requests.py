@@ -179,10 +179,10 @@ class SingleRouterRequestTests(BoardTestCase):
         self.seed(board)
         with board.store.db.write() as connection:
             connection.execute("UPDATE buddies SET provider='',enabled=0 WHERE buddy_id=?", (BUDDY_ID,))
-            buddy, code = router.buddy_problem(connection, BUDDY_ID, "review")
+            buddy, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
         self.assertIsNone(buddy)
         self.assertEqual(code, "router-incomplete")
-        self.assertEqual(code, "router-incomplete")
+        self.assertEqual(facts, {})
 
     def test_buddy_problem_keeps_each_cached_unavailability_reason(self):
         board = self.board()
@@ -191,20 +191,42 @@ class SingleRouterRequestTests(BoardTestCase):
             for updates, code in (("enabled=0", "router-disabled"),
                                   ("enabled=1,available=0", "router-catalog-unavailable")):
                 connection.execute(f"UPDATE buddies SET {updates} WHERE buddy_id=?", (BUDDY_ID,))
-                buddy, actual = router.buddy_problem(connection, BUDDY_ID, "review")
+                buddy, actual, _ = router.buddy_problem(connection, BUDDY_ID, "review")
                 self.assertIsNone(buddy)
                 self.assertEqual(actual, code)
+            cause = {"code": "catalog.model-unavailable", "params": {"harness": "dsh"}}
+            connection.execute("UPDATE buddies SET unavailable_code=?,unavailable_params_json=? WHERE buddy_id=?",
+                               (cause["code"], canonical_json(cause["params"]), BUDDY_ID))
+            _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
+            self.assertEqual(code, "router-catalog-unavailable")
+            self.assertEqual(facts, {"cause": cause})
+            resolution = router.current_router(connection)
+            self.assertEqual(resolution.inspections[0]["cause"], cause)
             connection.execute("UPDATE buddies SET available=1 WHERE buddy_id=?", (BUDDY_ID,))
             with patch("hey_my_buddy.blackboard.service.harness_health.read_health", return_value={"available": False, "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}):
-                _, code = router.buddy_problem(connection, BUDDY_ID, "review")
+                _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-harness-unavailable")
+            self.assertEqual(facts, {"cause": {"code": "harness.not-found", "params": {"operation": "probe"}}})
             with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
-                _, code = router.buddy_problem(connection, BUDDY_ID, "review")
+                _, code, _ = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
             with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):
-                _, code = router.buddy_problem(connection, BUDDY_ID, "fast")
+                _, code, _ = router.buddy_problem(connection, BUDDY_ID, "fast")
             self.assertEqual(code, "router-no-tool-unsupported")
-            _, code = router.buddy_problem(connection, "unpublished", "review")
+            with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check",
+                       return_value={"eligible": False, "reason": {"code": "harness.readonly-worker-carrier-unimplemented", "params": {"harness": "dsh"}},
+                                     "systemSandbox": False, "sameAttemptContinuation": True}):
+                _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
+            self.assertEqual(code, "router-review-unsupported")
+            self.assertEqual(facts["cause"]["code"], "harness.readonly-worker-carrier-unimplemented")
+            with patch("hey_my_buddy.blackboard.service.harness_health.read_health",
+                       return_value={"harness": "dsh", "available": True}), patch(
+                           "hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check",
+                           side_effect=BoardError("NATIVE_CHECK_FAILED", "qualification failed")):
+                _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
+            self.assertEqual(code, "router-review-unsupported")
+            self.assertEqual(facts, {"errorCode": "NATIVE_CHECK_FAILED"})
+            _, code, _ = router.buddy_problem(connection, "unpublished", "review")
             self.assertEqual(code, "router-not-published")
 
     def test_frozen_current_router_keeps_snapshot_after_settings_changes(self):

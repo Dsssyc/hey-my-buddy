@@ -19,6 +19,7 @@ class RouterContractTests(unittest.TestCase):
         with self.assertRaises(BoardError) as caught:
             router.validate_answer({"buddyId": "foreign", "note": "x", "evidence": []}, ["legal"])
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
+        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):

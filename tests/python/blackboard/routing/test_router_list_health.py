@@ -14,7 +14,7 @@ import unittest
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 
-from hey_my_buddy.blackboard.routing import router, router_history
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
 A = "dsh:fixture:alpha:max"
@@ -78,7 +78,7 @@ class RouterListHealthTestCase(BoardTestCase):
             return events, receipts
 
     def add_legacy_record(self, decision, *, buddy_id=None, kind="decision.failed", code="timeout",
-                          at=T0, receipt=None, output=None, candidates=3):
+                          at=T0, receipt=None, output=None, candidates=3, dispatched=False):
         """One pre-list routing record: its own frozen input, terminal event and receipt."""
         task_id = attempt_id = None
         if receipt is not None:
@@ -104,6 +104,15 @@ class RouterListHealthTestCase(BoardTestCase):
                 " VALUES(?,?,'select','digest',?,?,0,?,?,?,?)",
                 (decision, f"legacy-request-{decision}", task_id, attempt_id,
                  canonical_json(requested), canonical_json(output or {}), at, at))
+            if dispatched:
+                router_sequence.freeze_request(db, decision, snapshot={
+                    "facts": {"routerBuddyIds": [buddy_id]}, "baseInput": {}, "inspections": []}, now=at)
+                buddy = db.execute("SELECT buddy_id,harness,provider,model,effort FROM buddies WHERE buddy_id=?",
+                                   (buddy_id,)).fetchone()
+                router_sequence.reserve_dispatch(db, decision_id=decision, task_id=task_id,
+                                                 router_index=0, buddy={"buddyId": buddy["buddy_id"],
+                                                 **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
+                                                 document={}, now=at)
             self.board_.store._append_event(db, kind, task_id=task_id, attempt_id=attempt_id,
                                             payload={"decisionId": decision,
                                                      **({"errorCode": code} if code else {})})
@@ -145,10 +154,10 @@ class OverviewTests(RouterListHealthTestCase):
         # Two settled business requests, each with a bound attempt.
         self.add_legacy_record("dec-r1", buddy_id=A, kind="decision.failed", code="timeout",
                                receipt={"status": "failed", "result": {"status": "error", "code": "timeout"},
-                                        "shutdownConfirmed": True})
+                                        "shutdownConfirmed": True}, dispatched=True)
         self.add_legacy_record("dec-r2", buddy_id=A, kind="decision.failed", code="timeout",
                                receipt={"status": "failed", "result": {"status": "error", "code": "timeout"},
-                                        "shutdownConfirmed": True})
+                                        "shutdownConfirmed": True}, dispatched=True)
         summary = self.state()
         self.assertEqual(summary["sampleCount"], 2)
         self.assertEqual(summary["attemptCount"], 2)

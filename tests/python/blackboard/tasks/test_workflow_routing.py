@@ -285,7 +285,7 @@ class TestWorkflowRouting(WorkflowTestCase):
                 (taken["activeRequest"]["requestId"],),
             ).fetchone()
             self.assertIsNone(request["summary"])
-            self.assertIsNone(request["reason_code"])
+            self.assertEqual(request["reason_code"], "routing-taken-over")
             self.assertEqual(request["decision_id"], submitted["routing"]["decisionId"])
             self.assertEqual(json.loads(request["payload_json"]), {"source": "routing"})
         with self.assertRaises(BoardError) as raised:
@@ -296,6 +296,22 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertIsNone(view["buddy"])
         recovered = self.continue_run(board, view, buddy=BUDDY, note="New Host selected an installed buddy after shutdown confirmation")
         self.assertEqual(recovered["buddy"], BUDDY)
+
+    def test_takeover_of_unconfirmed_old_route_owns_its_attention_without_current_decision(self):
+        board = self.board()
+        self.seed(board)
+        submitted = self.routed(board)
+        self.router_claim(board, submitted)
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?",
+                               (submitted["routing"]["decisionId"],))
+            connection.execute("UPDATE workflow_runs SET current_routing_id=NULL WHERE run_id=?", (submitted["runId"],))
+        current = board.call("workflow_get", {"runId":submitted["runId"]})
+        taken = board.call("workflow_takeover", {"runId":submitted["runId"], "commandId":"takeover-old-route",
+                           "expectedOwnerGeneration":1, "newHostId":"host-2", **self.control(current)})
+        self.assertEqual(taken["activeRequest"]["reason"], {"code":"routing-taken-over", "params":{}})
+        self.assertIsNone(taken["activeRequest"]["decisionId"])
+        self.assertTrue(taken["awaitingHost"])
 
     def test_host_buddy_cannot_break_locked_constraints(self):
         # The retired scenario locked a partial `effort` constraint; a partial tuple

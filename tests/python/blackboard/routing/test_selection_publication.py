@@ -135,6 +135,19 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         self.assertEqual((view["status"], view["buddyId"]), ("completed", B))
         self.assertEqual(len(self.tasks()), 1)
 
+    def test_empty_retry_keeps_the_triggering_bound_and_health_classification(self):
+        request, first = self.start(three=True, micro_task=True)
+        for buddy in (A, B, C):
+            self.invalidate(buddy, "disabled")
+        response = self.report(first, self.answer(first, buddy_id=B))
+        self.assertTrue(response["committed"])
+        view = self.board_.call("selection_get", {"decisionId": request["decisionId"], "includeAudit": True})["decision"]
+        self.assertEqual(view["reason"], {"code":"router-out-of-bounds", "params":{"bound":"disabled"}})
+        self.assertEqual(view["output"]["code"], "router-out-of-bounds")
+        health = self.board_.store.decisions.health_summary()
+        self.assertEqual(health["boundsRejectedCount"], 1)
+        self.assertEqual(health["failureCount"], 0)
+
     def test_sole_candidate_after_retry_does_not_attribute_old_router_answer(self):
         request, first = self.start(three=True)
         self.invalidate(B, "disabled")

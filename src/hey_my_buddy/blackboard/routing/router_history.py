@@ -138,7 +138,7 @@ def _fact_entries(connection, buddy_id: str) -> list[dict]:
         "SELECT event_seq, recorded_at, plane, request_id, router_index, phase, task_id,"
         " attempt_id, outcome, code FROM router_outcomes WHERE buddy_id=? ORDER BY event_seq", (buddy_id,))
     for row in rows:
-        entries.append({"source": "fact", "seq": int(row["event_seq"]), "at": row["recorded_at"],
+        entries.append({"seq": int(row["event_seq"]), "at": row["recorded_at"],
                         "outcome": row["outcome"], "plane": row["plane"],
                         "requestId": row["request_id"], "routerIndex": row["router_index"],
                         "phase": row["phase"], "taskId": row["task_id"],
