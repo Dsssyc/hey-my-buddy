@@ -6,7 +6,6 @@ history, and a target that moved under the review is refused.
 """
 from __future__ import annotations
 from unittest.mock import patch as defer_reclaim
-import json
 import os
 from pathlib import Path
 from unittest import mock
@@ -423,24 +422,9 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             'note': "adopt this exact site", **self.control(view),
         })
         self.assertTrue(adopted["delivered"])
-        # A later turn starts after the adopted seal and fails without a seal.
-        # Its new out-of-scope file still needs the conclusion's scope check.
-        view = self.view(board, submitted["runId"])
-        board.call("workflow_continue", {
-            "runId": view["runId"], "commandId": "after-adoption", "expectedRevision": view["revision"],
-            "input": "Continue from the adopted site", **self.control(view),
-        })
-        next_claim = self.claim(board, submitted["runId"], request_id="after-adoption-claim")["claim"]
+        # A Host change beyond both the scope and the adopted site, plus a forged
+        # adoption record that claims the Host already promoted exactly that path.
         (checkout / "smuggled.txt").write_text("never authorized\n", encoding="utf-8", newline="\n")
-        attempt = next_claim["attempt"]
-        board.call("execution_result", {
-            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "n" * 16,
-            "status": "failed", "shutdownConfirmed": True, "exitCode": 1, "result": {"status": "failed"},
-        })
-        with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (submitted["runId"],),
-            ).fetchone()[0])
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"

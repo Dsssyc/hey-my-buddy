@@ -106,7 +106,27 @@ class ExistingConclusionTests(LifecycleTestCase):
         self.assertEqual(raised.exception.details["paths"], ["tracked.txt"])
         self.assertIsNone(self.view(board, run_id)["hostConclusion"])
 
-    def test_prepared_continuation_reclaims_against_the_adopted_seals_input(self):
+    def test_first_submission_base_mismatch_does_not_ask_to_conclude_a_task(self):
+        base = git(self.repo, "rev-parse", "HEAD").strip()
+        (self.repo / "tracked.txt").write_text("Host commit before submission\n", encoding="utf-8", newline="\n")
+        git(self.repo, "add", "tracked.txt")
+        git(self.repo, "commit", "-qm", "Host selected a different base")
+        board = self.board()
+        with self.assertRaises(BoardError) as raised:
+            board.call("workflow_submit", {
+                **BUDDY, "requestId": "initial-base-mismatch", "hostId": "host-1", "task": "Start from a selected base",
+                "cwd": str(self.repo), "submissionToken": "t" * 32,
+                "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["src"],
+                                       "base": {"kind": "working-tree", "ref": base}},
+            })
+        self.assertEqual(raised.exception.code, "WORKSPACE_BASE_MISMATCH")
+        self.assertNotIn("conclude", str(raised.exception))
+        self.assertIn("before submitting", str(raised.exception))
+        self.assertEqual(raised.exception.details["baseCommit"], base)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 0)
+
+    def test_prepared_managed_continuation_seals_against_its_current_input(self):
         board = self.board()
         submitted = board.call("workflow_submit", {
             **BUDDY, "requestId": "adopted-handoff", "hostId": "host-1", "task": "Scoped work with an adopted output",
@@ -147,11 +167,11 @@ class ExistingConclusionTests(LifecycleTestCase):
         concluded = board.call("workflow_conclude", {
             "runId": run_id, "note": "No turn ran after adoption", **self.control(view),
         })
-        self.assertIsNone(concluded["partialArtifactId"])
+        self.assertIsNotNone(concluded["partialArtifactId"])
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
 
-    def test_a_same_checkout_helpers_seal_can_be_reclaimed_without_a_new_parent_turn(self):
+    def test_managed_parent_seals_after_a_same_checkout_helper_without_a_new_parent_turn(self):
         board = self.board()
         submitted, _, _, checkout, _, view, _ = self.run_worktree(board, disposition="assistance")
         run_id = submitted["runId"]
@@ -172,7 +192,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         concluded = board.call("workflow_conclude", {
             "runId": run_id, "note": "No further parent turn", **self.control(view),
         })
-        self.assertIsNone(concluded["partialArtifactId"])
+        self.assertIsNotNone(concluded["partialArtifactId"])
         self.assertTrue(concluded["reclaim"]["removed"], concluded["reclaim"])
         self.assertFalse(checkout.exists())
 
