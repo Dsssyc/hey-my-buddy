@@ -1,7 +1,6 @@
 """Test fixtures must retire their own detached daemon before deleting state."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import runpy
@@ -17,17 +16,18 @@ from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
     stop_private_service, wait_for, write_catalog_fixture,
 )
+from hey_my_buddy import locking
 from hey_my_buddy.protocol.transport import _read_endpoint
 
 
 def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
     for fd in handles:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(fd, blocking=False)
         except BlockingIOError:
             test.fail("A test daemon still holds its lifetime lock")
         else:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            locking.unlock(fd)
 
 
 class FixtureCleanupTests(unittest.TestCase):

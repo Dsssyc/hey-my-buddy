@@ -6,7 +6,6 @@ Resource names belong to each manifest, independently of the installed harnesses
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -394,7 +393,6 @@ class RuntimeMaterializationTests(unittest.TestCase):
         lock_path = target.parent / f".{target.name}.install.lock"
         second_attempted = Event()
         locked_inodes = []
-        real_flock = fcntl.flock
         real_lock = runtime.locking.lock
 
         def observe_lock(fd, **options):
@@ -422,7 +420,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
                 probe_fd = os.open(lock_path, os.O_RDWR)
                 try:
                     with self.assertRaises(BlockingIOError):
-                        real_flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        real_lock(probe_fd, blocking=False)
                 finally:
                     os.close(probe_fd)
                 self.assertFalse((target / runtime.READY_FILE).exists())

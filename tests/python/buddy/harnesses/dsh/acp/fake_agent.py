@@ -22,13 +22,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import pwd
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from hey_my_buddy.buddy.harnesses.dsh.acp.launch import real_user_home
 
 
 def log(log_path: Path, event: dict) -> None:
@@ -39,7 +40,7 @@ def log(log_path: Path, event: dict) -> None:
 
 def check_private_home(log_path: Path) -> bool:
     """Keep the simulated native program away from the person's real homes."""
-    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    real_home = real_user_home()
     home = os.environ.get("HOME")
     native_home = os.environ.get("DSH_HOME") or str(Path(home or "/") / ".dsh")
     ok = bool(home and Path(home).resolve() != real_home.resolve()
