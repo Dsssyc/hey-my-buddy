@@ -94,24 +94,22 @@ def _manifests(connection):
         ("workflow_runs", "workspace_manifest_json"),
         ("workflow_children", "workspace_manifest_json"),
         ("workflow_continuations", "workspace_manifest_json"),
-        ("workflow_artifacts", "manifest_json"),
     ):
         for (raw,) in connection.execute(f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL"):
-            value = json.loads(raw)
-            if isinstance(value, dict) and value.get("version") in (1, 2, 3) and "repositoryId" in value:
-                yield value
+            yield json.loads(raw)
+    for (raw,) in connection.execute(
+        "SELECT manifest_json FROM workflow_artifacts WHERE kind IN ('input','turn-input')"
+    ):
+        yield json.loads(raw)
     for (raw,) in connection.execute("SELECT input_json FROM workflow_turns WHERE input_json IS NOT NULL"):
         value = json.loads(raw).get("executionWorkspace")
-        if isinstance(value, dict) and value.get("version") in (1, 2, 3) and "repositoryId" in value:
+        if value is not None:
             yield value
     for (raw,) in connection.execute("SELECT result_json FROM attempts WHERE result_json IS NOT NULL"):
         result = json.loads(raw)
-        for container in (result, result.get("result")):
-            if not isinstance(container, dict):
-                continue
-            value = container.get("workspaceManifest")
-            if isinstance(value, dict) and value.get("version") in (1, 2, 3) and "repositoryId" in value:
-                yield value
+        nested = result.get("result")
+        if isinstance(nested, dict) and nested.get("workspaceManifest") is not None:
+            yield nested["workspaceManifest"]
 
 
 def _git(repository: Path, *args: str, data: bytes | None = None) -> bytes:
@@ -122,7 +120,7 @@ def _git(repository: Path, *args: str, data: bytes | None = None) -> bytes:
     with tempfile.TemporaryDirectory(prefix="hmb-upgrade-git-hooks-") as hooks:
         command = ["git", "-c", f"core.hooksPath={hooks}", "--git-dir", str(repository), *args]
         try:
-            result = subprocess.run(command, input=data, capture_output=True, env=environment, timeout=20,
+            result = subprocess.run(command, input=data, capture_output=True, env=environment, timeout=60,
                                     creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         except subprocess.TimeoutExpired as error:
             raise RuntimeError(
@@ -202,36 +200,20 @@ def _cleanup_evidence(raw: str) -> str:
     evidence = json.loads(raw)
     workspace = evidence["workspace"]
     workspace["projectId"] = workspace.pop("repositoryId")
-    workspace.pop("checkoutId", None)
+    del workspace["checkoutId"]
     allocation = workspace["allocation"]
     allocation["projectId"] = allocation.pop("repositoryId")
-    allocation.pop("checkoutId", None)
+    del allocation["checkoutId"]
     return _json(evidence)
-
-
-def _cleanup_result(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    result = json.loads(raw)
-    if "checkoutId" not in result:
-        return raw
-    result.pop("checkoutId")
-    return _json(result)
 
 
 def upgrade(connection):
     manifests = list(_manifests(connection))
     _mark_old_projects(manifests)
-    roots = {}
-    for manifest in manifests:
-        key = (manifest["workspaceId"], manifest["manifestSha256"])
-        root = manifest["checkoutRoot"]
-        if key in roots and roots[key] != root:
-            raise ValueError(f"Conflicting sealed checkout roots for {key}")
-        roots[key] = root
+    roots = {(manifest["workspaceId"], manifest["manifestSha256"]): manifest["checkoutRoot"]
+             for manifest in manifests}
 
     # Retire unstarted cleanup admissions and their receipts, as in 31 → 32.
-    connection.execute("DELETE FROM commands WHERE kind IN ('workflow.cleanup_plan','workflow.cleanup_apply')")
     connection.execute("DELETE FROM events WHERE json_extract(payload_json,'$.planId') IN"
                        " (SELECT plan_id FROM workspace_cleanup_plans WHERE state IN ('planned','blocked'))")
     connection.execute("DELETE FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")
@@ -262,7 +244,7 @@ def upgrade(connection):
     for row in integrations:
         connection.execute(insert, (row["rowid"], row["integration_id"], row["run_id"], row["artifact_id"],
                                     row["strategy"], row["binding_sha256"], row["target_path"], row["target_ref"],
-                                    row["target_repository_id"], row["source_commit"], row["source_tree"],
+                                    None, row["source_commit"], row["source_tree"],
                                     row["before_commit"], row["after_commit"], row["before_tree"], row["after_tree"],
                                     row["verification_json"], row["note"], row["command_id"], row["actor_role"],
                                     row["actor_id"], row["created_at"]))
@@ -278,7 +260,7 @@ def upgrade(connection):
         connection.execute(insert, (row["rowid"], row["plan_id"], row["run_id"], row["workspace_id"],
                                     row["path"], row["kind"], row["state"],
                                     _cleanup_evidence(row["evidence_json"]), row["retention_json"],
-                                    row["reasons_json"], _cleanup_result(row["result_json"]), row["revision"],
+                                    row["reasons_json"], row["result_json"], row["revision"],
                                     row["created_at"], row["applied_at"]))
     connection.execute(CLEANUP_INDEX)
     connection.execute("UPDATE meta SET value='33' WHERE key='schema_version'")

@@ -112,6 +112,26 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
                 self.assertEqual(count, len(actual.splitlines()))
                 self.assertEqual(self.dump(board), before)
 
+    def test_reclaimed_checkout_reference_count_uses_known_relocated_repository(self):
+        board = self.board()
+        run = self.create(board)
+        with board.store.db.read() as connection:
+            manifest = json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone()[0])
+        proof = workspace.deletion_inspect(board.directory, manifest)
+        workspace.cleanup_remove(board.directory, manifest, proof=proof)
+        self.assertFalse(Path(manifest["checkoutRoot"]).exists())
+        moved = self.workdir("moved-preview-repository")
+        moved.rmdir()
+        self.repo.rename(moved)
+        self.repo = moved
+        self.create(board, request_id="project-at-new-location", kind="existing")
+        before = self.dump(board)
+        preview = deletion.preview(board.store, "run:" + run["runId"])
+        self.assertEqual(preview["scope"]["gitRefs"], 4)
+        self.assertFalse(Path(manifest["checkoutRoot"]).exists())
+        self.assertEqual(self.dump(board), before)
+
     def test_unproven_allocation_makes_whole_checkout_count_unknown(self):
         board = self.board()
         first = self.create(board, macroTask={'title': 'Incomplete allocations'})
@@ -146,7 +166,8 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
                                                                      if key != 'manifestSha256'}))
         workspace._validate_manifest(conflicting)
         collected.manifests.append(conflicting)
-        self.assertIsNone(deletion._scope_summary(board.store, collected)['gitRefs'])
+        with board.store.db.read() as connection:
+            self.assertIsNone(deletion._scope_summary(board.store, collected, connection)['gitRefs'])
 
     def test_conflicting_output_commits_make_the_reference_count_unknown(self):
         board = self.board()
@@ -163,7 +184,8 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             document['tree'] = manifest['inputTree']
         conflicting['snapshotSha256'] = workspace._sha(workspace._json(conflicting['snapshot']))
         collected.artifacts.extend([output, conflicting])
-        self.assertIsNone(deletion._scope_summary(board.store, collected)['gitRefs'])
+        with board.store.db.read() as connection:
+            self.assertIsNone(deletion._scope_summary(board.store, collected, connection)['gitRefs'])
 
     def test_session_count_uses_distinct_native_identities_without_native_reads(self):
         board = self.board()

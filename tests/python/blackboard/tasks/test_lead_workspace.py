@@ -197,6 +197,46 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "concluded")
         self.assertFalse(checkout.exists())
 
+    def test_conclusion_reports_missing_repository_for_each_owned_checkout(self):
+        board, lead, _other = self._board_with_leads()
+        children = []
+        for index in range(2):
+            child = self._child(board, lead, f"moved-owned-{index}")
+            claim, manifest, checkout = self._claim_child(board, child)
+            (checkout / "src" / "feature.py").write_text(
+                f"value = {index + 2}\n", encoding="utf-8", newline="\n")
+            seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
+            self._finish_child(board, child, claim, seal=seal)
+            children.append((child, checkout))
+        board.call("workflow_cancel", {"runId": lead["runId"], **lead["control"]})
+        attempt = lead["claim"]["attempt"]
+        board.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "nonce": "l" * 16,
+            "status": "cancelled", "result": {"status": "cancelled"}, "shutdownConfirmed": True,
+        })
+        coordinator = board.store.workflow
+        reclaim = coordinator._reclaim_checkout
+        attempted = []
+
+        def after_commit(*, run_id):
+            if not attempted:
+                self.repo.rename(self.directory / "moved-after-conclusion")
+            attempted.append(run_id)
+            return reclaim(run_id=run_id)
+
+        with patch.object(coordinator, "_reclaim_checkout", side_effect=after_commit):
+            concluded = board.call("workflow_conclude", {
+                "runId": lead["runId"], "note": "Close all owned work", **lead["control"],
+            })
+        self.assertEqual(concluded["state"], "concluded")
+        self.assertEqual(set(attempted), {lead["runId"], *(child["runId"] for child, _ in children)})
+        self.assertEqual(concluded["ownedReclaimTotal"], 2)
+        for child, checkout in children:
+            reclaim_result = next(item for item in concluded["ownedReclaims"] if item["runId"] == child["runId"])
+            self.assertEqual(reclaim_result["reasons"], ["repository-not-found"])
+            self.assertTrue(checkout.exists())
+            self.assertEqual(board.call("workflow_get", {"runId": child["runId"]})["state"], "concluded")
+
     def test_replaying_lead_conclusion_retries_blocked_owned_reclaim(self):
         board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
         coordinator = board.store.workflow

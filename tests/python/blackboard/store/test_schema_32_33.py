@@ -45,6 +45,8 @@ class Schema33Tests(unittest.TestCase):
         self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 32, 'targetSchema': 33})
         self.assertEqual(self.project(), old_id.encode())
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as migrated:
+            self.assertEqual({row[0] for row in migrated.execute(
+                'SELECT target_project_id FROM workflow_integrations')}, {None})
             reservation = migrated.execute('SELECT workspace_id,manifest_sha256,checkout_root FROM workspace_reservations LIMIT 1').fetchone()
             manifest = migrated.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE json_extract(workspace_manifest_json,\'$.workspaceId\')=?', (reservation[0],)).fetchone()
             self.assertEqual(reservation[2], json.loads(manifest[0])['checkoutRoot'])
@@ -87,6 +89,20 @@ class Schema33Tests(unittest.TestCase):
                                '(SELECT integration_id FROM workflow_integrations LIMIT 1)', (old_id, str(independent)))
         upgrade.upgrade_state(self.state)
         self.assertIsNone(self.project(git_dir))
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            self.assertEqual({row[0] for row in connection.execute(
+                'SELECT target_project_id FROM workflow_integrations')}, {None})
+
+    def test_missing_cleanup_evidence_key_rolls_back(self):
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection, connection:
+            row = connection.execute('SELECT plan_id,evidence_json FROM workspace_cleanup_plans LIMIT 1').fetchone()
+            evidence = json.loads(row[1])
+            del evidence['workspace']['checkoutId']
+            connection.execute('UPDATE workspace_cleanup_plans SET evidence_json=? WHERE plan_id=?',
+                               (json.dumps(evidence), row[0]))
+        with self.assertRaises(KeyError):
+            upgrade.upgrade_state(self.state)
+        self.assertEqual(self.schema(), '32')
 
     def test_inherited_git_environment_cannot_redirect_marker(self):
         other = self.root / 'other-repository'

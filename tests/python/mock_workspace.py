@@ -132,7 +132,7 @@ class MockWorkspace:
             raise BoardError("INVALID_WORKSPACE", "writeScope must be a list of nonempty relative paths")
         return sorted({value for value in values})
 
-    def inspect(self, cwd: str, *, create_project=False, existing=False, managed=False, _project=True) -> dict:
+    def inspect(self, cwd: str, *, checkout=None) -> dict:
         return {
             "kind": "existing",
             "path": str(cwd),
@@ -272,7 +272,7 @@ class MockWorkspace:
         return {
             "eligible": False, "reasons": ["not-a-managed-worktree"],
             "workspaceId": manifest.get("workspaceId"), "manifestWorkspaceId": manifest.get("workspaceId"),
-            "kind": manifest.get("kind", "existing"), "checkoutRoot": manifest.get("checkoutRoot"),
+            "kind": manifest.get("kind", "existing"),
             "projectId": manifest.get("projectId"), "path": manifest.get("checkoutRoot"),
             "cwd": manifest.get("path"), "allocation": None, "worktree": False, "locked": None,
             "unsealedPaths": [], "refs": [], "sealedObservation": None, "attachedBranch": None,

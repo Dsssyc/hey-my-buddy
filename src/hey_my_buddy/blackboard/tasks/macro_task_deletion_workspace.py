@@ -8,7 +8,6 @@ from ... import private_dirs
 from ...paths import native_path
 from ...errors import BoardError
 from ...protocol.reasons import reason
-from ...protocol.workspace_manifest import project_id
 from . import workspace
 from .macro_task_deletion_progress import collect_skipped
 
@@ -35,11 +34,9 @@ def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> d
             "reason": reason(_SKIP_CODES[code])}
 
 
-def _repository_current(manifest: dict) -> Path | None:
-    repository = workspace.repository_at(manifest["path"])
-    if repository is None or workspace.read_project_id(repository) != project_id(manifest):
-        return None
-    return Path(repository)
+def _repository_current(manifest: dict, *, candidates=()) -> Path | None:
+    repository = workspace.locate_repository(manifest, candidates=candidates, repair=False)
+    return Path(repository) if repository is not None else None
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:

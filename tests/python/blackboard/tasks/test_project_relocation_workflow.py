@@ -53,13 +53,42 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         with self.assertRaises(BoardError) as caught:
             self.reclaim(board, accepted)
         self.assertEqual(caught.exception.code, "WORKSPACE_REPOSITORY_NOT_FOUND")
+        self.assertEqual(caught.exception.details["reasons"], ["repository-not-found"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM workspace_cleanup_plans WHERE run_id=?", (submitted["runId"],)
             ).fetchone()[0], 0)
         self.assertEqual(self.view(board, submitted["runId"])["revision"], accepted["revision"])
+        planned = board.call("storage_plan", {})
+        blocked = next(row for row in planned["candidates"] if row["path"] == str(checkout))
+        self.assertEqual(blocked["reasons"], ["repository-not-found"])
+        self.assertFalse(blocked["eligible"])
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        Reclamation(board.store).run()
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM service_issues").fetchone()[0], 0)
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM workspace_cleanup_plans WHERE run_id=?", (submitted["runId"],)
+            ).fetchone()[0], 0)
         result = self.reclaim(board, accepted, cwd=str(moved))
         self.assertTrue(result["removed"])
+        self.assertFalse(checkout.exists())
+
+    def test_accept_commits_then_reports_missing_repository_and_retries(self):
+        board = self.board()
+        self.register(board)
+        submitted, _claim, _manifest, checkout, _seal, delivered, artifact = self.run_worktree(
+            board, request_id="relocate-accept-reclaim")
+        moved = self._move_repository()
+        accepted = self.accept(board, delivered, artifact, not_required=True)
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["reclaim"]["reasons"], ["repository-not-found"])
+        self.assertTrue(checkout.exists())
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT 1 FROM tasks WHERE task_id=? AND accepted_at IS NOT NULL", (submitted["runId"],)).fetchone())
+        reclaimed = self.reclaim(board, self.view(board, submitted["runId"]), cwd=str(moved))
+        self.assertTrue(reclaimed["removed"])
         self.assertFalse(checkout.exists())
 
     def test_known_project_location_reclaims_without_request_candidate(self):
@@ -168,4 +197,31 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["integration"]["target"]["projectId"], manifest["projectId"])
         self.assertTrue(checkout.exists())
+
+    def test_accept_existing_source_after_repository_moves_to_target_path(self):
+        from hey_my_buddy.blackboard.tasks import workspace
+        board = self.board()
+        self.register(board)
+        submitted = board.call("workflow_submit", {
+            **BUDDY, "requestId": "relocate-existing-source", "hostId": "host-1",
+            "task": "Change the existing checkout", "cwd": str(self.repo),
+            "submissionToken": "e" * 32,
+            "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
+        })
+        self.controls[submitted["runId"]] = submitted["control"]
+        claimed = self.claim(board, submitted["runId"])
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        (self.repo / "tracked.txt").write_text("integrated existing output\n", encoding="utf-8")
+        seal = workspace.seal(self.directory, manifest, submitted["runId"],
+                              claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal)
+        delivered = self.view(board, submitted["runId"])
+        artifact = next(row for row in delivered["artifacts"] if row["kind"] == "output")
+        git(self.repo, "add", "tracked.txt")
+        git(self.repo, "commit", "-qm", "integrate existing output")
+        moved = self._move_repository()
+        accepted = self.accept(board, delivered, artifact, target={"path": moved, "ref": "HEAD"})
+        self.assertEqual(accepted["state"], "accepted")
+        self.assertEqual(accepted["integration"]["target"]["path"], str(moved))
+        self.assertEqual(accepted["integration"]["target"]["projectId"], manifest["projectId"])
 

@@ -233,8 +233,6 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
     tokens, paths = {}, {}
     for index, (manifest, request_id) in enumerate(allocations):
         identities = [manifest['workspaceId'], request_id, manifest.get('manifestSha256')]
-        if manifest['kind'] == 'worktree':
-            identities.append(manifest['checkoutRoot'])
         for token in identities:
             if isinstance(token, str):
                 tokens.setdefault(token, set()).add(index)
@@ -284,6 +282,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
 
 def inspect(store) -> dict:
     from . import workspace
+    from .workflow import repository_candidates
     state = store.directory.resolve()
     rows = []
     orphaned, commands, known = process_inventory(state)
@@ -304,16 +303,36 @@ def inspect(store) -> dict:
         return row
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
+    repository_check = object()
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
             manifest = json.loads(run['workspace_manifest_json'])
             retained = store.workflow._allocation_provenance(connection, run)
             reasons = None
-            if run['state'] not in ('accepted', 'concluded'):
+            if run['state'] in ('accepted', 'concluded') and manifest['kind'] == 'worktree':
+                plan = connection.execute(
+                    "SELECT state FROM workspace_cleanup_plans WHERE run_id=? AND path=?"
+                    " ORDER BY rowid DESC LIMIT 1", (run['run_id'], manifest['checkoutRoot'])).fetchone()
+                if plan is None or plan['state'] != 'applied':
+                    reasons = repository_check
+            elif run['state'] not in ('accepted', 'concluded'):
                 task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (run['run_id'],)).fetchone()
                 reasons, _, _ = store.workflow._cleanup_reasons(connection, run, task, manifest)
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons))
+    checked_inputs = []
+    for run_id, revision, manifest, retained, reasons in workspace_inputs:
+        if reasons is repository_check:
+            physical = next((item for item in (manifest, *retained)
+                             if item['kind'] == 'worktree' and item['checkoutRoot'] == manifest['checkoutRoot']), manifest)
+            try:
+                repository = workspace.locate_repository(
+                    physical, candidates=lambda: repository_candidates(store.db, physical), repair=False)
+                reasons = ['repository-not-found'] if repository is None else None
+            except BoardError as error:
+                reasons = [error.code]
+        checked_inputs.append((run_id, revision, manifest, retained, reasons))
+    workspace_inputs = checked_inputs
     from . import reclamation
     native = reclamation.native_roots(store)
     native_tasks = reclamation.native_task_ids(store) if native else {}

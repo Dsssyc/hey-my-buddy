@@ -149,11 +149,13 @@ class ProjectMarkerTests(ProjectRepositoryCase):
         self.assertIsNone(workspace.repository_at(str(self.repo / "tracked.txt")))
         plain = self.directory / "plain"
         plain.mkdir()
-        (plain / ".git").write_text("gitdir: missing-private-repository\n", encoding="utf-8")
         self.assertIsNone(workspace.repository_at(str(plain)))
-        with patch.object(workspace.os, "stat", side_effect=PermissionError("directory is unreadable")):
-            with self.assertRaises(PermissionError):
-                workspace.repository_at(str(plain))
+        if os.name != "nt":
+            plain.chmod(0)
+            try:
+                self.assert_code("WORKSPACE_GIT_ERROR", workspace.repository_at, str(plain))
+            finally:
+                plain.chmod(0o700)
 
         real_run = subprocess.run
 
@@ -202,6 +204,71 @@ class RepositoryRelocationTests(ProjectRepositoryCase):
                          str(copied / ".git"))
         self.assertEqual(workspace.repository_at(manifest["checkoutRoot"]), str(copied / ".git"))
 
+    def _user_worktrees(self):
+        roots = [self.directory / "user-one", self.directory / "user-two"]
+        for root in roots:
+            self.git(self.repo, "worktree", "add", "--detach", str(root), "HEAD")
+        return {root / ".git": (root / ".git").read_bytes() for root in roots}
+
+    def test_move_reconnect_changes_only_our_private_gitfile(self):
+        users = self._user_worktrees()
+        manifest = self.prepare()
+        moved = self.directory / "moved"
+        self.repo.rename(moved)
+        self.assertEqual(workspace.locate_repository(manifest, cwd=str(moved)), str(moved / ".git"))
+        self.assertTrue(workspace.verify(manifest, state_dir=self.directory)["valid"])
+        self.assertEqual({path: path.read_bytes() for path in users}, users)
+
+    def test_copy_reconnect_preserves_users_still_linked_to_original(self):
+        users = self._user_worktrees()
+        manifest = self.prepare()
+        copied = self.directory / "copy"
+        self.copy_repository(copied)
+        checkout = Path(manifest["checkoutRoot"])
+        # Only our private link is lost. The user's two links still lead to the
+        # original and must stay there when the candidate is the copied repo.
+        (checkout / ".git").write_text("gitdir: missing-repository\n", encoding="utf-8")
+        self.assertEqual(workspace.locate_repository(manifest, cwd=str(copied)), str(copied / ".git"))
+        self.assertTrue(workspace.verify(manifest, state_dir=self.directory)["valid"])
+        self.assertEqual({path: path.read_bytes() for path in users}, users)
+        for pointer in users:
+            self.assertEqual(workspace.repository_at(str(pointer.parent)), self.common())
+
+    def test_reconnect_requires_registration_backlink_and_allocation_lock(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        pointer = (checkout / ".git").read_bytes()
+        git_dir = Path(workspace.inspect(str(checkout))["gitDir"])
+        moved = self.directory / "moved"
+        self.repo.rename(moved)
+        registration = moved / ".git" / "worktrees" / git_dir.name
+        backlink = (registration / "gitdir").read_bytes()
+        lock = (registration / "locked").read_bytes()
+        for filename, changed in (("gitdir", str(self.directory / "someone-else" / ".git").encode() + b"\n"),
+                                  ("locked", b"another-owner\n")):
+            with self.subTest(filename=filename):
+                (registration / filename).write_bytes(changed)
+                self.assertIsNone(workspace.locate_repository(manifest, cwd=str(moved)))
+                self.assertEqual((checkout / ".git").read_bytes(), pointer)
+                (registration / "gitdir").write_bytes(backlink)
+                (registration / "locked").write_bytes(lock)
+
+    def test_missing_checkout_gitfile_does_not_find_ancestor_repository(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        self.git(self.directory, "init", "-q")
+        (checkout / ".git").unlink()
+        self.assertIsNone(workspace.repository_at(str(checkout)))
+        self.assertEqual(workspace.repository_at(str(checkout), allow_parent=True), str(self.directory / ".git"))
+        self.assertEqual(workspace.locate_repository(manifest), self.common())
+        self.assertTrue(workspace.verify(manifest, state_dir=self.directory)["valid"])
+
+    def test_live_link_never_evaluates_known_location_query(self):
+        manifest = self.prepare()
+        def candidates():
+            self.fail("A live link must not scan sealed manifests")
+        self.assertEqual(workspace.locate_repository(manifest, candidates=candidates), self.common())
+
     def test_live_link_wins_over_copied_candidate(self):
         manifest = self.prepare()
         copied = self.directory / "copy"
@@ -243,16 +310,17 @@ class RepositoryRelocationTests(ProjectRepositoryCase):
         pointer = (linked / ".git").read_bytes()
         moved = self.directory / "moved"
         self.repo.rename(moved)
-        self.assertIsNone(workspace.locate_repository(manifest, cwd=str(moved)))
+        self.assertEqual(workspace.locate_repository(manifest, cwd=str(moved)), str(moved / ".git"))
         self.assertEqual((linked / ".git").read_bytes(), pointer)
+        self.assert_code("WORKSPACE_CHECKOUT_NOT_FOUND", workspace.verify, manifest, state_dir=self.directory)
         self.assertIsNone(workspace.repository_at(str(linked)))
 
     def test_missing_existing_root_is_named_at_inspect_boundary(self):
         linked = self.directory / "existing-linked"
         self.git(self.repo, "worktree", "add", "--detach", str(linked), "HEAD")
-        self.prepare("existing", kind="existing", cwd=linked)
+        manifest = self.prepare("existing", kind="existing", cwd=linked)
         linked.rename(self.directory / "existing-moved")
-        self.assert_code("WORKSPACE_CHECKOUT_NOT_FOUND", workspace.inspect, str(linked), existing=True)
+        self.assert_code("WORKSPACE_CHECKOUT_NOT_FOUND", workspace.inspect, str(linked), checkout=manifest)
 
     def test_all_allocation_refs_can_be_removed_while_link_is_live(self):
         manifest = self.prepare()
@@ -270,4 +338,5 @@ class RepositoryRelocationTests(ProjectRepositoryCase):
         replacement = secrets.token_hex(32)
         blob = self.git(self.repo, "hash-object", "-w", "--stdin", data=replacement.encode())
         self.git(self.repo, "update-ref", PROJECT_REF, blob.decode())
+        self.assertIsNone(workspace.locate_repository(manifest))
         self.assert_code("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.directory)

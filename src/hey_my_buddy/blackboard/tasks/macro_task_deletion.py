@@ -202,7 +202,6 @@ def _storage_in_use(store, connection, scope):
     allocations = [workspace.resolve_allocation(store.directory,m,scope.manifests)
                    for m in scope.manifests if m.get('kind') == 'worktree']
     checkouts = {a['path'] for a in allocations if a is not None}
-    checkout_paths = {a['path'] for a in allocations if a is not None}
     holders = {}
 
     def retain(kind, owner):
@@ -221,10 +220,7 @@ def _storage_in_use(store, connection, scope):
         root = f"json_extract({valid},'{prefix}.checkoutRoot')"
         predicates = [f'{wid} IN (SELECT value FROM json_each(?))']
         args = [_ids(workspace_ids)]
-        for checkout_root in sorted(checkouts):
-            predicates.append(f'{root}=?')
-            args.append(checkout_root)
-        for checkout_path in sorted(checkout_paths):
+        for checkout_path in sorted(checkouts):
             descendant = checkout_path + os.sep
             predicates.append(f'({root}=? OR substr({root},1,?)=?)')
             args.extend((checkout_path,len(descendant),descendant))
@@ -271,7 +267,7 @@ def _summary(row, scope, *, duplicate):
             'deletedAt':None, 'microTaskCount':len(scope.runs), 'duplicate':duplicate}
 
 
-def _scope_summary(store, scope):
+def _scope_summary(store, scope, connection):
     """Project retained identities and current refs, without reading native stores or Git sizes."""
     from . import workspace
     from .macro_task_deletion_workspace import _expected_refs, _refs, _repository_current
@@ -298,7 +294,8 @@ def _scope_summary(store, scope):
             refs_known = False
     if refs_known:
         for identifier, manifest in manifests.items():
-            repository = _repository_current(manifest)
+            from .workflow import known_repository_paths
+            repository = _repository_current(manifest, candidates=lambda: known_repository_paths(connection, manifest))
             if repository is None:
                 refs_known = False
                 break
@@ -334,7 +331,7 @@ def preview(store, target: str) -> dict:
                 raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE', 'A harness with stored sessions is unavailable',
                                  macroTaskId=target, harnesses=unavailable)
             blockers = _blockers(store, connection, scope)
-            summary = _scope_summary(store, scope)
+            summary = _scope_summary(store, scope, connection)
         else:
             blockers = []
             summary = {'artifacts': {'count': len(scope.artifacts), 'bytes': None if scope.artifacts else 0},
@@ -362,12 +359,12 @@ def _delete_sessions(store, scope):
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
     from .checkout_processes import first_execution_time
-    from .workflow import known_repository_paths
+    from .workflow import repository_candidates
     with store.db.read() as connection:
         starts = {m["checkoutRoot"]: first_execution_time(connection, m)
                   for m in scope.manifests}
-        candidates = {m["workspaceId"]: known_repository_paths(connection, m)
-                      for m in scope.manifests}
+    candidates = {m["workspaceId"]: (lambda manifest=m: repository_candidates(store.db, manifest))
+                  for m in scope.manifests}
     return delete_workspaces(store, scope.manifests, scope.artifacts,
                              first_execution_times=starts, candidate_paths=candidates)
 

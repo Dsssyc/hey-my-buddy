@@ -102,13 +102,20 @@ class UpgradeFixtureTests(unittest.TestCase):
         })
         delivered = board.call('workflow_get', {'runId': run_id})
         self.assertEqual(delivered['state'], 'delivered')
+        target_repository = fixture['fixtureRoot'] / 'repository'
+        _git(target_repository, 'checkout', '-b', 'fixture-schema33-integration')
+        target = {'path': str(target_repository), 'ref': 'refs/heads/fixture-schema33-integration'}
+        verified = workspace.integration_verify(
+            seal, original_input=old_manifest, final_input=manifest, **target)
+        self.assertTrue(verified['verified'])
         accepted = board.call('workflow_accept', {
             'runId': run_id, 'artifactId': delivered['finalArtifactId'],
-            'notRequired': 'Read-only fixture has no integration target',
+            'target': target,
             'note': 'Accepted after the v3 continuation',
             **fixture['deliveredStockControl'],
         })
         self.assertEqual(accepted['state'], 'accepted')
+        self.assertEqual(accepted['integration']['state'], 'verified')
 
 
     def insert_retained_native_selections(self, fixture, connection):
@@ -311,9 +318,20 @@ class UpgradeFixtureTests(unittest.TestCase):
             "SELECT command_id FROM commands WHERE kind NOT IN ('workflow.cleanup_plan','workflow.cleanup_apply')")}
         retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
                            if json.loads(row['payload_json']).get('planId') not in deleted_plans}
-        files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                 if p.is_file() and not p.name.startswith('board.sqlite3')
-                 and not p.is_relative_to(native_path(state / 'fixture-root' / 'repository' / '.git'))}
+        old_project_id = json.loads(connection.execute(
+            'SELECT workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()[0])['repositoryId']
+        marker_blob = hashlib.sha1(b'blob ' + str(len(old_project_id)).encode() + b'\0'
+                                   + old_project_id.encode()).hexdigest()
+        git_root = Path('fixture-root/repository/.git')
+        project_files = {git_root / 'refs/hey-my-buddy/project',
+                         git_root / 'objects' / marker_blob[:2] / marker_blob[2:]}
+
+        def state_files():
+            return {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
+                    if p.is_file() and not p.name.startswith('board.sqlite3')
+                    and p.relative_to(native_path(state)) not in project_files}
+
+        files = state_files()
         self.assertEqual(before['schema'], UPGRADE_FLOOR_SCHEMA)
         with self.assertRaises(Corruption):
             Database(state).initialize()
@@ -357,12 +375,34 @@ class UpgradeFixtureTests(unittest.TestCase):
                         continue
                     evidence = json.loads(value['evidence_json'])
                     workspace = evidence['workspace']
-                    workspace['projectId'] = workspace.pop('repositoryId')
-                    workspace.pop('checkoutId', None)
                     allocation = workspace['allocation']
-                    allocation['projectId'] = allocation.pop('repositoryId')
-                    allocation.pop('checkoutId', None)
-                    value['evidence_json'] = evidence
+                    self.assertEqual(set(evidence), {'acceptance', 'attemptId', 'finalArtifactId',
+                                                     'hostConclusion', 'integrationId', 'ownerGeneration',
+                                                     'shutdown', 'workspace'})
+                    self.assertEqual(set(workspace), {'allocation', 'attachedBranch', 'checkoutId',
+                                                      'eligible', 'kind', 'locked', 'manifestWorkspaceId',
+                                                      'reasons', 'repositoryId', 'sealedObservation',
+                                                      'unsealedPaths', 'workspaceId', 'worktree'})
+                    self.assertEqual(set(allocation), {'checkoutId', 'kind', 'manifestSha256',
+                                                       'manifestWorkspaceId', 'path', 'repositoryId', 'workspaceId'})
+                    self.assertEqual(set(json.loads(value['result_json'])), {'alreadyRemoved'})
+                    value['evidence_json'] = {
+                        **{key: evidence[key] for key in ('acceptance', 'attemptId', 'finalArtifactId',
+                                                          'hostConclusion', 'integrationId', 'ownerGeneration',
+                                                          'shutdown')},
+                        'workspace': {
+                            **{key: workspace[key] for key in ('attachedBranch', 'eligible', 'kind', 'locked',
+                                                                'manifestWorkspaceId', 'reasons',
+                                                                'sealedObservation', 'unsealedPaths',
+                                                                'workspaceId', 'worktree')},
+                            'projectId': workspace['repositoryId'],
+                            'allocation': {
+                                **{key: allocation[key] for key in ('kind', 'manifestSha256',
+                                                                     'manifestWorkspaceId', 'path', 'workspaceId')},
+                                'projectId': allocation['repositoryId'],
+                            },
+                        },
+                    }
                     for removed in ('checkout_id', 'repository_id', 'expires_at', 'command_id'):
                         value.pop(removed)
                     expected.append(value)
@@ -387,7 +427,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                 expected = []
                 for row in original:
                     value = dict(zip(integration_columns, row))
-                    value['target_project_id'] = value.pop('target_repository_id')
+                    value.pop('target_repository_id')
+                    value['target_project_id'] = None
                     value.pop('target_checkout_id')
                     expected.append(value)
                 after_columns = ['rowid', *[column[1] for column in connection.execute('PRAGMA table_info(workflow_integrations)')]]
@@ -421,9 +462,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             upgrade_state(state)
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
         self.assertEqual(upgrade.idle_snapshot(state), after)
-        self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
-                          if p.is_file() and not p.name.startswith('board.sqlite3')
-                          and not p.is_relative_to(native_path(state / 'fixture-root' / 'repository' / '.git'))}, files)
+        self.assertEqual(state_files(), files)
 
     def test_retained_catalog_is_normalized_for_refresh_and_console_without_rewriting_evidence(self):
         from console.test_console import Browser

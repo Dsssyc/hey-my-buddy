@@ -423,6 +423,17 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(resumed["claim"]["task"]["cwd"], before[1]["cwd"])
         self.assertEqual((Path(before[1]["cwd"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
 
+    def test_background_preparation_reports_missing_repository(self):
+        board, run_id, _first, continuation_id = self.pending(kind="worktree")
+        moved = self.repo.with_name("moved-during-preparation")
+        self.repo.rename(moved)
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"],
+                         "WORKSPACE_REPOSITORY_NOT_FOUND")
+        self.assertIsNone(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+
     def test_real_worktree_continuation_retains_checkout_and_source_files(self):
         board, run_id, first, cont = self.pending(kind="worktree")
         previous = first["claim"]["turn"]["input"]["executionWorkspace"]
