@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 import time
 
 from ...errors import BoardError
@@ -52,6 +53,7 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
     manifest = document.get("executionWorkspace")
     root, digest = router_input.prepare(
         manifest, ensure_private_dir(context_root(context, native.name)),
+        state_dir=Path(context.environment["HMB_STATE_DIR"]),
         deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
     try:
         request = ReadOnlyStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"],
@@ -122,7 +124,8 @@ class DecisionAdapter(Adapter):
                 pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
             verification = router_input.verify(
-                *handle.router_input, deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
+                *handle.router_input, state_dir=Path(context.environment["HMB_STATE_DIR"]),
+                deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
             if verification["unchanged"] is None:
                 raise BoardError("router-input-unknown", "The frozen Router input could not yet be verified")
             # The mirror is a full copy of the frozen input. Once the native group is

@@ -46,7 +46,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.manifest['inputTree'] = subtree.decode()
         directory = self.root / 'long-mirror'
         directory.mkdir()
-        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
         path = frozen / name
         self.assertGreater(len(str(path)), 260)
         self.assertEqual(read_bytes(path), b'frozen bytes')
@@ -55,11 +55,11 @@ class FrozenTreeEntryTests(unittest.TestCase):
             self.assertFalse(metadata.st_file_attributes & 1)
         else:
             self.assertEqual(metadata.st_mode & 0o777, 0o555)
-        self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        self.assertTrue(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120, state_dir=self.root / "state")['unchanged'])
         if os.name != 'nt':
             native_path(path).chmod(0o644)
         native_path(path).write_bytes(b'changed')
-        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120, state_dir=self.root / "state")['unchanged'])
         router_input.discard(frozen)
         self.assertFalse(frozen.exists())
 
@@ -67,10 +67,10 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_mode_change_invalidates_the_snapshot(self):
         directory = self.root / 'mode-mirror'
         directory.mkdir()
-        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+        frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
         path = frozen / 'first.txt'
         path.chmod(0o644)
-        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
+        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120, state_dir=self.root / "state")['unchanged'])
 
 
     def assert_refused_after_materializing_a_file(self, entry, message):
@@ -89,7 +89,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
                 mock.patch.object(router_input, "discard", side_effect=check_partial_input) as cleanup:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unavailable")
         self.assertEqual(refused.exception.message, message)
         cleanup.assert_called_once_with(frozen)
@@ -120,7 +120,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
              mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=220)
+                router_input.prepare(self.manifest, directory, deadline=220, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
@@ -132,7 +132,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         with mock.patch.object(router_input.time, "monotonic", return_value=100), \
              mock.patch.object(router_input.subprocess, "run", return_value=failed) as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=340)
+                router_input.prepare(self.manifest, directory, deadline=340, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unavailable")
         self.assertEqual(git.call_args.kwargs["timeout"], 240)
         command, environment = router_input.workspace._git_command(
@@ -151,7 +151,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         expired = subprocess.TimeoutExpired(["git"], 10, stderr=diagnostic)
         with mock.patch.object(router_input.subprocess, "run", side_effect=expired):
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unknown")
         self.assertEqual(refused.exception.details["stderr"], diagnostic.decode()[-2000:])
         self.assertTrue(refused.exception.details["stderrTruncated"])
@@ -184,7 +184,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
                 with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
                         mock.patch.object(router_input.subprocess, "Popen", side_effect=failed_reader):
                     with self.assertRaises(BoardError) as refused:
-                        router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+                        router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
                 self.assertEqual(refused.exception.code, "router-input-unavailable")
                 self.assertEqual(refused.exception.message, message)
                 self.assertEqual(refused.exception.details["stderr"], diagnostic.decode(errors="replace")[-2000:])
@@ -209,7 +209,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
              mock.patch.object(router_input.subprocess, "Popen", side_effect=blocked_reader):
             with self.assertRaises(BoardError) as refused:
                 router_input.prepare(self.manifest, directory,
-                                     deadline=router_input.time.monotonic() + 0.1)
+                                     deadline=router_input.time.monotonic() + 0.1, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unknown")
         self.assertIsNotNone(process.returncode)
         self.assertFalse((directory / "frozen-input").exists())
@@ -217,7 +217,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_indeterminate_workspace_verification_stays_unknown(self):
         self.enterContext(mock.patch.object(router_input.workspace, "verify",
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
-        result = router_input.verify(self.manifest, self.checkout, "expected", deadline=time.monotonic() + 120)
+        result = router_input.verify(self.manifest, self.checkout, "expected", deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")
 
@@ -228,14 +228,14 @@ class FrozenTreeEntryTests(unittest.TestCase):
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
         with mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
     def test_expired_local_verification_stays_unknown(self):
         with mock.patch.object(router_input.time, "monotonic", return_value=221), \
              mock.patch.object(router_input, "_digest") as digest:
-            result = router_input.verify(None, self.checkout, "expected", deadline=220)
+            result = router_input.verify(None, self.checkout, "expected", deadline=220, state_dir=self.root / "state")
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")
         digest.assert_not_called()
@@ -243,11 +243,11 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_digest_and_verification_use_the_caller_deadline(self):
         with mock.patch.object(router_input.time, "monotonic", return_value=100):
             expected = router_input.digest(self.checkout, deadline=340)
-            result = router_input.verify(None, self.checkout, expected, deadline=340)
+            result = router_input.verify(None, self.checkout, expected, deadline=340, state_dir=self.root / "state")
         self.assertTrue(result["unchanged"])
 
     def test_completed_digest_mismatch_is_changed(self):
-        result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=time.monotonic() + 120)
+        result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=time.monotonic() + 120, state_dir=self.root / "state")
         self.assertIs(result["unchanged"], False)
         self.assertEqual(result["code"], "router-input-changed")
 

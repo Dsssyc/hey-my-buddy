@@ -100,7 +100,7 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
         self.assertEqual(manifest["version"], 3)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_historical_hashed_manifest_remains_readable(self):
         manifest = self.prepare()
@@ -123,13 +123,13 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(current["access"], "full")
         self.assertNotIn("accessNote", current)
         self.assertNotIn("accessReason", current)
-        self.assertTrue(workspace.verify(current)["unchanged"])
+        self.assertTrue(workspace.verify(current, state_dir=self.state)["unchanged"])
         legacy = self.legacy_full_manifest(current)
-        self.assertTrue(workspace.verify(legacy)["unchanged"])
+        self.assertTrue(workspace.verify(legacy, state_dir=self.state)["unchanged"])
         first = dict(legacy, version=1, integrator="host:host-1")
         first["manifestSha256"] = workspace._sha(workspace._json({
             key: value for key, value in first.items() if key != "manifestSha256"}))
-        self.assertTrue(workspace.verify(first)["unchanged"])
+        self.assertTrue(workspace.verify(first, state_dir=self.state)["unchanged"])
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
                           dict(legacy, accessNote="renamed"))
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
@@ -247,7 +247,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(manifest["snapshot"]["excludedUntracked"], ["src/excluded.txt"])
         self.assertNotIn("stagedSha256", manifest["snapshot"])
         self.assertNotIn("unstagedSha256", manifest["snapshot"])
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_prepare_replay_freezes_source_and_changed_intent_conflicts(self):
         intent = self.intent()
@@ -272,8 +272,8 @@ class WorkspaceTests(unittest.TestCase):
     def test_verify_detects_drift_and_read_cannot_opt_out(self):
         manifest = self.prepare(access="read", writeScope=[])
         (Path(manifest["path"]) / "src/file.txt").write_text("changed\n", encoding="utf-8", newline="\n")
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=False)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=False, state_dir=self.state)
 
     def test_unknown_worktree_target_is_preserved(self):
         _, directory = workspace._workspace_directory(self.state, "collision")
@@ -294,7 +294,7 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "src/file.txt").write_text("source advanced after interruption", encoding="utf-8", newline="\n")
         recovered = self.prepare()
         self.assertEqual((Path(recovered["path"]) / "src/file.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertTrue(workspace.verify(recovered)["unchanged"])
+        self.assertTrue(workspace.verify(recovered, state_dir=self.state)["unchanged"])
 
     def test_changed_interrupted_checkout_is_not_overwritten(self):
         original = workspace._write_once
@@ -388,7 +388,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertLess(len(str(checkout)), 260)
         self.assertGreater(len(str(target)), 260)
         self.assertEqual(native_path(target).read_bytes(), b"before\x00\xff\r\n")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace._git(checkout, "status", "--porcelain=v1", "--untracked-files=all"), b"")
         native_path(target).write_bytes(b"after\x00\xfe\r\n")
         sealed = workspace.seal(self.state, manifest, "long-file", "attempt")
@@ -465,15 +465,17 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("sealed-output-invalid", cleanup["reasons"])
         self.assertTrue(target.is_dir())
 
-    def test_matching_seal_cleanup_proof_does_not_write_git_objects(self):
+    def test_matching_seal_cleanup_proof_only_updates_the_private_index(self):
         manifest = self.prepare()
         (Path(manifest["checkoutRoot"]) / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, manifest, "task", "attempt")
         git = workspace._git
 
         def read_only_git(root, *args, **kwargs):
-            self.assertNotIn(args[0], {"fast-import", "write-tree", "commit-tree", "update-index", "read-tree"})
-            self.assertFalse(args[0] == "hash-object" and "-w" in args)
+            self.assertNotIn(args[0], {"write-tree", "commit-tree", "update-ref"})
+            if args[0] in {"add", "update-index", "read-tree"}:
+                temporary = Path(kwargs["env"]["GIT_INDEX_FILE"])
+                self.assertTrue(temporary.is_relative_to(self.state / "tmp"))
             return git(root, *args, **kwargs)
 
         with patch.object(workspace, "_git", side_effect=read_only_git):
@@ -490,12 +492,12 @@ class WorkspaceTests(unittest.TestCase):
         first = workspace.seal(self.state, initial, "task", "attempt-one")
         self.assertEqual(first["includedUntracked"], ["src/new.txt"])
         self.assertEqual(self.prepare("turn-one", kind="existing"), initial)
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, initial)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, initial, state_dir=self.state)
         continuation = self.prepare("turn-two", kind="existing", base={"kind": "working-tree", "ref": first["commit"]},
                                     includeUntracked=first["includedUntracked"])
         self.assertEqual(continuation["inputCommit"], first["commit"])
         self.assertEqual(continuation["inputTree"], first["tree"])
-        self.assertTrue(workspace.verify(continuation)["unchanged"])
+        self.assertTrue(workspace.verify(continuation, state_dir=self.state)["unchanged"])
         (self.repo / "src/new.txt").write_text("second output\n", encoding="utf-8", newline="\n")
         second = workspace.seal(self.state, continuation, "task", "attempt-two")
         self.assertEqual(second["inputCommit"], first["commit"])
@@ -510,7 +512,7 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(cwd=str(self.repo / "src"))
         self.assertEqual(Path(manifest["path"]), Path(manifest["checkoutRoot"]) / "src")
         self.assertTrue((Path(manifest["path"]) / "file.txt").exists())
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_symbolic_input_reference_cannot_modify_a_branch(self):
         workspace_id, _ = workspace._workspace_directory(self.state, "request")
@@ -533,9 +535,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse((Path(manifest["path"]) / "src/unselected.secret").exists())
         (self.repo / name).write_bytes(b"later source input")
         self.assertEqual((Path(manifest["path"]) / name).read_bytes(), b"\x00selected")
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
         (Path(manifest["path"]) / name).write_bytes(b"changed selected input")
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
 
     def test_ignored_caches_do_not_interfere_with_managed_input_or_output(self):
         (self.repo / ".gitignore").write_text("*.ignored\n", encoding="utf-8", newline="\n")
@@ -543,7 +545,7 @@ class WorkspaceTests(unittest.TestCase):
         self.git("commit", "-qm", "ignore generated files")
         reader = self.prepare("reader", access="read", writeScope=[])
         (Path(reader["path"]) / "new.ignored").write_text("generated cache", encoding="utf-8", newline="\n")
-        self.assertTrue(workspace.verify(reader)["unchanged"])
+        self.assertTrue(workspace.verify(reader, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, reader, "reader", "attempt")["changedPaths"], [])
         writer = self.prepare("writer")
         (Path(writer["path"]) / "docs/out.ignored").write_text("generated cache outside write scope", encoding="utf-8", newline="\n")
@@ -557,7 +559,7 @@ class WorkspaceTests(unittest.TestCase):
         existing = self.prepare("existing", kind="existing", access="read", writeScope=[])
         self.assertNotIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
         existing_file.write_text("updated ignored cache", encoding="utf-8", newline="\n")
-        self.assertTrue(workspace.verify(existing)["unchanged"])
+        self.assertTrue(workspace.verify(existing, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
 
     def test_ignored_dependencies_and_unreadable_environments_are_not_read(self):
@@ -579,7 +581,7 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "local-environment").mkdir()
         (self.repo / "local-environment/secret").write_text("ignored by repository exclude", encoding="utf-8", newline="\n")
         manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
         self.assertEqual(manifest["snapshot"]["excludedUntracked"], [])
         self.assertEqual(manifest["exclusionPolicy"], {"version": 1, "kind": "git-standard",
@@ -599,10 +601,10 @@ class WorkspaceTests(unittest.TestCase):
         ignored.chmod(0)
         self.addCleanup(ignored.chmod, 0o700)
         manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
-        self.assertTrue(workspace.verify(manifest)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
         (fixtures / "config.json").write_text('{"fixture": "changed"}', encoding="utf-8", newline="\n")
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")
 
     def test_frozen_input_survives_gc_before_public_input_ref_publication(self):
@@ -631,11 +633,11 @@ class WorkspaceTests(unittest.TestCase):
     def test_malformed_manifest_and_input_fail_with_structured_errors(self):
         manifest = self.prepare()
         changed = {**manifest, "access": "read"}
-        self.assert_error("WORKSPACE_MANIFEST_CHANGED", workspace.verify, changed)
+        self.assert_error("WORKSPACE_MANIFEST_CHANGED", workspace.verify, changed, state_dir=self.state)
         changed = {**manifest, "snapshot": {}}
         changed["manifestSha256"] = hashlib.sha256(json.dumps({key: value for key, value in changed.items() if key != "manifestSha256"},
                                                              sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
-        self.assert_error("INVALID_WORKSPACE", workspace.verify, changed)
+        self.assert_error("INVALID_WORKSPACE", workspace.verify, changed, state_dir=self.state)
         self.assert_error("INVALID_WORKSPACE", self.prepare, "escape", writeScope=["../outside"])
         self.assert_error("INVALID_WORKSPACE", self.prepare, "git-metadata", includeUntracked=[".git/config"])
 

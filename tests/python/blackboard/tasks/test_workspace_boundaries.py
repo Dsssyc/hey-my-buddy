@@ -77,7 +77,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertNotEqual(manifest["snapshot"]["stagedTree"], manifest["inputTree"])
         self.clear_refs_and_prune(staged)
         self.assertEqual(self.git("cat-file", "-t", manifest["inputCommit"]), b"commit\n")
-        self.assert_error("WORKSPACE_GIT_ERROR", workspace.verify, manifest, require_unchanged=False)
+        self.assert_error("WORKSPACE_GIT_ERROR", workspace.verify, manifest, require_unchanged=False, state_dir=self.state)
         self.assertEqual(source.read_text(encoding="utf-8"), "base\n")
         source.write_text("output after the staged commit disappeared\n", encoding="utf-8", newline="\n")
         with patch.object(workspace, "_observe", side_effect=AssertionError("capture before input proof")):
@@ -109,7 +109,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
                 self.assertEqual(self.git("cat-file", "--batch-check", data=(snapshot["stagedCommit"] + "\n").encode()),
                                  (snapshot["stagedCommit"] + " missing\n").encode())
                 with patch.object(workspace, "_git", wraps=workspace._git) as calls:
-                    self.assertTrue(workspace.verify(manifest, require_unchanged=False)["valid"])
+                    self.assertTrue(workspace.verify(manifest, require_unchanged=False, state_dir=self.state)["valid"])
                 self.assertFalse(any(snapshot["stagedCommit"] + "^{tree}" in call.args for call in calls.call_args_list))
 
     def test_missing_input_commit_rejects_turn_start_and_sealing(self):
@@ -121,7 +121,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.clear_refs_and_prune(manifest["inputCommit"], manifest["snapshot"]["stagedCommit"])
         source.write_text("output after the input commit disappeared\n", encoding="utf-8", newline="\n")
         for boundary, operation in (
-            ("turn-start", lambda: workspace.verify(manifest, require_unchanged=False)),
+            ("turn-start", lambda: workspace.verify(manifest, require_unchanged=False, state_dir=self.state)),
             ("seal", lambda: self.seal(manifest)),
         ):
             with self.subTest(boundary=boundary):
@@ -363,6 +363,29 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
         self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
         self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
+
+    def test_resumed_cleanup_refuses_a_link_placeholder_that_the_real_index_cannot_represent(self):
+        self.git("config", "core.symlinks", "false")
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        link = checkout / "src/new-link"
+        try:
+            link.symlink_to("file.txt")
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest("Worker cannot create a native output link")
+            raise
+        sealed = self.seal(manifest)
+        self.assertEqual(self.git("ls-tree", "-r", sealed["commit"], "--", "src/new-link").split()[0], b"120000")
+        link.unlink()
+        (checkout / ".git").unlink()
+        error = self.assert_error("WORKSPACE_UNSUPPORTED", workspace.cleanup_inspect,
+                                  self.state, manifest, sealed=sealed, resume=True)
+        self.assertEqual(error.details["paths"], ["src/new-link"])
+        self.assertTrue(checkout.is_dir())
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(link.read_bytes(), b"file.txt")
+        self.assertEqual(self.git("ls-files", "-s", "--", "src/new-link", cwd=checkout), b"")
 
     def test_resumed_cleanup_preserves_a_surviving_changed_file(self):
         manifest = self.prepare()

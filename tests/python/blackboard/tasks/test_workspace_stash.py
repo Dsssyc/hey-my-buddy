@@ -279,17 +279,17 @@ class StashChangesNeverGateWorkTests(StashInventoryTestCase):
     def test_stash_changes_never_break_prepare_verify_or_seal(self):
         self.stash("user's staged work")
         manifest = self.manifest_for("stash-facts")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)["unchanged"])
         # The user drops their stash while the workspace is alive: the shared
         # reflog changes, but no managed file changed, so verification and the
         # seal are untouched — a stash change is never a workspace conflict.
         self.git("stash", "drop", "stash@{0}")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)["unchanged"])
         seal = workspace.seal(self.directory, manifest, "task-stash-facts", "attempt-stash-facts")
         self.assertTrue(seal["snapshotSha256"])
         # And a newly created stash is equally outside the managed proof.
         self.stash("a later stash")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)["unchanged"])
 
     def test_the_recorded_recovery_command_restores_a_dropped_entry(self):
         commit = self.stash("recoverable work")

@@ -45,9 +45,9 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual(replay_seal, first_seal)
         router_directory = self.directory / "router-seam"
         router_directory.mkdir()
-        frozen, digest = router_input.prepare(original, router_directory, deadline=time.monotonic() + 120)
+        frozen, digest = router_input.prepare(original, router_directory, deadline=time.monotonic() + 120, state_dir=self.directory)
         self.assertEqual((frozen / "tracked.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertTrue(router_input.verify(original, frozen, digest, deadline=time.monotonic() + 120)["unchanged"])
+        self.assertTrue(router_input.verify(original, frozen, digest, deadline=time.monotonic() + 120, state_dir=self.directory)["unchanged"])
         self.assertEqual(self.fixed_files(), initial_files)
         run_id = submitted["runId"]
         continued = board.call("workflow_continue", {
@@ -146,7 +146,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual((git_directory / "HEAD").read_bytes(), (retained / "HEAD").read_bytes())
         self.assertEqual(git(checkout, "rev-parse", original["snapshot"]["inputRef"]).strip(), original["inputCommit"])
         with self.assertRaises(BoardError):
-            workspace_module.verify(original, require_unchanged=False)
+            workspace_module.verify(original, require_unchanged=False, state_dir=self.directory)
         with self.assertRaises(BoardError) as unsafe:
             workspace_module.cleanup_remove(self.directory, original)
         self.assertEqual(unsafe.exception.code, "WORKSPACE_CHANGED")

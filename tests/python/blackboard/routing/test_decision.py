@@ -978,11 +978,13 @@ class DecisionWorkerProcessTests(DecisionTestCase):
         self.assertEqual(request_view.cwd, str(frozen_root))
         from hey_my_buddy.private_dirs import context_root
         private_root = context_root(context, harness)
-        self.input_prepare.assert_called_once_with(manifest, private_root, deadline=ANY)
+        self.input_prepare.assert_called_once_with(manifest, private_root,
+                                                   state_dir=Path(context.environment["HMB_STATE_DIR"]), deadline=ANY)
         self.assertTrue(Path(frozen_root).is_relative_to(private_root))
         self.assertFalse(private_root.is_relative_to(context.directory))
         self.assertFalse((context.directory / "frozen-input").exists())
-        self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest, deadline=ANY)
+        self.input_verify.assert_called_once_with(manifest, frozen_root, expected_digest,
+                                                  state_dir=Path(context.environment["HMB_STATE_DIR"]), deadline=ANY)
         # A verified, stopped Router leaves only digests behind, not a repository copy.
         self.assertFalse(Path(frozen_root).exists())
         snapshot = board.call("console_snapshot", {})

@@ -101,10 +101,10 @@ class GitIndexSnapshotTests(unittest.TestCase):
                                  LARGE_BINARY)
                 self.assertNotIn("src/excluded.txt", self.tree_entries(repo, manifest["inputTree"]))
                 self.assertEqual(manifest["snapshot"]["excludedEntries"]["src/excluded.txt"],
-                                 ["100644", hashlib.sha256(b"excluded\n").hexdigest()])
+                                 ["100644", hashlib.sha256(b"excluded\r\n").hexdigest()])
                 self.assertEqual(len(self.tree_entries(repo, manifest["inputTree"])["src/binary.bin"][1]),
                                  64 if object_format == "sha256" else 40)
-                self.assertTrue(workspace.verify(manifest)["unchanged"])
+                self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
                 checkout = Path(manifest["checkoutRoot"])
                 (checkout / "src/text.txt").write_bytes(b"output\r\n")
                 (checkout / "src/binary.bin").write_bytes(LARGE_BINARY + b"\x00output")
@@ -192,8 +192,8 @@ class GitIndexSnapshotTests(unittest.TestCase):
             "prepare-large", workspace.prepare, self.state, "large", self.intent(large_repo, large_selected))
         self.assertGreater(small, 0)
         self.assertLessEqual(large - small, 8, (small, large))
-        small_verify, _ = self.count_git_processes("verify-small", workspace.verify, small_manifest)
-        large_verify, _ = self.count_git_processes("verify-large", workspace.verify, large_manifest)
+        small_verify, _ = self.count_git_processes("verify-small", workspace.verify, small_manifest, state_dir=self.state)
+        large_verify, _ = self.count_git_processes("verify-large", workspace.verify, large_manifest, state_dir=self.state)
         self.assertLessEqual(large_verify - small_verify, 8, (small_verify, large_verify))
         for manifest in (small_manifest, large_manifest):
             checkout = Path(manifest["checkoutRoot"])

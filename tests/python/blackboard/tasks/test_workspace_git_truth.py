@@ -75,12 +75,12 @@ class WorkspaceGitTruthTests(unittest.TestCase):
     def test_existing_require_unchanged_uses_normalized_git_content(self):
         base = self.git_link_and_crlf_fixture()
         manifest = workspace.prepare(self.state, "existing", self.intent(kind="existing", base={"kind": "commit", "ref": base}))
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.state)["unchanged"])
         # A disk line-ending change with the same Git blob is not content drift.
         (self.repo / "src/text.txt").write_bytes(b"line one\nline two\n")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.state)["unchanged"])
         (self.repo / "src/text.txt").write_bytes(b"different\r\n")
-        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=True)
+        self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, require_unchanged=True, state_dir=self.state)
 
     def test_worker_checkout_uses_git_smudge_and_link_placeholder(self):
         self.git_link_and_crlf_fixture()
@@ -90,7 +90,7 @@ class WorkspaceGitTruthTests(unittest.TestCase):
         self.assertEqual((checkout / "src/link").read_bytes(), b"text.txt")
         self.assertFalse((checkout / "src/link").is_symlink())
         self.assertEqual(self.git("ls-files", "-s", "--", "src/link", cwd=checkout).split()[0], b"120000")
-        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True, state_dir=self.state)["unchanged"])
 
     def test_seal_uses_clean_filter_for_crlf_and_link_placeholder(self):
         self.git_link_and_crlf_fixture()

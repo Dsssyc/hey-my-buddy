@@ -19,7 +19,8 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
-import tempfile
+import stat
+import struct
 
 from ...private_dirs import directory_mode
 from ...errors import BoardError
@@ -55,25 +56,18 @@ def _errors():
         raise BoardError("INVALID_WORKSPACE", "Malformed workspace argument or recovery record") from error
 
 
-class _GitWorktree(str):
-    """An owned checkout whose gitfile was removed during reclamation."""
-    def __new__(cls, root, git_dir):
-        value = super().__new__(cls, str(root))
-        value.git_dir = git_dir
-        return value
-
-
-def _git_command(root, *args, repository_only=False):
+def _git_command(root, *args, repository_only=False, git_dir=None):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
                    GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", LC_ALL="C")
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
-               "-c", "core.longpaths=true", "--git-dir" if repository_only else "-C", str(root), *args]
-    if isinstance(root, _GitWorktree):
-        command[len(command) - len(args):len(command) - len(args)] = ["--git-dir=" + str(root.git_dir), "--work-tree=" + str(root)]
+               "-c", "core.untrackedCache=false", "-c", "core.ignoreStat=false", "-c", "core.splitIndex=false",
+               "-c", "core.longpaths=true", "--git-dir" if repository_only else "-C", str(root)]
+    if git_dir is not None:
+        command.extend(["--git-dir=" + str(git_dir), "--work-tree=" + str(root)])
+    command.extend(args)
     return command, git_env
 
 
@@ -82,20 +76,10 @@ _GIT_DIAGNOSTIC_LIMIT = 2000
 
 def _git_diagnostic(value):
     """Keep the diagnostic tail, including whether its prefix was omitted."""
-    skipped = False
-    if hasattr(value, "read"):
-        # Fast-import already captures into files. Do not load an unbounded
-        # file to return a bounded error; four bytes cover one UTF-8 character.
-        value.seek(0, os.SEEK_END)
-        size = value.tell()
-        start = max(0, size - 4 * _GIT_DIAGNOSTIC_LIMIT)
-        value.seek(start)
-        value = value.read()
-        skipped = start > 0
     if isinstance(value, bytes):
         value = value.decode(errors="replace")
     text = str(value) if value is not None else ""
-    return text[-_GIT_DIAGNOSTIC_LIMIT:], skipped or len(text) > _GIT_DIAGNOSTIC_LIMIT
+    return text[-_GIT_DIAGNOSTIC_LIMIT:], len(text) > _GIT_DIAGNOSTIC_LIMIT
 
 
 def _git_failure(command, operation, *, stdout=None, stderr=None, returncode=None,
@@ -116,12 +100,20 @@ def _git_unknown(command, operation, error, *, stdout=None, stderr=None, returnc
                       **failure.details)
 
 
-def _git(root, *args, data=None, env=None, allowed=(0,)):
-    command, git_env = _git_command(root, *args)
+def _git_timeout(args):
+    # Content, index and directory operations scale with the input. Small
+    # metadata/control calls retain the bounded wait.
+    unbounded = {"add", "reset", "checkout-index", "restore", "read-tree", "write-tree",
+                 "update-index", "ls-files", "ls-tree", "diff", "cat-file"}
+    return None if (args[0] in unbounded or args[:2] == ("worktree", "remove")) else _GIT_TIMEOUT_SECONDS
+
+
+def _git(root, *args, data=None, env=None, allowed=(0,), git_dir=None):
+    command, git_env = _git_command(root, *args, git_dir=git_dir)
     git_env.update(env or {})
     try:
         result = subprocess.run(command, input=data, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
+                                timeout=_git_timeout(args), creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -148,7 +140,7 @@ def _git_in(git_dir, *args, allowed=(0,)):
     command, git_env = _git_command(git_dir, *args, repository_only=True)
     try:
         result = subprocess.run(command, input=None, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
+                                timeout=_git_timeout(args), creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -209,7 +201,7 @@ def _relative(value, *, allow_root=False):
     if not isinstance(value, str) or not value or "\0" in value:
         raise BoardError("INVALID_WORKSPACE", "Workspace paths must be relative strings")
     parts = PurePosixPath(value).parts
-    if (PurePosixPath(value).is_absolute() or is_absolute_path(value)
+    if (PurePosixPath(value).is_absolute()
             or (_WINDOWS and ("\\" in value or ":" in value))
             or any(part in ("..", ".git") or part.lower() == ".git" for part in parts)):
         raise BoardError("INVALID_WORKSPACE", "Workspace paths cannot escape the checkout or address Git metadata", path=value)
@@ -224,52 +216,61 @@ def _in_scope(path, scope):
 
 
 @contextmanager
-def _index(root, *, state_dir=None, copy=False):
+def _index(root, *, state_dir, copy=False, git_dir=None):
     """Keep Git's temporary index outside the Worker-writable checkout."""
     with ExitStack() as cleanup:
         directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-",
-            directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp") if state_dir is not None else
-                      private_dirs.ensure_private_dir(Path(tempfile.gettempdir()) / "hey-my-buddy-indexes"))
+            directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp"))
         cleanup.callback(private_dirs.remove_tree, directory)
         index = Path(directory) / "index"
         if copy:
             # The index timestamp is Git's racy-clean watermark. A plain byte
             # copy with a newer timestamp could hide a same-size recent edit.
-            source = Path(_line(root, "rev-parse", "--path-format=absolute", "--git-path", "index"))
+            source = Path(_line(root, "rev-parse", "--path-format=absolute", "--git-path", "index", git_dir=git_dir))
             if source.exists():
-                shutil.copy2(source, index)
+                with native_path(source).open("rb") as original, native_path(index).open("wb") as copied:
+                    info = os.fstat(original.fileno())
+                    shutil.copyfileobj(original, copied)
+                os.utime(native_path(index), ns=(info.st_atime_ns, info.st_mtime_ns))
         yield {"GIT_INDEX_FILE": str(index)}
 
 
-def _batch_objects(root, oids):
-    """Read many committed objects' exact bytes from one Git process."""
-    if not oids:
-        return []
-    query = b"".join(oid.encode() + b"\n" for oid in oids)
-    payload = _git(root, "cat-file", "--batch", data=query)
-    command, _env = _git_command(root, "cat-file", "--batch")
-    results = []
-    position = 0
-    for oid in oids:
-        end = payload.find(b"\n", position)
-        name, _, description = payload[position:end].partition(b" ")
-        fields = description.split()
-        if name.decode() != oid or len(fields) != 2 or fields[0] != b"blob":
-            raise _git_failure(command, "cat-file", stdout=payload, returncode=0,
-                               message="Git did not return a workspace object", oid=oid)
-        start = end + 1
-        results.append(payload[start:start + int(fields[1])])
-        position = start + int(fields[1]) + 1
-    if position != len(payload):
-        raise _git_failure(command, "cat-file", stdout=payload, returncode=0,
-                           message="Git returned more workspace objects than requested")
-    return results
+def _raw_entry(root, path):
+    """The original-byte evidence for a regular file or link, without objects."""
+    target = native_path(Path(root) / path)
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        if _WINDOWS:
+            # The print name is the link text. os.readlink on Windows returns
+            # the substitute name, which can introduce a device-path prefix.
+            import win32file
+            handle = win32file.CreateFile(str(target), 0, 7, None, 3, 0x02200000, None)
+            try:
+                raw = win32file.DeviceIoControl(handle, 0x000900A8, None, 16 * 1024)
+            finally:
+                handle.Close()
+            offset, size = struct.unpack_from("<HH", raw, 12)
+            text = raw[20 + offset:20 + offset + size].decode("utf-16-le")
+        else:
+            text = os.readlink(target)
+        return ["120000", _sha(os.fsencode(text))]
+    if (not stat.S_ISREG(info.st_mode)
+            or (_WINDOWS and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "Only regular files and symlinks can be observed", path=path)
+    digest = hashlib.sha256()
+    with target.open("rb") as stream:
+        for block in iter(lambda: stream.read(65536), b""):
+            digest.update(block)
+    return ["100755" if info.st_mode & 0o111 else "100644", digest.hexdigest()]
 
 
-def _entries(root, revision=None, *, env=None):
+def _entries(root, revision=None, *, env=None, git_dir=None):
     args = ("ls-tree", "-rz", revision) if revision else ("ls-files", "--stage", "-z")
     entries = {}
-    for entry in _git(root, *args, env=env).split(b"\0"):
+    for entry in _git(root, *args, env=env, git_dir=git_dir).split(b"\0"):
         if not entry:
             continue
         metadata, path = entry.split(b"\t", 1)
@@ -284,40 +285,43 @@ def _entries(root, revision=None, *, env=None):
             if last != "0":
                 raise BoardError("WORKSPACE_UNMERGED", "Resolve the source index conflicts before preparing a workspace", path=name)
         entries[name] = [mode, oid]
-    if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z", env=env).split(b"\0")):
+    if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z", env=env, git_dir=git_dir).split(b"\0")):
         raise BoardError("WORKSPACE_UNSUPPORTED", "Sparse checkouts require an explicit full checkout")
     return entries
 
 
-def _untracked(root, selected):
+def _untracked(root, selected, *, env=None, git_dir=None):
     # Git prunes ignored dependency/cache directories before listing files.
     # Explicit selections may include ignored input, but only within their
     # literal pathspecs. https://git-scm.com/docs/git-ls-files#_options
-    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"))
+    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z", env=env, git_dir=git_dir).split(b"\0"))
     if selected:
-        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected).split(b"\0"))
+        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected, env=env, git_dir=git_dir).split(b"\0"))
     result = sorted(_relative(os.fsdecode(path)) for path in paths if path)
     return result
 
 
-def _observe(root, selected, *, require_selected=False, state_dir=None, git_dir=None):
-    # Git owns worktree interpretation: a copy retains its tracked modes and
-    # flags while add applies this repository's attributes, filters and config.
-    # git_dir is used only after interrupted removal has deleted the gitfile.
-    if git_dir is not None:
-        root = _GitWorktree(root, git_dir)
-    head = _commit(root, "HEAD")
-    index = _entries(root)
-    paths = _untracked(root, selected)
-    with _index(root, state_dir=state_dir, copy=True) as environment:
-        _git(root, "add", "-u", env=environment)
-        if paths:
+def _observe(root, selected, *, require_selected=False, state_dir, git_dir=None, capture=()):
+    # One copy supplies both the recorded index and Git's worktree observation.
+    # capture selects content for an output tree without changing the frozen
+    # input selectors or the original-byte evidence in its fingerprint.
+    head = _line(root, "rev-parse", "--verify", "HEAD^{commit}", git_dir=git_dir)
+    with _index(root, state_dir=state_dir, copy=True, git_dir=git_dir) as environment:
+        index = _entries(root, env=environment, git_dir=git_dir)
+        paths = _untracked(root, selected, env=environment, git_dir=git_dir)
+        if index:
+            _git(root, "update-index", "--no-assume-unchanged", "-z", "--stdin",
+                 data=b"".join(os.fsencode(path) + b"\0" for path in index), env=environment, git_dir=git_dir)
+        _git(root, "add", "-u", env=environment, git_dir=git_dir)
+        admitted = [path for path in paths if _in_scope(path, [*selected, *capture])]
+        if admitted:
             _git(root, "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul",
-                 data=b"".join(os.fsencode(path) + b"\0" for path in paths), env=environment)
-        entries = _entries(root, env=environment)
-    untracked_entries = {path: entries[path] for path in paths if path in entries}
-    contents = _batch_objects(root, [entry[1] for entry in untracked_entries.values()])
-    untracked = {path: [entry[0], _sha(data)] for (path, entry), data in zip(untracked_entries.items(), contents)}
+                 data=b"".join(os.fsencode(path) + b"\0" for path in admitted), env=environment, git_dir=git_dir)
+        entries = _entries(root, env=environment, git_dir=git_dir)
+    untracked = {path: _raw_entry(root, path) for path in paths}
+    if any(value is None for value in untracked.values()):
+        raise BoardError("WORKSPACE_CHANGED", "An untracked file disappeared during observation")
+    untracked_entries = {path: entries[path] for path in admitted if path in entries}
     included = {path: entry for path, entry in untracked_entries.items() if _in_scope(path, selected)}
     if require_selected:
         for path in selected:
@@ -327,8 +331,6 @@ def _observe(root, selected, *, require_selected=False, state_dir=None, git_dir=
                    "tracked": {path: entry for path, entry in entries.items() if path in index},
                    "untracked": untracked, "included": included}
     observation["fingerprint"] = _sha(_json(observation))
-    # Canonical objects accompany the observation in memory only. Durable
-    # fingerprints and excluded entries keep their existing fact format.
     observation["untrackedEntries"] = untracked_entries
     return observation
 
@@ -520,6 +522,8 @@ def _require_checkout(root, observation, expected, *, state_dir, paths=None):
     actual = observation["tracked"] | observation["untrackedEntries"]
     selected = set(actual) | set(expected) if paths is None else paths
     mismatched = {path for path in selected if actual.get(path) != expected.get(path)}
+    mismatched.update(path for path in observation["untracked"]
+                      if (paths is None or path in paths) and path not in observation["untrackedEntries"])
     # add can retain cached aliases even though checkout wrote only one name.
     # For a new checkout, Git also lists every physical name from an empty
     # index; no content is reread. A selected restore needs this only when the
@@ -535,6 +539,40 @@ def _require_checkout(root, observation, expected, *, state_dir, paths=None):
                          paths=sorted(mismatched), reason="The Git observation after checkout differs from the input tree")
 
 
+def _checkout_observation(root, expected, *, state_dir, selectors=(), capture=(), paths=None, git_error=None):
+    observed = _observe(root, selectors, state_dir=state_dir,
+                        capture=[*capture, *expected] if git_error is not None else capture)
+    try:
+        _require_checkout(root, observed, expected, state_dir=state_dir, paths=paths)
+    except BoardError as error:
+        if git_error is not None:
+            error.details["reason"] = git_error.details["reason"]
+            raise error from git_error
+        raise
+    if git_error is not None:
+        raise git_error
+    return observed
+
+
+def _checkout_cwd(target, relative):
+    """Create the cwd through ordinary directories of this new checkout only."""
+    current = target
+    for count, part in enumerate(relative.parts, start=1):
+        current = current / part
+        location = native_path(current)
+        try:
+            info = location.lstat()
+        except FileNotFoundError:
+            location.mkdir()
+            continue
+        if (not stat.S_ISDIR(info.st_mode)
+                or (_WINDOWS and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+            raise BoardError("WORKSPACE_UNSUPPORTED", "The working directory traverses a link or a non-directory",
+                             paths=["/".join(relative.parts[:count])],
+                             reason="Every cwd component must be an ordinary directory in the allocated checkout")
+    return current
+
+
 def _prepare_worktree(source, target, pinned, reason, *, state_dir):
     root = Path(source["repositoryPath"])
     entries = _entries(root, pinned["inputCommit"])
@@ -548,16 +586,21 @@ def _prepare_worktree(source, target, pinned, reason, *, state_dir):
                 or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]):
             raise BoardError("WORKSPACE_CONFLICT", "The interrupted worktree is incomplete or changed; it was preserved", path=str(target))
         _require_checkout(target, observed, entries, state_dir=state_dir)
-        return None, observed
+        return None, observed, identity["checkoutId"]
     # Capture physical ownership before Git writes the checkout.
     identity = None
     try:
         _git(root, "worktree", "add", "--detach", "--no-checkout", "--lock", "--reason", reason,
              str(target), pinned["inputCommit"])
         identity = _new_worktree_identity(target, source)
-        _git(target, "reset", "--hard", pinned["inputCommit"])
-        observed = _observe(target, [], state_dir=state_dir)
-        _require_checkout(target, observed, entries, state_dir=state_dir)
+        write_error = None
+        try:
+            _git(target, "reset", "--hard", pinned["inputCommit"])
+        except BoardError as error:
+            if error.code != "WORKSPACE_GIT_ERROR":
+                raise
+            write_error = error
+        observed = _checkout_observation(target, entries, state_dir=state_dir, git_error=write_error)
     except Exception as error:
         if identity is None and _path_present(target) and not target.is_symlink():
             try:
@@ -571,7 +614,7 @@ def _prepare_worktree(source, target, pinned, reason, *, state_dir):
                 "inputCommit": pinned["inputCommit"], "repositoryPath": str(root),
                 "lock": reason, "reasons": ["allocation-identity-unproven"]})
         raise
-    return identity, observed
+    return identity, observed, identity["checkoutId"]
 
 
 def _new_worktree_identity(target, source):
@@ -678,7 +721,7 @@ def _validate_manifest(manifest):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be normalized")
 
 
-def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
+def verify(manifest: dict, *, state_dir, require_unchanged: bool = True) -> dict:
     """Validate fixed input objects and actual execution checkout identity.
 
     Read workspaces always require unchanged managed input, as defined by the
@@ -688,10 +731,11 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
     """
     with _errors():
         _validate_manifest(manifest)
-        return _verify(manifest, require_unchanged=require_unchanged)
+        result, _observation = _verify(manifest, state_dir=state_dir, require_unchanged=require_unchanged)
+        return result
 
 
-def _verify(manifest, *, require_unchanged):
+def _verify(manifest, *, state_dir, require_unchanged, observation=None):
     """Observe a manifest already validated at the operation's input boundary."""
     with _errors():
         actual = inspect(manifest["path"])
@@ -709,12 +753,13 @@ def _verify(manifest, *, require_unchanged):
                 raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned staged tree is inconsistent")
         unchanged = None
         if require_unchanged or manifest["access"] == "read":
-            observation = _observe(root, snapshot["executionSelectors"])
+            if observation is None:
+                observation = _observe(root, snapshot["executionSelectors"], state_dir=state_dir)
             if observation["fingerprint"] != snapshot["executionFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The execution workspace no longer matches its prepared input")
             unchanged = True
-        return {"valid": True, "workspaceId": manifest["workspaceId"], "checkoutId": actual["checkoutId"],
-                "repositoryId": actual["repositoryId"], "unchanged": unchanged}
+        return ({"valid": True, "workspaceId": manifest["workspaceId"], "checkoutId": actual["checkoutId"],
+                 "repositoryId": actual["repositoryId"], "unchanged": unchanged}, observation)
 
 
 def recovery_inputs(manifest: dict) -> list[str]:
@@ -887,7 +932,7 @@ def _borrowed_submission_allocation(state_dir, intent):
     if (allocation is None or allocation["workspaceId"] != parts[0]
             or allocation["path"] != str(directory / "checkout")):
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout has no proven original allocation")
-    _verify(original, require_unchanged=False)
+    _verify(original, state_dir=state_dir, require_unchanged=False)
     if original["checkoutRoot"] != allocation["path"]:
         raise BoardError("WORKSPACE_CHANGED", "The borrowed execution checkout identity changed")
     registration = _worktree_record(Path(original["snapshot"]["repositoryPath"]), directory / "checkout")
@@ -912,7 +957,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
     if preparation is not None:
         preparation["replayed"] = manifest is not None
     if manifest is not None:
-        verify(manifest, require_unchanged=False)
+        verify(manifest, state_dir=state_dir, require_unchanged=False)
         return manifest
     pinned = _record(directory / "input.json")
     fresh_input = pinned is None
@@ -933,12 +978,14 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         path = Path(intent["cwd"])
         if intent["kind"] == "worktree":
             target = directory / "checkout"
-            identity, prepared = _prepare_worktree(source, target, pinned, "hey-my-buddy:" + workspace_id, state_dir=state_dir)
+            identity, prepared, checkout_id = _prepare_worktree(source, target, pinned, "hey-my-buddy:" + workspace_id, state_dir=state_dir)
             relative = path.relative_to(source["checkoutRoot"])
-            path = target / relative
-            if relative.parts:
-                path.mkdir(parents=True, exist_ok=True)
+            path = _checkout_cwd(target, relative)
         actual = inspect(str(path))
+        if intent["kind"] == "worktree" and (actual["checkoutRoot"] != str(target)
+                                                or actual["checkoutId"] != checkout_id):
+            raise BoardError("WORKSPACE_CHANGED", "The cwd does not belong to the allocated checkout",
+                             path=str(path), expectedCheckoutRoot=str(target), expectedCheckoutId=checkout_id)
         if source["repositoryId"] != actual["repositoryId"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
         selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
@@ -975,12 +1022,20 @@ def _entry_state(entries, path):
 
 
 def _observed_states(root, observation, paths):
-    entries = observation["tracked"] | observation["untrackedEntries"]
-    present = {path: entries[path] for path in paths if path in entries}
-    contents = _batch_objects(root, [entry[1] for entry in present.values()])
-    states = {path: {"mode": entry[0], "sha256": _sha(data)}
-              for (path, entry), data in zip(present.items(), contents)}
-    return {path: states.get(path) for path in paths}
+    states = {}
+    for path in paths:
+        item = observation["untracked"].get(path) if path in observation["untracked"] else _raw_entry(root, path)
+        if item is None:
+            states[path] = None
+            continue
+        mode = item[0]
+        indexed = observation["index"].get(path)
+        if _WINDOWS and mode != "120000" and indexed is not None and indexed[0] in ("100644", "100755"):
+            # Preserve the mode of this existing evidence format: Windows has
+            # no chmod execute bit for a tracked ordinary file.
+            mode = indexed[0]
+        states[path] = {"mode": mode, "sha256": item[1]}
+    return states
 
 
 def _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes, initial, initial_index):
@@ -1031,7 +1086,10 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
             continue
         if path in excluded:
             excluded_changes.add(path)
-        entry = observation["untrackedEntries"][path]
+        entry = observation["untrackedEntries"].get(path)
+        if entry is None:
+            violations.add(path)
+            continue
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
         elif allow_outside_scope:
@@ -1131,12 +1189,12 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 if output.get("taskId") != task_id or output.get("attemptId") != attempt_id or output.get("manifestSha256") != manifest["manifestSha256"]:
                     raise BoardError("WORKSPACE_CONFLICT", "This output identity belongs to a different attempt or input")
                 return _finish_output(repository, output, directory)
-            _verify(manifest, require_unchanged=False)
+            _valid, observation = _verify(manifest, state_dir=state_dir, require_unchanged=False)
             root = Path(manifest["checkoutRoot"])
-            observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
+            if observation is None:
+                observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+                                       capture=[*manifest["writeScope"], *allowed_paths])
             if manifest["access"] == "read":
-                if observation["fingerprint"] != manifest["snapshot"]["executionFingerprint"]:
-                    raise BoardError("WORKSPACE_CHANGED", "Read-only input changed before it could be sealed")
                 entries, changed, excluded_changes = _entries(root, manifest["inputTree"]), [], []
             else:
                 try:
@@ -1393,7 +1451,18 @@ def _site_conflicts(root, recorded, selected, observation):
                (recorded[path].get("observedIndex"), recorded[path].get("authorizedIndex"))]
 
 
-def _restore_paths(root, observation, worktree, index, *, state_dir, selectors):
+def _update_index(root, before, entries):
+    """Update selected entries without replacing other staging flags or stats."""
+    changed = {path: entry for path, entry in entries.items() if _entry_state(before, path) != entry}
+    if changed:
+        records = b"".join(
+            (b"0 " + b"0" * len(before[path][1]) if entry is None else
+             entry["mode"].encode() + b" " + entry["oid"].encode()) + b"\t" + os.fsencode(path) + b"\0"
+            for path, entry in sorted(changed.items()))
+        _git(root, "update-index", "-z", "--index-info", data=records)
+
+
+def _restore_paths(root, observation, worktree, index, *, state_dir, selectors, capture=()):
     """Git writes the selected worktree paths and the authorized staging state."""
     current = observation["tracked"] | observation["untrackedEntries"]
     desired = dict(current)
@@ -1408,19 +1477,17 @@ def _restore_paths(root, observation, worktree, index, *, state_dir, selectors):
         current_tree = _tree(root, current, state_dir=state_dir)
         with _index(root, state_dir=state_dir) as environment:
             _git(root, "read-tree", current_tree, env=environment)
-            _git(root, "restore", "--source=" + tree, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
-                 data=b"".join(os.fsencode(path) + b"\0" for path in selected), env=environment)
-    desired_index = dict(observation["index"])
-    for path, entry in index.items():
-        if entry is None:
-            desired_index.pop(path, None)
-        else:
-            desired_index[path] = [entry["mode"], entry["oid"]]
-    if desired_index != observation["index"]:
-        _git(root, "read-tree", _tree(root, desired_index, state_dir=state_dir))
-    after = _observe(root, selectors, state_dir=state_dir)
-    _require_checkout(root, after, desired, state_dir=state_dir, paths=worktree)
-    return after
+            try:
+                _git(root, "restore", "--source=" + tree, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
+                     data=b"".join(os.fsencode(path) + b"\0" for path in selected), env=environment)
+            except BoardError as error:
+                if error.code != "WORKSPACE_GIT_ERROR":
+                    raise
+                return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+                                             capture=[*capture, *worktree], paths=worktree, git_error=error)
+    _update_index(root, observation["index"], index)
+    return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+                                 capture=[*capture, *worktree], paths=worktree)
 
 
 def _blocking_paths(root, manifest, observation, *, state_dir):
@@ -1438,7 +1505,7 @@ def _reset_site(root, manifest, observation, *, state_dir):
     initial = _entries(root, manifest["inputCommit"])
     initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
     excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
-    current_index = _entries(root)
+    current_index = observation["index"]
     selected = set(observation["tracked"]) | set(initial) | set(current_index) | set(initial_index)
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
@@ -1448,7 +1515,7 @@ def _reset_site(root, manifest, observation, *, state_dir):
     states = {path: _entry_state(initial, path) for path in ordered}
     after = _restore_paths(root, observation, states,
                            {path: _entry_state(initial_index, path) for path in ordered},
-                           state_dir=state_dir, selectors=manifest["snapshot"]["executionSelectors"])
+                           state_dir=state_dir, selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
     # An excluded cache was never captured by content, so a modified one cannot be
     # returned mechanically; it is reported instead of being silently accepted.
     remaining = sorted(path for path, fingerprint in excluded.items()
@@ -1648,8 +1715,10 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             if manifest["repositoryId"] != _identity(repository):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
-            _verify(manifest, require_unchanged=False)
-            observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
+            _verify(manifest, state_dir=state_dir, require_unchanged=False)
+            capture = (["."] if action in ("adopt", "abandon") else
+                       [*manifest["writeScope"], *(selected_paths or blocking)])
+            observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir, capture=capture)
             if observation["fingerprint"] != observed_fingerprint:
                 raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
                                  observedFingerprint=observed_fingerprint, currentFingerprint=observation["fingerprint"])
@@ -1680,7 +1749,6 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                 raise BoardError("INVALID_WORKSPACE", "Selected paths have no recorded failure evidence", paths=unknown[:32])
             if not selected:
                 raise BoardError("WORKSPACE_CONFLICT", "The recorded failure site has no blocking path to restore")
-            index = _entries(root)
             conflicting = _site_conflicts(root, entries, selected, observation)
             if conflicting:
                 raise BoardError("WORKSPACE_CONFLICT", "Selected paths changed after the recorded failure; the site is preserved",
@@ -1688,7 +1756,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             authorized = {path: entries[path].get("authorized") for path in selected}
             after = _restore_paths(root, observation, authorized,
                                    {path: entries[path].get("authorizedIndex") for path in selected}, state_dir=state_dir,
-                                   selectors=manifest["snapshot"]["executionSelectors"])
+                                   selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
             remaining = _blocking_paths(root, manifest, after, state_dir=state_dir)
             preserved = sorted(set(entries) - set(selected))
             if remaining:
@@ -2086,7 +2154,7 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
     return record, git_dir
 
 
-def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, state_dir):
+def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, state_dir, allowed):
     """Restore only missing retained files, then use the ordinary cleanup proof."""
     if not _path_present(checkout_root / ".git"):
         _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"))
@@ -2097,8 +2165,18 @@ def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, st
         # checkout-index without --force preserves a file that is already there.
         with _index(checkout_root, state_dir=state_dir) as environment:
             _git(checkout_root, "read-tree", tree, env=environment)
-            _git(checkout_root, "checkout-index", "--stdin", "-z",
-                 data=b"".join(os.fsencode(path) + b"\0" for path in missing), env=environment)
+            write_error = None
+            try:
+                _git(checkout_root, "checkout-index", "--stdin", "-z",
+                     data=b"".join(os.fsencode(path) + b"\0" for path in missing), env=environment)
+            except BoardError as error:
+                if error.code != "WORKSPACE_GIT_ERROR":
+                    raise
+                write_error = error
+        return _checkout_observation(checkout_root, entries, state_dir=state_dir,
+                                     selectors=manifest["snapshot"]["executionSelectors"], paths=missing,
+                                     capture=[*manifest["writeScope"], *allowed, *missing], git_error=write_error)
+    return None
 
 
 def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,
@@ -2147,6 +2225,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         checkout_root = Path(allocation["path"])
         if not _inside(manifest["path"], checkout_root):
             result["reasons"].append("unsafe-path")
+        restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             try:
@@ -2159,7 +2238,8 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
             if record is None:
                 result["eligible"] = not result["reasons"]
                 return result
-            _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, state_dir=state_dir)
+            restored = _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed,
+                                        state_dir=state_dir, allowed=tuple(allowed or ()))
         try:
             actual = inspect(str(checkout_root))
         except BoardError as error:
@@ -2174,7 +2254,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                 result["reasons"].append("identity-changed")
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
-                           result, allowed=tuple(allowed or ()))
+                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored)
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -2189,7 +2269,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, allowed=()) -> None:
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
@@ -2230,7 +2310,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
 
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
         try:
-            _verify(manifest, require_unchanged=True)
+            _verify(manifest, state_dir=state_dir, require_unchanged=True, observation=observation)
         except BoardError as error:
             if error.code == "WORKSPACE_GIT_UNKNOWN":
                 raise
@@ -2257,7 +2337,9 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     if not fixed_refs_match(True):
         result["reasons"].append("sealed-output-invalid")
         return
-    observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"])
+    if observation is None:
+        observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+                               capture=[*manifest["writeScope"], *allowed])
     if observation["fingerprint"] == snapshot.get("observationSha256"):
         return
     unsealed = []
@@ -2285,10 +2367,10 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
     """Prove deletion of one checkout without restoring an interrupted removal.
 
     A missing gitfile can be the result of ``git worktree remove`` stopping
-    halfway through. In that state only surviving files are compared with
-    retained Git trees; missing files are allowed, but an added or changed file
-    keeps the checkout in place. The original registration and lock still have
-    to prove the exact physical allocation.
+    halfway through. Compare surviving tracked and nonignored untracked paths
+    with retained Git trees; ignored caches stay outside this observation.
+    Missing files are allowed, but an added or changed managed file keeps the
+    checkout in place. Registration and lock still prove the physical allocation.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -2343,15 +2425,17 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
 
         # The registration is still bound to this allocation, but Git removed
         # its gitfile. Never write it back merely to complete deletion.
-        observed = _observe(checkout, [], state_dir=state_dir, git_dir=_git_dir)
-        surviving = observed["tracked"] | observed["untrackedEntries"]
         trees = [item["tree"] for item in candidates if
                  _line(repository, "rev-parse", item["commit"] + "^{tree}") == item["tree"]]
         trees.append(manifest["inputTree"])
+        expected_trees = [_entries(repository, tree) for tree in dict.fromkeys(trees)]
+        capture = sorted({path for expected in expected_trees for path in expected})
+        observed = _observe(checkout, [], state_dir=state_dir, git_dir=_git_dir, capture=capture)
+        surviving = observed["tracked"] | observed["untrackedEntries"]
+        unknown = observed["untracked"].keys() - observed["untrackedEntries"].keys()
         differences = []
-        for tree in dict.fromkeys(trees):
-            expected = _entries(repository, tree)
-            differences = [path for path, value in surviving.items() if expected.get(path) != value]
+        for expected in expected_trees:
+            differences = sorted(unknown | {path for path, value in surviving.items() if expected.get(path) != value})
             if not differences:
                 return {"reasons": [], "resume": True}
         return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
@@ -2388,6 +2472,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
         if not _path_present(checkout_root):
             return removal
+        restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)

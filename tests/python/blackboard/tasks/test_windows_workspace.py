@@ -25,6 +25,17 @@ class WindowsWorkspacePrivateRecordsTests(unittest.TestCase):
                     workspace._relative(path)
             self.assertEqual(workspace._relative("directory/file.txt"), "directory/file.txt")
 
+    def test_raw_evidence_preserves_the_existing_windows_index_mode(self):
+        path = self.root / "script.cmd"
+        payload = b"echo evidence\r\n"
+        path.write_bytes(payload)
+        path.chmod(0o755)
+        raw = workspace._raw_entry(self.root, "script.cmd")
+        with patch.object(workspace, "_WINDOWS", True), patch.object(workspace, "_raw_entry", return_value=raw):
+            states = workspace._observed_states(self.root, {"index": {"script.cmd": ["100644", "object"]},
+                                                         "untracked": {}}, ["script.cmd"])
+        self.assertEqual(states["script.cmd"], {"mode": "100644", "sha256": workspace._sha(payload)})
+
     def test_private_lock_leaf_cannot_follow_a_link(self):
         with workspace._lock(self.root):
             pass

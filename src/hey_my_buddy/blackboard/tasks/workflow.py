@@ -1073,10 +1073,9 @@ class WorkflowCoordinator:
                 return row
         return None
 
-    @staticmethod
-    def _verify_read_snapshot(manifest, checkout_id, holder_task_id):
+    def _verify_read_snapshot(self, manifest, checkout_id, holder_task_id):
         try:
-            workspace_module().verify(manifest, require_unchanged=True)
+            workspace_module().verify(manifest, state_dir=self.board.directory, require_unchanged=True)
         except BoardError as error:
             if error.code == "WORKSPACE_CHANGED":
                 raise BoardError(
@@ -6476,7 +6475,7 @@ class WorkflowCoordinator:
                     if replayed:
                         # A replay's on-disk input needs a fresh execution proof;
                         # a new preparation has just observed this same checkout.
-                        workspace_module().verify(manifest, require_unchanged=True)
+                        workspace_module().verify(manifest, state_dir=self.board.directory, require_unchanged=True)
                 except (BoardError, OSError) as error:
                     if isinstance(error, BoardError) and error.code in {"WORKSPACE_BUSY", "WORKSPACE_GIT_UNKNOWN"}:
                         # Another worker is preparing the same continuation. Leave it

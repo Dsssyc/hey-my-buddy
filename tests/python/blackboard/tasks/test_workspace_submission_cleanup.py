@@ -367,7 +367,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.rejected(board)
         self.assertEqual(caught.exception.code, 'ADMISSION_FAILED')
         self.assertTrue(Path(manifest['checkoutRoot']).exists())
-        workspace.verify(manifest)
+        workspace.verify(manifest, state_dir=self.directory)
 
     def test_existing_source_is_preserved_on_rejection(self):
         board = self.board()
@@ -528,7 +528,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
     def test_reset_failure_revokes_new_checkout(self):
         board = self.board()
         original_git = workspace._git
-        error = BoardError('WORKSPACE_GIT_ERROR', 'controlled checkout failure', argv=['git', 'reset'])
+        error = workspace._git_failure(['git', 'reset'], 'reset', returncode=128,
+                                       stderr=b'controlled checkout failure')
         def read_tree_failure(root, *args, **kwargs):
             if args[0] == 'reset' and Path(root).name == 'checkout':
                 raise error
@@ -536,8 +537,10 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         with patch.object(workspace, '_git', side_effect=read_tree_failure):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
-        self.assertIs(caught.exception, error)
-        self.assertTrue(error.details['preparationCleanup']['removed'])
+        self.assertEqual(caught.exception.code, 'WORKSPACE_UNSUPPORTED')
+        self.assertIs(caught.exception.__cause__, error)
+        self.assertTrue(caught.exception.details['paths'])
+        self.assertTrue(caught.exception.details['preparationCleanup']['removed'])
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assert_no_registration(board)
 

@@ -223,7 +223,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                 handle = native_adapter.start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
-            prepare.assert_called_once_with(manifest, private_root, deadline=ANY)
+            prepare.assert_called_once_with(manifest, private_root, state_dir=Path(root) / "state", deadline=ANY)
             self.assertFalse(private_root.is_relative_to(directory))
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)

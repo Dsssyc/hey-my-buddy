@@ -139,7 +139,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         self.assertEqual(manifest["baseCommit"], before["head"])
         self.assertTrue(manifest["snapshot"]["stagedTree"])
         self.assertNotEqual(manifest["snapshot"]["executionFingerprint"], "")
-        verified = workspace.verify(manifest, require_unchanged=True)
+        verified = workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)
         self.assertTrue(verified["valid"])
         self.assertTrue(verified["unchanged"])
         task = board.call("task_get", {"runId": submitted["runId"]})["task"]
@@ -324,9 +324,9 @@ class RealAdapterTests(RealWorkspaceTestCase):
         verified: list[bool] = []
         real_verify = workspace.verify
 
-        def recording_verify(value, *, require_unchanged=True):
+        def recording_verify(value, *, state_dir, require_unchanged=True):
             verified.append(require_unchanged)
-            return real_verify(value, require_unchanged=require_unchanged)
+            return real_verify(value, state_dir=state_dir, require_unchanged=require_unchanged)
 
         workspace.verify = recording_verify
         try:
@@ -485,7 +485,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         effective = parent_second["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(effective["baseCommit"], helper_seal["commit"])
         self.assertEqual(effective["inputTree"], helper_seal["tree"])
-        verified = workspace.verify(effective, require_unchanged=True)
+        verified = workspace.verify(effective, require_unchanged=True, state_dir=self.directory)
         self.assertTrue(verified["valid"])
         (self.repo / "parent-integration.txt").write_text("integrated\n", encoding="utf-8", newline="\n")
         final_seal = workspace.seal(

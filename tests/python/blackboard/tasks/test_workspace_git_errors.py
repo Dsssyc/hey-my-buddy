@@ -18,7 +18,6 @@ class GitErrorTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.stdout = b"o" * 3000 + b"stdout-tail\xff"
         self.stderr = b"e" * 3000 + b"stderr-tail\xfe"
-        self.oid = "a" * 40
 
     def failure(self, callback):
         with self.assertRaises(BoardError) as caught:
@@ -118,17 +117,6 @@ class GitErrorTests(unittest.TestCase):
             self.assertNotIn("private-input", str(error.payload()))
             self.assertNotIn("private-environment", str(error.payload()))
 
-    def test_batch_object_response_failures_report_argv_and_bounded_stdout(self):
-        payloads = (self.oid.encode() + b" missing\n" + b"x" * 3000,
-                    self.oid.encode() + b" blob 1\nx\n" + b"x" * 3000)
-        for payload in payloads:
-            with self.subTest(payload=payload[:70]), patch.object(workspace, "_git", return_value=payload):
-                error = self.failure(lambda: workspace._batch_objects(self.root, [self.oid]))
-                command, _env = workspace._git_command(self.root, "cat-file", "--batch")
-                self.diagnostics(error, command, "cat-file", output=False)
-                self.assertEqual(error.details["stdout"], payload.decode(errors="replace")[-2000:])
-                self.assertTrue(error.details["stdoutTruncated"])
-                self.assertEqual(error.details["returncode"], 0)
 
 
 if __name__ == "__main__":

@@ -368,7 +368,7 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertIsNone(manifest)
         self.assertTrue(root.is_dir())
         self.assertEqual(len(digest), 64)
-        self.assertTrue(router_input.verify(manifest, root, digest, deadline=time.monotonic() + 120)["unchanged"])
+        self.assertTrue(router_input.verify(manifest, root, digest, deadline=time.monotonic() + 120, state_dir=self.root / "state")["unchanged"])
         self.assertEqual(self.start(preparation), "started-handle")
         harness, _context, request = self.start_call
         self.assertEqual(harness, "dsh")

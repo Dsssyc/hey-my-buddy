@@ -194,7 +194,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             claim = self.claim(board, run_id, request_id=f'git-claim-{index}')
             self.assertIsNotNone(claim['claim'])
             manifest = claim['claim']['turn']['input']['executionWorkspace']
-            git_workspace.verify(manifest, require_unchanged=True)
+            git_workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)
             saved.append(dict(manifest))
             self.assertEqual(manifest['access'], access)
             if access != 'read':
@@ -251,4 +251,4 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         manifest = claim['claim']['turn']['input']['executionWorkspace']
         self.assertEqual(manifest['snapshot']['executionSelectors'], ['input.txt'])
         self.assertEqual(manifest['access'], 'read')
-        git_workspace.verify(manifest, require_unchanged=True)
+        git_workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)
