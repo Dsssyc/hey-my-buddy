@@ -380,7 +380,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${B}/preview-run-b9`);
         await expect(detail(page).locator("[data-slot=detail-status]")).toHaveText(locale === "zh-CN" ? "已验收" : "Accepted");
         await step(page, turn(1)).click();
-        await expect(pane(page)).toContainText(locale === "zh-CN" ? "模型开始前额度被拒绝" : "Rejected before the model started");
+        await expect(pane(page)).toContainText(locale === "zh-CN" ? "模型开始前被拒绝" : "Rejected before the model started");
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");
         await expect(pane(page)).toContainText("zcode");
         await page.screenshot({ path: testInfo.outputPath(`task-rerouted-${locale}-${width}-light.png`) });
@@ -444,3 +444,38 @@ test.describe("the detail of a micro task in the dark theme", () => {
     }
   });
 });
+
+for (const locale of ["zh-CN", "en-US"]) for (const width of [390, 1280]) {
+  test.describe(`model capacity ${locale} ${width}px`, () => {
+    test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
+    test("shows the structured overload on its micro task", async ({ page }) => {
+      await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+      await page.route("**/api/tasks/preview-run-b2", async route => {
+        const response = await route.fetch();
+        const task = await response.json();
+        task.quotaFailure = { code: "model-overloaded", nativeCode: "serverOverloaded", rejectionPhase: "during-model" };
+        await route.fulfill({ response, json: task });
+      });
+      await page.route("**/api/command", async route => {
+        const request = route.request().postDataJSON();
+        if (request.operation !== "workflow_get" || request.params.runId !== "preview-run-b9") return route.continue();
+        const response = await route.fetch();
+        const reply = await response.json();
+        for (const turn of [...(reply.result.turns ?? []), ...(reply.result.audit?.turns ?? [])]) {
+          if (turn.state === "rejected") turn.quotaFailure = { code: "model-overloaded", nativeCode: "serverOverloaded" };
+        }
+        await route.fulfill({ response, json: reply });
+      });
+      await open(page, "#tasks/macro-22222222-2222-4222-8222-222222222222/preview-run-b2");
+      const label = locale === "zh-CN" ? "模型满载" : "Model at capacity";
+      await expect(pane(page)).toContainText(label);
+      await expectNoSidewaysScroll(page);
+      await expectTextUncut(pane(page).getByText(label, { exact: false }));
+      await page.evaluate(() => { window.location.hash = "#tasks/macro-22222222-2222-4222-8222-222222222222/preview-run-b9"; });
+      await page.locator("[data-slot=detail-strip] [data-key='span:execution:att-b9-1']").click();
+      await expect(pane(page)).toContainText(label);
+      await expect(pane(page)).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");
+      await expectNoSidewaysScroll(page);
+    });
+  });
+}

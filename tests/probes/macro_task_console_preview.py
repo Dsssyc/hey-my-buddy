@@ -1734,6 +1734,8 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
         "tokenUsage": item["usage"],
+        **({"quotaFailure": item["result"]["result"]["quotaFailure"]}
+           if item["result"] is not None and "quotaFailure" in item["result"]["result"] else {}),
         "releaseReason": item["releaseReason"],
         "reminders": ({"overdue": True, "possiblyStuck": True, "lastNativeEventAt": instant(9, 40), "toolInProgress": False}
                       if entry["runId"] == "preview-run-a3"

@@ -911,6 +911,19 @@ class SettlementGuardTests(NativeRunCase):
         self.assertNotIn("nativeInterruptRequested", observations)
         self.assertNotIn("nativeInterruptAcknowledged", observations)
 
+    def test_overload_uses_the_common_failure_package_and_activity_phase(self):
+        from hey_my_buddy.buddy.roles.run_execution import _worker_facts
+        for case, phase in (("overload-before", "before-model"), ("overload-during", "during-model")):
+            self.fixture_case(case)
+            for scope, schema in (("write", WORKER_SCHEMA), ("read", READ_SCHEMA)):
+                with self.subTest(case=case, scope=scope):
+                    result = self.execute(self.request(scope=scope, schema=schema, timeout=20))
+                    self.assertEqual(result.end.reason_code, "harness-error")
+                    failure = _worker_facts(result)["quotaFailure"]
+                    self.assertEqual(failure["code"], "model-overloaded")
+                    self.assertEqual(failure["nativeCode"], "overloaded")
+                    self.assertEqual(failure["rejectionPhase"], phase)
+
     def test_quota_failure_uses_the_common_package_on_worker_and_router_carriers(self):
         self.fixture_case("quota-rejected")
         for scope, schema in (("write", WORKER_SCHEMA), ("read", READ_SCHEMA)):

@@ -149,7 +149,7 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
+export type QuotaFailure = { code: "quota-exceeded" | "rate-limited" | "model-overloaded"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
 
 export type Task = {
   providerCooling?: ProviderCooling | null;

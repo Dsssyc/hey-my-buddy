@@ -18,7 +18,7 @@ def moment(seconds):
 
 
 def failure(*, phase="before-model", reset=None, code="quota-exceeded"):
-    return {"code": code, "nativeCode": "usageLimitExceeded", "source": "synthetic/turn-error",
+    return {"code": code, "nativeCode": "serverOverloaded" if code == "model-overloaded" else "usageLimitExceeded", "source": "synthetic/turn-error",
             "observedAt": T0, "resetsAt": reset, "rejectionPhase": phase}
 
 
@@ -233,6 +233,89 @@ class CoolingWorkflowTests(WorkflowTestCase):
 
     def test_rate_limit_is_not_a_quota_reroute_or_cooldown(self):
         self.assert_host_failure(code="rate-limited")
+
+    def test_overload_reroutes_before_model_without_provider_cooling(self):
+        run = self.routed()
+        first = self.claim(self.board_, run_id=run["runId"])
+        self.enable(1)
+        settled = self.reject_turn(first, code="model-overloaded")
+        self.assertTrue(settled["workflow"]["autoContinued"])
+        current = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(current["buddy"], self.identities[1])
+        self.assertEqual(current["workspace"], run["workspace"])
+        self.assertEqual(current["turns"][0]["quotaFailure"]["code"], "model-overloaded")
+        self.assertEqual(current["routing"]["routingBasis"]["excludedBuddies"], [{
+            "buddyId": self.ids[0], **self.identities[0], "note": None,
+            "reason": "model-overloaded", "nativeCode": "serverOverloaded",
+            "turnId": first["claim"]["turn"]["turnId"]}])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0], 0)
+            event = json.loads(db.execute("SELECT payload_json FROM events WHERE kind='workflow.auto_continued'").fetchone()[0])
+            self.assertEqual(event["reason"], "model-overloaded")
+        second = self.claim(self.board_, run_id=run["runId"])
+        self.assertEqual(second["claim"]["turn"]["resumeMode"], "initial")
+        self.finish_turn(self.board_, second)
+        delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertNotIn("quotaFailure", delivered)
+        pending = self.continue_run(self.board_, delivered, reroute=True)
+        self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
+        after = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(after["routing"]["routingBasis"]["excludedCount"], 0)
+        self.assertEqual(after["routing"]["routingBasis"]["candidateCount"], 2)
+
+    def test_all_overloaded_services_reach_host_instead_of_routing_in_a_loop(self):
+        run = self.routed()
+        for index in range(3):
+            turn = self.claim(self.board_, run_id=run["runId"])
+            if index < 2:
+                self.enable(index + 1)
+            self.reject_turn(turn, code="model-overloaded")
+        current = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(current["routing"]["status"], "needs-host")
+        basis = current["routing"]["routingBasis"]
+        self.assertEqual((basis["candidateCount"], basis["excludedCount"], basis["coolingCount"]), (0, 3, 0))
+        self.assertTrue(all(item["reason"] == "model-overloaded" for item in basis["excludedBuddies"]))
+
+    def test_during_model_overload_is_visible_and_manual_reroute_excludes_all_efforts(self):
+        run = self.assert_host_failure(phase="during-model", code="model-overloaded")
+        failed = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(failed["quotaFailure"]["code"], "model-overloaded")
+        self.assertEqual(failed["quotaFailure"]["nativeCode"], "serverOverloaded")
+        provider = self.identities[0]["provider"]
+        self.catalog_fixture({**FIXTURE_CATALOG, "providers": [{"harness": "dsh", "provider": provider,
+            "efforts": ["off", "max"], "models": [{"id": self.identities[0]["model"]}, {"id": "spare"}]}]})
+        self.board_.call("model_catalog_refresh", {"requestId": "extra-efforts"})
+        extra = [f"dsh:{provider}:{self.identities[0]['model']}:max", f"dsh:{provider}:spare:off"]
+        self.board_.console_call("user_policy_publish", {"commandId": "enable-extra",
+            "buddySettings": [{"buddyId": buddy_id, "enabled": True} for buddy_id in extra]})
+        pending = self.continue_run(self.board_, failed, reroute=True)
+        self.board_.store.workflow.prepare_continuation_workspace({"runId": pending["runId"]})
+        current = self.board_.call("workflow_get", {"runId": run["runId"]})
+        self.assertEqual(current["buddy"], {**self.identities[0], "model": "spare"})
+        excluded = current["routing"]["routingBasis"]["excludedBuddies"]
+        self.assertEqual({item["effort"] for item in excluded}, {"off", "max"})
+        from hey_my_buddy.blackboard.routing.candidate import candidate_bound
+        with self.board_.store.db.read() as db:
+            other_harness = dict(db.execute("SELECT * FROM buddies WHERE buddy_id=?", (self.ids[0],)).fetchone())
+            other_harness["harness"] = "codex"
+            self.assertIsNone(candidate_bound(db, other_harness, {"excludedModelServices": excluded}, T0,
+                                             require_health=False, apply_preferences=False, check_cooling=False))
+        # A fresh request has no task-local exclusion, even on the same provider.
+        fresh = self.board_.call("selection_request", {"requestId": "fresh-request", "task": "choose"})
+        fresh_basis = self.board_.call("selection_get", {"decisionId": fresh["decisionId"]})["decision"]["routingBasis"]
+        self.assertEqual((fresh_basis["candidateCount"], fresh_basis["excludedCount"]), (3, 0))
+
+    def test_overload_does_not_override_explicit_buddy(self):
+        self.assert_host_failure(code="model-overloaded", explicit=True)
+
+    def test_overload_does_not_override_locked_buddy(self):
+        self.assert_host_failure(code="model-overloaded", locked=True)
+
+    def test_overload_with_unknown_phase_stays_with_host(self):
+        self.assert_host_failure(code="model-overloaded", phase="unknown")
+
+    def test_cancelled_overload_does_not_reroute(self):
+        self.assert_host_failure(code="model-overloaded", cancel=True)
 
     def test_unconfirmed_stop_retains_the_turn_without_publishing_cooling(self):
         run = self.routed()

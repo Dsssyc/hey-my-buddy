@@ -116,7 +116,7 @@ from .config import (
 from .protocol import (
     ClaudeProtocolError,
     Connection,
-    QuotaRejected,
+    ProviderRejected,
     TurnEvidence,
     model_usage_keys,
     result_quota_denial,
@@ -204,8 +204,8 @@ def _interrupt(connection: Connection | None, *, strict: bool = False) -> bool:
         connection.cancelled = threading.Event()
         connection.deadline = time.monotonic() + 2
         return connection.call({"subtype": "interrupt"}) is not None
-    except (ClaudeProtocolError, QuotaRejected, OSError, ValueError) as error:
-        if strict and (isinstance(error, QuotaRejected)
+    except (ClaudeProtocolError, ProviderRejected, OSError, ValueError) as error:
+        if strict and (isinstance(error, ProviderRejected)
                        or isinstance(error, ClaudeProtocolError) and error.code == "invalid-protocol"):
             raise
         # A late quota frame while awaiting interrupt acknowledgement must not
@@ -757,7 +757,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
     if subtype == "success" and native_result.get("is_error") is False:
         return True
     if result_quota_denial(native_result):
-        raise QuotaRejected("unknown", None, source="claude/stream-json-result")
+        raise ProviderRejected("unknown", None, source="claude/stream-json-result")
     if (native_result.get("is_error") is True or subtype == "error"
             or isinstance(subtype, str) and subtype.startswith("error_")):
         raise ClaudeProtocolError("native-turn-failed",
@@ -1165,12 +1165,12 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "cancelled"
             state.reason = "observer-interrupt"
             request_interrupt()
-        except QuotaRejected as error:
+        except ProviderRejected as error:
             # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
             state.status = "error"
             state.reason = "harness-error"
-            state.error_text = "the Claude provider quota rejected this execution"
-            state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
+            state.error_text = str(error)
+            state.quota_failure = {"code": error.classification, "nativeCode": error.native_code,
                                    "source": error.source, "observedAt": utc_now(),
                                    "resetsAt": error.resets_at,
                                    "rejectionPhase": collector.evidence.rejection_phase() if collector is not None

@@ -19,7 +19,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await page.screenshot({ path: testInfo.outputPath(`task-cooling-${width}-${theme}.png`) });
       await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${B}/preview-run-b9`);
       await page.locator("[data-slot=detail-strip] [data-key='span:execution:att-b9-1']").click();
-      await expect(pane).toContainText("模型开始前额度被拒绝");
+      await expect(pane).toContainText("模型开始前被拒绝");
       await expect(pane).toContainText("已改派");
       await expect(page.locator("[data-slot=detail-status]")).toHaveText("已验收");
       await settle(page);

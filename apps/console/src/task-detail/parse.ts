@@ -115,6 +115,7 @@ export function parseTokenUsage(value: unknown): TokenUsage | null {
 function parseTurn(value: unknown): Turn {
   const turn = rec(value, "turn");
   const routing = recOrNull(turn.routing, "turn.routing");
+  const failure = recOrNull(turn.quotaFailure, "turn.quotaFailure");
   return {
     turnId: str(turn.turnId, "turn.turnId"), turnIndex: int(turn.turnIndex, "turn.turnIndex"),
     attemptId: str(turn.attemptId, "turn.attemptId"), expectedSeconds: intOrNull(turn.expectedSeconds, "turn.expectedSeconds"),
@@ -124,6 +125,7 @@ function parseTurn(value: unknown): Turn {
     buddy: parseBuddy(turn.buddy, "turn.buddy"),
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
+    ...(failure ? { quotaFailure: { code: oneOf(failure.code, ["quota-exceeded", "rate-limited", "model-overloaded"] as const, "turn.quotaFailure") } } : {}),
   };
 }
 
@@ -232,7 +234,8 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
     candidateCount: basis ? intOrNull(basis.candidateCount, what) : null,
     excluded: basis ? list(basis.excludedBuddies ?? [], what).map(item => {
       const excluded = rec(item, what);
-      return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
+      return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null,
+        ...(excluded.reason === undefined ? {} : { reason: oneOf(excluded.reason, ["model-overloaded"] as const, what) }) };
     }) : [],
     coolingCount: basis ? intOrNull(basis.coolingCount, what) : null,
     cooling: basis ? list(basis.coolingBuddies ?? [], what).map(item => {
@@ -439,7 +442,7 @@ function parseAttempt(task: Rec): Attempt | null {
   const reminders = rec(attempt.reminders, "task.selectedAttempt.reminders");
   const receipt = recOrNull(attempt.result, "task.selectedAttempt.result");
   const quotaFailure = recOrNull(task.quotaFailure, "task.quotaFailure");
-  const quota = quotaFailure ? oneOf(quotaFailure.code, ["quota-exceeded", "rate-limited"] as const, "task.quotaFailure") : null;
+  const quota = quotaFailure ? oneOf(quotaFailure.code, ["quota-exceeded", "rate-limited", "model-overloaded"] as const, "task.quotaFailure") : null;
   const initiator = attempt.stopInitiator ?? task.stopInitiator;
   const cancellation = recOrNull(task.cancellation, "task.cancellation");
   const cancelled = task.state === "cancelled" || task.state === "cancelling" || recOrNull(task.workflow, "task.workflow")?.state === "cancelled";

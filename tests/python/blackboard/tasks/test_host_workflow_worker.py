@@ -155,10 +155,30 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
     def env(self):
         environment = {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
                        "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
-                       "HMB_CODEX_FIXTURE_CASE": "quota-failure"}
+                       "HMB_CODEX_FIXTURE_CASE": getattr(self, "codex_case", "quota-failure")}
         select_fixture(environment, self.directory, "codex",
                        Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py")
         return environment
+
+    def test_codex_overload_is_visible_directly_in_get_and_await(self):
+        self.codex_case = "overload-activity-text"
+        with self.daemon(env=self.env()):
+            submitted = self.call("submit", {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
+                "requestId": "codex-overload", "hostId": "host-1", "task": "Offline model overload",
+                "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
+            awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
+            current = self.call("get", {"runId": submitted["runId"]})
+            self.assertEqual(current["state"], "failed", current)
+            self.assertEqual(awaited["status"], "failed", awaited)
+            for failure in (current["quotaFailure"], awaited["result"]["quotaFailure"]):
+                self.assertEqual(failure["code"], "model-overloaded")
+                self.assertEqual(failure["nativeCode"], "serverOverloaded")
+                self.assertEqual(failure["rejectionPhase"], "during-model")
+            for method in ("get", "await"):
+                code, brief = self.cli(method, json.dumps({"runId": submitted["runId"]}), env=self.env())
+                self.assertEqual(code, 0, brief)
+                failure = brief["quotaFailure"] if method == "get" else brief["result"]["quotaFailure"]
+                self.assertEqual((failure["code"], failure["nativeCode"]), ("model-overloaded", "serverOverloaded"))
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):

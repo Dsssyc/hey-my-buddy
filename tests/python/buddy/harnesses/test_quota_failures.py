@@ -172,10 +172,10 @@ class NativeQuotaFailureTests(unittest.TestCase):
 
     def test_claude_publishes_explicit_native_rejection_as_exhaustion(self):
         from hey_my_buddy.buddy.harnesses.claude import native_run
-        from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected
+        from hey_my_buddy.buddy.harnesses.claude.protocol import ProviderRejected
         # The native failure boundary raises the same exported rejection that
         # the stream collector raises; no native child or service is started.
-        with patch.object(native_run, "_prepare", side_effect=QuotaRejected("five_hour", None)):
+        with patch.object(native_run, "_prepare", side_effect=ProviderRejected("five_hour", None)):
             result = native_run.run(self.request("claude"), observer=lambda _: FEEDBACK_CONTINUE,
                                     services=None, cancelled=lambda: False)
         self.assertEqual(result.native_failure.value["code"], "quota-exceeded")

@@ -24,4 +24,4 @@ def persist(connection, attempt, result, *, status, shutdown_confirmed, now):
 def failure_view(result):
     """The common harness result already normalized this structured fact."""
     failure = result.get("quotaFailure") if isinstance(result, dict) else None
-    return failure if isinstance(failure, dict) and failure.get("code") in ("quota-exceeded", "rate-limited") else None
+    return failure if isinstance(failure, dict) and failure.get("code") in ("quota-exceeded", "rate-limited", "model-overloaded") else None

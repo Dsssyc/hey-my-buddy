@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import i18n from "i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api";
 import { CODEX, HOST, OPUS, at, audit, client, event, inquiry, row, routing, span, task, timeline, workflow } from "./task-detail.fixtures";
@@ -9,6 +10,21 @@ import type { Artifact, Integration } from "./types";
 afterEach(cleanup);
 
 describe("opening the detail of a micro task", () => {
+  it("names a model overload briefly in both languages", async () => {
+    try {
+      for (const [language, label] of [["zh", "模型满载"], ["en", "Model at capacity"]]) {
+        await act(async () => { await i18n.changeLanguage(language); });
+        open({ step: 7, replies: { task: task({ state: "failed", quotaFailure: {
+          code: "model-overloaded", nativeCode: "serverOverloaded" },
+          selectedAttempt: { attemptId: "att-2", result: { terminationReason: "harness-error" } } }),
+          workflow: workflow({ state: "failed" }) } });
+        await ready();
+        expect(pane().textContent).toContain(label);
+        cleanup();
+      }
+    } finally { await act(async () => { await i18n.changeLanguage("zh"); }); }
+  });
+
   it("offers overview and session only for routing and execution steps", async () => {
     const f = open({ step: 1 });
     await ready();
@@ -484,7 +500,7 @@ describe("a turn", () => {
     expect(pane().textContent).not.toContain("终止原因");
   });
 
-  it("shows a pre-model quota rejection on its own turn, then the new route without making the successful task failed", async () => {
+  it.each(["quota-exceeded", "model-overloaded"] as const)("shows a pre-model %s on its own turn after a successful reroute", async code => {
     const first = timeline();
     first.spans = first.spans.filter(item => ["r1", "e1"].includes(item.spanId));
     Object.assign(first.spans.find(item => item.spanId === "e1")!, { state: "rejected", endAt: at("10:03"), resultStatus: "failed", error: "quota exceeded" });
@@ -497,11 +513,11 @@ describe("a turn", () => {
     // Older rejected turns are outside the compact record and still present in the audit.
     base.turns = base.turns.filter(item => item.turnIndex !== 1);
     const history = audit();
-    history.turns = history.turns.map(item => item.turnIndex === 1 ? { ...item, state: "rejected", summary: null } : item);
+    history.turns = history.turns.map(item => item.turnIndex === 1 ? { ...item, state: "rejected", summary: null, quotaFailure: { code } } : item);
     open({ step: 3, timeline: first, replies: { task: task({ state: "completed", workflow: { ...task().workflow, state: "accepted" } }), workflow: base, audit: history } });
     await ready();
-    expect(pane().textContent).toContain("模型开始前额度被拒绝");
-    expect(pane().textContent).toContain("额度被拒");
+    expect(pane().textContent).toContain("模型开始前被拒绝");
+    expect(pane().textContent).toContain(code === "model-overloaded" ? "模型满载" : "额度耗尽");
     expect(pane().textContent).toContain("已改派");
     expect(pane().textContent).toContain(CODEX.model);
     expect(pane().textContent).not.toContain("失败");

@@ -83,6 +83,7 @@ _QUOTA_NATIVE_CODES = frozenset({
 })
 #: Native codes that mean "transiently rate limited" rather than exhausted quota.
 _RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded", "model_rate_limited"})
+_OVERLOAD_NATIVE_CODES = frozenset({"serverOverloaded", "overloaded"})
 
 
 def _is_count(value: Any) -> bool:
@@ -250,7 +251,9 @@ def normalize_token_usage(value: Any) -> dict | None:
 
 
 def classify_quota_code(native_code: str) -> str:
-    """Map one native structured code onto the bounded quota classification."""
+    """Map one native structured code onto the bounded provider refusal classification."""
+    if native_code in _OVERLOAD_NATIVE_CODES:
+        return "model-overloaded"
     if native_code in _QUOTA_NATIVE_CODES:
         return "quota-exceeded"
     if native_code in _RATE_NATIVE_CODES:
@@ -266,7 +269,7 @@ def classify_quota_code(native_code: str) -> str:
 
 
 def normalize_quota_failure(value: Any) -> dict | None:
-    """One native quota/rate-limit failure, keeping its structured native code.
+    """One native provider refusal, keeping its structured native code.
 
     The harness supplies the bounded ``code`` classification; ``nativeCode``
     is its own machine code and is never translated or classified here.
@@ -276,7 +279,7 @@ def normalize_quota_failure(value: Any) -> dict | None:
     if not isinstance(value, dict):
         return None
     code = value.get("code")
-    if code not in ("quota-exceeded", "rate-limited"):
+    if code not in ("quota-exceeded", "rate-limited", "model-overloaded"):
         return None
     native_code = identifier(value.get("nativeCode"))
     phase = value.get("rejectionPhase")

@@ -45,12 +45,15 @@ class ClaudeProtocolError(Exception):
         self.code = code
 
 
-class QuotaRejected(Exception):
-    """A structured native quota rejection; carries only bounded typed facts."""
+class ProviderRejected(Exception):
+    """A structured native provider rejection; carries only bounded typed facts."""
 
-    def __init__(self, rate_limit_type: str, resets_at: object, *, source: str = "claude/stream-json-rate-limit-event"):
-        super().__init__("the Claude provider quota rejected this execution")
-        self.rate_limit_type = rate_limit_type
+    def __init__(self, native_code: str, resets_at: object, *, classification: str = "quota-exceeded",
+                 source: str = "claude/stream-json-rate-limit-event"):
+        super().__init__("the Claude provider quota rejected this execution" if classification == "quota-exceeded"
+                         else "the Claude provider model is at capacity")
+        self.native_code = native_code
+        self.classification = classification
         self.resets_at = resets_at
         self.source = source
 
@@ -315,7 +318,7 @@ class TurnEvidence:
                 # A rejection fails the attempt even when the rate-limit identity
                 # is absent or malformed; the published facts stay sanitized.
                 rate_limit_type = _identifier(info.get("rateLimitType")) or "unknown"
-                raise QuotaRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))
+                raise ProviderRejected(rate_limit_type, _bounded_resets_at(info.get("resetsAt")))
             return None
         # Frames under a subagent's tool call are not root-turn evidence; a
         # subagent result never ends the root turn.
@@ -378,6 +381,12 @@ class TurnEvidence:
                 return None
             return None
         if frame_type == "assistant":
+            # The CLI's error assistant is infrastructure output, not model work.
+            # Only a root structured code can reject this root turn.
+            if root_session and frame.get("error") == "overloaded":
+                from ....protocol.usage import classify_quota_code
+                raise ProviderRejected("overloaded", None, classification=classify_quota_code("overloaded"),
+                                       source="claude/stream-json-assistant-error")
             self.model_messages += 1
             self._observe_assistant(frame)
             message = frame.get("message")

@@ -21,7 +21,7 @@ export default {
   },
   fold: { more: "Show more", less: "Show less" },
   result: { name: "Result" },
-  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", quotaRefused: "Refused for quota", rerouted: "Rerouted" },
+  turn: { expected: "Expected {{time}}", rejected: "Rejected before the model started", providerRefused: "Provider refused", rerouted: "Rerouted" },
   origin: { host: "Chosen by Host", locked: "Locked by user", single: "Only candidate", unrecorded: "Route not recorded" },
   usage: {
     inputShort: "Input", outputShort: "Output", cacheShort: "Cache",
@@ -80,7 +80,7 @@ export default {
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
     "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
-  quota: { "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
+  quota: { "model-overloaded": "Model at capacity", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {
     name: "Seal", commit: "Commit", files: "Files: {{n}}", id: "Artifact ID", sha: "SHA-256", diff: "Diff", note: "Note",
     partial: "Partial output", resolved: "Resealed by Host", partialNote: "Partial, unverified and not final; it can be read, integrated or continued from, and is not an accepted result.",
@@ -89,7 +89,7 @@ export default {
   },
   basis: {
     name: "Bounds at submission", constraints: "Hard constraints: {{buddy}}", capabilities: "Required capabilities: {{list}}", candidates: "Legal candidates when submitted: {{n}}",
-    excluded: "Excluded by the user: {{n}}; {{list}}", cooling: "Cooling down: {{n}}; {{list}}", coolingBuddy: "{{buddy}} (until {{time}})", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
+    overloaded: "Excluded for model capacity: {{n}}; {{list}}", excluded: "Excluded by the user: {{n}}; {{list}}", cooling: "Cooling down: {{n}}; {{list}}", coolingBuddy: "{{buddy}} (until {{time}})", prefer: "Preferred {{buddy}}: {{note}}", pin: "Pinned {{buddy}}: {{note}}", exclude: "Excluded {{buddy}}: {{note}}",
   },
   routing: {
     chosen: "Choice", abstained: "Abstained", notCalled: "No Router was called", elapsed: "Time: {{time}}", toolCalls: "Tool calls: {{n}}", source: "Source",

@@ -291,6 +291,9 @@ describe("the task view", () => {
     expect(stopped).toEqual({ cause: "forced-stop", stoppedBy: "host", actor: { role: "host", id: "codex-desktop" }, note: "不再需要", quota: null });
     const limited = parseTask(task({ state: "failed", quotaFailure: { code: "rate-limited" }, selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
     expect(limited).toMatchObject({ cause: "harness-error", stoppedBy: null, quota: "rate-limited" });
+    const overloaded = parseTask(task({ state: "failed", quotaFailure: { code: "model-overloaded", nativeCode: "serverOverloaded" },
+      selectedAttempt: attempt({ result: { terminationReason: "harness-error" } }) }), "m1").attempt!.ending;
+    expect(overloaded).toMatchObject({ cause: "harness-error", quota: "model-overloaded" });
     // A stop with no recorded initiator is unknown, never a person.
     expect(parseTask(task({ state: "cancelled", selectedAttempt: attempt({ result: { terminationReason: "unknown-stop" } }) }), "m1").attempt!.ending).toMatchObject({ stoppedBy: "unknown" });
     expect(() => parseTask(task({ state: "failed", quotaFailure: { code: "blocked" } }), "m1")).toThrow(ApiError);

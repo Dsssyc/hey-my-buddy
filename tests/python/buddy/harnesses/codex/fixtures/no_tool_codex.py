@@ -122,11 +122,13 @@ def main():
                     event(method, turn_id, item=item)
             if case == "connection-notification":
                 send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
-            if case in ("quota-before", "quota-text", "quota-error"):
-                if case == "quota-text":
+            if case in ("quota-before", "quota-text", "quota-error", "overload-before", "overload-text", "overload-error"):
+                if case in ("quota-text", "overload-text"):
                     event("item/completed", turn_id, item={"id": "partial", "type": "agentMessage", "text": "partial"})
-                error = {"message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
-                if case == "quota-error":
+                error = {"message": "Selected model is at capacity. Please try a different model.",
+                         "codexErrorInfo": "serverOverloaded"} if case.startswith("overload-") else {
+                         "message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
+                if case in ("quota-error", "overload-error"):
                     event("error", turn_id, error=error, willRetry=False)
                 else:
                     event("turn/completed", turn_id, turn={"id": turn_id, "status": "failed", "items": [], "error": error})

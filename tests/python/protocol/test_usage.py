@@ -123,7 +123,8 @@ class QuotaFailureTests(unittest.TestCase):
         for native, expected in (("QUOTA", "quota-exceeded"), ("usageLimitExceeded", "quota-exceeded"),
                                  ("sessionBudgetExceeded", "quota-exceeded"),
                                  ("workspace_owner_usage_limit_reached", "quota-exceeded"),
-                                 ("RATE_LIMIT", "rate-limited"), ("rateLimitExceeded", "rate-limited")):
+                                 ("RATE_LIMIT", "rate-limited"), ("rateLimitExceeded", "rate-limited"),
+                                 ("serverOverloaded", "model-overloaded"), ("overloaded", "model-overloaded")):
             with self.subTest(native=native):
                 self.assertEqual(usage.classify_quota_code(native), expected)
                 failure = usage.normalize_quota_failure({"code": expected, "nativeCode": native, "source": "fixture",
@@ -145,6 +146,8 @@ class QuotaFailureTests(unittest.TestCase):
                 self.assertEqual(usage.normalize_quota_failure(failure), failure)
         self.assertEqual(usage.classify_quota_code("1310"), "unknown")
         self.assertEqual(usage.classify_quota_code("rate_limited"), "unknown")
+        for text in ("Selected model is at capacity", "API Error: 529 overloaded", "server_error", "503", "529"):
+            self.assertEqual(usage.classify_quota_code(text), "unknown")
 
     def test_missing_or_invalid_classification_is_refused(self):
         for code in (None, "unknown", "QUOTA", "quota exceeded", False, 0, [], {}):

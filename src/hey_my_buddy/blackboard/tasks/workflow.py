@@ -320,6 +320,10 @@ class WorkflowCoordinator:
             "sharedStash": _frozen_turn_shared_stash(context, compact=compact),
             "tokenUsage": (json.loads(row["token_usage_json"]) if row["token_usage_json"] else None),
         }
+        from ..evaluation.native_observations import failure_view
+        failure = failure_view(result)
+        if failure is not None:
+            view["quotaFailure"] = failure
         if compact:
             # The default view is an index: the full input/outcome/provenance is in audit.
             return view
@@ -1383,6 +1387,7 @@ class WorkflowCoordinator:
         response = self.board.decisions.route_workflow(
             connection, run_id=run_id, sequence=sequence, spec=micro_task,
             manifest=json.loads(run["workspace_manifest_json"]),
+            excluded_model_services=self._overloaded_model_services(connection, run_id),
         )
         decision_id = response["decisionId"]
         connection.execute(
@@ -6818,10 +6823,32 @@ class WorkflowCoordinator:
                 and result.get("modelStarted") is False
                 and payload.get("shutdownConfirmed") is True)
 
+    def _overloaded_model_services(self, connection, run_id):
+        """Task-local refusals since the last effective turn, newest evidence first.
+
+        Consecutive pre-model rejections belong to the same routing recovery;
+        keep their exclusions so two overloaded services cannot route in a loop.
+        A later effective turn ends that recovery, even when it failed otherwise.
+        """
+        from ..evaluation.native_observations import failure_view
+        excluded = {}
+        for turn in connection.execute(
+                "SELECT t.turn_id,t.state,a.model_harness,a.model_provider,a.model_model,a.result_json"
+                " FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+                " WHERE t.run_id=? ORDER BY t.turn_index DESC", (run_id,)):
+            failure = failure_view(self.result_payload(json.loads(turn["result_json"]) if turn["result_json"] else None))
+            if failure is not None and failure["code"] == "model-overloaded":
+                identity = (turn["model_harness"], turn["model_provider"], turn["model_model"])
+                excluded.setdefault(identity, dict(zip(("harness", "provider", "model"), identity)) | {
+                    "reason": "model-overloaded", "nativeCode": failure["nativeCode"], "turnId": turn["turn_id"]})
+            if turn["state"] != "rejected":
+                break
+        return list(excluded.values())
+
     def _quota_reroutable(self, connection, run, turn, attempt, payload):
         failure = self.result_payload(payload).get("quotaFailure")
         routing = json.loads(turn["input_json"])["context"]["routing"]
-        if (not failure or failure["code"] != "quota-exceeded" or failure.get("rejectionPhase") != "before-model"
+        if (not failure or failure["code"] not in ("quota-exceeded", "model-overloaded") or failure.get("rejectionPhase") != "before-model"
                 or not attempt["shutdown_confirmed"] or attempt["cancel_requested_at"] is not None
                 or run["state"] != "executing" or run["buddy_locked"]
                 or run["current_turn_id"] != turn["turn_id"] or run["current_attempt_id"] != attempt["attempt_id"]
@@ -6932,7 +6959,7 @@ class WorkflowCoordinator:
                 previous_decision_id = run_row["current_routing_id"]
                 self._start_routing(connection, run_row["run_id"], now)
                 refreshed = self._run_row(connection, run_row["run_id"])
-                facts = {"turnId": turn_row["turn_id"], "reason": "quota-exceeded",
+                facts = {"turnId": turn_row["turn_id"], "reason": self.result_payload(payload)["quotaFailure"]["code"],
                          "previousDecisionId": previous_decision_id, "decisionId": refreshed["current_routing_id"],
                          "continuationId": continuation["continuation_id"] if continuation is not None else None,
                          "autoContinued": True}

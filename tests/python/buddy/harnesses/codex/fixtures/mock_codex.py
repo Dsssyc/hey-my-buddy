@@ -281,8 +281,8 @@ def main():
                           "turnId": turn_id, "status": {"type": "active"}}})
             send({"id": ident, "result": {"turn": {"id": turn_id, "status": "inProgress", "items": []}}})
             send({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "inProgress", "items": []}}})
-            if case.startswith("quota-before") or case.startswith("quota-activity-"):
-                activity = case.removeprefix("quota-activity-")
+            if case.startswith(("quota-before", "quota-activity-", "overload-before", "overload-activity-")):
+                activity = case.removeprefix("quota-activity-").removeprefix("overload-activity-")
                 if activity in ("text", "reasoning", "tool"):
                     item = {"type": {"text": "agentMessage", "reasoning": "reasoning",
                                       "tool": "mcpToolCall"}[activity], "id": "activity-1"}
@@ -292,8 +292,10 @@ def main():
                         "threadId": thread_id, "turnId": turn_id, "item": item}})
                 elif activity == "tokens":
                     send_usage("quota-failure", thread_id, turn_id, turn_index)
-                error = {"message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
-                if case == "quota-before-truncated":
+                error = {"message": "Selected model is at capacity. Please try a different model.",
+                         "codexErrorInfo": "serverOverloaded"} if case.startswith("overload-") else {
+                         "message": "native quota exceeded", "codexErrorInfo": "usageLimitExceeded"}
+                if case in ("quota-before-truncated", "overload-before-truncated"):
                     send({"method": "error", "params": {"threadId": thread_id, "turnId": turn_id,
                                                            "error": error, "willRetry": False}})
                     sys.stdout.write('{"method":')

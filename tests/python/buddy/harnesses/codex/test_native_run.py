@@ -297,11 +297,12 @@ class FastSeamTests(SeamCase):
 
     def test_fast_quota_failure_uses_common_root_activity(self):
         for case, phase in (("quota-before", "before-model"), ("quota-text", "during-model"),
-                            ("quota-error", "before-model")):
+                            ("quota-error", "before-model"), ("overload-before", "before-model"),
+                            ("overload-text", "during-model"), ("overload-error", "before-model")):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+                self.assertEqual(result.native_failure.value["code"], "model-overloaded" if case.startswith("overload-") else "quota-exceeded")
                 self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
 
     def test_foreign_turn_refusal_bounds_multibyte_method_name(self):
@@ -1368,12 +1369,19 @@ class WorkerSeamTests(CodexSeamCase):
         cases = (("quota-before", "before-model"), ("quota-before-truncated", "unknown"),
                  ("quota-before-overflow", "unknown"),
                  ("quota-activity-text", "during-model"), ("quota-activity-reasoning", "during-model"),
-                 ("quota-activity-tool", "during-model"), ("quota-activity-tokens", "during-model"))
+                 ("quota-activity-tool", "during-model"), ("quota-activity-tokens", "during-model"),
+                 ("overload-before", "before-model"), ("overload-before-truncated", "unknown"),
+                 ("overload-activity-text", "during-model"), ("overload-activity-reasoning", "during-model"),
+                 ("overload-activity-tool", "during-model"), ("overload-activity-tokens", "during-model"))
         for case, phase in cases:
             with self.subTest(case=case):
                 result = self.worker_run(case)
                 self.assertEqual(result.end.status, "error")
                 self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
+                if case.startswith("overload-"):
+                    from hey_my_buddy.buddy.roles.run_execution import _worker_facts
+                    self.assertEqual(_worker_facts(result)["quotaFailure"]["code"], "model-overloaded")
+                    self.assertEqual(result.native_failure.value["nativeCode"], "serverOverloaded")
 
     def test_denied_native_requests_are_facts_on_a_completed_worker_turn(self):
         result = self.worker_run("approval")

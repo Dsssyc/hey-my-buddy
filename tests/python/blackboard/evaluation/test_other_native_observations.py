@@ -20,7 +20,7 @@ from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixtur
 from hey_my_buddy.protocol import usage
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
+from hey_my_buddy.buddy.harnesses.claude.protocol import ProviderRejected, TurnEvidence
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeRpcError,
@@ -142,10 +142,10 @@ class ClaudeNativeRecordTests(unittest.TestCase):
 
     def test_a_rejection_keeps_its_native_limit_and_reset(self):
         evidence = self.evidence()
-        with self.assertRaises(QuotaRejected) as caught:
+        with self.assertRaises(ProviderRejected) as caught:
             evidence.observe({"type": "rate_limit_event",
                               "rate_limit_info": CLAUDE_NATIVE["rateLimitRejected"]["rate_limit_info"]})
-        self.assertEqual(caught.exception.rate_limit_type, "five_hour")
+        self.assertEqual(caught.exception.native_code, "five_hour")
         self.assertEqual(caught.exception.resets_at, 1790467200)
 
 
