@@ -870,6 +870,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.harness != "claude":
         raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
+    if request.tool_scope == "full":
+        raise BoardError("INVALID_ARGUMENT", "claude full access is not implemented", toolScope="full")
     if services is not None and not isinstance(services, RunServices):
         # No in-run session service exists on this harness; the one accepted
         # binding is this module's own controller endpoint binding, and a

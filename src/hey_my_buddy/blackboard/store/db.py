@@ -662,6 +662,37 @@ WHERE (o.profile_id IS NOT NULL AND o.mode != 'none') OR (o.profile_id IS NULL A
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
 
+WORKFLOW_TURNS_DDL = """
+CREATE TABLE IF NOT EXISTS workflow_turns (
+    turn_id             TEXT PRIMARY KEY,
+    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    attempt_id          TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    generation          INTEGER,
+    turn_index          INTEGER NOT NULL,
+    resume_mode         TEXT NOT NULL
+        CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
+    previous_session_id TEXT,
+    session_id          TEXT,
+    prompt_sha256       TEXT,
+    input_sha256        TEXT,
+    input_json          TEXT NOT NULL,
+    -- Frozen access for this turn, independent of later run intent changes.
+    access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
+    -- Only an explicit full turn carries the Host's one-line reason.
+    access_reason       TEXT,
+    state               TEXT NOT NULL CHECK (state IN ('prepared','running','concluded','failed')),
+    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
+    outcome_json        TEXT,
+    provenance_json     TEXT,
+    turn_result_path    TEXT,
+    sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    CHECK ((access='full') = (access_reason IS NOT NULL)),
+    UNIQUE(run_id, turn_index)
+);
+"""
+
 #: Current governed productivity workflow tables. A governed run is the existing
 #: logical task (``run_id`` = ``task_id``) plus durable turn, request, helper,
 #: continuation, workspace-reservation, pinned-artifact and attempt-scoped
@@ -744,32 +775,9 @@ CREATE INDEX IF NOT EXISTS workflow_routes_run_idx ON workflow_routes(run_id);
 """,
     # One row per actual execution turn. The turn input is written to disk by the
     # adapter; this row pins the service-owned identity, the bounded context and the
-    # validated structured outcome.
-    """
-CREATE TABLE IF NOT EXISTS workflow_turns (
-    turn_id             TEXT PRIMARY KEY,
-    run_id              TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    attempt_id          TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    generation          INTEGER,
-    turn_index          INTEGER NOT NULL,
-    resume_mode         TEXT NOT NULL
-        CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
-    previous_session_id TEXT,
-    session_id          TEXT,
-    prompt_sha256       TEXT,
-    input_sha256        TEXT,
-    input_json          TEXT NOT NULL,
-    state               TEXT NOT NULL CHECK (state IN ('prepared','running','concluded','failed')),
-    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention')),
-    outcome_json        TEXT,
-    provenance_json     TEXT,
-    turn_result_path    TEXT,
-    sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL,
-    UNIQUE(run_id, turn_index)
-);
-""",
+    # validated structured outcome. Access is the frozen permission of this
+    # turn; a full-access reason belongs only to that explicit choice.
+    WORKFLOW_TURNS_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_turns_run_idx ON workflow_turns(run_id, turn_index);
 """,

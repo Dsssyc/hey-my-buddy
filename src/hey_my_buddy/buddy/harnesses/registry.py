@@ -101,7 +101,7 @@ def worker_format(name: str):
             prefixes=('This is a governed Buddy root turn executed through Claude Code. Work only inside the allocated checkout and honor the frozen Host scope. Internal subagents may assist. The completion interface for this harness is ONLY the supplied structured-output schema: emit {outcome: ...} exactly once as the final structured result. No buddy_finish_turn tool exists or is required here. A completed outcome must have request:null. Use assistance or attention, with a request object, only when actual work or a Host decision remains. Do not create another Buddy goal.',),
             schema=outcome_schema(suggested_profile=True),
             validation_key="structuredOutputValidated", display_name="Claude", interaction_kind="permissions",
-            follow_workspace_access=True, native_quota_failure=True, reject_previous_on_initial=True)
+            native_quota_failure=True, reject_previous_on_initial=True)
     return None
 
 
@@ -192,6 +192,26 @@ def capability_report() -> dict:
     return report
 
 
+def require_permission(configuration: dict | None, access: str) -> None:
+    """Reject an explicit Worker route that cannot run at the requested access.
+
+    An unresolved route is checked after selection. Command and external workers
+    retain their existing caller-owned read/write contract.
+    """
+    if configuration is None:
+        return
+    adapter = configuration["adapter"]
+    capability = f"permission:{access}"
+    if adapter in ("command", "external") and access in ("read", "write"):
+        return
+    native = adapters().get(adapter)
+    if native is not None and capability in native.capabilities:
+        return
+    raise BoardError("UNSUPPORTED_CAPABILITY", "This adapter does not support the requested Worker permission",
+                     adapter=adapter, access=access, requiredCapability=capability,
+                     missingCapabilities=[capability])
+
+
 def local_capabilities() -> list[str]:
     """The capabilities a *built-in* worker host can honestly advertise.
 
@@ -236,6 +256,7 @@ __all__ = [
     "live_binding",
     "local_capabilities",
     "register_run_seam",
+    "require_permission",
     "run_seam",
     "supported_capabilities",
 ]

@@ -1,4 +1,4 @@
-"""The public-operation schema-16 board guards the unique 16→17 retirement."""
+"""The public-operation schema-16 board guards the unique 16→17 conversion."""
 from __future__ import annotations
 
 import json
@@ -78,17 +78,26 @@ class Schema16UpgradeTests(BoardTestCase):
             {row[1] for row in self.connection.execute('PRAGMA table_info(harness_quota_observations)')},
             {'adapter', 'quota_json'},
         )
+        turn_columns = {row[1] for row in self.connection.execute('PRAGMA table_info(workflow_turns)')}
+        self.assertTrue({'access', 'access_reason'} <= turn_columns)
 
     def test_all_retired_stock_is_deleted_and_every_historical_value_is_preserved(self):
         old = rows(self.connection)
+        old_turn_columns = [row[1] for row in self.connection.execute('PRAGMA table_info(workflow_turns)')]
+        access_index = old_turn_columns.index('state')
+        run_access = {row[0]: json.loads(row[1])['access'] for row in self.connection.execute(
+            'SELECT run_id,execution_workspace_json FROM workflow_runs')}
         keys = dict(old['meta'])
         for prefix in migrations.RETIRED_META_PREFIXES:
             self.assertTrue(any(key.startswith(prefix) for key in keys), prefix)
         migrations.migrate_16_to_17(self.connection)
         actual = rows(self.connection)
         for table, values in old.items():
-            if table not in ('meta', 'catalog_current', 'catalog_pending', 'harness_health', 'evaluation_profiles'):
+            if table not in ('meta', 'catalog_current', 'catalog_pending', 'harness_health', 'evaluation_profiles', 'workflow_turns'):
                 self.assertEqual(actual[table], values, table)
+        expected_turns = [row[:access_index] + (run_access[row[1]], None) + row[access_index:]
+                          for row in old['workflow_turns']]
+        self.assertEqual(actual['workflow_turns'], sorted(expected_turns, key=repr))
         planned = {key: value for key, value in keys.items() if not migrations.retired_meta(key)}
         planned['schema_version'] = '17'
         self.assertEqual(dict(actual['meta']), planned)
@@ -105,6 +114,33 @@ class Schema16UpgradeTests(BoardTestCase):
             original = next(item for item in old['harness_health'] if item[0] == row[0])
             self.assertEqual(row[:3], original[:3])
             self.assertEqual(row[3:], ('unknown', '{}', None, None, None))
+
+    def test_historical_write_access_is_backfilled_from_owning_run(self):
+        run_id = DELIVERED
+        self.connection.execute(
+            "UPDATE workflow_runs SET execution_workspace_json=json_set(execution_workspace_json,'$.access','write')"
+            ' WHERE run_id=?', (run_id,))
+        before = self.connection.execute(
+            'SELECT input_json,input_sha256,prompt_sha256,provenance_json FROM workflow_turns WHERE run_id=?',
+            (run_id,),
+        ).fetchone()
+        migrations.migrate_16_to_17(self.connection)
+        after = self.connection.execute(
+            'SELECT access,access_reason,input_json,input_sha256,prompt_sha256,provenance_json'
+            ' FROM workflow_turns WHERE run_id=?', (run_id,),
+        ).fetchone()
+        self.assertEqual(after, ('write', None, *before))
+        self.assertEqual({row[0] for row in self.connection.execute(
+            'SELECT access FROM workflow_turns WHERE run_id!=?', (run_id,))}, {'read'})
+
+    def test_turn_access_and_reason_constraint(self):
+        migrations.migrate_16_to_17(self.connection)
+        turn_id = self.connection.execute('SELECT turn_id FROM workflow_turns LIMIT 1').fetchone()[0]
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.connection.execute("UPDATE workflow_turns SET access='full' WHERE turn_id=?", (turn_id,))
+        self.connection.execute("UPDATE workflow_turns SET access='full',access_reason='Host choice' WHERE turn_id=?", (turn_id,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.connection.execute("UPDATE workflow_turns SET access='read' WHERE turn_id=?", (turn_id,))
 
     def test_health_recovery_cannot_route_old_profiles_without_a_new_trusted_catalog(self):
         from hey_my_buddy.blackboard.catalog.catalog import restore_retained_availability
@@ -195,6 +231,15 @@ class Schema16UpgradeTests(BoardTestCase):
         self.assertEqual(schema_shape(self.connection), shape)
         self.assertFalse(self.connection.in_transaction)
 
+    def test_failure_after_turn_rebuild_rolls_back_its_values_and_schema(self):
+        before, shape = rows(self.connection), schema_shape(self.connection)
+        with mock.patch.object(migrations, '_HEALTH_DDL', 'CREATE TABLE broken('):
+            with self.assertRaises(BoardError) as caught:
+                migrations.migrate_16_to_17(self.connection)
+        self.assertEqual(caught.exception.details['tables'], ['harness_health'])
+        self.assertEqual(rows(self.connection), before)
+        self.assertEqual(schema_shape(self.connection), shape)
+
     def test_exact_fingerprints_reject_damage_to_retained_event_and_worker_rows(self):
         for table, statement in (
             ('events', "UPDATE events SET payload_json='{}' WHERE seq=(SELECT MIN(seq) FROM events)"),
@@ -216,6 +261,7 @@ class Schema16UpgradeTests(BoardTestCase):
             ('harness_health', "UPDATE harness_health SET revision=revision+1"),
             ('catalog_current', "UPDATE catalog_current SET observation_id=42"),
             ('evaluation_profiles', "UPDATE evaluation_profiles SET enabled=0"),
+            ('workflow_turns', "UPDATE workflow_turns SET input_sha256='damaged'"),
         ):
             with self.subTest(table=table):
                 self.connection.execute(f'CREATE TRIGGER damage AFTER DELETE ON catalog_pending BEGIN {statement}; END')

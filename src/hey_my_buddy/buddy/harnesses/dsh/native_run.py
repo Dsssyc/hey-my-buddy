@@ -852,6 +852,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native DSH execution: the single native path of this harness."""
     if request.harness != "dsh":
         raise BoardError("INVALID_ARGUMENT", "this run module drives dsh", harness=request.harness)
+    if request.tool_scope == "full":
+        raise BoardError("INVALID_ARGUMENT", "dsh full access is not implemented", toolScope="full")
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "dsh accepts its own narrow session service binding")
     governed = services is not None

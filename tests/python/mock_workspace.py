@@ -73,6 +73,7 @@ class MockWorkspace:
             "path": path,
             **identity,
             "access": intent.get("access", "write"),
+            **({"accessReason": intent["accessReason"]} if intent.get("access") == "full" else {}),
             "baseCommit": base_commit,
             "inputCommit": sha256_text(f"input:{request_id}"),
             "inputTree": "c" * 40,

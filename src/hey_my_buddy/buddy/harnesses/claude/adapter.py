@@ -31,7 +31,7 @@ class ClaudeAdapter:
     """Native availability and facts, with no inherited execution entries."""
 
     name = "claude"
-    capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline")
+    capabilities = ("claude", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write")
     native_resume = False
     model_discovery = True
     read_only_structured = True

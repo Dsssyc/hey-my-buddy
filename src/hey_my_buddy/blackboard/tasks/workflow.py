@@ -310,6 +310,8 @@ class WorkflowCoordinator:
         view = {
             "turnId": row["turn_id"],
             "turnIndex": row["turn_index"],
+            "access": row["access"],
+            "accessReason": row["access_reason"],
             "attemptId": row["attempt_id"],
             "generation": row["generation"],
             "resumeMode": row["resume_mode"],
@@ -714,6 +716,8 @@ class WorkflowCoordinator:
             "continuationCount": run_row["continuation_count"],
             "workspace": self._workspace_view(run_row, connection=connection),
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
+            "access": json.loads(run_row["execution_workspace_json"])["access"],
+            "accessReason": json.loads(run_row["execution_workspace_json"]).get("accessReason"),
             "requestFingerprint": run_row["request_fingerprint"],
             "executionConfiguration": self._configuration(run_row),
             "configurationLocked": bool(run_row["configuration_locked"]),
@@ -1165,7 +1169,7 @@ class WorkflowCoordinator:
         if (reservation is None or task["cwd"] != manifest.get("path")
                 or not self._identity_equivalent(reservation["checkout_id"], manifest.get("checkoutId"), connection=connection)
                 or not self._identity_equivalent(reservation["repository_id"], manifest.get("repositoryId"), connection=connection)
-                or reservation["path"] != manifest.get("path") or reservation["access"] != manifest.get("access")):
+                or reservation["path"] != manifest.get("path") or reservation["access"] != ("read" if manifest["access"] == "read" else "write")):
             raise BoardError("PREPARATION_CONFLICT", "The continuation no longer owns its recorded checkout allocation")
         if reservation["state"] == "transferred":
             # The authorized helper still owns it. Its normal settlement restores
@@ -1176,7 +1180,7 @@ class WorkflowCoordinator:
             "SELECT * FROM workspace_reservations WHERE checkout_id IN " + self._identity_placeholders(variants)
             + " AND holder_task_id!=?"
             " AND (state='held' OR (?='released' AND state='transferred')) AND (access='write' OR ?='write')",
-            (*variants, task["task_id"], reservation["state"], manifest["access"]),
+            (*variants, task["task_id"], reservation["state"], "read" if manifest["access"] == "read" else "write"),
         ).fetchall()
         if conflicts:
             raise BoardError("PREPARATION_CONFLICT", "Another owner holds the continuation checkout; wait for release before continuing",
@@ -1187,7 +1191,7 @@ class WorkflowCoordinator:
             raise BoardError("SHUTDOWN_UNCONFIRMED", "A released checkout can only be reacquired after every attempt is confirmed stopped")
         self._reserve(connection, manifest=manifest, holder_task_id=task["task_id"],
                       holder_kind=reservation["holder_kind"], parent_run_id=reservation["parent_run_id"],
-                      access=manifest["access"], now=now)
+                      access="read" if manifest["access"] == "read" else "write", now=now)
         self.board._append_event(connection, "workflow.workspace_reclaimed", task_id=task["task_id"],
                                  payload={"checkoutId": manifest["checkoutId"], "previousReservationId": reservation["reservation_id"]})
 
@@ -1260,6 +1264,11 @@ class WorkflowCoordinator:
         from ..catalog.catalog import validate_configuration
 
         return validate_configuration(schemas.normalize_configuration(constraints), directory=self.board.directory)
+
+    @staticmethod
+    def _require_permission(configuration: dict | None, access: str) -> None:
+        from ...buddy.harnesses.registry import require_permission
+        require_permission(configuration, access)
 
     @staticmethod
     def _execution_adapter(name: str):
@@ -1493,6 +1502,7 @@ class WorkflowCoordinator:
             if configuration.get("adapter") not in schemas.CODING_ADAPTERS:
                 continue
             try:
+                self._require_permission(configuration, json.loads(run["execution_workspace_json"])["access"])
                 checked = self._validated_configuration(configuration)
                 if checked != configuration:
                     raise BoardError("INVALID_CONFIGURATION", "The installed native tuple changed; choose a current configuration")
@@ -1540,7 +1550,7 @@ class WorkflowCoordinator:
         task and its governance record are one durable fact.
         """
         run_id = task_row["task_id"]
-        access = executionWorkspace.get("access", "write")
+        access = "read" if executionWorkspace["access"] == "read" else "write"
         from .objectives import attach_objective
         presentation = presentation or {}
         objective_id = attach_objective(connection, presentation, spec=spec, host_id=hostId, manifest=manifest, now=now)
@@ -1674,6 +1684,7 @@ class WorkflowCoordinator:
                     response["controlAvailable"] = False
                 return response
 
+        self._require_permission(schemas.configuration_constraints(spec) or None, normalized["executionWorkspace"]["access"])
         configuration = self._validated_configuration(spec)
         self._cleanup_fence(normalized["executionWorkspace"].get("cwd") or spec.get("cwd"))
         with self._submission_preparation(request_id, normalized["executionWorkspace"]) as prepared:
@@ -2271,6 +2282,7 @@ class WorkflowCoordinator:
             shared_locks = (locks, set())
             try:
                 for helper in helpers:
+                    self._require_permission(schemas.configuration_constraints(helper["spec"]) or None, helper["executionWorkspace"]["access"])
                     configuration = self._validated_configuration(helper["spec"])
                     self._cleanup_fence(helper["executionWorkspace"].get("cwd") or helper["spec"].get("cwd"))
                     allocation = preparations.enter_context(self._submission_preparation(
@@ -2506,7 +2518,7 @@ class WorkflowCoordinator:
         for item in prepared:
             helper_task_id = str(uuid.uuid4())
             manifest = item["manifest"]
-            access = item["executionWorkspace"].get("access", "write")
+            access = "read" if item["executionWorkspace"]["access"] == "read" else "write"
             transfer_from = None
             if access == "write" and self._identity_equivalent(
                 manifest.get("checkoutId"), json.loads(run_row["workspace_manifest_json"] or "{}").get("checkoutId"), connection=connection
@@ -2756,6 +2768,8 @@ class WorkflowCoordinator:
                 "reason",
                 "configuration",
                 "reroute",
+                "access",
+                "accessReason",
                 *schemas.CONTROL_FIELDS,
                 schemas.CONSOLE_AUTHORITY_FIELD,
             },
@@ -2773,6 +2787,7 @@ class WorkflowCoordinator:
             raise BoardError("INVALID_ARGUMENT", "helperPolicy must be 'cancel' or 'keep'")
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         reroute = schemas.optional_bool(params, "reroute", False)
+        access_selection = schemas.normalize_access(params) if "access" in params or "accessReason" in params else None
         supplied_configuration = schemas.normalize_configuration(params["configuration"]) if "configuration" in params else None
         if supplied_configuration is not None and reroute:
             raise BoardError("INVALID_ARGUMENT", "configuration and reroute are mutually exclusive")
@@ -2787,6 +2802,7 @@ class WorkflowCoordinator:
             "configuration": supplied_configuration,
             "reason": reason,
             "reroute": reroute,
+            **({"access": access_selection[0], "accessReason": access_selection[1]} if access_selection else {}),
         }
         # Authenticate/replay before native catalog work. A concurrent takeover is
         # checked again after validation, before any durable mutation.
@@ -2799,6 +2815,10 @@ class WorkflowCoordinator:
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
             self._configuration_matches_goal(target_snapshot, supplied_configuration)
+            current_choice = json.loads(target_snapshot["execution_workspace_json"])
+            self._require_permission(supplied_configuration if supplied_configuration is not None else
+                                     (None if reroute else self._configuration(target_snapshot)),
+                                     access_selection[0] if access_selection else current_choice["access"])
         # ADR-027 rule 3: an explicit override meets the same catalog facts as a
         # submission — one bounded re-read of its harness before any catalog
         # rejection — and only afterwards the user's independent enabled gate,
@@ -2816,6 +2836,8 @@ class WorkflowCoordinator:
             self._expect_revision(run_row, target_snapshot["revision"])
             self._configuration_matches_goal(run_row, configuration)
             self._require_enabled_override(connection, configuration)
+            current_workspace = json.loads(run_row["execution_workspace_json"])
+            next_access, next_reason = access_selection or (current_workspace["access"], current_workspace.get("accessReason"))
             run_id = run_row["run_id"]
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             self._assert_lineage_open(connection, run_id)
@@ -2909,6 +2931,19 @@ class WorkflowCoordinator:
                 now=now,
                 continuation_id=continuation_id,
             )
+            if access_selection is not None:
+                updated_workspace = {**current_workspace, "access": next_access}
+                updated_workspace.pop("accessReason", None)
+                if next_reason is not None:
+                    updated_workspace["accessReason"] = next_reason
+                connection.execute("UPDATE workflow_runs SET execution_workspace_json=? WHERE run_id=?",
+                                   (canonical_json(updated_workspace), run_id))
+                if (current_workspace["access"], current_workspace.get("accessReason")) != (next_access, next_reason):
+                    self.board._append_event(
+                        connection, "workflow.access_changed", task_id=run_id,
+                        revision=run_row["revision"] + 1,
+                        payload={"previousAccess": current_workspace["access"], "access": next_access,
+                                 "accessReason": next_reason, "actor": actor, "continuationId": continuation_id})
             if configuration is not None:
                 connection.execute("UPDATE workflow_runs SET execution_configuration_json=?,current_routing_id=NULL,"
                                    "execution_configuration_revision=execution_configuration_revision+1,"
@@ -5901,8 +5936,8 @@ class WorkflowCoordinator:
         input_json = canonical_json(turn_input)
         connection.execute(
             "INSERT INTO workflow_turns(turn_id, run_id, attempt_id, generation, turn_index, resume_mode,"
-            " previous_session_id, input_json, state, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,'prepared',?,?)",
+            " previous_session_id, input_json, access, access_reason, state, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,'prepared',?,?)",
             (
                 turn_id,
                 run_row["run_id"],
@@ -5912,6 +5947,8 @@ class WorkflowCoordinator:
                 resume_mode,
                 previous_session,
                 input_json,
+                execution_workspace["access"],
+                execution_workspace.get("accessReason"),
                 now,
                 now,
             ),
@@ -6055,16 +6092,21 @@ class WorkflowCoordinator:
             # A failed site without a resolution is captured explicitly from the
             # stopped worktree; its out-of-scope paths were already rejected above.
             sealed = None
-        if sealed is None and recovered_attempt is None:
+        choice = json.loads(run_row["execution_workspace_json"])
+        changed_access = (choice["access"], choice.get("accessReason")) != (manifest["access"], manifest.get("accessReason"))
+        if sealed is None and recovered_attempt is None and not changed_access:
             return None
+        # A permission-only continuation before any seal keeps the original
+        # explicit untracked input selectors when it re-prepares the allocation.
+        included = (sealed.get("includedUntracked") or (sealed.get("snapshot") or {}).get("included") or []
+                    if sealed is not None else list((manifest.get("snapshot") or {}).get("executionSelectors") or []))
         sealed = sealed or {}
-        snapshot = sealed.get("snapshot") if isinstance(sealed.get("snapshot"), dict) else {}
-        included = sealed.get("includedUntracked") or snapshot.get("included") or []
         return {
             # Reuse the allocated checkout instead of minting a new worktree.
             "kind": "existing",
             "cwd": manifest["path"],
-            "access": manifest.get("access", "write"),
+            "access": choice["access"],
+            **({"accessReason": choice["accessReason"]} if choice["access"] == "full" else {}),
             "base": {"kind": "working-tree", **({"ref": sealed["commit"]} if sealed.get("commit") else {})},
             "includeUntracked": included,
             "integrator": manifest.get("integrator") or "host",
@@ -6111,14 +6153,14 @@ class WorkflowCoordinator:
             ownership_problem = None
             if len(own) != 1 or any(
                 item["holder_task_id"] != row["run_id"]
-                and (item["access"] == "write" or previous.get("access") == "write") for item in reservations
+                and (item["access"] == "write" or json.loads(run["execution_workspace_json"])["access"] != "read") for item in reservations
             ):
                 ownership_problem = {"code": "PREPARATION_CONFLICT", "message": "The continuation checkout is no longer exclusively owned; explicitly continue after its owner releases it"}
-            elif any(own[0][key] != previous.get(field) if key not in ("checkout_id", "repository_id")
+            elif own[0]["access"] != ("read" if previous["access"] == "read" else "write") or any(own[0][key] != previous.get(field) if key not in ("checkout_id", "repository_id")
                     else not self._identity_equivalent(own[0][key], previous.get(field), connection=connection)
                     for key, field in (
                         ("checkout_id", "checkoutId"), ("repository_id", "repositoryId"),
-                        ("path", "path"), ("access", "access"),
+                        ("path", "path"),
                     )) or task["cwd"] != previous.get("path"):
                 ownership_problem = {"code": "PREPARATION_CONFLICT", "message": "The continuation reservation no longer matches its recorded checkout allocation"}
             task_fence = tuple(task[key] for key in ("revision", "state", "active_attempt_id", "selected_attempt_id", "cwd", "spec_json"))
@@ -6179,7 +6221,7 @@ class WorkflowCoordinator:
                     if any((manifest.get(field) != previous.get(field)
                             if field not in ("checkoutId", "repositoryId")
                             else not self._identity_equivalent(manifest.get(field), previous.get(field)))
-                           for field in ("checkoutId", "checkoutRoot", "repositoryId", "path", "access")):
+                           for field in ("checkoutId", "checkoutRoot", "repositoryId", "path")):
                         raise BoardError("PREPARATION_CONFLICT", "The prepared continuation changed its allocated checkout")
                     with self.db.read() as connection:
                         if snapshot(connection, row["continuation_id"]) != before:
@@ -6234,10 +6276,10 @@ class WorkflowCoordinator:
                     )
                     update_variants = self._identity_variants(manifest["checkoutId"], connection=connection)
                     connection.execute(
-                        "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, updated_at=?"
+                        "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, updated_at=?, access=?"
                         " WHERE holder_task_id=? AND checkout_id IN "
                         + self._identity_placeholders(update_variants) + " AND state='held'",
-                        (manifest["workspaceId"], manifest["manifestSha256"], now, row["run_id"], *update_variants),
+                        (manifest["workspaceId"], manifest["manifestSha256"], now, "read" if manifest["access"] == "read" else "write", row["run_id"], *update_variants),
                     )
                     kind = "workflow.workspace_prepared"
                     event = {"continuationId": row["continuation_id"], "manifestSha256": manifest["manifestSha256"], "checkoutId": manifest["checkoutId"]}

@@ -6,19 +6,52 @@ from pathlib import Path
 import hashlib
 import json
 import threading
+import tempfile
 import uuid
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
-from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, worker_format
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import decode_run_request, decode_run_result
+from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from buddy.harnesses.claude.test_native_run import CONFIGURATION, NativeRunCase
 
 
 class CodexSchemaTests(unittest.TestCase):
+    def test_worker_permission_capabilities_match_role_paths(self):
+        for harness in ("codex", "claude", "dsh", "zcode"):
+            capabilities = set(adapter(harness).capabilities)
+            self.assertIn("permission:write", capabilities)
+            self.assertEqual("permission:read" in capabilities, harness == "claude")
+            self.assertNotIn("permission:full", capabilities)
+
+    def test_every_worker_path_carries_the_frozen_workspace_access(self):
+        for harness in ("codex", "claude", "dsh", "zcode"):
+            for access in ("read", "write", "full"):
+                with self.subTest(harness=harness, access=access), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
+                            "turnId": "turn", "executionWorkspace": {"access": access}}
+                    (root / "input.json").write_text(canonical_json(turn))
+                    (root / "task.txt").write_text("Task")
+                    binding = SimpleNamespace(services=None,
+                                              description=SessionService(tool_names=("mcp__test__finish",)),
+                                              completion_tool="finish", checkpoint_tool="checkpoint",
+                                              answer_tool="answer")
+                    module = SimpleNamespace(prepare_services=lambda **_kwargs: binding)
+                    control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
+                               "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
+                               "nativeRoot": str(root / "native"), "invocationId": "invocation",
+                               "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
+                               "cwd": str(root), "timeoutSeconds": 10}
+                    request, _services, _observer, error = run_execution.worker_request(control, module)
+                    self.assertIsNone(error)
+                    self.assertEqual(request.tool_scope, access)
+
     def test_every_codex_object_has_required_properties_and_rejects_additions(self):
         def check(node):
             if isinstance(node, dict):
@@ -148,13 +181,13 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("6757ce37fb0a6de3395b1cda877c5d4b5d78e4b9cff2bee6b6a4ee250dbafd8d",
-                      "ea7db0557cc9718b5f5b8ecb2b89b8b82c05535c5dda1fe3c0dce6137ffdbc7f"),
+                      "b0223e5c33d35207d459719843c853bbd590ca688feff8b79b2b9571c6984933"),
             "claude": ("cd91d26ede0d45b6bed2b7747520a1358ab334874c26f9d19bd2f348ae5e15a3",
-                       "99f649f8eae95e65bbf7d902bc84efb594024b9ad779e44d1930e2e5a16819a4"),
+                       "9cc61132209bb0c6e31d8077c485071618a1da01c1854fad0124fbda57c2bd81"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
                 self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
-        self.assertEqual(worker_format("codex").tool_scope({"executionWorkspace": {"access": "read"}}), "write")
+        self.assertEqual(worker_format("codex").tool_scope({"executionWorkspace": {"access": "read"}}), "read")

@@ -46,6 +46,10 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
 
     def setUp(self):
         super().setUp()
+        # Ownership/history fixtures exercise a synthetic read-capable Worker;
+        # actual DSH eligibility is checked in the permission-level tests.
+        from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+        self.enterContext(patch.object(DshAdapter, "capabilities", (*DshAdapter.capabilities, "permission:read")))
         self.workspace = workspace
         workflow_module._workspace_module = workspace
         self.repo = self.repository("repo")

@@ -78,13 +78,22 @@ class UpgradeMigrationTests(BoardTestCase):
     def test_migration_and_identity_path_preserve_history_and_bind_the_updated_snapshot(self):
         _current, before = self.backed_up()
         old = self.all_rows()
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            turn_columns = [row[1] for row in connection.execute('PRAGMA table_info(workflow_turns)')]
         summary, expected = upgrade.migrate_board(self.state, before)
         self.assertEqual(summary['toSchema'], 17)
         self.assertEqual(expected['schema'], 17)
         migrated = self.all_rows()
         for table in old:
-            if table not in ('meta', 'catalog_current', 'harness_health', 'catalog_pending', 'evaluation_profiles'):
+            if table not in ('meta', 'catalog_current', 'harness_health', 'catalog_pending', 'evaluation_profiles', 'workflow_turns'):
                 self.assertEqual(migrated[table], old[table], table)
+        # The new turn columns are added by the upgrade; every historical value
+        # remains identical when projected through the original column list.
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
+            historical_turns = sorted(connection.execute('SELECT ' + ','.join(turn_columns) + ' FROM workflow_turns').fetchall(), key=repr)
+            self.assertEqual(historical_turns, old['workflow_turns'])
+            self.assertTrue(all(row[0] in ('read', 'write') and row[1] is None
+                                for row in connection.execute('SELECT access,access_reason FROM workflow_turns')))
         identity, expected = migrate_workspace_identity(self.state, expected)
         self.assertEqual(expected, {**upgrade.idle_snapshot(self.state), 'runtimeSettings':{}})
         self.assertEqual(identity['mapped'], [])

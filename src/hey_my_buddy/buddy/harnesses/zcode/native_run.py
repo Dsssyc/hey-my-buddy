@@ -920,6 +920,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native ZCode execution: the single native path of this harness."""
     if request.harness != "zcode":
         raise BoardError("INVALID_ARGUMENT", "this run module drives zcode", harness=request.harness)
+    if request.tool_scope == "full":
+        raise BoardError("INVALID_ARGUMENT", "zcode full access is not implemented", toolScope="full")
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "zcode accepts its own narrow session service binding")
     no_tool = request.tool_scope == "none"

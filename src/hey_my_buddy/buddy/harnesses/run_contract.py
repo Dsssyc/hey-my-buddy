@@ -60,7 +60,7 @@ NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": 
                   "inputId": "input_id", "callId": "call_id"}
 
 HarnessName = Literal["codex", "claude", "zcode", "dsh"]
-ToolScope = Literal["none", "read", "write"]
+ToolScope = Literal["none", "read", "write", "full"]
 EndStatus = Literal["ok", "error", "cancelled"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]

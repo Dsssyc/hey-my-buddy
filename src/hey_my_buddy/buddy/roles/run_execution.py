@@ -287,7 +287,7 @@ def worker_request(control: dict, module):
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool)
         services, descriptions = binding.services, (binding.description,)
-        schema, scope = worker_services.OUTCOME_SCHEMA, "write"
+        schema, scope = worker_services.OUTCOME_SCHEMA, turn_input["executionWorkspace"].get("access", "write")
     else:
         prompt, schema, scope = format.prompt(task_text, turn_input), format.schema, format.tool_scope(turn_input)
         services = _native_services(control, module, scope)

@@ -132,7 +132,7 @@ examples:
   Input: one JSON object as the positional argument, --params-file PATH or "-" (stdin); the three are mutually exclusive, decoded as UTF-8 and never re-interpreted by a shell. `buddy help [METHOD]` prints the methods or one method's validated parameters and starts no service.
   buddy submit '{"requestId":"fix-123","hostId":"host-1","task":"...","cwd":"/abs/path","executionWorkspace":{"kind":"existing","access":"write"}}'
       Admit one governed goal in an explicit executionWorkspace: kind existing|worktree,
-      access read|write, base {kind:commit|working-tree,ref?}, includeUntracked,
+      access read|write|full (default write; full requires accessReason), base {kind:commit|working-tree,ref?}, includeUntracked,
       writeScope and targetRef; the source cwd and the integrator are derived from
       the top-level cwd and the submitting Host.
       Routing: a complete explicit adapter/provider/model/effort quadruple is validated
@@ -151,6 +151,7 @@ examples:
 
   buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
   buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
+      continue may set access and accessReason for the next turn; omission keeps the current choice.
   buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
   buddy cancel '{"runId":"<runId>","commandId":"cmd-4","reason":"...","controlFile":"..."}'
   buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"reason":"...","controlFile":"..."}'

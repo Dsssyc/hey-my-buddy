@@ -264,7 +264,7 @@ class TestInquiry(BoardTestCase):
         submitted = client.workflow_submit(
             requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), adapter=adapter,
             provider=provider, model=model, effort=effort,
-            executionWorkspace={"kind": "existing", "access": "read"},
+            executionWorkspace={"kind": "existing", "access": "write"},
         )
         self.assertTrue(submitted["governed"])
         return client.get(runId=submitted["runId"])
@@ -777,7 +777,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         submitted = client.workflow_submit(
             requestId=request_id, hostId="zcode-live-test-host", task="do", cwd=str(cwd), adapter=adapter,
             provider="fixture-zcode", model="fixture-glm", effort="low",
-            executionWorkspace={"kind": "existing", "access": "read"},
+            executionWorkspace={"kind": "existing", "access": "write"},
         )
         self.assertTrue(submitted["governed"])
         return client.get(runId=submitted["runId"])

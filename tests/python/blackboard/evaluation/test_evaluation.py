@@ -252,6 +252,18 @@ class EvaluationTestCase(BoardTestCase):
 # Published revisions and validation
 # ---------------------------------------------------------------------------
 class EvaluationPublishTests(EvaluationTestCase):
+    def test_catalog_permissions_persist_through_user_publication(self):
+        board = self.board()
+        catalog_result = self.seed_catalog(board)
+        profile = next(item for item in catalog_result["profiles"] if item["profileId"] == PROFILE_ID)
+        self.assertIn("permission:write", profile["capabilities"])
+        self.assertNotIn("permission:read", profile["capabilities"])
+        self.assertNotIn("permission:full", profile["capabilities"])
+        self.publish(board, profileSettings=[{"profileId": PROFILE_ID, "enabled": True}])
+        published = next(item for item in self.snapshot(board)["profiles"] if item["profileId"] == PROFILE_ID)
+        self.assertIn("permission:write", published["capabilities"])
+        self.assertNotIn("permission:full", published["capabilities"])
+
     def test_fresh_snapshot_is_unconfigured_without_a_verified_router(self):
         board = self.board()
         snapshot = self.snapshot(board)

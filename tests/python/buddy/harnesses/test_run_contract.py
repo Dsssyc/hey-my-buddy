@@ -96,6 +96,22 @@ def full_result() -> rc.RunResult:
 
 
 class CodecRoundtripTests(unittest.TestCase):
+    def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
+        from hey_my_buddy.buddy.harnesses import claude, codex, dsh, zcode
+
+        request = edited(full_request(Path("/private/tmp")), tool_scope="full")
+        self.assertEqual(rc.decode_run_request(rc.encode_run_request(request)).tool_scope, "full")
+        for name, module in (("claude", claude.native_run), ("codex", codex.native_run),
+                             ("dsh", dsh.native_run), ("zcode", zcode.native_run)):
+            with self.subTest(harness=name), mock.patch("subprocess.Popen",
+                                                        side_effect=AssertionError("native launch")) as spawn:
+                with self.assertRaises(BoardError) as caught:
+                    module.run(edited(request, harness=name), observer=lambda _event: None,
+                               services=None, cancelled=lambda: False)
+                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+                self.assertIn("full access is not implemented", caught.exception.message)
+                spawn.assert_not_called()
+
     def test_a_resume_checkpoint_is_absent_or_carries_all_three_bound_facts(self):
         fields = {"mode": "native-session", "previousSessionId": "previous",
                   "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",

@@ -4,9 +4,10 @@ SQL retirement has no filesystem, credential or process side effects.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
-from .db import SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION
+from .db import SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION, WORKFLOW_TURNS_DDL
 from ...errors import BoardError
 
 NEW_TABLES = frozenset({'quota_current', 'harness_quota_observations', 'harness_account_reads'})
@@ -69,7 +70,7 @@ def schema_version(connection: sqlite3.Connection) -> int:
 
 
 def migrate_16_to_17(connection: sqlite3.Connection) -> dict:
-    """Retire account state atomically; preserve all sealed execution history."""
+    """Retire account state and freeze historical turn access atomically."""
     if schema_version(connection) != PREVIOUS_SCHEMA_VERSION:
         raise BoardError('UPGRADE_MIGRATION_FAILED', 'Migration expects schema 16', tables=['meta'])
     foreign_keys = connection.execute('PRAGMA foreign_keys').fetchone()[0]
@@ -99,12 +100,37 @@ def _migrate_16_to_17_transaction(connection: sqlite3.Connection) -> dict:
         planned_profiles = [tuple(0 if column == 'available' else 'ACCOUNT_STATUS_UNKNOWN' if column == 'unavailable_reason' else value
                                   for column, value in zip(profile_columns, row))
                             for row in connection.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')]
+        old_turn_columns = [row[1] for row in connection.execute('PRAGMA table_info(workflow_turns)')]
+        access_index = old_turn_columns.index('state')
+        turn_columns = old_turn_columns[:access_index] + ['access', 'access_reason'] + old_turn_columns[access_index:]
+        planned_turns = []
+        for row in connection.execute(
+            'SELECT t.*, r.execution_workspace_json FROM workflow_turns AS t'
+            ' JOIN workflow_runs AS r ON r.run_id=t.run_id ORDER BY t.turn_id'
+        ):
+            values = tuple(row)
+            workspace = json.loads(values[-1])
+            access = workspace.get('access') if isinstance(workspace, dict) else None
+            if access not in ('read', 'write'):
+                raise ValueError(f'Unsupported historical turn access: {access}')
+            planned_turns.append(values[:access_index] + (access, None) + values[access_index:-1])
         retained_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        retained_tables -= {'meta', 'harness_health', 'catalog_current', 'catalog_pending', 'evaluation_profiles'}
+        retained_tables -= {'meta', 'harness_health', 'catalog_current', 'catalog_pending', 'evaluation_profiles', 'workflow_turns'}
         retained = database_snapshot(connection, exact=True, table_names=retained_tables)
         for table, statement in _NEW_DDL:
             tables = [table]
             connection.execute(statement)
+        tables = ['workflow_turns']
+        connection.execute(WORKFLOW_TURNS_DDL.replace('workflow_turns (', 'workflow_turns_17 (', 1))
+        placeholders = ','.join('?' for _ in turn_columns)
+        connection.executemany(
+            f"INSERT INTO workflow_turns_17({','.join(turn_columns)}) VALUES({placeholders})",
+            planned_turns,
+        )
+        connection.execute('DROP TABLE workflow_turns')
+        connection.execute('ALTER TABLE workflow_turns_17 RENAME TO workflow_turns')
+        connection.execute('CREATE INDEX workflow_turns_run_idx ON workflow_turns(run_id, turn_index)')
+        connection.execute('CREATE INDEX workflow_turns_attempt_idx ON workflow_turns(attempt_id)')
         tables = ['harness_health']
         connection.execute(_HEALTH_DDL)
         connection.executemany('INSERT INTO harness_health_17 VALUES(?,?,?,?,?,?,?,?)', planned_health)
@@ -133,6 +159,8 @@ def _migrate_16_to_17_transaction(connection: sqlite3.Connection) -> dict:
             changed.append('catalog_current')
         if [tuple(row) for row in connection.execute('SELECT * FROM evaluation_profiles ORDER BY profile_id')] != planned_profiles:
             changed.append('evaluation_profiles')
+        if [tuple(row) for row in connection.execute('SELECT * FROM workflow_turns ORDER BY turn_id')] != planned_turns:
+            changed.append('workflow_turns')
         for table in NEW_TABLES | {'catalog_pending'}:
             if connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]:
                 changed.append(table)

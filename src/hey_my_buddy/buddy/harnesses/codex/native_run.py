@@ -963,6 +963,8 @@ def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
     """Run one native Codex execution: the single native path of this harness."""
     if request.harness != "codex":
         raise BoardError("INVALID_ARGUMENT", "this run module drives codex", harness=request.harness)
+    if request.tool_scope == "full":
+        raise BoardError("INVALID_ARGUMENT", "codex full access is not implemented", toolScope="full")
     if services is not None and not isinstance(services, RunServices):
         raise BoardError("INVALID_ARGUMENT", "codex accepts its own narrow run service binding")
     binding = services if services is not None else RunServices()
