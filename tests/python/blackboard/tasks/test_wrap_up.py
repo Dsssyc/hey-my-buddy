@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.store.db import TERMINATION_REASONS
+from hey_my_buddy.buddy.roles.controller import stop_termination_reason
 from hey_my_buddy.errors import BoardError
 
 
@@ -274,6 +276,61 @@ class WrapUpStopTests(WorkflowTestCase):
                 self.assertEqual(receipt["attempt"]["result"]["terminationReason"], reason)
 
     def test_console_stop_receipt_survives_a_later_service_intent(self):
+        self._assert_stop_order("console", "service", "console", "console-stop")
+
+    def test_service_stop_receipt_survives_a_later_console_intent(self):
+        self._assert_stop_order("service", "console", "service", "service-stop")
+
+    def test_console_stop_escalates_an_existing_host_wrap_up(self):
+        self._assert_stop_order("host", "console", "console", "console-stop")
+
+    def test_host_stop_preserves_an_existing_console_stop(self):
+        self._assert_stop_order("console", "host", "console", "console-stop")
+
+    def _assert_stop_order(self, first, second, expected_initiator, expected_reason):
+        board = self.board()
+        self.register(board)
+        run = self.submit(board)
+        claim = self.claim(board)
+        first_at = board.store.now()
+        second_at = (datetime.fromisoformat(first_at.replace("Z", "+00:00"))
+                     + timedelta(seconds=1)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        for initiator, requested_at in ((first, first_at), (second, second_at)):
+            with patch.object(board.store.workflow, "now", return_value=requested_at):
+                if initiator == "console":
+                    board.store.workflow.cancel({"runId": run["runId"]},
+                                                console_authority={"sessionId": "browser"})
+                elif initiator == "service":
+                    with board.store.db.write() as connection:
+                        board.store.workflow._request_attempt_stop(
+                            connection, run["runId"], requested_at, initiator="service", wrap_up=False)
+                else:
+                    board.call("workflow_cancel", {"runId": run["runId"], **self.control(run)})
+            if initiator == first:
+                first_stop = self.attempt(board, claim)
+
+        cancel_view = board.call("task_get", {"runId": run["runId"]})["task"]
+        self.assertEqual(cancel_view["stopInitiator"], expected_initiator)
+        with board.store.db.read() as connection:
+            stored = connection.execute(
+                "SELECT stop_initiator,cancel_requested_at,grace_deadline FROM attempts WHERE attempt_id=?",
+                (claim["claim"]["attempt"]["attemptId"],),
+            ).fetchone()
+        self.assertEqual(tuple(stored), (expected_initiator, first_at, first_stop["graceDeadline"]))
+        self.assertEqual(cancel_view["graceDeadline"], first_stop["graceDeadline"])
+        reason = stop_termination_reason(shutdown_confirmed=True,
+                                         stop_initiator=cancel_view["stopInitiator"])
+        self.assertEqual(reason, expected_reason)
+        receipt = self.result(board, claim, reason=reason)
+        self.assertEqual(receipt["attempt"]["stopInitiator"], expected_initiator)
+        self.assertEqual(receipt["attempt"]["result"]["terminationReason"], expected_reason)
+        self.assertEqual(receipt["task"]["stopInitiator"], expected_initiator)
+        self.assertEqual(receipt["task"]["terminationReason"], expected_reason)
+        host_view = board.call("workflow_get", {"runId": run["runId"]})["task"]
+        self.assertEqual(host_view["stopInitiator"], expected_initiator)
+        self.assertEqual(host_view["terminationReason"], expected_reason)
+
+    def test_console_stop_receipt_requires_column_even_with_console_event(self):
         board = self.board()
         self.register(board)
         run = self.submit(board)
@@ -281,11 +338,12 @@ class WrapUpStopTests(WorkflowTestCase):
         board.store.workflow.cancel({"runId": run["runId"]},
                                     console_authority={"sessionId": "browser"})
         with board.store.db.write() as connection:
-            board.store.workflow._request_attempt_stop(
-                connection, run["runId"], board.store.now(), initiator="service", wrap_up=False)
-        receipt = self.result(board, claim, reason="console-stop")
-        self.assertEqual(receipt["attempt"]["stopInitiator"], "service")
-        self.assertEqual(receipt["attempt"]["result"]["terminationReason"], "console-stop")
+            connection.execute("UPDATE attempts SET stop_initiator='service' WHERE attempt_id=?",
+                               (claim["claim"]["attempt"]["attemptId"],))
+        with self.assertRaises(BoardError) as rejected:
+            self.result(board, claim, reason="console-stop")
+        self.assertEqual(rejected.exception.code, "INVALID_ARGUMENT")
+        self.assertFalse(self.attempt(board, claim)["resultAvailable"])
 
     def test_regular_endings_keep_their_own_causes(self):
         board = self.board()
