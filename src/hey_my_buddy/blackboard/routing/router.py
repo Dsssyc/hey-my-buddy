@@ -118,8 +118,6 @@ def validate_answer(answer: object, buddy_ids: list[str], routing_mode: str = "r
                 or not isinstance(ref, str) or not ref.strip() or len(ref) > 1024
                 or any(ord(char) < 32 or ord(char) == 127 for char in ref)):
             raise BoardError("answer-shape", "Router evidence reference is invalid")
-        if kind == "statistics" and ref not in buddy_ids:
-            raise BoardError("router-evidence-out-of-bounds", "Statistics evidence must name a frozen candidate")
         if kind == "file" and (PurePosixPath(ref).is_absolute() or ".." in ref.split("/")
                                or "\\" in ref or ":" in ref or ref in (".", "")):
             raise BoardError("answer-shape", "File evidence must be a checkout-relative path")
