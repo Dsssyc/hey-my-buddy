@@ -159,7 +159,10 @@ def ensure_private_dir(path: Path) -> Path:
         missing.append(current)
         current = current.parent
     for directory in reversed(missing):
-        directory.mkdir(mode=0o700)
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
     _guard_parents(path)
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))

@@ -64,6 +64,7 @@ class WindowsFileAPI:
                                                                ctypes.c_void_p, wintypes.DWORD]),
             "GetFinalPathNameByHandleW": (wintypes.DWORD, [wintypes.HANDLE, wintypes.LPWSTR,
                                                             wintypes.DWORD, wintypes.DWORD]),
+            "GetLongPathNameW": (wintypes.DWORD, [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]),
             "GetFileType": (wintypes.DWORD, [wintypes.HANDLE]),
             "SetFileInformationByHandle": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int,
                                                              ctypes.c_void_p, wintypes.DWORD]),
@@ -114,7 +115,7 @@ class WindowsFileAPI:
             self._error()
         return tag.FileAttributes, tag.ReparseTag
 
-    def name(self, handle):
+    def final_path(self, handle):
         size = self.kernel.GetFinalPathNameByHandleW(handle, None, 0, 0)
         if not size:
             self._error()
@@ -122,7 +123,20 @@ class WindowsFileAPI:
         used = self.kernel.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
         if not used or used >= len(buffer):
             self._error()
-        return ntpath.basename(buffer.value.rstrip("\\"))
+        return buffer.value
+
+    def name(self, handle):
+        return ntpath.basename(self.final_path(handle).rstrip("\\"))
+
+    def long_path(self, path):
+        size = self.kernel.GetLongPathNameW(str(path), None, 0)
+        if not size:
+            self._error()
+        buffer = ctypes.create_unicode_buffer(size + 1)
+        used = self.kernel.GetLongPathNameW(str(path), buffer, len(buffer))
+        if not used or used >= len(buffer):
+            self._error()
+        return buffer.value
 
     def file_type(self, handle):
         return self.kernel.GetFileType(handle)
@@ -236,13 +250,25 @@ def initialize_process_owner():
     _owner_initialized = True
 
 
+def _path_key(value):
+    # GetFinalPathNameByHandleW uses the extended DOS/UNC namespace; callers may
+    # spell the same path without that prefix. Keep every path component.
+    if value[:8].upper() == '\\\\?\\UNC\\':
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    return ntpath.normcase(ntpath.normpath(value))
+
+
 def _check(api, handle, path, *, directory, private=False):
     attributes, _ = api.info(handle)
-    if ((path.name and api.name(handle) != path.name)
-            or attributes & FILE_ATTRIBUTE_REPARSE_POINT
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT
             or bool(attributes & FILE_ATTRIBUTE_DIRECTORY) != directory
             or api.file_type(handle) != FILE_TYPE_DISK):
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path has an alias, reparse point or invalid type', path=str(path))
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path has a reparse point or invalid type', path=str(path))
+    expected = api.long_path(path)
+    if _path_key(api.final_path(handle)) != _path_key(expected):
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private handle does not name the requested path', path=str(path))
     if private:
         validate_private_handle(handle)
 

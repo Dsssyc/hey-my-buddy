@@ -1,7 +1,7 @@
 """The Windows private boundary's policy is portable; native checks are explicit."""
 from contextlib import contextmanager
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tempfile
@@ -94,6 +94,26 @@ class HandleBoundaryTests(unittest.TestCase):
         self.assertEqual(args[5] & (files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS),
                          files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS)
 
+    def test_private_handle_compares_the_full_long_path_without_case_sensitivity(self):
+        api = mock.Mock()
+        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY, 0)
+        api.file_type.return_value = files.FILE_TYPE_DISK
+        api.long_path.return_value = r'C:\Users\Runner Long Name\AppData'
+        api.final_path.return_value = r'\\?\c:\users\RUNNER LONG NAME\appdata'
+        requested = PureWindowsPath(r'C:\Users\RUNNER~1\AppData')
+        files._check(api, 123, requested, directory=True)
+        api.long_path.assert_called_once_with(requested)
+        api.final_path.return_value = r'\\?\C:\Other\Runner Long Name\AppData'
+        with self.assertRaises(BoardError):
+            files._check(api, 123, requested, directory=True)
+
+    def test_reparse_point_is_rejected_before_expanding_its_path(self):
+        api = mock.Mock()
+        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY | files.FILE_ATTRIBUTE_REPARSE_POINT, 0)
+        with self.assertRaises(BoardError):
+            files._check(api, 123, PureWindowsPath(r'C:\private\junction'), directory=True)
+        api.long_path.assert_not_called()
+
     def test_new_directories_are_created_one_level_at_a_time_with_0700(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
@@ -166,8 +186,49 @@ class LauncherTransferTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'native Windows ACL/handle evidence')
 class NativePrivateFilesTests(unittest.TestCase):
-    def test_elevated_creation_publication_inherited_fd_and_pinned_ancestor(self):
+    def setUp(self):
         files.initialize_process_owner()
+
+    def test_private_path_accepts_different_case(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_dirs.ensure_private_dir(Path(temporary) / 'Mixed Case Private')
+            path = root / 'Payload.json'
+            publish_bytes(path, b'case-preserved-content')
+            variant = Path(str(path).swapcase())
+            with os.fdopen(private_dirs.open_regular_fd(variant, os.O_RDONLY), 'rb') as stream:
+                self.assertEqual(stream.read(), b'case-preserved-content')
+            private_dirs.validate_private_dir(Path(str(root).swapcase()))
+
+    def test_private_path_accepts_an_available_8dot3_alias(self):
+        import win32api
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_dirs.ensure_private_dir(Path(temporary) / 'Long Private Directory For Short Name')
+            short = win32api.GetShortPathName(str(root))
+            if files._path_key(short) == files._path_key(str(root)):
+                self.skipTest('GetShortPathNameW returned the long spelling; this volume supplies no 8.3 alias for the fixture')
+            path = root / 'Payload.json'
+            publish_bytes(path, b'short-name-content')
+            with os.fdopen(private_dirs.open_regular_fd(Path(short) / path.name, os.O_RDONLY), 'rb') as stream:
+                self.assertEqual(stream.read(), b'short-name-content')
+            private_dirs.validate_private_dir(Path(short))
+
+    def test_private_path_replaced_by_a_junction_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = private_dirs.ensure_private_dir(base / 'private')
+            outside = private_dirs.ensure_private_dir(base / 'outside')
+            moved = root.with_name('original-private')
+            root.rename(moved)
+            result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(root), str(outside)], capture_output=True)
+            self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
+            try:
+                with self.assertRaises(BoardError):
+                    private_dirs.validate_private_dir(root)
+            finally:
+                root.rmdir()
+                moved.rename(root)
+
+    def test_elevated_creation_publication_inherited_fd_and_pinned_ancestor(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = private_dirs.ensure_private_dir(Path(temporary) / 'private' / 'nested')
             path = root / 'credential.json'

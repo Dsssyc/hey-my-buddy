@@ -13,6 +13,36 @@ from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_concurrent_private_directory_creator_is_accepted_and_checked(self):
+        if os.name == 'nt':
+            self.skipTest('POSIX mkdir race; Windows creation is tested at its handle boundary')
+        raced = self.directory / 'concurrent-parent'
+        target = raced / 'leaf'
+        original = Path.mkdir
+        def create_concurrently(path, mode=0o777, parents=False, exist_ok=False):
+            if path == raced:
+                self.assertFalse(path.exists())
+                self.assertEqual(mode, 0o700)
+                original(path, mode=0o700)
+            return original(path, mode=mode, parents=parents, exist_ok=exist_ok)
+        with mock.patch.object(Path, 'mkdir', create_concurrently):
+            self.assertEqual(private_dirs.ensure_private_dir(target), target)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(stat.S_IMODE(raced.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
+
+    def test_concurrent_creator_cannot_replace_a_private_directory_with_a_file(self):
+        if os.name == 'nt':
+            self.skipTest('POSIX mkdir race; Windows validates the directory handle')
+        target = self.directory / 'concurrent-file'
+        original = Path.mkdir
+        def create_file(path, mode=0o777, parents=False, exist_ok=False):
+            if path == target:
+                path.write_bytes(b'not a directory')
+            return original(path, mode=mode, parents=parents, exist_ok=exist_ok)
+        with mock.patch.object(Path, 'mkdir', create_file), self.assertRaises(BoardError):
+            private_dirs.ensure_private_dir(target)
+
     def test_session_paths_follow_group_identity_and_reject_escaping_components(self):
         self.assertEqual(private_dirs.session_record_path(self.directory, 'macro', 'attempt'),
                          self.directory / 'sessions/macro-tasks/macro/attempt.jsonl')
