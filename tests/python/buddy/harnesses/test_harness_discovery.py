@@ -183,22 +183,69 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
             # Withhold containment evidence after actually stopping our fixture.
             # The probe must stay unavailable and must not expose its output.
-            terminate = discovery._terminate_group
+            from hey_my_buddy.protocol.owned_process import OwnedJob
 
-            def unobserved_stop(process):
-                terminate(process)
-                return False
+            def withheld_stop_evidence(*, windows):
+                if windows:
+                    active = OwnedJob.active
+
+                    def unobserved_job(job):
+                        active(job)
+                        raise OSError("fixture Job emptiness observation unavailable")
+
+                    return patch.object(OwnedJob, "active", autospec=True, side_effect=unobserved_job)
+                terminate = discovery._terminate_group
+
+                def unobserved_group(process):
+                    terminate(process)
+                    return False
+
+                return patch.object(discovery, "_terminate_group", side_effect=unobserved_group)
 
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
-            ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
-                discovery, "_terminate_group", side_effect=unobserved_stop
-            ):
+            ), patch.object(discovery, "_app_paths", return_value=[]), \
+                 withheld_stop_evidence(windows=os.name == "nt") as observation:
                 uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(uncertain["reason"]["code"], "harness.shutdown-unverified")
             self.assertEqual(uncertain["status"], "unhealthy")
             self.assertFalse(uncertain["available"])
             self.assertNotIn("secret", str(uncertain))
+            self.assertTrue(observation.called)
+
+            # Exercise the Windows probe and its Job API on every host OS.
+            from buddy.harnesses.test_windows_probe_pipe import WindowsProbePipeTests
+            from hey_my_buddy.protocol import owned_process, process_identity
+
+            with self.subTest(platform="Windows Job"), WindowsProbePipeTests().probe_fixture() as fixture:
+                fixture.process._buddy_job.close()
+                fixture.api.close.reset_mock()
+                del fixture.process._buddy_job
+                fixture.peek.side_effect = None
+                fixture.peek.return_value = (b"", 60_000, 0)
+                private_output = b"secret" * 10_000
+                fixture.read.side_effect = lambda _fd, size: private_output[:size]
+                windows_os = SimpleNamespace(**{**vars(os), "name": "nt", "read": fixture.read})
+                with patch.object(discovery, "os", windows_os), \
+                     patch.object(owned_process, "os", SimpleNamespace(name="nt")), \
+                     patch.object(owned_process, "WindowsAPI", return_value=fixture.api), \
+                     patch.object(owned_process.subprocess, "Popen", return_value=fixture.process), \
+                     patch.object(process_identity, "native_process_journal_active", return_value=False), \
+                     patch.object(process_identity, "begin_native_process_spawn", return_value=None), \
+                     patch.object(discovery, "_home", return_value=home), \
+                     patch.object(discovery, "_common_dirs", return_value=[]), \
+                     patch.object(discovery, "_app_paths", return_value=[]), \
+                     withheld_stop_evidence(windows=True) as observation:
+                    uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""},
+                                                   state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                self.assertEqual(uncertain["reason"]["code"], "harness.shutdown-unverified")
+                self.assertEqual(uncertain["status"], "unhealthy")
+                self.assertFalse(uncertain["available"])
+                self.assertNotIn("secret", str(uncertain))
+                self.assertTrue(observation.called)
+                fixture.api.terminate.assert_called_once_with(77)
+                self.assertEqual(fixture.api.active(77), 0)
+                self.assertIsNotNone(fixture.process.returncode)
 
     def test_snapshot_hash_changes_when_default_record_changes(self):
         with tempfile.TemporaryDirectory() as directory:
