@@ -36,21 +36,50 @@ SPEC = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
 CWD = "/private/frozen-copy"
 WORKSPACE = {"workspacePath": CWD, "workspaceKey": CWD}
 
-GOOD_BUNDLE = (
+#: The strict session/create schema every synthetic bundle shares.
+BUNDLE_SCHEMA = (
     'var Qm=m.enum(["build","plan","edit","yolo","auto"]),'
     'kR=m.object({sessionId:Dn.optional(),workspace:rd,parentSessionId:Dn.optional(),mode:Qm.optional(),'
     'model:Pu.optional(),titleGenerationEnabled:m.boolean().optional(),mcpServers:m.array(Ype).optional(),'
     'toolAllowlist:m.array(Dn).optional(),toolDenylist:m.array(Dn).optional(),'
     'offPeakToolEnabled:m.boolean().optional(),dynamicWorkflowEnabled:m.boolean().optional()}).strict();'
-    'function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0;'
-    'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(s)}'
-    'function fT(e){let t=e.toolAllowlist;return t}'
-    'r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");'
-    'function refresh(e){wire(e.registry,{allowedTools:fT(e.config)})}'
+)
+#: The three read-only registrations every synthetic bundle carries.
+BUNDLE_TOOLS = (
     'var readTool={capability:"Read files",metadata:{name:"Read",readOnly:!0}};'
     'var globTool={metadata:{name:"Glob",readOnly:!0}};'
     'var grepTool={metadata:{name:"Grep",readOnly:!0}};'
 )
+#: The in-loop positive flow; the refresh site really calls the registered
+#: function with the resolver's output as allowedTools, like the installation.
+GOOD_BUNDLE = (BUNDLE_SCHEMA
+               + 'function Uw(e,t={}){let n=t.allowedTools?new Set(t.allowedTools):void 0;'
+                 'for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(s)}'
+               + 'function fT(e){let t=e.toolAllowlist;return t}'
+               + 'r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");'
+               + 'function refresh(e){Uw(e.registry,{embeddedSearchEnabled:!1,'
+                 'allowedTools:fT(e.config),disallowedTools:e.config.toolDisallowlist})}'
+               + BUNDLE_TOOLS)
+#: The short-circuit OR chain the installed bundle uses, rejection member and
+#: chain-final register included, under wholly $-renamed identifiers.
+GOOD_OR_CHAIN_BUNDLE = (BUNDLE_SCHEMA
+                       + 'function $r($e,$t={}){let $n=$t.allowedTools?new Set($t.allowedTools):void 0;'
+                         'for(let $s of $l)'
+                         '$t.includeSkill===!1&&$s.metadata.name==="Skill"'
+                         '||$n&&!$n.has($s.metadata.name)'
+                         '||$t.includeNodeRepl!==!0&&$s.metadata.name==="js"'
+                         '||$e.register($s)}'
+                       + 'function $f(e){let t=e.toolAllowlist;return t}'
+                       + 'r($r,"registerBuiltInTools");r($f,"resolveBuiltInToolAllowlist");'
+                       + 'function refresh(e){$r(e.registry,{allowedTools:$f(e.config)})}'
+                       + BUNDLE_TOOLS)
+#: The same if-form under renamed identifiers: minified names are never fixed.
+RENAMED_IF_BUNDLE = (GOOD_BUNDLE
+                     .replace("function Uw(e,t={})", "function Uw($e,$t={})")
+                     .replace("t.allowedTools", "$t.allowedTools")
+                     .replace("let n=", "let $n=")
+                     .replace("for(let s of builtins)if(!n||n.has(s.metadata.name))e.register(s)",
+                              "for(let $s of builtins)if(!$n||$n.has($s.metadata.name))$e.register($s)"))
 
 
 class SessionParameterTests(unittest.TestCase):
@@ -71,7 +100,63 @@ class ContractProblemTests(unittest.TestCase):
     """The helper identifies mechanisms; mutating any one yields its own reason."""
 
     def test_the_well_formed_mechanism_set_is_accepted(self):
-        self.assertIsNone(native_contract_problem(GOOD_BUNDLE))
+        for label, bundle in (("if-form", GOOD_BUNDLE), ("or-chain", GOOD_OR_CHAIN_BUNDLE),
+                              ("renamed-if", RENAMED_IF_BUNDLE)):
+            with self.subTest(label=label):
+                self.assertIsNone(native_contract_problem(bundle))
+
+    def test_registration_control_flows_bind_or_fail_closed(self):
+        """Only the two complete flows qualify; near-misses carry their reason."""
+        for label, mutated, reason in (
+            ("inverted-if-membership",
+             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(n&&!n.has(s.metadata.name))"),
+             "unrecognized control flow"),
+            ("inverted-chain-member",
+             GOOD_OR_CHAIN_BUNDLE.replace("$n&&!$n.has($s.metadata.name)", "$n&&$n.has($s.metadata.name)"),
+             "unrecognized control flow"),
+            ("unconditional-register",
+             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", ""),
+             "unrecognized control flow"),
+            ("register-not-chain-final",
+             GOOD_OR_CHAIN_BUNDLE.replace("$e.register($s)}", "$e.register($s)||x}"),
+             "unrecognized control flow"),
+            ("register-outside-the-flow",
+             GOOD_BUNDLE.replace("e.register(s)}", "e.register(s);e.register(s)}"),
+             "outside the one allowlist-gated flow"),
+            ("membership-on-another-set",
+             GOOD_BUNDLE.replace("if(!n||n.has(s.metadata.name))", "if(!q||q.has(s.metadata.name))"),
+             "unrecognized control flow"),
+            ("set-not-from-the-options-parameter",
+             GOOD_BUNDLE.replace("new Set(t.allowedTools)", "new Set(globalAllow)"),
+             "no Set membership filter"),
+            ("membership-on-another-variable",
+             GOOD_BUNDLE.replace("n.has(s.metadata.name)", "n.has(other.metadata.name)"),
+             "unrecognized control flow"),
+            ("register-on-a-foreign-registry",
+             GOOD_BUNDLE.replace("e.register(s)}", "k.register(s)}"),
+             "own registry parameters"),
+            ("register-on-two-registries",
+             GOOD_BUNDLE.replace("e.register(s)}", "e.register(s);k.register(s)}"),
+             "own registry parameters"),
+            ("unknown-loop-structure",
+             GOOD_BUNDLE.replace("for(let s of builtins)", "builtins.forEach(function(s)"),
+             "for-of loop"),
+            ("bypassed-resolver-call",
+             GOOD_BUNDLE.replace("Uw(e.registry,{embeddedSearchEnabled:!1,"
+                                 "allowedTools:fT(e.config),disallowedTools:e.config.toolDisallowlist})",
+                                 "Uw(e.registry,{embeddedSearchEnabled:!1});"
+                                 "wire(e.registry,{allowedTools:fT(e.config)})"),
+             "not called with allowedTools from resolveBuiltInToolAllowlist"),
+            ("decoy-resolver-named",
+             GOOD_BUNDLE.replace('r(Uw,"registerBuiltInTools");r(fT,"resolveBuiltInToolAllowlist");',
+                                 'function fG(e){return null}'
+                                 'r(Uw,"registerBuiltInTools");r(fG,"resolveBuiltInToolAllowlist");'),
+             "does not read the config toolAllowlist"),
+        ):
+            with self.subTest(label=label):
+                problem = native_contract_problem(mutated)
+                self.assertIsNotNone(problem)
+                self.assertIn(reason, problem)
 
     def test_mutations_fail_with_their_specific_reason(self):
         for label, mutated, reason in (
@@ -161,6 +246,49 @@ class ReadOnlyEvidenceTests(unittest.TestCase):
         self.assertEqual(package["events"][0]["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_current_root_tool_frames_carry_the_monotonic_sequence(self):
+        scheduled = {"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}
+        result = {"kind": "result", "toolCallId": "c-1"}
+        # No integer sequence on a root tool frame fails after its fact lands.
+        evidence, facts = self.evidence()
+        self.start(evidence)
+        with self.assertRaises(NativeError) as caught:
+            evidence.observe(self.event("tool.updated", scheduled, seq=None), 2)
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        self.assertEqual(len(facts.finish(False)["events"]), 1)
+        # A descending frame is a regression ...
+        evidence, _ = self.evidence()
+        self.start(evidence)
+        evidence.observe(self.event("tool.updated", scheduled, seq=3), 2)
+        with self.assertRaises(NativeError) as caught:
+            evidence.observe(self.event("tool.updated", result, seq=2), 3)
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        # ... and so is a repeated sequence number.
+        evidence, _ = self.evidence()
+        self.start(evidence)
+        evidence.observe(self.event("tool.updated", scheduled, seq=3), 2)
+        with self.assertRaises(NativeError) as caught:
+            evidence.observe(self.event("tool.updated", result, seq=3), 3)
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        # A root tool frame advances last_seq: a later canonical frame cannot
+        # regress below it.
+        evidence, _ = self.evidence()
+        self.start(evidence)
+        evidence.observe(self.event("tool.updated", scheduled, seq=5), 2)
+        with self.assertRaises(NativeError) as caught:
+            evidence.observe(self.event("turn.completed", {"inputId": "input", "resultType": "success",
+                                           "response": "{}"}, seq=4), 3)
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        # Legal read/search pairs on the root still pass after the discipline.
+        evidence, facts = self.evidence()
+        self.start(evidence)
+        evidence.observe(self.event("tool.updated", {"kind": "scheduled", "toolCallId": "c-2",
+                                     "toolName": "Grep"}), 2)
+        evidence.observe(self.event("tool.updated", {"kind": "result", "toolCallId": "c-2"}, seq=3), 3)
+        self.settle(evidence)
+        self.assertTrue(evidence.settled)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(facts.finish(True), "review", False))
 
     def test_unknown_tool_and_agent_kinds_fail_closed_with_facts_kept(self):
         for kind in ("tool.started", "agent.started"):
@@ -330,6 +458,11 @@ def round_events(answer, tools=(), *, session="s-1", turn="t-1"):
     return build
 
 
+def subscribe_report(session_id="s-1", *, event_seq=0, events=None):
+    """The native subscribe handshake shape for one root session."""
+    return {"sessionId": session_id, "eventSeq": event_seq, "events": events or []}
+
+
 def script(rounds, *, send=None, close=None):
     """Canned results for one happy call shape with ``rounds`` answer rounds."""
     send = send or [{"accepted": True, "sessionId": f"s-{index + 1}"} for index in range(rounds)]
@@ -337,7 +470,7 @@ def script(rounds, *, send=None, close=None):
     return {"session/create": [snapshot(f"s-{index + 1}") for index in range(rounds)],
             "session/setModel": [configured() for _ in range(rounds)],
             "session/setThoughtLevel": [configured() for _ in range(rounds)],
-            "session/subscribe": [{} for _ in range(rounds)],
+            "session/subscribe": [subscribe_report(f"s-{index + 1}") for index in range(rounds)],
             "session/send": send, "session/close": close}
 
 
@@ -374,7 +507,7 @@ class FakeConnectionCallTests(unittest.TestCase):
                           "session/subscribe", "session/send", "session/close"])
         self.assertEqual(self.creates(connection), [session_parameters(WORKSPACE)])
         self.assertEqual(result["resolved"], SPEC)
-        self.assertEqual(result["observed"], {**SPEC, "workspacePath": CWD})
+        self.assertIsNone(result["observed"])
         self.assertTrue(result["modelStarted"])
         self.assertEqual(result["nativeIdentity"], {"sessionId": "s-1", "turnId": "t-1"})
         self.assertEqual((result["rawAnswer"], result["answerValid"], result["correctionCount"]),
@@ -398,6 +531,46 @@ class FakeConnectionCallTests(unittest.TestCase):
             script(1, send=[{"accepted": False, "sessionId": "s-1"}]))
         self.assertEqual(error.code, "native-admission-failed")
         self.assertFalse(result["modelStarted"])
+        self.assertIsNone(result["observed"])
+
+    def test_a_refused_send_never_fills_a_served_report(self):
+        _, result, _, error, _ = self.exercise(
+            script(1, send=[NativeError("native-rpc-error", "the read-only input was refused")]))
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertEqual(result["resolved"], SPEC)
+        self.assertIsNone(result["observed"])
+        self.assertFalse(result["modelStarted"])
+
+    def test_every_bad_subscribe_report_fails_before_the_send(self):
+        replayed = [{"eventId": "e-1", "type": "message.upserted", "sessionId": "s-1", "seq": 1}]
+        for label, report in (
+            ("foreign-session", {"sessionId": "s-child", "eventSeq": 0, "events": []}),
+            ("boolean-sequence", {"sessionId": "s-1", "eventSeq": True, "events": []}),
+            ("string-sequence", {"sessionId": "s-1", "eventSeq": "0", "events": []}),
+            ("negative-sequence", {"sessionId": "s-1", "eventSeq": -1, "events": []}),
+            ("missing-sequence", {"sessionId": "s-1", "events": []}),
+            ("missing-events", {"sessionId": "s-1", "eventSeq": 0}),
+            ("events-not-an-array", {"sessionId": "s-1", "eventSeq": 0, "events": {}}),
+            ("empty-report", {}),
+            ("replayed-events", {"sessionId": "s-1", "eventSeq": 1, "events": replayed}),
+        ):
+            with self.subTest(label=label):
+                session_id, result, _, error, connection = self.exercise(
+                    dict(script(1), **{"session/subscribe": [report]}))
+                self.assertIsNone(session_id)
+                self.assertEqual(error.code, "invalid-protocol")
+                self.assertFalse(result["modelStarted"])
+                self.assertIsNone(result["observed"])
+                self.assertEqual([method for method, _ in connection.calls][-1], "session/subscribe")
+
+    def test_a_well_shaped_report_with_no_replay_admits_the_round(self):
+        _, result, _, error, connection = self.exercise(
+            script(1), {"session/send": [round_events('{"choice":"a"}')]})
+        self.assertIsNone(error)
+        self.assertEqual([params for method, params in connection.calls
+                          if method == "session/subscribe"],
+                         [{"sessionId": "s-1", "deliveryKind": "web-remote-replayable",
+                           "includeSnapshot": False}])
 
     def test_non_root_session_and_workspace_mismatch_fail_closed(self):
         *_, error, connection = self.exercise({"session/create": [snapshot(parent="s-0")]})
@@ -551,7 +724,7 @@ class FakeAppServerTests(unittest.TestCase):
             "toolAllowlist": ["Read", "Glob", "Grep"], "mcpServers": [],
             "offPeakToolEnabled": False, "dynamicWorkflowEnabled": False}])
         self.assertEqual(result["resolved"], SPEC)
-        self.assertEqual(result["observed"], {**SPEC, "workspacePath": str(self.cwd)})
+        self.assertIsNone(result["observed"])
         self.assertTrue(result["modelStarted"])
         self.assertEqual(result["sessionId"], "s-1")
         self.assertEqual(result["nativeIdentity"], {"sessionId": "s-1", "turnId": "t-1"})
@@ -659,6 +832,17 @@ class FakeAppServerTests(unittest.TestCase):
         self.assertFalse(result["modelStarted"])
         self.assertEqual(len(self.recorded_creates()), 1)
         self.assertEqual(facts.finish(False)["nativeIdentity"], [])
+
+    def test_subscribe_report_failures_precede_any_model_input(self):
+        for case in ("sub-wrong-sid", "sub-bad-seq", "sub-replay"):
+            with self.subTest(case=case):
+                self.record.write_text("")  # one create per case, not per class
+                error, result, facts, _ = self.run_call(case)
+                self.assertEqual(error.code, "invalid-protocol")
+                self.assertFalse(result["modelStarted"])
+                self.assertEqual(len(self.recorded_creates()), 1)
+                package = facts.finish(False)
+                self.assertEqual((package["events"], package["nativeIdentity"]), ([], []))
 
     def test_the_single_deadline_and_cancel_end_the_call(self):
         error, result, facts, _ = self.run_call("timeout", deadline=time.monotonic() + 1.5)

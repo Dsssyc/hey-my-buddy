@@ -8,8 +8,11 @@ projected into the shared evidence by
 :class:`~buddy.adapters.zcode_tool_evidence.ZcodeToolFacts` before any
 rejection or session filter, exactly like the no-tool channel; this module
 extends the same canonical session/event rules with the real ``tool.updated``
-allowance, the cumulative call budget and the one format correction. Whether a
-recorded call was allowed is judged only by the blackboard at publication: the
+allowance — the current root's own tool frames carry the same strictly
+increasing integer sequence as every other canonical frame — the verified
+subscription handshake, the cumulative call budget and the one format
+correction. Whether a recorded call was allowed is judged only by the
+blackboard at publication: the
 native snapshot carries no allowlist echo, none is invented, and every state
 and identity here comes from the native protocol. The native installation
 content is only statically checked (:func:`native_contract_problem`); that
@@ -65,14 +68,21 @@ def native_contract_problem(source_text) -> str | None:
     The check is structural and identifies mechanisms, never names: a strict
     session/create schema carrying the restriction fields with a mode enum that
     offers ``plan``, the named ``registerBuiltInTools``/``resolveBuiltInToolAllowlist``
-    pair with the allowedTools Set membership filter over ``metadata.name``, the
-    call chain that feeds one from the other, and the three registration names.
-    Minified identifiers are read from the text itself, never assumed; versions,
-    hashes and certificates play no part. A bundle whose mechanisms cannot be
-    identified is ineligible with the specific reason — a bare mention of
-    ``toolAllowlist`` proves nothing. The caller supplies the text bounded to
-    32 MiB of the public bundle; no credential or provider configuration ever
-    enters this check.
+    pair whose registration runs through one of the two complete allowlist
+    control flows — the in-loop ``if(!allowSet || allowSet.has(...))`` or the
+    short-circuit OR chain whose rejection member is
+    ``allowSet && !allowSet.has(tool.metadata.name)`` with the register action
+    as its last item — bound from the options parameter's allowedTools to the
+    same Set, the same loop variable's ``metadata.name`` and the same registry
+    parameter, the resolver reading the config ``toolAllowlist`` and its call
+    handed to that very registration as ``allowedTools``, and the three
+    registration names. Minified identifiers are read from the text itself,
+    never assumed; versions, hashes and certificates play no part. A bundle
+    whose mechanisms cannot be identified is ineligible with the specific
+    reason — a bare mention of ``toolAllowlist``, an inverted membership test
+    or an unconditional register proves nothing. The caller supplies the text
+    bounded to 32 MiB of the public bundle; no credential or provider
+    configuration ever enters this check.
     """
     if not isinstance(source_text, str) or not source_text.strip():
         return "no public CLI bundle text was provided for the read-only contract check"
@@ -123,16 +133,197 @@ def _allowlist_chain_problem(text: str) -> str | None:
     body = _function_body(text, register.group(1))
     if body is None:
         return "registerBuiltInTools is not a function definition in the public bundle"
-    if not (re.search(r"new Set\(\w+\.allowedTools\)", body)
-            and re.search(r"\.has\(\w+\.metadata\.name\)", body)):
-        return "registerBuiltInTools registers without the allowedTools Set membership filter over metadata.name"
+    problem = _registration_flow_problem(body)
+    if problem is not None:
+        return problem
     body = _function_body(text, resolve.group(1))
     if body is None:
         return "resolveBuiltInToolAllowlist is not a function definition in the public bundle"
     if not re.search(r"(?<![\w$])[\w$]+\.toolAllowlist\b", body):
         return "resolveBuiltInToolAllowlist does not read the config toolAllowlist"
-    if not re.search(r"allowedTools\s*:\s*" + re.escape(resolve.group(1)) + r"\s*\(", text):
+    if not _resolver_feeds_registration(text, register.group(1), resolve.group(1)):
         return "registerBuiltInTools is not called with allowedTools from resolveBuiltInToolAllowlist"
+    return None
+
+
+#: The fail-closed verdict for a registration the two recognized control flows
+#: cannot explain: an inverted membership test, an extra guard shape, a chain
+#: that continues past the register action — none of them is the allowlist.
+_UNRECOGNIZED_FLOW = ("registerBuiltInTools registers through an unrecognized control flow "
+                      "instead of the allowedTools Set membership filter over metadata.name")
+
+
+def _registration_flow_problem(body: str) -> str | None:
+    """Bind the one complete allowlist-gated registration flow in ``body``.
+
+    The Set must be built from a parameter's ``allowedTools``, the membership
+    reads the same for-of loop variable's ``metadata.name``, every registration
+    lands on the same registry parameter inside that one loop, and the flow is
+    either the in-loop ``if(!allowSet || allowSet.has(name)) register`` or the
+    short-circuit OR chain whose rejection member is
+    ``allowSet && !allowSet.has(name)`` with the register action as its last
+    item. Unrecognized control flows fail closed.
+    """
+    params = _parameter_names(body)
+    set_var = _allowset_variable(body, params)
+    if set_var is None:
+        return "registerBuiltInTools builds no Set membership filter from its options allowedTools parameter"
+    loop = re.search(r"for\s*\(\s*(?:let|var|const)\s+([\w$]+)\s+of\b", body)
+    if loop is None:
+        return "registerBuiltInTools filters no per-tool for-of loop over the built-in tools"
+    loop_var = loop.group(1)
+    receiver = _registry_receiver(body, params)
+    if receiver is None:
+        return "registerBuiltInTools does not register on one of its own registry parameters"
+    calls = list(re.finditer(r"(?<![\w$])" + re.escape(receiver) + r"\s*\.\s*register\s*\(", body))
+    header_end = _balanced_span(body, body.index("(", loop.start()))
+    span = _loop_body_span(body, header_end) if header_end is not None else None
+    if span is None or len(calls) != 1 or not span[0] <= calls[0].start() < span[1]:
+        return "registerBuiltInTools carries registrations outside the one allowlist-gated flow"
+    call = calls[0]
+    call_end = _balanced_span(body, call.end() - 1)
+    if call_end is None:
+        return _UNRECOGNIZED_FLOW
+    before, after = body[span[0]:call.start()], body[call_end:span[1]]
+    membership = (re.escape(set_var) + r"\s*\.\s*has\s*\(\s*" + re.escape(loop_var)
+                  + r"\s*\.\s*metadata\s*\.\s*name\s*\)")
+    # Flow one: the in-loop positive condition registers exactly what the
+    # allowlist carries, with no further arm that could weaken it.
+    gate = re.compile(r"\(\s*!\s*" + re.escape(set_var) + r"\s*\|\|\s*" + membership + r"\s*\)")
+    for if_header in re.finditer(r"(?<![.\w$])if\s*\(", body):
+        if not span[0] <= if_header.start() < span[1]:
+            continue
+        condition_end = _balanced_span(body, if_header.end() - 1)
+        if (condition_end is not None and condition_end <= call.start()
+                and body[condition_end:call.start()].strip() in ("", "{")
+                and gate.fullmatch(body[if_header.end() - 1:condition_end])):
+            return None
+    # Flow two: the top-level short-circuit OR chain rejects with the Set
+    # membership and registers only as the chain's final item.
+    rejection = re.escape(set_var) + r"\s*&&\s*!\s*" + membership
+    if re.search(rejection, before) and re.search(r"\|\|\s*$", before) and "||" not in after:
+        return None
+    return _UNRECOGNIZED_FLOW
+
+
+def _parameter_names(body: str) -> tuple[str, ...]:
+    """The simple identifier parameters of the function ``body`` opens with."""
+    head = re.match(r"function\s+[\w$]+\s*\(", body)
+    if head is None:
+        return ()
+    end = _balanced_span(body, head.end() - 1)
+    if end is None:
+        return ()
+    names = []
+    for part in _split_arguments(body[head.end():end - 1]):
+        name = re.match(r"\s*([\w$]+)", part)
+        if name is not None:
+            names.append(name.group(1))
+    return tuple(names)
+
+
+def _split_arguments(text: str) -> list[str]:
+    """Comma-separated top-level pieces of a parameter or argument list."""
+    parts, depth, quote, escaped, start = [], 0, None, False, 0
+    for index, character in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif character in "'\"`":
+            quote = character
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+        elif character == "," and depth == 0:
+            parts.append(text[start:index])
+            start = index + 1
+    parts.append(text[start:])
+    return parts
+
+
+def _allowset_variable(body: str, params: tuple[str, ...]) -> str | None:
+    """The variable a declaration binds to ``new Set(<param>.allowedTools…)``."""
+    for name in params:
+        for built in re.finditer(r"new Set\(\s*" + re.escape(name) + r"\.allowedTools\b[^)]{0,80}\)", body):
+            # The nearest assignment reaching the Set's construction binds it;
+            # no statement separator and no second assignment may intervene.
+            window = body[max(0, built.start() - 200):built.start()]
+            declaration = re.search(r"([\w$]+)\s*=\s*[^;=]*$", window)
+            if declaration is not None:
+                return declaration.group(1)
+    return None
+
+
+def _registry_receiver(body: str, params: tuple[str, ...]) -> str | None:
+    """The one registry parameter every registration in the body acts on."""
+    receivers = {call.group(1) for call in re.finditer(r"(?<![\w$])([\w$]+)\s*\.\s*register\s*\(", body)}
+    if len(receivers) != 1:
+        return None
+    receiver = next(iter(receivers))
+    return receiver if receiver in params else None
+
+
+def _loop_body_span(body: str, header_end: int) -> tuple[int, int] | None:
+    """The loop's content span: inside braces when braced, else to the end.
+
+    A braceless minified loop body is one statement, so the span runs to the
+    end of the function body — which only ever widens the fail-closed checks
+    around what lies inside the loop.
+    """
+    index = header_end
+    while index < len(body) and body[index].isspace():
+        index += 1
+    if index >= len(body):
+        return None
+    if body[index] == "{":
+        close = _balanced_span(body, index)
+        return None if close is None else (index + 1, close - 1)
+    return index, len(body)
+
+
+def _resolver_feeds_registration(text: str, register_name: str, resolve_name: str) -> bool:
+    """One call of the registration receives the resolver's call as allowedTools."""
+    for call in re.finditer(r"(?<![\w$])" + re.escape(register_name) + r"\s*\(", text):
+        if text[max(0, call.start() - 9):call.start()].rstrip().endswith("function"):
+            continue  # the function's own definition, not a call
+        end = _balanced_span(text, call.end() - 1)
+        if end is not None and re.search(r"(?<![\w$])allowedTools\s*:\s*"
+                                         + re.escape(resolve_name) + r"\s*\(",
+                                         text[call.end():end - 1]):
+            return True
+    return False
+
+
+def _balanced_span(text: str, open_index: int) -> int | None:
+    """The index just past the closer matching the opener at ``open_index``.
+
+    Only the opener's own bracket kind is counted and string literals are
+    skipped, so brackets of the other kind and quoted text cannot end the scan
+    early; the span is bounded like a function body.
+    """
+    opener, closer = text[open_index], ")" if text[open_index] == "(" else "}"
+    depth, quote, index = 0, None, open_index
+    while index < len(text) and index - open_index <= 65536:
+        character = text[index]
+        if quote is not None:
+            if character == "\\":
+                index += 1
+            elif character == quote:
+                quote = None
+        elif character in "'\"`":
+            quote = character
+        elif character == opener:
+            depth += 1
+        elif character == closer:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
     return None
 
 
@@ -194,10 +385,12 @@ class ReadOnlyEvidence:
     """Canonical no-tool native evidence extended with real tool calls.
 
     The event families, sequence discipline, turn identity, completion and
-    settlement rules stay the no-tool channel's; a canonical ``tool.updated``
-    frame is allowed in every session because its facts were already projected,
-    so a foreign, child, MCP or late call reaches the blackboard for judgment
-    instead of disappearing into a rejection. The deduplicated call count of
+    settlement rules stay the no-tool channel's; a ``tool.updated`` frame is a
+    fact in every session because its facts were already projected, so a
+    foreign, child, MCP or late call reaches the blackboard for judgment
+    instead of disappearing into a rejection. The current root's own tool
+    frames follow the same strictly increasing integer sequence as every other
+    canonical frame before they are allowed. The deduplicated call count of
     the shared collector carries the run's N/N+1 budget across every correction
     session; exceeding it fails the call with ``readonly-budget-exhausted``.
     """
@@ -263,7 +456,16 @@ class ReadOnlyEvidence:
             if kind == "tool.updated":
                 # A real tool frame is a fact, never a rejection: its identity,
                 # completeness and category were projected above and only the
-                # blackboard judges them at publication.
+                # blackboard judges them at publication. The current root's own
+                # frames carry the same strictly increasing integer sequence as
+                # every other canonical frame; foreign, child and late frames
+                # keep their facts without a session filter here.
+                if params.get("sessionId") == self.session_id:
+                    seq = params.get("seq")
+                    if type(seq) is not int or seq <= self.last_seq:
+                        raise NativeError("invalid-protocol",
+                                          "read-only native tool frame order is invalid")
+                    self.last_seq = seq
                 return
             if isinstance(kind, str) and (kind.startswith("tool.") or kind.startswith("agent.")):
                 raise NativeError("invalid-protocol", "unknown native tool or agent frame in a read-only call")
@@ -348,7 +550,9 @@ def read_only_call(connection: NativeConnection, control: dict, result: dict, wo
     """One structured review call over restricted root sessions, corrections included.
 
     Every answer round creates a fresh root session with the fixed restricted
-    parameters, verifies the native model/effort report, subscribes and only
+    parameters, verifies the native model/effort report, subscribes — the
+    handshake's report must name this root session, carry a nonnegative
+    integer event sequence and replay nothing into the fresh session — and only
     then sends. The single connection deadline spans the preflight checks,
     every native multi-tool step and the at most one format correction; tool
     counts accumulate in ``tools`` and are never reset. ``modelStarted`` is
@@ -379,15 +583,31 @@ def read_only_call(connection: NativeConnection, control: dict, result: dict, wo
         native_path = (session.get("workspace") or {}).get("workspacePath")
         if native_path != control["cwd"]:
             raise NativeError("wrong-native-workspace", "the read-only native workspace differs from the frozen copy")
+        # ``resolved`` keeps the native configuration facts; ``observed`` stays
+        # null — this protocol reports no served identity, so a refused send
+        # below must never find one filled in.
         result["resolved"] = configure_session(connection, snapshot, spec, access)
-        result["observed"] = {**result["resolved"], "workspacePath": native_path}
         result["sessionId"] = session_id
         input_id = "buddy-read-only-" + secrets.token_hex(16)
         evidence = ReadOnlyEvidence(session_id, input_id, tools, budget)
         connection.observe = evidence.observe
-        connection.call("session/subscribe", {"sessionId": session_id,
-                                              "deliveryKind": "web-remote-replayable",
-                                              "includeSnapshot": False})
+        report = connection.call("session/subscribe", {"sessionId": session_id,
+                                                       "deliveryKind": "web-remote-replayable",
+                                                       "includeSnapshot": False})
+        # The native handshake reports the session's own identity, a nonnegative
+        # integer event sequence and the replay window. This is a fresh root
+        # session that requested no snapshot and no afterSeq, so a non-empty
+        # replay is a protocol failure; no subscribed or allowlist echo field
+        # exists in the native protocol and none is invented here. A report
+        # without this shape fails before any model input is sent.
+        if (not isinstance(report, dict) or report.get("sessionId") != session_id
+                or type(report.get("eventSeq")) is not int or report["eventSeq"] < 0
+                or not isinstance(report.get("events"), list)):
+            raise NativeError("invalid-protocol",
+                              "the read-only subscription handshake returned an unknown report shape")
+        if report["events"]:
+            raise NativeError("invalid-protocol",
+                              "the read-only subscription replayed events into a fresh root session")
         accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                     "content": prompt})
         if accepted.get("accepted") is not True or accepted.get("sessionId") != session_id:

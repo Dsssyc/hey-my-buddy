@@ -108,6 +108,19 @@ for line in sys.stdin:
     elif method == "session/subscribe":
         assert p["deliveryKind"] == "web-remote-replayable" and p["includeSnapshot"] is False
         subscribed = True
+        # The real handshake reports the session's own identity, its nonnegative
+        # event sequence and the replay window; a fresh session with
+        # includeSnapshot=false and no afterSeq replays nothing. The sub-*
+        # cases break exactly one member of that report.
+        result = {"sessionId": f"s-{session}", "eventSeq": 0, "events": []}
+        if CASE == "sub-wrong-sid":
+            result["sessionId"] = "s-other"
+        elif CASE == "sub-bad-seq":
+            result["eventSeq"] = True
+        elif CASE == "sub-replay":
+            result = {"sessionId": f"s-{session}", "eventSeq": 3,
+                      "events": [{"eventId": "e-1", "type": "message.upserted",
+                                  "sessionId": f"s-{session}", "seq": 1}]}
     elif method == "session/send":
         assert subscribed
         result = {"accepted": True, "sessionId": f"s-{session}"}
