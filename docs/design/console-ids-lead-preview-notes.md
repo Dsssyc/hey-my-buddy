@@ -37,3 +37,21 @@ B 首回合未形成可验收的交付。第三回合由 `workflow.turn_failed` 
 黑板保留了 B 的固定部分产物 `ce2fd2ae-fef8-488f-8ffe-5dfd829158d7`，输出提交 `29ffedbd`，仅修改 `apps/console/browser/lead.check.ts`、预览脚本和 `test_host_preview.py`；状态明确为 `partial: true`、`verified: false`、`final: false`，未整合、未验收。Lead 读取固定差异和该微任务检出内保存的 Playwright 失败上下文，发现四种语言 / 宽度组合均在检查器标题断言失败：`Expected: 等待 Lead`、`Received: 等待 Host`；检查器类型栏与时间轴已显示 Lead，但 `inspector-card.ts` 的 `head` 仍直接调用 `spanHead(host)`。
 
 该新场景暴露的根因位于本 Lead 的总写入范围 `apps/console` 内，A 已验收，不存在并行写入。Lead 用 `scope-amend`（`commandId: preview-inspector-scope-1`、`expectedRevision: 4`、`expectedScopeVersion: 1`）在 B 原范围上增加 `apps/console/src/inspector-card.ts` 与已有 `apps/console/src/macro-task-timeline.test.tsx`，理由为修复等待 Lead 检查器标题，返回退出码 0、revision 5、scopeVersion 2；没有扩展本 Lead 的 Host 授权范围。随后经 `continue --params-file tmp/preview-continue.json`（`commandId: preview-inspector-rework-1`、`expectedRevision: 5`）要求 B 从固定部分产物继续、修复头部根因、不放松浏览器断言，只新增运行检查器定向 Vitest，其他环境规则与限定检查维持，返回退出码 0。B 累计返修 1 次，尚待下一次交付；本 Lead 未代改子任务代码，也未通过其他工具重试失败操作。
+
+第四回合由 B 的 `workflow.turn_returned` 叫醒，B 的继续执行采用 `reconstructed-new-session`，保留了首回合固定改动，最终在三句摘要中准确列出检查与边界。固定最终产物为 `90697df6-7baa-4fae-b507-fff0ef70ee90`，输出提交 `86d4bb99`；累计差异的五个文件覆盖首回合的 `lead.check.ts`，没有因最后一回合未再次修改该文件而漏掉它。B 补充了一个两回合 Lead、一个请求 Lead 决定的名下微任务、一个仍排队的名下微任务，明确记录最初创建它们的 Lead 回合；等待状态不冒充进程仍在运行。检查器头部与类型栏统一复用时间轴已解析的标题，现有非 Lead 等待与执行片段的轮次也有行为断言。
+
+Lead 读取累计固定差异、`git diff --check` 通过后，在 B 的实际检出重跑指定 Python 检查器的 `tests/python/cli/test_host_preview.py`（3 项、默认 4 进程、私有根已清理）、`npm --prefix apps/console test -- src/macro-task-timeline.test.tsx`（43 项），并重新构建 ignored `tmp/lead-preview-assets` 后运行 `npm --prefix apps/console exec -- playwright test --config tmp/lead-preview.config.mts lead.check.ts actors.check.ts`（10 项，覆盖中英文及 1440 / 1024 宽度）；全部退出码为 0。浏览器检查真实的只读预览停止拒绝、键盘操作及文本可读性，没有验证实际后端成功停止。
+
+恢复时一个容易误用的点是：B 的最新 workspace ID 为 `ws-c831af755ec7c780c570d746a609316a`，但类型是 `existing`，实际检出路径仍是最初的 `ws-c612e1793e4fef71a82db606c1fff421/checkout`，必须用 `get.workspace.path`；Lead 按 ID 猜目录导致两次命令无法启动，改用回执真实路径后通过。另一次手工复核命令把 `--config` 误写成 `../../tmp/lead-preview.config.mts`，npm exec 实际保留检出根为 cwd，未找到配置；改成根相对的 `tmp/lead-preview.config.mts` 后 10 项通过。这两处是 Lead 自己的命令错误，未发生权限拒绝。
+
+B 的五份累计固定改动原样合入 Lead 提交 `64a4ab7a`。使用第四回合执行凭据调用 `accept`，绑定最终 artifactId 和 `target: {path: <Lead 自己的受管检出>, ref: 64a4ab7a}`，退出码 0，返回 `state: accepted`、`integration.state: verified`、`strategy: patch`、`reclaim.removed: true`，整合标识为 `int-b1b3c205-a521-46e2-b97b-93ed88ac0bc1`。两项均已验收，A 返修 0 次、B 返修 1 次；没有遗留名下微任务，开始整合后的最终验证。
+
+## 整合后检查与停止点
+
+在 Lead 的整合提交 `64a4ab7a` 上，按要求使用 Node.js 24.21.0 依次运行：`npm --prefix apps/console ci` 退出码 0；`npm --prefix apps/console test` 退出码 0，81 个文件、1,119 项全部通过，耗时 30.26 秒；`npm --prefix apps/console run test:browser` 退出码 1，停在命令自身先执行的 `tsc --noEmit` 阶段，浏览器用例未开始。原始输出保留在 ignored `tmp/console-full-test.log` 与 `tmp/console-browser-test.log`。
+
+类型检查错误原文为 `src/console-data.test.ts(25,25): error TS2352: Conversion of type '{ spec: { adapter: string; }; lineage: { buddy: {}; }; }' to type 'Task' may be a mistake because neither type sufficiently overlaps with the other`，第 26 行的 `{ spec: { adapter: string; }; } as Task` 同样触发 TS2352，缺少 `runId`、`task`、`status`、`owner` 等字段。两行均来自 A 的新增测试；Vitest 执行通过没有覆盖 TypeScript 编译。Lead 在验收 A 之前只重跑其定向 Vitest，没有类型检查，这是本轮验收检查安排的缺口，不是产品把不合格的编译结果判为通过。
+
+Host 要求范围内缺陷用 `continue` 打回、不由 Lead 代改，且验收与整合流程走不通时停下报告；共享 workflow 同时明确已验收的微任务不能继续。A 与 B 已经完成固定产物验收并回收检出，当前没有可用于打回的非终态微任务，因此 Lead 停在此处，请 Host 决定返修途径，不自行修改测试、不以 `notRequired` 或调整验收结果绕过。需要的具体修复是给这两项测试使用符合类型的 fixture（或者明确的测试边界断言），然后重跑类型检查及受影响测试；之后从浏览器检查继续，成功后重建打包资源，再按指定解释器运行 Python 预览检查。若 Host 允许在本 Lead 检出直接修复这两行，即可继续同一份整合产物；若仍要求由微任务实现，则需要 Host 授权新的返修微任务。
+
+截至停止点，最终打包资源未重建，最终整合检出的 Python 检查未运行；此前 B 自身交付上的 Python 3 项和浏览器 10 项通过仅证明 B 的独立产物，不能当作整合后检查通过。额外原生剪贴板与窄屏复制入口检查尚未执行。
