@@ -189,7 +189,7 @@ class NativeShapeRoundTests(NativeRunCase):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-run-facts")
         retained = json.loads(Path(ref.location).read_text())["unknownEvents"]["countsByType"]
         self.assertTrue(any(f["unknownEvents"]["total"] for f in seen))
-        self.assertEqual(native_run.native_evidence(result)["evidenceRefs"], [ref.to_payload()])
+        self.assertNotIn("evidenceRefs", native_run.native_evidence(result))
         return result, retained
 
     def test_unknown_native_selection_continues_with_result_and_observer_facts(self):

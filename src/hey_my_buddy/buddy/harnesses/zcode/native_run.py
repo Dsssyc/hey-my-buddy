@@ -1634,8 +1634,7 @@ def native_evidence(result: RunResult) -> dict:
     completion = result.completion_evidence
     return {"eventCount": result.native_event_count,
             "toolAllowlist": settings.get("toolAllowlist"),
-            "streamEof": completion.stream_end if completion is not None else None,
-            "evidenceRefs": [ref.to_payload() for ref in result.evidence_refs if ref.kind == "native-run-facts"]}
+            "streamEof": completion.stream_end if completion is not None else None}
 
 
 def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout_seconds: int,
