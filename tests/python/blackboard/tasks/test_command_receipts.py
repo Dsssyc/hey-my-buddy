@@ -31,6 +31,27 @@ def replay(board, kind, response):
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
+    def test_deleted_receipt_checks_identity_without_loading_response(self):
+        board = self.board()
+        params = {"requestId": "deleted-command", "adapter": "command", "task": "Record a command",
+                  "cwd": str(self.workdir()), "argv": ["/bin/true"]}
+        board.store.task_submit(params, command_id="deleted-command-id")
+        with board.store.db.write() as connection:
+            connection.execute(
+                "INSERT INTO macro_task_deletions"
+                " (deletion_id,target_kind,target_id,state,started_at,deleted_at,micro_task_count)"
+                " VALUES('deletion-1','macro-task','macro-old','deleted',?,?,1)",
+                (board.store.now(), board.store.now()),
+            )
+            connection.execute(
+                "UPDATE commands SET response_json='{}',deletion_id='deletion-1' WHERE command_id='deleted-command-id'"
+            )
+        self.assertEqual(board.store.task_submit(params, command_id="deleted-command-id"),
+                         {"commandId": "deleted-command-id", "deleted": True})
+        with self.assertRaises(BoardError) as caught:
+            board.store.task_submit({**params, "task": "Different input"}, command_id="deleted-command-id")
+        self.assertEqual(caught.exception.code, "CONFLICT")
+
     def test_decision_continuation_takeover_and_cancel_keep_commits_with_current_view(self):
         board = self.board()
         submitted = self.submit(board)

@@ -39,6 +39,7 @@ from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
 from .command_receipts import CANCELLATION_NOTE
+from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 
@@ -1611,6 +1612,8 @@ class WorkflowCoordinator:
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
                          attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
+        if macro_task_id is not None:
+            reject_macro_task(connection, macro_task_id)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
             " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -2439,6 +2442,9 @@ class WorkflowCoordinator:
     ) -> dict | None:
         """Read-only authority/revision/replay check before any workspace preparation."""
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", request_key)
+            if deleted is not None:
+                return deleted
             run_row = self._run_row(connection, run_id)
             # Authority is checked before a replay is returned; a delayed old owner
             # can never read back another Host's recorded response.
@@ -2934,6 +2940,9 @@ class WorkflowCoordinator:
         # Authenticate/replay before native catalog work. A concurrent takeover is
         # checked again after validation, before any durable mutation.
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.continue", request_key)
+            if deleted is not None:
+                return deleted
             run = self._run_row(connection, run_id)
             self._authorize(connection, run, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
@@ -2963,6 +2972,8 @@ class WorkflowCoordinator:
             receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
+            reject_deleting_run(connection, owner_run_id)
+            reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
             run_row = self._continuation_target(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
@@ -3314,6 +3325,9 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "newHostId": new_host, "expectedOwnerGeneration": expected_generation}
         now = self.now()
         with self.db.write() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.takeover", request_key)
+            if deleted is not None:
+                return deleted
             run_row = self._run_row(connection, run_id)
             receipt = self.board._receipt(connection, command_id, "workflow.takeover", request_key)
             if receipt is not None:
@@ -3434,6 +3448,10 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "reason": reason}
         now = self.now()
         with self.db.write() as connection:
+            if command_id:
+                deleted = self.board._deleted_receipt(connection, command_id, "workflow.cancel", request_key)
+                if deleted is not None:
+                    return deleted
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             actor, initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="Cancellation")
@@ -3465,7 +3483,7 @@ class WorkflowCoordinator:
         with self.db.write() as connection:
             receipt = self.board._receipt(connection, command_id, "macro_task.stop", request)
             if receipt is not None:
-                return {**receipt, "duplicate": True}
+                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
             if identifier.startswith("macro-"):
                 roots = connection.execute(
                     "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
@@ -3932,6 +3950,9 @@ class WorkflowCoordinator:
         verification_inputs = None
         duplicate = None
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.accept", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
@@ -4739,6 +4760,7 @@ class WorkflowCoordinator:
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
             run_row = self._target_run(connection, owner, target_id)
+            reject_deleting_run(connection, target_id)
             target_id = run_row["run_id"]
         result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params,
                                        console_authority=console_authority)
@@ -4916,6 +4938,9 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedScopeVersion": expected_scope,
                        "writeScope": write_scope, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.scope_amend", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
@@ -5138,6 +5163,9 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "conflictId": conflict_id, "action": action,
                        "paths": paths, "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.workspace_resolve", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
@@ -5502,6 +5530,9 @@ class WorkflowCoordinator:
         expected = schemas.require_expected_revision(params)
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_plan", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
@@ -5562,6 +5593,7 @@ class WorkflowCoordinator:
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
+            reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = run_row["run_id"]
@@ -5641,6 +5673,9 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "planId": plan_id, "confirmPath": confirm_path,
                        "expectedRevision": expected}
         with self.db.read() as connection:
+            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_apply", request_key)
+            if deleted is not None:
+                return deleted
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
@@ -5702,6 +5737,7 @@ class WorkflowCoordinator:
             receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
+            reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = run_row["run_id"]
@@ -7823,6 +7859,8 @@ class WorkflowCoordinator:
                 runId=task_row["task_id"],
             )
         self._authorize(connection, run_row, params, console_authority=authority, action=operation)
+        if operation == "task_retry":
+            reject_deleting_run(connection, run_row["run_id"])
         command, native_operation = {
             "task_cancel": ("cancel", "workflow_cancel"),
             "task_retry": ("continue", "workflow_continue"),

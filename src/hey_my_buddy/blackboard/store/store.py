@@ -343,9 +343,23 @@ class BoardStore:
                 "This commandId already belongs to a different request; use a new commandId",
                 commandId=command_id,
             )
+        if row["deletion_id"] is not None:
+            return {"commandId": command_id, "deleted": True}
         from ..tasks.command_receipts import replay_response
 
         return replay_response(self.workflow, connection, kind, json.loads(row["response_json"]))
+
+    def _deleted_receipt(
+        self, connection: sqlite3.Connection, command_id: str, kind: str,
+        request: dict, subject: str | None = None,
+    ) -> dict | None:
+        """Replay only a deleted command before its former run can be loaded."""
+        row = connection.execute(
+            "SELECT deletion_id FROM commands WHERE command_id=?", (command_id,)
+        ).fetchone()
+        if row is None or row["deletion_id"] is None:
+            return None
+        return self._receipt(connection, command_id, kind, request, subject)
 
     def _store_receipt(
         self,

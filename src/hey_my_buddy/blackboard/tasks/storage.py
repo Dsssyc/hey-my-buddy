@@ -512,9 +512,15 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if allocation is None:
                 continue  # Host-owned/unrelated checkout: never measure or delete.
             path = Path(allocation['path'])
-            if path in seen or not path.exists():
+            if path in seen:
                 continue
             seen.add(path)
+            if not path.exists():
+                # The checkout may have been reclaimed while its allocation
+                # record and sealed outputs remain. Keep those bytes visible.
+                add('workspaces', path.parent, [*reasons, 'checkout-missing'],
+                    runId=run_id, revision=revision)
+                continue
             if not reasons and git_proof:
                 inspected = workspace.cleanup_inspect(state, manifest, sealed=sealed, retained=retained)
                 reasons.extend(inspected['reasons'])
@@ -532,6 +538,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if path in seen or path in recognized:
                 continue
             if not (path.exists() or private_dirs.linked_component(path) is not None):
+                add('workspaces', directory, ['owner-unproven', 'checkout-missing'],
+                    orphan=True, runId=None)
                 continue
             orphan_inputs.append(_orphan_workspace(store, directory, git_proof=git_proof))
     pending = [item for item in orphan_inputs if not item['reasons']]

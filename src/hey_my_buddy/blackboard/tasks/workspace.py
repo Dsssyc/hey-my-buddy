@@ -2494,6 +2494,80 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     return
 
 
+def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict]) -> dict:
+    """Prove deletion of one checkout without restoring an interrupted removal.
+
+    A missing gitfile can be the result of ``git worktree remove`` stopping
+    halfway through. In that state only surviving files are compared with
+    retained Git trees; missing files are allowed, but an added or changed file
+    keeps the checkout in place. The original registration and lock still have
+    to prove the exact physical allocation.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        allocation = resolve_allocation(state_dir, manifest)
+        if allocation is None or allocation["workspaceId"] != manifest["workspaceId"]:
+            return {"reasons": ["owner-unproven"], "resume": False}
+        checkout = Path(allocation["path"])
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        candidates = [item for item in artifacts if isinstance(item, dict)
+                      and item.get("workspaceId") == manifest["workspaceId"]
+                      and item.get("manifestSha256") == manifest["manifestSha256"]
+                      and isinstance(item.get("snapshot"), dict)
+                      and isinstance(item.get("tree"), str)]
+        pointer_missing = not _path_present(checkout / ".git")
+        try:
+            record, _git_dir = _cleanup_resume_registration(repository, checkout, allocation, manifest)
+        except BoardError as error:
+            if error.code == "WORKSPACE_UNSAFE":
+                return {"reasons": error.details["reasons"], "resume": True}
+            raise
+        if record is None:
+            return {"reasons": [], "resume": True}
+        if "detached" not in record:
+            return {"reasons": ["attached-branch"], "resume": True}
+        if record.get("HEAD") != manifest["inputCommit"]:
+            return {"reasons": ["identity-changed"], "resume": True}
+        if not pointer_missing:
+            first = None
+            for sealed in [*candidates, None]:
+                proof = cleanup_inspect(state_dir, manifest, sealed=sealed)
+                if proof["eligible"]:
+                    return {"reasons": [], "resume": True}
+                if first is None:
+                    first = proof
+            return {"reasons": first["reasons"], "resume": True}
+
+        # The registration is still bound to this allocation, but Git removed
+        # its gitfile. Never write it back merely to complete deletion.
+        fmt = _line(repository, "rev-parse", "--show-object-format")
+        surviving = {}
+        def collect(directory):
+            for entry in os.scandir(directory):
+                path = Path(entry.path)
+                relative = path.relative_to(checkout).as_posix()
+                if relative == ".git":
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    collect(path)
+                else:
+                    value = _file(checkout, relative)
+                    if value is None:
+                        raise BoardError("WORKSPACE_CHANGED", "A checkout file vanished during deletion proof")
+                    surviving[relative] = [value[0], _blob_oid(value[1], fmt)]
+        collect(checkout)
+        trees = [item["tree"] for item in candidates if
+                 _line(repository, "rev-parse", item["commit"] + "^{tree}") == item["tree"]]
+        trees.append(manifest["inputTree"])
+        differences = []
+        for tree in dict.fromkeys(trees):
+            expected = _entries(repository, tree)
+            differences = [path for path, value in surviving.items() if expected.get(path) != value]
+            if not differences:
+                return {"reasons": [], "resume": True}
+        return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences)[:32], "resume": True}
+
+
 def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
