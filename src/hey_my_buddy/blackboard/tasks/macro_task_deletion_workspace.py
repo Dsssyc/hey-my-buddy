@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import stat
+import re
 from typing import Callable
 
 from ... import private_dirs
@@ -71,10 +71,15 @@ def _refs(repository: Path, identifier: str) -> dict[str, str]:
     refs = {}
     for line in output.splitlines():
         ref, separator, oid = line.partition(b"\0")
-        name = ref.decode("utf-8", errors="strict")
-        if not separator or not name.startswith(prefix):
+        try:
+            name = ref.decode("utf-8", errors="strict")
+            value = oid.decode("ascii", errors="strict")
+        except UnicodeError as error:
+            raise BoardError("WORKSPACE_GIT_ERROR", "Invalid workspace reference inventory") from error
+        if (not separator or not name.startswith(prefix)
+                or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value) is None):
             raise BoardError("WORKSPACE_GIT_ERROR", "Invalid workspace reference inventory")
-        refs[name] = oid.decode("ascii", errors="strict")
+        refs[name] = value
     return refs
 
 
@@ -107,14 +112,10 @@ def _delete_refs(repository: Path, identifier: str, expected: dict[str, str]) ->
 def _record_proven(state: Path, manifest: dict) -> bool:
     identifier = manifest["workspaceId"]
     directory = state / "workspaces" / identifier
-    records = [directory / name for name in ("manifest.json", "request.json", "input.json", ".lock")]
-    if (not workspace._workspace_identifier(identifier) or private_dirs.linked_component(directory)
-            or not directory.is_dir() or any(private_dirs.linked_component(path) for path in records)):
+    if workspace.allocation_lock_directory(state, identifier) != directory:
         return False
-    try:
-        if not stat.S_ISREG((directory / ".lock").lstat().st_mode):
-            return False
-    except FileNotFoundError:
+    records = [directory / name for name in ("manifest.json", "request.json", "input.json")]
+    if any(private_dirs.linked_component(path) for path in records):
         return False
     if workspace._record(directory / "manifest.json") != manifest:
         return False
@@ -135,6 +136,20 @@ def _record_proven(state: Path, manifest: dict) -> bool:
                 and pinned["snapshot"]["stagedCommit"] == manifest["snapshot"]["stagedCommit"])
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def _tombstone(state: Path, identifier: str) -> Path:
+    return state / "workspaces" / (".deleting-" + identifier)
+
+
+def _remove_tombstone(state: Path, identifier: str) -> bool:
+    tomb = _tombstone(state, identifier)
+    if not workspace._path_present(tomb):
+        return False
+    if private_dirs.linked_component(tomb) is not None or not tomb.is_dir():
+        raise BoardError("WORKSPACE_UNSAFE", "The deletion tombstone is unsafe")
+    private_dirs.remove_tree(tomb)
+    return True
 
 
 def delete_workspaces(store, manifests: list[dict], artifacts: list[dict],
@@ -178,7 +193,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict],
             skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
             blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
             continue
-        with workspace._lock(directory):
+        with workspace._lock(directory, create=False):
             if not _record_proven(state, manifest):
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                 blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
@@ -231,11 +246,17 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict],
             skipped.extend(ref_skips)
             if phase_completed is not None and not ref_skips and not _refs(repository, identifier):
                 phase_completed("refs")
+            if not ref_skips and not _refs(repository, identifier):
+                if _remove_tombstone(state, identifier) and phase_completed is not None:
+                    phase_completed("allocation")
+            continue
+        if workspace._path_present(_tombstone(state, identifier)):
+            skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
             continue
         if not _record_proven(state, manifest):
             skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
             continue
-        with workspace._lock(directory):
+        with workspace._lock(directory, create=False):
             if not _record_proven(state, manifest):
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                 continue
@@ -254,7 +275,12 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict],
                 continue
             if phase_completed is not None:
                 phase_completed("refs")
-            private_dirs.remove_tree(directory)
+            tomb = _tombstone(state, identifier)
+            if workspace._path_present(tomb):
+                skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))
+                continue
+            directory.rename(tomb)
+            private_dirs.remove_tree(tomb)
             if phase_completed is not None:
                 phase_completed("allocation")
     return skipped

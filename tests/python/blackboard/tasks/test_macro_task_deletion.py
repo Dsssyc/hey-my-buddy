@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks
+from hey_my_buddy.blackboard.tasks import macro_task_deletion, macro_tasks, worker_sessions
 from hey_my_buddy.buddy.harnesses import registry as harness_registry
 from hey_my_buddy.private_dirs import micro_task_root
 from hey_my_buddy.errors import BoardError
@@ -18,7 +18,6 @@ from hey_my_buddy.errors import BoardError
 PHYSICAL_STAGES = (
     "_delete_sessions",
     "_delete_workspaces",
-    "_delete_storage_plans",
     "_delete_private_roots",
     "_delete_cli_files",
 )
@@ -105,7 +104,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         first = self.submit(board, request_id="queued-0", macroTask={"title": "Large group"})
         for number in range(1, 53):
             self.submit(board, request_id=f"queued-{number}", macroTaskId=first["macroTaskId"], kind="worktree")
-        preview = macro_task_deletion.preview(board.store, first["macroTaskId"])
+        # This case counts queued tasks; the workflow fixture uses synthetic
+        # manifests, so it supplies the ownership lookup at that physical seam.
+        with patch('hey_my_buddy.blackboard.tasks.workspace.resolve_allocation',return_value=None):
+            preview = macro_task_deletion.preview(board.store, first["macroTaskId"])
         self.assertEqual(preview["microTaskCount"], 53)
         self.assertGreaterEqual(preview["blockerTotal"], 53)
         self.assertEqual(len(preview["blockers"]), 50)
@@ -309,7 +311,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         target_paths = materialize(target)
         other_paths = materialize(other)
         with ExitStack() as stack:
-            for stage in ("_delete_sessions", "_delete_workspaces", "_delete_storage_plans"):
+            for stage in ("_delete_sessions", "_delete_workspaces"):
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             result = macro_task_deletion.delete(board.store, target["macroTaskId"], 1)
         self.assertEqual(result["state"], "deleted")
@@ -552,65 +554,6 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (other["runId"],)).fetchone())
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 
-    def test_shared_exact_workspace_artifact_checkout_and_integration_refuse(self):
-        board = self.board()
-        owner = self.closed(board, "shared-owner", macro_task="Shared owner")
-        other = self.closed(board, "shared-other", macro_task="Shared neighbor", project="shared-other")
-        target = owner["macroTaskId"]
-        manifest = {"workspaceId": "shared-workspace", "repositoryId": "shared-repository",
-                    "checkoutId": "shared-checkout", "manifestSha256": "shared-manifest-hash", "snapshot": {}}
-        now = board.store.now()
-        with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
-                       (json.dumps(manifest), owner["runId"]))
-            db.execute("UPDATE workflow_runs SET workspace_manifest_json='bad unrelated json' WHERE run_id=?",
-                       (other["runId"],))
-        self.assertEqual(macro_task_deletion.preview(board.store, target)["blockerTotal"], 0)
-
-        def shared_kind(expected):
-            error = self.assert_code("MACRO_TASK_STORAGE_IN_USE", macro_task_deletion.preview,
-                                     board.store, target)
-            self.assertIn(expected, {obj["objectKind"] for obj in error.details["objects"]})
-            self.assert_code("MACRO_TASK_STORAGE_IN_USE", macro_task_deletion.delete,
-                             board.store, target, 1)
-            with board.store.db.read() as db:
-                self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0], 0)
-
-        with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
-                       (json.dumps({**manifest, "workspaceId": "other-workspace"}), other["runId"]))
-        shared_kind("workspace")  # Same repository and checkout, different workspace ID.
-        with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET workspace_manifest_json='bad unrelated json' WHERE run_id=?",
-                       (other["runId"],))
-            db.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,kind,manifest_json,manifest_sha256,"
-                       "created_at) VALUES(?,?,?,?,?,?)",
-                       ("other-shared-artifact", other["runId"], "input", json.dumps(manifest), "fixture", now))
-        shared_kind("workspace")
-        with board.store.db.write() as db:
-            db.execute("DELETE FROM workflow_artifacts WHERE artifact_id='other-shared-artifact'")
-            db.execute("INSERT INTO workspace_reservations(reservation_id,workspace_id,checkout_id,repository_id,"
-                       "path,access,holder_task_id,holder_kind,manifest_sha256,state,created_at,updated_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                       ("other-shared-reservation", "other-workspace", "shared-checkout", "shared-repository",
-                        "private", "read", other["runId"], "reader", "fixture", "released", now, now))
-        shared_kind("checkout")
-        with board.store.db.write() as db:
-            db.execute("DELETE FROM workspace_reservations WHERE reservation_id='other-shared-reservation'")
-            db.execute("INSERT INTO workflow_integrations(integration_id,run_id,artifact_id,state,strategy,"
-                       "binding_sha256,target_kind,target_repository_id,target_checkout_id,verification_json,"
-                       "actor_role,actor_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                       ("other-shared-integration", other["runId"], "other-artifact", "verified", "fixture",
-                        "fixture", "checkout", "shared-repository", "shared-checkout", "{}", "host", "fixture", now))
-        shared_kind("integration-target")
-        with board.store.db.write() as db:
-            db.execute("DELETE FROM workflow_integrations WHERE integration_id='other-shared-integration'")
-            db.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
-                       (json.dumps({**manifest, "workspaceId": "other-workspace",
-                                    "repositoryId": "other-repository",
-                                    "manifestSha256": "other-manifest-hash"}), other["runId"]))
-        self.assertEqual(macro_task_deletion.preview(board.store, target)["blockerTotal"], 0)
-
     def test_native_session_identity_is_deduplicated_and_failure_keeps_mark(self):
         board = self.board()
         run = self.closed(board, "native-owner", macro_task="Native owner")
@@ -636,6 +579,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 raise OSError("offline adapter interruption")
             return {session_id: "already-gone"}
         with ExitStack() as stack:
+            inventory = stack.enter_context(patch.object(worker_sessions,"deletable_sessions",
+                                                          wraps=worker_sessions.deletable_sessions))
             stack.enter_context(patch.object(harness_registry, "adapter",
                                              side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native)))
             for stage in PHYSICAL_STAGES[1:]:
@@ -649,6 +594,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertEqual(completed["state"], "deleted")
         self.assertEqual(completed["deletionId"], interrupted["deletionId"])
         self.assertEqual(calls, [[session_id], [session_id]])
+        self.assertEqual(inventory.call_count,2)
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
 
@@ -787,3 +733,44 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             self.assert_code('MACRO_TASK_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
         with board.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0],0)
+
+    def test_lead_owned_run_is_not_a_standalone_deletion_root(self):
+        board = self.board()
+        lead = self.submit(board,request_id='lead-root')
+        self.finish_turn(board,self.claim(board,run_id=lead['runId']))
+        owned = self.closed(board,'owned-root')
+        with board.store.db.write() as db:
+            turn = db.execute('SELECT turn_id FROM workflow_turns WHERE run_id=?',(lead['runId'],)).fetchone()
+            db.execute('INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at) VALUES(?,?,?,?)',
+                       (owned['runId'],lead['runId'],turn['turn_id'],board.store.now()))
+            db.execute("UPDATE workflow_runs SET state='waiting-owned' WHERE run_id=?",(lead['runId'],))
+        target = 'run:' + owned['runId']
+        self.assert_code('NOT_FOUND',macro_task_deletion.preview,board.store,target)
+        self.assert_code('NOT_FOUND',macro_task_deletion.delete,board.store,target,1)
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0],0)
+
+    def test_shared_native_turn_without_result_receipt_retains_session(self):
+        board = self.board()
+        owner = self.closed(board,'turn-native-owner',macro_task='Native owner')
+        other = self.closed(board,'turn-native-holder',macro_task='Native holder',project='other-native')
+        session_id = '33333333-3333-4333-8333-333333333333'
+        now = board.store.now()
+        receipt = {'result':{'nativeSession':{'harness':'codex','sessionId':session_id,'captured':True,
+                     'storageOwner':'harness-user-store','resumeMode':'initial'},
+                    'nativeCheckpoint':{'version':1,'sessionId':session_id,'taskId':owner['runId'],
+                                        'attemptId':'created-session'}}}
+        with board.store.db.write() as db:
+            for run,attempt_id,result in ((owner,'created-session',json.dumps(receipt)),(other,'interrupted-resume',None)):
+                db.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
+                           'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                           (attempt_id,run['runId'],1,'fixture','finished','codex',1,result,now,now))
+            db.execute('INSERT INTO workflow_turns(turn_id,run_id,attempt_id,turn_index,resume_mode,previous_session_id,'
+                       'input_json,access,expected_seconds,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                       ('interrupted-native-turn',other['runId'],'interrupted-resume',1,'native-session',session_id,
+                        '{}','write',60,'interrupted',now,now))
+        error = self.assert_code('MACRO_TASK_STORAGE_IN_USE',macro_task_deletion.preview,board.store,owner['macroTaskId'])
+        self.assertIn({'objectKind':'native-session','holderRunIds':[other['runId']]},error.details['objects'])
+        with board.store.db.write() as db:
+            db.execute("UPDATE workflow_turns SET previous_session_id='different-session' WHERE turn_id='interrupted-native-turn'")
+        self.assertEqual(macro_task_deletion.preview(board.store,owner['macroTaskId'])['blockerTotal'],0)

@@ -1,4 +1,4 @@
-"""Only task-bound private bytes and content-bearing storage plans are removed."""
+"""Only task-bound private bytes are removed, and interrupted removal resumes."""
 import hashlib
 import json
 from pathlib import Path
@@ -75,18 +75,76 @@ class DeletionFileTests(BoardTestCase):
         self.assertTrue(control.is_symlink())
         self.assertEqual(json.loads(user.read_text()),{'keep':True})
 
-    def test_content_bearing_plan_is_removed_but_opaque_receipt_is_retained(self):
+
+
+from blackboard.tasks import test_macro_task_deletion as engine_fixtures
+from blackboard.tasks import test_workflow as workflow_fixtures
+
+
+class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
+    closed = engine_fixtures.MacroTaskDeletionTests.closed
+
+    def test_private_root_partial_removal_retries_from_real_files(self):
         board = self.board()
-        scope = self.scope()
-        scope.manifests = [{'workspaceId':'ws-owned'}]
-        plan = self.file(board.directory / 'storage' / 'stg-owned.json',{
-            'candidates':[{'orphan':True,'manifest':{'workspaceId':'ws-owned','snapshot':{'entries':['user-file']}}}]})
-        other = self.file(board.directory / 'storage' / 'stg-other.json',{
-            'candidates':[{'orphan':True,'manifest':{'workspaceId':'ws-other'}}]})
-        receipt = self.file(board.directory / 'storage' / 'receipt-owned.json',{
-            'planId':'stg-owned','removed':[{'id':'owned','path':'blackboard/path','bytes':7}]})
-        opaque_plan = self.file(board.directory / 'storage' / 'stg-opaque.json',{
-            'candidates':[{'id':'owned','runId':'owned','path':'blackboard/path'}]})
-        self.assertEqual(deletion._delete_storage_plans(board.store,scope),[])
-        self.assertFalse(plan.exists())
-        self.assertTrue(all(path.exists() for path in (other,receipt,opaque_plan)))
+        run = self.closed(board,'private-interruption',macro_task='Private root interruption')
+        root = private_dirs.micro_task_root(board.directory,'dsh',run['runId'])
+        root.mkdir(parents=True)
+        first,remaining = root/'first',root/'remaining'
+        first.write_text('first private byte')
+        remaining.write_text('remaining private bytes')
+        evidence = board.directory/'attempts'/run['runId']/'evidence'
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('execution evidence')
+        original = private_dirs.remove_tree
+        def interrupted(path,**kwargs):
+            if path == root:
+                first.unlink()
+                raise OSError('interrupted inside private root')
+            return original(path,**kwargs)
+        with patch.object(deletion,'_delete_workspaces',return_value=[]), \
+                patch.object(private_dirs,'remove_tree',side_effect=interrupted):
+            result = deletion.delete(board.store,run['macroTaskId'],1)
+        self.assertEqual((result['state'],result['objectKind']),('deleting','private-root'))
+        self.assertFalse(first.exists())
+        self.assertTrue(remaining.exists())
+        with patch.object(deletion,'_delete_workspaces',return_value=[]):
+            completed = deletion.delete(board.store,run['macroTaskId'],1)
+        self.assertEqual(completed['state'],'deleted')
+        self.assertFalse(root.exists())
+        self.assertFalse(evidence.exists())
+
+    def test_cli_partial_removal_retries_from_real_files(self):
+        board = self.board()
+        run = self.closed(board,'cli-interruption',macro_task='CLI interruption')
+        first = control_file_path(board.directory,run['runId'],1)
+        remaining = control_file_path(board.directory,run['runId'],2)
+        first.parent.mkdir()
+        first.write_text('{}')
+        remaining.write_text('{}')
+        submission = submission_file_path(board.directory,'cli-interruption')
+        submission.parent.mkdir()
+        submission.write_text('{}')
+        user = first.parent/'unrelated.g1.json'
+        user.write_text('unrelated control')
+        original = Path.unlink
+        removed = []
+        def interrupted(path,*args,**kwargs):
+            result = original(path,*args,**kwargs)
+            if path in (first,remaining) and not removed:
+                removed.append(path)
+                raise OSError('interrupted after unlink inside CLI file phase')
+            return result
+        with patch.object(deletion,'_delete_workspaces',return_value=[]), \
+                patch.object(Path,'unlink',new=interrupted):
+            result = deletion.delete(board.store,run['macroTaskId'],1)
+        self.assertEqual((result['state'],result['objectKind']),('deleting','cli-file'))
+        self.assertEqual(sum(path.exists() for path in (first,remaining)),1)
+        self.assertEqual(len(removed),1)
+        self.assertTrue(submission.exists())
+        with patch.object(deletion,'_delete_workspaces',return_value=[]):
+            completed = deletion.delete(board.store,run['macroTaskId'],1)
+        self.assertEqual(completed['state'],'deleted')
+        self.assertFalse(first.exists())
+        self.assertFalse(remaining.exists())
+        self.assertFalse(submission.exists())
+        self.assertEqual(user.read_text(),'unrelated control')

@@ -320,16 +320,20 @@ class BoardStore:
         """Bind a command replay to one execution's nonce verifier."""
         return f"{self.db.nonce_verifier(nonce)}:{attempt_id}"
 
-    def _receipt(
+    def _receipt_entry(
         self,
         connection: sqlite3.Connection,
         command_id: str,
         kind: str,
-        request: dict,
+        request: dict | None,
         subject: str | None = None,
-    ) -> dict | None:
+        *,
+        deleted_only: bool = False,
+    ) -> sqlite3.Row | None:
         row = connection.execute("SELECT * FROM commands WHERE command_id = ?", (command_id,)).fetchone()
         if row is None:
+            return None
+        if deleted_only and row["deletion_id"] is None:
             return None
         if row["subject"] and ((subject is None and row["deletion_id"] is not None)
                                or (subject is not None and not _constant_time_equal(row["subject"], subject))):
@@ -338,30 +342,35 @@ class BoardStore:
                 "This commandId belongs to a different execution identity; it cannot be replayed from here",
                 commandId=command_id,
             )
-        if row["kind"] != kind or (row["deletion_id"] is None
+        if row["kind"] != kind or (row["deletion_id"] is None and request is not None
                                     and row["request_hash"] != sha256_text(canonical_json(request))):
             raise BoardError(
                 "CONFLICT",
                 "This commandId already belongs to a different request; use a new commandId",
                 commandId=command_id,
             )
+        return row
+
+    def _receipt_response(self, connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
+        if row is None:
+            return None
         if row["deletion_id"] is not None:
-            return {"commandId": command_id, "deleted": True}
+            return {"commandId": row["command_id"], "deleted": True}
         from ..tasks.command_receipts import replay_response
 
-        return replay_response(self.workflow, connection, kind, json.loads(row["response_json"]))
+        return replay_response(self.workflow, connection, row["kind"], json.loads(row["response_json"]))
 
-    def _deleted_receipt(
-        self, connection: sqlite3.Connection, command_id: str, kind: str,
-        request: dict, subject: str | None = None,
+    def _receipt(
+        self,
+        connection: sqlite3.Connection,
+        command_id: str,
+        kind: str,
+        request: dict,
+        subject: str | None = None,
     ) -> dict | None:
-        """Replay only a deleted command before its former run can be loaded."""
-        row = connection.execute(
-            "SELECT deletion_id FROM commands WHERE command_id=?", (command_id,)
-        ).fetchone()
-        if row is None or row["deletion_id"] is None:
-            return None
-        return self._receipt(connection, command_id, kind, request, subject)
+        return self._receipt_response(
+            connection, self._receipt_entry(connection, command_id, kind, request, subject)
+        )
 
     def _store_receipt(
         self,

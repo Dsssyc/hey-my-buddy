@@ -6,7 +6,7 @@ here. Database rows remain the ownership evidence until physical work completes.
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import re
@@ -32,7 +32,7 @@ class Scope:
     attempt_rows: list
     manifests: list[dict]
     artifacts: list[dict]
-    sessions: list[dict]
+    sessions: list[dict] = field(default_factory=list)
 
 
 def _ids(values):
@@ -74,7 +74,9 @@ def _collect(connection, target):
     else:
         root = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (identifier[4:],)).fetchone()
         if (root is None or root['macro_task_id'] is not None or connection.execute(
-                'SELECT 1 FROM workflow_children WHERE child_task_id=?',(identifier[4:],)).fetchone() is not None):
+                'SELECT 1 FROM workflow_children WHERE child_task_id=?',(identifier[4:],)).fetchone() is not None
+                or connection.execute('SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=?',
+                                      (identifier[4:],)).fetchone() is not None):
             raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
         seed, seed_id = 'SELECT run_id FROM workflow_runs WHERE run_id=?', identifier[4:]
     runs = {row[0] for row in connection.execute(f'''
@@ -110,7 +112,8 @@ def _collect(connection, target):
             return
         assert isinstance(document, dict), 'Workspace evidence is not an object'
         candidate = document.get('executionWorkspace', document)
-        if 'workspaceId' in candidate and 'snapshot' in candidate:
+        if (candidate.get('kind') in ('worktree','existing')
+                and 'workspaceId' in candidate and 'snapshot' in candidate):
             manifests.append(candidate)
     for row in _rows(connection, 'workflow_children', 'parent_run_id', runs):
         if row['workspace_manifest_json']:
@@ -128,9 +131,7 @@ def _collect(connection, target):
     request_ids = {row['request_id'] for row in _rows(connection, 'decision_requests', 'decision_id', decisions)}
     return Scope(runs, tasks, {r['attempt_id'] for r in attempt_rows}, decisions,
                  {r['turn_id'] for r in turns}, request_ids, run_rows, task_rows,
-                 attempt_rows, manifests, artifacts,
-                 [row for row in worker_sessions.inventory_rows(connection, tasks)
-                  if row['storageOwner'] == 'harness-user-store'])
+                 attempt_rows, manifests, artifacts)
 
 
 def _blockers(store, connection, scope):
@@ -169,12 +170,13 @@ def _blockers(store, connection, scope):
     return sorted(reasons.values(), key=lambda row: (row['taskId'], row['reasonCode']))
 
 
-def _storage_in_use(connection, scope):
-    """Select candidate identities in SQL; parse only matching structured evidence."""
+def _storage_in_use(store, connection, scope):
+    """Match only the allocations, ref namespaces and native sessions we remove."""
     workspace_ids = {m['workspaceId'] for m in scope.manifests}
-    checkouts = {(m['repositoryId'],m['checkoutId']) for m in scope.manifests
-                 if m.get('repositoryId') and m.get('checkoutId')}
-    hashes = {m['manifestSha256'] for m in scope.manifests}
+    from . import workspace
+    allocations = [workspace.resolve_allocation(store.directory,m,scope.manifests)
+                   for m in scope.manifests if m.get('kind') == 'worktree']
+    checkouts = {(a['repositoryId'],a['checkoutId']) for a in allocations if a is not None}
     holders = {}
 
     def retain(kind, owner):
@@ -192,43 +194,21 @@ def _storage_in_use(connection, scope):
         wid = f"json_extract({valid},'{prefix}.workspaceId')"
         rid = f"json_extract({valid},'{prefix}.repositoryId')"
         cid = f"json_extract({valid},'{prefix}.checkoutId')"
-        digest = f"json_extract({valid},'{prefix}.manifestSha256')"
-        predicates = [f'{wid} IN (SELECT value FROM json_each(?))',
-                      f'{digest} IN (SELECT value FROM json_each(?))']
-        args = [_ids(workspace_ids),_ids(hashes)]
+        predicates = [f'{wid} IN (SELECT value FROM json_each(?))']
+        args = [_ids(workspace_ids)]
         for repository_id,checkout_id in sorted(checkouts):
             predicates.append(f'({rid}=? AND {cid}=?)')
             args.extend((repository_id,checkout_id))
-        if table == 'workflow_artifacts':
-            predicates.append('manifest_sha256 IN (SELECT value FROM json_each(?))')
-            args.append(_ids(hashes))
-        query = f'SELECT {owner} AS owner,{column} AS document FROM {table} WHERE (' + ' OR '.join(predicates) + ')'
+        query = f'SELECT {owner} AS owner FROM {table} WHERE (' + ' OR '.join(predicates) + ')'
         for row in connection.execute(query,args):
-            # A selected malformed fixed binding is corrupt target evidence;
-            # unrelated malformed JSON did not match and was never decoded.
-            json.loads(row['document'])
             retain('workspace',row['owner'])
     for row in connection.execute(
-            'SELECT holder_task_id,workspace_id,repository_id,checkout_id FROM workspace_reservations'):
+            "SELECT holder_task_id,workspace_id,repository_id,checkout_id FROM workspace_reservations WHERE state='held'"):
         if row['workspace_id'] in workspace_ids or (row['repository_id'],row['checkout_id']) in checkouts:
             retain('checkout',row['holder_task_id'])
-    for repository_id,checkout_id in sorted(checkouts):
-        for row in connection.execute(
-                'SELECT run_id FROM workflow_integrations WHERE target_repository_id=? AND target_checkout_id=?',
-                (repository_id,checkout_id)):
-            retain('integration-target',row['run_id'])
-    session_ids = {(r['harness'],r['sessionId']) for r in scope.sessions}
-    if session_ids:
-        for row in worker_sessions.inventory_rows(connection,created_only=False,stopped_only=False,
-                                                  session_ids={session_id for _,session_id in session_ids}):
-            if (row['storageOwner'] == 'harness-user-store'
-                    and (row['harness'],row['sessionId']) in session_ids):
-                retain('native-session',row['taskId'])
-        for row in connection.execute(
-                'SELECT t.run_id,t.session_id,t.previous_session_id FROM workflow_turns t'
-                " JOIN attempts a ON a.attempt_id=t.attempt_id WHERE a.adapter='codex'"):
-            if any(('codex',row[field]) in session_ids for field in ('session_id','previous_session_id')):
-                retain('native-session',row['run_id'])
+    session_ids = {row['sessionId'] for row in scope.sessions}
+    for row in worker_sessions.session_references(connection,session_ids):
+        retain('native-session',row['taskId'])
     return [{'objectKind':kind,'holderRunIds':sorted(ids)} for kind,ids in sorted(holders.items())]
 
 
@@ -252,7 +232,8 @@ def preview(store, target: str) -> dict:
         scope = _collect(connection, target)
         if _busy(connection, scope):
             raise BoardError('MACRO_TASK_BUSY', 'A workspace cleanup is applying', macroTaskId=target)
-        shared = _storage_in_use(connection, scope)
+        scope.sessions = worker_sessions.deletable_sessions(store,scope.tasks,connection=connection)
+        shared = _storage_in_use(store,connection,scope)
         if shared:
             raise BoardError('MACRO_TASK_STORAGE_IN_USE', 'Storage is retained by another micro task', macroTaskId=target, objects=shared)
         blockers = _blockers(store, connection, scope)
@@ -268,11 +249,10 @@ def preview(store, target: str) -> dict:
 def _delete_sessions(store, scope):
     from ...buddy.harnesses.registry import adapter
     grouped = {}
-    for session in worker_sessions.deletable_sessions(store, scope.tasks):
+    for session in scope.sessions:
         grouped.setdefault(session['harness'], set()).add(session['sessionId'])
     for harness, ids in grouped.items():
-        results = adapter(harness).delete_sessions(sorted(ids))
-        assert set(results) == ids and all(value in ('deleted','already-gone') for value in results.values())
+        adapter(harness).delete_sessions(sorted(ids))
     return []
 
 
@@ -365,28 +345,6 @@ def _delete_cli_files(store, scope):
                 if temporary_matches(temporary,requestId=task['request_id']):
                     remove(temporary)
     return skipped
-
-
-def _delete_storage_plans(store, scope):
-    directory = store.directory / 'storage'
-    identities = {m['workspaceId'] for m in scope.manifests}
-    for path in directory.glob('stg-*.json'):
-        if private_dirs.linked(path):
-            continue
-        document = json.loads(path.read_text())
-        if 'candidates' not in document:
-            continue
-        for candidate in document['candidates']:
-            # Only persisted plans with content-bearing allocation proof. Ordinary
-            # removal receipts carry no such material and are retained.
-            manifests = [candidate.get('manifest'), *(candidate.get('retained') or [])]
-            proof = candidate.get('proof') or {}
-            allocation = proof.get('allocation') or {}
-            manifests.append(allocation.get('manifest'))
-            if any(isinstance(m,dict) and m.get('workspaceId') in identities for m in manifests):
-                path.unlink()
-                break
-    return []
 
 
 def _delete_rows(store, connection, scope, deletion):
@@ -488,12 +446,10 @@ def delete(store, target: str, micro_task_count: int) -> dict:
         from . import workspace
         with ExitStack() as locks:
             for identifier in sorted({m['workspaceId'] for m in initial_scope.manifests}):
-                directory = store.directory / 'workspaces' / identifier
-                if (workspace._workspace_identifier(identifier) and directory.is_dir()
-                        and (directory / '.lock').is_file()
-                        and private_dirs.linked_component(directory / '.lock') is None):
+                directory = workspace.allocation_lock_directory(store.directory,identifier)
+                if directory is not None:
                     try:
-                        locks.enter_context(workspace._lock(directory))
+                        locks.enter_context(workspace._lock(directory,create=False))
                     except BoardError as error:
                         if error.code == 'WORKSPACE_BUSY':
                             with store.db.read() as connection:
@@ -506,6 +462,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                 if deletion is not None and deletion['state'] == 'deleted':
                     return _summary(deletion,duplicate=True)
                 scope = _collect(connection,target)
+                scope.sessions = worker_sessions.deletable_sessions(store,scope.tasks,connection=connection)
                 if deletion is None:
                     if len(scope.runs) != micro_task_count:
                         raise BoardError('REVISION_CONFLICT','The micro task count changed',microTaskCount=len(scope.runs))
@@ -515,7 +472,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     if blockers:
                         raise BoardError('MACRO_TASK_NOT_SETTLED','The macro task is not settled',macroTaskId=target,
                                          blockerTotal=len(blockers),blockers=blockers[:50])
-                    shared = _storage_in_use(connection,scope)
+                    shared = _storage_in_use(store,connection,scope)
                     if shared:
                         raise BoardError('MACRO_TASK_STORAGE_IN_USE','Storage is retained by another micro task',macroTaskId=target,objects=shared)
                     kind,identifier = _target(target)
@@ -524,7 +481,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
-                                ('storage-plan',_delete_storage_plans),('private-root',_delete_private_roots),('cli-file',_delete_cli_files)):
+                                ('private-root',_delete_private_roots),('cli-file',_delete_cli_files)):
             try:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:

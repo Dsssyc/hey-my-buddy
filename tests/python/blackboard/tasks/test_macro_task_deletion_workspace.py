@@ -84,6 +84,54 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 self.assertEqual(self.delete(manifest), [])
                 self.assertFalse(directory.exists())
 
+    def test_interrupted_recursive_removal_replays_without_proof_files(self):
+        manifest = self.prepare()
+        identifier = manifest["workspaceId"]
+        directory = self.state / "workspaces" / identifier
+        tomb = directory.parent / (".deleting-" + identifier)
+        original = private_dirs.remove_tree
+
+        def interrupt(path, **kwargs):
+            if path == tomb:
+                for name in ("manifest.json", "request.json", "input.json", ".lock"):
+                    (path / name).unlink()
+                raise OSError("interrupted halfway through removal")
+            return original(path, **kwargs)
+
+        with patch.object(private_dirs, "remove_tree", side_effect=interrupt):
+            with self.assertRaisesRegex(OSError, "interrupted halfway"):
+                self.delete(manifest)
+        self.assertFalse(directory.exists())
+        self.assertTrue(tomb.exists())
+        self.assertFalse((tomb / "manifest.json").exists())
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse(tomb.exists())
+
+    def test_allocation_lock_directory_requires_existing_ordinary_lock(self):
+        manifest = self.prepare()
+        identifier = manifest["workspaceId"]
+        directory = self.state / "workspaces" / identifier
+        self.assertEqual(workspace.allocation_lock_directory(self.state, identifier), directory)
+        (directory / ".lock").unlink()
+        self.assertIsNone(workspace.allocation_lock_directory(self.state, identifier))
+        self.assertFalse((directory / ".lock").exists())
+
+    def test_malformed_reference_inventory_is_board_error(self):
+        manifest = self.prepare()
+        original = workspace._git
+        for oid in (b"\xff", b"not-an-oid"):
+            with self.subTest(oid=oid):
+                def malformed(root, *args, **kwargs):
+                    if args[0] == "for-each-ref":
+                        return (b"refs/hey-my-buddy/workspaces/" + manifest["workspaceId"].encode()
+                                + b"/bad\x00" + oid + b"\n")
+                    return original(root, *args, **kwargs)
+                with patch.object(workspace, "_git", side_effect=malformed):
+                    with self.assertRaises(BoardError) as caught:
+                        self.delete(manifest)
+                self.assertEqual(caught.exception.code, "WORKSPACE_GIT_ERROR")
+        self.assertTrue((self.state / "workspaces" / manifest["workspaceId"]).exists())
+
     def test_missing_checkout_still_removes_refs_and_record(self):
         manifest = self.prepare()
         directory = self.state / "workspaces" / manifest["workspaceId"]

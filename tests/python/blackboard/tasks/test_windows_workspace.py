@@ -43,8 +43,8 @@ class FakeWindowsAPI:
     def open_leaf(self, path, *, action="read"):
         if action == "create":
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        elif action == "lock" and not Path(path).is_symlink():
-            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        elif action in ("lock", "lock-existing") and not Path(path).is_symlink():
+            fd = os.open(path, os.O_RDWR | (os.O_CREAT if action == "lock" else 0), 0o600)
         elif action == "read" and not Path(path).is_symlink():
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         else:
@@ -211,6 +211,18 @@ class WindowsWorkspaceTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "WORKSPACE_UNSUPPORTED")
         self.assertFalse((self.root / "elsewhere").exists())
         self.assertEqual(self.api.open, [])
+
+    def test_existing_lock_does_not_create_a_missing_file(self):
+        with mock.patch.object(workspace, "_WINDOWS", True), \
+             mock.patch.object(windows_paths, "WindowsFileAPI", return_value=self.api):
+            with self.assertRaises(FileNotFoundError):
+                with workspace._lock(self.root, create=False):
+                    pass
+            self.assertFalse((self.root / ".lock").exists())
+            with workspace._lock(self.root):
+                pass
+            with workspace._lock(self.root, create=False):
+                pass
 
     def test_windows_names_and_case_aliases_are_rejected(self):
         invalid = ["folder\\escape", "x:stream", "CON.txt", "COM¹.log", "NUL .txt", "item.",

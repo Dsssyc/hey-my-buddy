@@ -28,7 +28,6 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 import re
-import stat
 import threading
 import uuid
 from pathlib import Path
@@ -1614,8 +1613,6 @@ class WorkflowCoordinator:
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
                          attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
-        if lead is not None and macro_task_id is not None:
-            reject_macro_task(connection, macro_task_id)
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
             " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
@@ -2177,9 +2174,9 @@ class WorkflowCoordinator:
         reason = schemas.optional_string(params, "reason", max_length=schemas.MAX_WORKFLOW_REASON_BYTES) or ""
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", {})
-            if deleted is not None:
-                return {"deletedReceipt": deleted, "helpers": []}
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", None, deleted_only=True)
+            if receipt_entry is not None:
+                return {"deletedReceipt": self.board._receipt_response(connection, receipt_entry), "helpers": []}
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
             integrator = self._owner_actor(connection, owner)
@@ -2229,15 +2226,15 @@ class WorkflowCoordinator:
         with self._helper_preparations(helpers if decision == "approve" else []) as prepared:
             now = self.now()
             with self.db.write() as connection:
-                deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", request_key)
-                if deleted is not None:
-                    return deleted
+                receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", request_key)
+                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                    return self.board._receipt_response(connection, receipt_entry)
                 run_row = self._run_row(connection, run_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
                 actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A Host decision")
-                receipt = self.board._receipt(connection, command_id, "workflow.decide", request_key)
+                receipt = self.board._receipt_response(connection, receipt_entry)
                 if receipt is not None:
-                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                    return {**receipt, "duplicate": True}
                 self._expect_revision(run_row, expected)
                 request_row = self._request_row(connection, run_id, request_id)
                 if json.loads(request_row["payload_json"]).get("source") == "routing":
@@ -2456,18 +2453,18 @@ class WorkflowCoordinator:
     ) -> dict | None:
         """Read-only authority/revision/replay check before any workspace preparation."""
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.decide", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
             # Authority is checked before a replay is returned; a delayed old owner
             # can never read back another Host's recorded response.
             self._authorize(
                 connection, run_row, params, console_authority=console_authority, action="A Host decision"
             )
-            receipt = self.board._receipt(connection, command_id, "workflow.decide", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(run_row, expected)
             request_row = self._request_row(connection, run_id, request_id)
             active = self._open_boundary(connection, run_row)
@@ -2954,14 +2951,14 @@ class WorkflowCoordinator:
         # Authenticate/replay before native catalog work. A concurrent takeover is
         # checked again after validation, before any durable mutation.
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.continue", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.continue", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             run = self._run_row(connection, run_id)
             self._authorize(connection, run, params, console_authority=console_authority, action="A continuation")
-            receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
             self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
@@ -2981,14 +2978,14 @@ class WorkflowCoordinator:
         buddy = self._validated_buddy(supplied_buddy) if supplied_buddy is not None else None
         now = self.now()
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.continue", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.continue", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A continuation")
-            receipt = self.board._receipt(connection, command_id, "workflow.continue", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             reject_deleting_run(connection, owner_run_id)
             reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
@@ -3342,11 +3339,11 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "newHostId": new_host, "expectedOwnerGeneration": expected_generation}
         now = self.now()
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.takeover", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.takeover", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
-            receipt = self.board._receipt(connection, command_id, "workflow.takeover", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
                 # A lost reply must be recoverable by the caller that authorized the
                 # original takeover: authenticate that receipt's original subject,
@@ -3354,7 +3351,7 @@ class WorkflowCoordinator:
                 self._authorize_takeover_replay(
                     connection, run_row, params, console_authority, expected_generation, receipt
                 )
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A takeover")
             self._expect_revision(run_row, expected)
             if run_row["owner_generation"] != expected_generation:
@@ -3466,16 +3463,16 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             if command_id:
-                deleted = self.board._deleted_receipt(connection, command_id, "workflow.cancel", request_key)
-                if deleted is not None:
-                    return deleted
+                receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cancel", request_key)
+                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                    return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             actor, initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="Cancellation")
             if command_id:
-                receipt = self.board._receipt(connection, command_id, "workflow.cancel", request_key)
+                receipt = self.board._receipt_response(connection, receipt_entry)
                 if receipt is not None:
-                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                    return {**receipt, "duplicate": True}
             if run_row["state"] in ("accepted", "concluded"):
                 raise BoardError("CONFLICT", "This run is already closed; cancellation cannot undo it")
             response = self._cancel_in_transaction(connection, run_row, task, reason, actor, initiator, now)
@@ -3498,9 +3495,12 @@ class WorkflowCoordinator:
         request = {"macroTaskId": identifier, "reason": reason}
         now = self.now()
         with self.db.write() as connection:
-            receipt = self.board._receipt(connection, command_id, "macro_task.stop", request)
+            receipt_entry = self.board._receipt_entry(connection, command_id, "macro_task.stop", request)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             if identifier.startswith("macro-"):
                 roots = connection.execute(
                     "SELECT r.* FROM workflow_runs r WHERE r.macro_task_id=?"
@@ -3967,12 +3967,12 @@ class WorkflowCoordinator:
         verification_inputs = None
         duplicate = None
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.accept", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
-            receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
             else:
@@ -4009,12 +4009,12 @@ class WorkflowCoordinator:
                 adjusted=adjusted, reason=note)
         now = self.now()
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.accept", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
-            receipt = self.board._receipt(connection, command_id, "workflow.accept", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
                 duplicate = {**receipt, "duplicate": True}
             run_row = self._target_run(connection, owner, target_id)
@@ -4780,7 +4780,6 @@ class WorkflowCoordinator:
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A checkout reclaim")
             run_row = self._target_run(connection, owner, target_id)
-            reject_deleting_run(connection, target_id)
             target_id = run_row["run_id"]
         result = self._reclaim_checkout(owner_run_id=run_id, run_id=target_id, purpose="reclaim", control=params,
                                        console_authority=console_authority)
@@ -4823,6 +4822,8 @@ class WorkflowCoordinator:
         try:
             planned = self.cleanup_plan(params, console_authority=console_authority, _lead_conclusion=lead_conclusion)
         except BoardError as error:
+            if error.code == "TASK_DELETING":
+                raise
             return {"removed": False, "reasons": [error.code], "detail": error.message}
         plan = planned["plan"]
         if plan["state"] == "applied":
@@ -4845,6 +4846,8 @@ class WorkflowCoordinator:
                 _lead_conclusion=lead_conclusion,
             )
         except BoardError as error:
+            if error.code == "TASK_DELETING":
+                raise
             if error.code == "NOT_READY":
                 blocked = {"removed": False, "reasons": error.details.get("reasons") or [error.code],
                            "planId": plan["planId"], "path": plan["path"]}
@@ -4958,27 +4961,27 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedScopeVersion": expected_scope,
                        "writeScope": write_scope, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.scope_amend", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.scope_amend", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
-            receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             target_snapshot = self._target_run(connection, owner, target_id)
             self._scope_precheck(connection, target_snapshot, expected_scope, "A scope amendment")
         now = self.now()
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.scope_amend", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.scope_amend", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
-            receipt = self.board._receipt(connection, command_id, "workflow.scope_amend", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id)
             run_id = run_row["run_id"]
@@ -5186,14 +5189,14 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "conflictId": conflict_id, "action": action,
                        "paths": paths, "observedFingerprint": observed, "reason": reason, "expectedRevision": expected}
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.workspace_resolve", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.workspace_resolve", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
-            receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             target_snapshot = self._target_run(connection, owner, target_id)
             conflict = self._conflict_row(connection, target_id, conflict_id)
@@ -5234,14 +5237,14 @@ class WorkflowCoordinator:
             raise
         now = self.now()
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.workspace_resolve", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.workspace_resolve", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
-            receipt = self.board._receipt(connection, command_id, "workflow.workspace_resolve", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id)
             run_id = run_row["run_id"]
@@ -5556,14 +5559,14 @@ class WorkflowCoordinator:
         expected = schemas.require_expected_revision(params)
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_plan", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
-            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
@@ -5573,18 +5576,6 @@ class WorkflowCoordinator:
             if not manifest:
                 raise BoardError("NOT_READY", "This run has no prepared workspace to clean up", runId=run_id)
             retained = self._allocation_provenance(connection, run_row)
-            existing = connection.execute(
-                "SELECT * FROM workspace_cleanup_plans WHERE run_id=? AND checkout_id=?"
-                " ORDER BY rowid DESC LIMIT 1",
-                (run_id, manifest.get("checkoutId")),
-            ).fetchone()
-            if existing is not None and existing["state"] in ("planned", "applying", "applied"):
-                # An applied plan is its own result; a live planned or resuming plan
-                # is still the one authorization for this exact path. An expired plan
-                # authorizes nothing and is replaced by a fresh one.
-                if existing["state"] != "planned" or existing["expires_at"] >= self.now():
-                    return {**self.compact(connection, run_row), "duplicate": True, "plan": self._plan_view(existing),
-                            "targetRunId": run_id, "targetRevision": run_row["revision"]}
             reasons, evidence, retention = self._cleanup_reasons(connection, run_row, task, manifest)
         module = workspace_module()
         allocation = module.resolve_allocation(self.board.directory, manifest, retained)
@@ -5614,14 +5605,14 @@ class WorkflowCoordinator:
         plan_id = f"cln-{uuid.uuid4()}"
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_plan", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
-            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_plan", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
@@ -5679,20 +5670,16 @@ class WorkflowCoordinator:
 
     @staticmethod
     @contextmanager
-    def _cleanup_allocation_lock(state_dir: Path, allocation: dict):
+    def _cleanup_allocation_lock(state_dir: Path, allocation: dict | None):
         """Share the original allocation fence with macro task deletion marking."""
-        directory = Path(state_dir).resolve() / "workspaces" / allocation["workspaceId"]
-        lock_path = directory / ".lock"
-        if (Path(allocation["path"]).parent != directory
-                or private_dirs.linked_component(directory) is not None
-                or not directory.is_dir()):
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation directory is not proven")
-        try:
-            if not stat.S_ISREG(lock_path.lstat().st_mode):
-                raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation lock is not a regular file")
-        except FileNotFoundError as error:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup allocation lock is missing") from error
-        with workspace_module()._lock(directory):
+        module = workspace_module()
+        directory = module.allocation_lock_directory(
+            state_dir, allocation["workspaceId"] if allocation is not None else None
+        )
+        if directory is None:
+            yield
+            return
+        with module._lock(directory, create=False):
             yield
 
     def cleanup_apply(self, params: dict, *, console_authority: dict | None = None,
@@ -5720,14 +5707,14 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "planId": plan_id, "confirmPath": confirm_path,
                        "expectedRevision": expected}
         with self.db.read() as connection:
-            deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_apply", request_key)
-            if deleted is not None:
-                return deleted
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
+            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
-            receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
+            receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
-                return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
+                return {**receipt, "duplicate": True}
             self._expect_revision(owner, expected)
             run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
             run_id = target_id
@@ -5783,15 +5770,14 @@ class WorkflowCoordinator:
                 refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
             now = self.now()
             with self.db.write() as connection:
-                deleted = self.board._deleted_receipt(connection, command_id, "workflow.cleanup_apply", request_key)
-                if deleted is not None:
-                    return deleted
+                receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
+                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
+                    return self.board._receipt_response(connection, receipt_entry)
                 owner = self._run_row(connection, owner_run_id)
                 self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
-                receipt = self.board._receipt(connection, command_id, "workflow.cleanup_apply", request_key)
+                receipt = self.board._receipt_response(connection, receipt_entry)
                 if receipt is not None:
-                    return receipt if receipt.get("deleted") else {**receipt, "duplicate": True}
-                reject_deleting_run(connection, target_id)
+                    return {**receipt, "duplicate": True}
                 self._expect_revision(owner, expected)
                 run_row = self._target_run(connection, owner, target_id, include_lead=_lead_conclusion)
                 run_id = run_row["run_id"]
@@ -5892,10 +5878,13 @@ class WorkflowCoordinator:
         # turn/input snapshot currently runs on it; both must still agree here.
         retained = self._allocation_provenance(connection, run_row)
         allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
-        if (allocation is None or plan["workspace_id"] != allocation["workspaceId"]
-                or plan["checkout_id"] != allocation["checkoutId"]
-                or plan["repository_id"] != allocation["repositoryId"]
-                or plan["path"] != allocation["path"]):
+        identity = allocation or manifest
+        path = Path(plan["path"])
+        if (plan["workspace_id"] != identity["workspaceId"]
+                or plan["checkout_id"] != identity["checkoutId"]
+                or plan["repository_id"] != identity["repositoryId"]
+                or plan["path"] != identity["path" if allocation else "checkoutRoot"]
+                or (allocation is None and (path.exists() or path.is_symlink()))):
             raise BoardError("CONFLICT", "The cleanup plan no longer matches the run's workspace allocation",
                              planId=plan["plan_id"])
         resume = plan["state"] == "applying"

@@ -9,6 +9,7 @@ sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
 from ... import locking
+from ... import private_dirs
 from collections import Counter
 import hashlib
 import json
@@ -561,9 +562,9 @@ def _write_once(path, data):
 
 
 @contextmanager
-def _lock(directory):
-    descriptor = (windows_paths.lock_fd(directory / ".lock") if _WINDOWS else
-                  os.open(directory / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+def _lock(directory, *, create=True):
+    descriptor = (windows_paths.lock_fd(directory / ".lock", create=create) if _WINDOWS else
+                  os.open(directory / ".lock", os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600))
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -2121,6 +2122,25 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
 def _workspace_identifier(value):
     return (isinstance(value, str) and value.startswith("ws-") and len(value) == 35
             and all(character in "0123456789abcdef" for character in value[3:]))
+
+
+def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | None:
+    """Return an existing private record directory with an ordinary lock file.
+
+    Both deletion marking and ordinary reclaim use this exact predicate. It
+    never creates a new lock or follows a linked component.
+    """
+    if not _workspace_identifier(workspace_id):
+        return None
+    directory = Path(state_dir).resolve() / "workspaces" / workspace_id
+    lock_path = directory / ".lock"
+    if (private_dirs.linked_component(lock_path) is not None
+            or not directory.is_dir()):
+        return None
+    try:
+        return directory if stat.S_ISREG(lock_path.lstat().st_mode) else None
+    except FileNotFoundError:
+        return None
 
 
 def _attached_branch_report(checkout_root, record) -> dict:
