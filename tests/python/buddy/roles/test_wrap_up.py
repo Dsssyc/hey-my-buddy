@@ -36,7 +36,7 @@ def request_for(control):
 
 
 def result_for(request, *, status="cancelled", session="native-session", resumable=True,
-               native_gone=True):
+               native_gone=True, usage=None):
     value = (rc.RunValue(schema_status="valid", parsed=rc.FrozenJson({"outcome": {
         "disposition": "completed", "summary": "Stopped partial work summary",
         "remaining": [], "decisions": [], "artifacts": [], "request": None}})) if status == "ok" else None)
@@ -44,6 +44,7 @@ def result_for(request, *, status="cancelled", session="native-session", resumab
         end=rc.RunEnd(status=status, reason_code="user-cancel" if status == "cancelled" else None),
         native_identity=rc.NativeIdentity(session_id=session),
         value=value,
+        usage=usage,
         continuation=rc.ContinuationFacts(resumable=resumable),
         stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone" if native_gone else "unknown")))
 
@@ -144,7 +145,7 @@ class RoleStopTests(unittest.TestCase):
     def _execute(self, *, resumable=True, native_gone=True, summary_session="native-session",
                  summary_native_gone=True, summary_status="ok", summary_raises=False,
                  force_before_summary=False, force_during_setup=False, expired=False,
-                 late_summary=False, invalid_summary=False):
+                 late_summary=False, invalid_summary=False, first_usage=None, summary_usage=None):
         control = {**self.control, "timeoutSeconds": 60}
         request = request_for(control)
         deadline = time.monotonic() - 1 if expired else time.monotonic() + 300
@@ -165,13 +166,14 @@ class RoleStopTests(unittest.TestCase):
                 cancellation.set()
                 if force_before_summary:
                     run_controller._signal_generation = 2
-                return result_for(native_request, resumable=resumable, native_gone=native_gone)
+                return result_for(native_request, resumable=resumable, native_gone=native_gone,
+                                  usage=first_usage)
             if summary_raises:
                 raise OSError("native summary failed after launch")
             if late_summary:
                 late_now[0] = True
             return result_for(native_request, status=summary_status, session=summary_session,
-                              native_gone=summary_native_gone)
+                              native_gone=summary_native_gone, usage=summary_usage)
         def prepare(candidate, _module):
             if force_during_setup and candidate["privateRoot"] != str(self.invocation):
                 run_controller._signal_generation = 2
@@ -190,6 +192,84 @@ class RoleStopTests(unittest.TestCase):
                                side_effect=ValueError("invalid summary") if invalid_summary else lambda *args: None):
             frame, code = run_controller.execute(control, cancellation, self.root)
         return rc.decode_run_result(frame), code, calls
+
+    def test_wrap_up_usage_includes_both_native_turn_increments(self):
+        first = {"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 500,
+                 "reasoningOutputTokens": 200, "nativeRecords": 3, "completeness": "complete"}
+        summary = {"inputTokens": 80, "cachedInputTokens": 10, "outputTokens": 221,
+                   "reasoningOutputTokens": 40, "nativeRecords": 2, "completeness": "complete"}
+        result, code, calls = self._execute(first_usage=first, summary_usage=summary)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result.usage.value, {
+            "version": 1, "inputTokens": 1080, "cachedInputTokens": 410, "outputTokens": 721,
+            "reasoningOutputTokens": 240, "nativeRecords": 5, "completeness": "complete",
+            "inputBasis": "includes-cached", "scope": "attempt", "source": "worker/wrap-up-native-turns"})
+        self.assertEqual(run_execution._worker_facts(result)["tokenUsage"], result.usage.value)
+
+    def test_one_unknown_native_turn_usage_keeps_known_subtotal_as_partial(self):
+        known = {"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 500,
+                 "nativeRecords": 3, "completeness": "complete"}
+        for first, summary in ((known, None), (None, known)):
+            with self.subTest(first_known=first is not None):
+                sub = ensure_private_dir(self.root / ("first-known" if first else "summary-known"))
+                self.invocation = sub
+                self.control = {**self.control, "privateRoot": str(sub), "verdictFile": str(sub / "verdict.json"),
+                                "requestFile": str(sub / "request.json"), "inputFile": str(sub / "turn-input.json"),
+                                "outputFile": str(sub / "turn-output.json")}
+                result, code, _calls = self._execute(first_usage=first, summary_usage=summary)
+                self.assertEqual(code, 0)
+                self.assertEqual(result.usage.value["inputTokens"], 1000)
+                self.assertEqual(result.usage.value["cachedInputTokens"], 400)
+                self.assertEqual(result.usage.value["outputTokens"], 500)
+                self.assertEqual(result.usage.value["nativeRecords"], 3)
+                self.assertEqual(result.usage.value["completeness"], "partial")
+
+    def test_partial_native_usage_stays_partial_after_adding_summary(self):
+        first = {"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 500,
+                 "completeness": "partial"}
+        summary = {"inputTokens": 80, "cachedInputTokens": 10, "outputTokens": 221,
+                   "completeness": "complete"}
+        result, _code, _calls = self._execute(first_usage=first, summary_usage=summary)
+        self.assertEqual(result.usage.value["inputTokens"], 1080)
+        self.assertEqual(result.usage.value["outputTokens"], 721)
+        self.assertEqual(result.usage.value["completeness"], "partial")
+
+    def test_both_unknown_native_turns_report_no_usage(self):
+        result, _code, calls = self._execute()
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(result.usage)
+
+    def test_partially_known_usage_counters_do_not_become_zero(self):
+        first = {"inputTokens": None, "cachedInputTokens": 400, "outputTokens": 500,
+                 "nativeRecords": 3, "completeness": "partial"}
+        summary = {"inputTokens": 80, "cachedInputTokens": 10, "outputTokens": 221,
+                   "nativeRecords": 2, "completeness": "complete"}
+        result, _code, _calls = self._execute(first_usage=first, summary_usage=summary)
+        self.assertIsNone(result.usage.value["inputTokens"])
+        self.assertEqual(result.usage.value["cachedInputTokens"], 410)
+        self.assertEqual(result.usage.value["outputTokens"], 721)
+        self.assertEqual(result.usage.value["completeness"], "partial")
+        self.assertNotIn("reasoningOutputTokens", result.usage.value)
+
+    def test_unlaunched_wrap_up_does_not_count_first_usage_twice(self):
+        known = {"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 500,
+                 "completeness": "partial"}
+        result, _code, calls = self._execute(first_usage=known, resumable=False)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result.usage.value["inputTokens"], 1000)
+        self.assertEqual(result.usage.value["outputTokens"], 500)
+        self.assertEqual(result.usage.value["nativeRecords"], 1)
+
+    def test_failed_summary_without_usage_keeps_interrupted_work_usage(self):
+        known = {"inputTokens": 1000, "cachedInputTokens": 400, "outputTokens": 500,
+                 "completeness": "partial"}
+        result, code, calls = self._execute(first_usage=known, summary_raises=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+        self.assertEqual(result.usage.value["outputTokens"], 500)
+        self.assertEqual(result.usage.value["completeness"], "partial")
 
     def test_interrupted_run_resumes_same_session_with_new_invocation_and_fresh_cancel_check(self):
         result, code, calls = self._execute()

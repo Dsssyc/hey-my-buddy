@@ -37,7 +37,7 @@ from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.registry import adapter, run_seam
 from ..harnesses.run_contract import (
-    EvidenceRef, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
+    EvidenceRef, FrozenJson, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
     ResumeCheckpoint, RunBudget, RunContinuation, decode_run_request, encode_run_request, encode_run_result,
 )
 from . import run_execution
@@ -161,6 +161,24 @@ def _summary_run(control, request, result, module, state_dir, deadline):
     return next_control, next_request, summary, True, False
 
 
+def _wrap_up_usage(first: RunResult, summary: RunResult) -> FrozenJson | None:
+    """Fold two native turn increments into this attempt's observed usage."""
+    known = [result.usage.value for result in (first, summary) if result.usage is not None]
+    if not known:
+        return None
+    combined = {
+        "version": 1, "source": "worker/wrap-up-native-turns", "scope": "attempt",
+        "inputBasis": "includes-cached",
+        "completeness": "complete" if len(known) == 2
+        and all(reading["completeness"] == "complete" for reading in known) else "partial",
+        "nativeRecords": sum(reading["nativeRecords"] for reading in known),
+    }
+    for field in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens"):
+        counts = [reading.get(field) for reading in known]
+        combined[field] = sum(counts) if all(count is not None for count in counts) else None
+    return FrozenJson(combined)
+
+
 def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple[str, int]:
     parent_control = control
     if control["operation"] == "review" and not adapter(control["harness"]).read_only_structured:
@@ -211,8 +229,11 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
             and result.end.status == "cancelled" and adapter(control["harness"]).interrupted_resume):
         deadline = _host_stop(control, request)
         if deadline is not None:
+            first = result
             control, request, result, wrap_up_candidate, grace_expired = _summary_run(
                 control, request, result, module, state_dir, deadline)
+            if result.identity != first.identity:
+                result = result.model_copy(update={"usage": _wrap_up_usage(first, result)})
     if control["operation"] == "worker" and request.worker_permission is not None:
         # This is the harness mapping selected for the call, not an observation
         # that the native process obeyed it. Bind it to this exact run on both

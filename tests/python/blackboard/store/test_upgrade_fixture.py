@@ -334,26 +334,38 @@ class UpgradeFixtureTests(unittest.TestCase):
             router = board_upgrade._receipt_object({'taskId': 'router', 'adapter': 'decision', 'terminationReason': 'deadline'})
             self.assertEqual(router['terminationReason'], 'deadline')
 
-    def test_migration_records_unknown_legacy_stop_without_changing_native_report(self):
-        fixture, connection = self.restored()
-        attempt_id, raw = connection.execute(
-            "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+    def assert_legacy_stop(self, actor, expected_initiator, expected_reason):
+        fixture, connection = self.restored('stop-' + (actor or 'unknown'))
+        attempt_id, task_id, raw = connection.execute(
+            "SELECT attempt_id,task_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+        connection.execute("DELETE FROM events WHERE attempt_id=? AND kind='task.completed'", (attempt_id,))
         receipt = json.loads(raw)
         native = {'terminationReason': 'user-cancel', 'origin': 'native report'}
         receipt.update(terminationReason='user-cancel', shutdownConfirmed=True, result=native)
         connection.execute(
             'UPDATE attempts SET cancel_requested_at=?,result_json=? WHERE attempt_id=?',
-            ('2026-01-01T00:00:00Z', json.dumps(receipt), attempt_id))
-        cached = {'attempt': {'taskId': 'service-task', 'attemptId': attempt_id, 'adapter': 'command',
-                              'cancelRequestedAt': '2026-01-01T00:00:00Z', 'result': receipt},
-                  'task': {'runId': 'service-task', 'adapter': 'command', 'terminationReason': 'user-cancel',
+            ('2026-01-01T00:00:00.000Z', json.dumps(receipt), attempt_id))
+        cached = {'attempt': {'taskId': task_id, 'attemptId': attempt_id, 'adapter': 'command',
+                              'cancelRequestedAt': '2026-01-01T00:00:00.000Z', 'result': receipt},
+                  'task': {'runId': task_id, 'adapter': 'command', 'terminationReason': 'user-cancel',
                            'shutdownConfirmed': True,
                            'result': native}}
         connection.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES('legacy-stop','worker.result','legacy-hash',?,'2026-01-01')",
                            (json.dumps(cached),))
-        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.finished',?,'2026-01-01')",
-                           (attempt_id, json.dumps({'terminationReason': 'user-cancel', 'shutdownConfirmed': True,
+        if actor is not None:
+            connection.execute(
+                "INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,'workflow.cancelled',?,'2026-01-01T00:00:00.000Z')",
+                (task_id, json.dumps({'actor': actor})))
+        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(?,?,'attempt.finished',?,'2026-01-01T00:00:00.000Z')",
+                           (task_id, attempt_id, json.dumps({'terminationReason': 'user-cancel', 'shutdownConfirmed': True,
                                                     'report': native})))
+        connection.execute(
+            "INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(?,?,'task.cancelled',?,'2026-01-01T00:00:00.000Z')",
+            (task_id, attempt_id, json.dumps({'taskState': 'cancelled'})))
+        # A later cancellation of the same task cannot relabel this attempt.
+        connection.execute(
+            "INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,'workflow.cancelled',?,'2026-01-01T00:00:00.000Z')",
+            (task_id, json.dumps({'actor': 'console:later-session'})))
         connection.commit()
         connection.close()
         board_upgrade.migrate(fixture['state'])
@@ -361,42 +373,78 @@ class UpgradeFixtureTests(unittest.TestCase):
             initiator, deadline, raw = current.execute(
                 'SELECT stop_initiator,grace_deadline,result_json FROM attempts WHERE attempt_id=?',
                 (attempt_id,)).fetchone()
-            self.assertEqual((initiator, deadline), ('unknown', None))
+            self.assertEqual((initiator, deadline), (expected_initiator, None))
             converted = json.loads(raw)
-            self.assertEqual(converted['terminationReason'], 'unknown-stop')
+            self.assertEqual(converted['terminationReason'], expected_reason)
             self.assertNotIn('stopInitiator', converted)
             self.assertEqual(converted['result'], native)
             cached = json.loads(current.execute(
                 "SELECT response_json FROM commands WHERE command_id='legacy-stop'").fetchone()[0])
-            self.assertEqual(cached['attempt']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['attempt']['stopInitiator'], expected_initiator)
             self.assertIsNone(cached['attempt']['graceDeadline'])
-            self.assertEqual(cached['attempt']['result']['terminationReason'], 'unknown-stop')
+            self.assertEqual(cached['attempt']['result']['terminationReason'], expected_reason)
             self.assertNotIn('stopInitiator', cached['attempt']['result'])
             self.assertEqual(cached['attempt']['result']['result'], native)
-            self.assertEqual(cached['task']['terminationReason'], 'unknown-stop')
-            self.assertEqual(cached['task']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['task']['terminationReason'], expected_reason)
+            self.assertEqual(cached['task']['stopInitiator'], expected_initiator)
             self.assertEqual(cached['task']['result'], native)
             event = json.loads(current.execute(
                 "SELECT payload_json FROM events WHERE kind='attempt.finished' ORDER BY seq DESC LIMIT 1").fetchone()[0])
-            self.assertEqual(event['terminationReason'], 'unknown-stop')
+            self.assertEqual(event['terminationReason'], expected_reason)
             self.assertNotIn('stopInitiator', event)
             self.assertEqual(event['report'], native)
 
+    def test_migration_uses_matching_legacy_cancellation_actor(self):
+        for actor, initiator, reason in (
+            ('host:fixture-host', 'host', 'forced-stop'),
+            ('console:fixture-session', 'console', 'console-stop'),
+            ('service-stop', 'service', 'service-stop'),
+            (None, 'unknown', 'unknown-stop'),
+            ('unreadable', 'unknown', 'unknown-stop'),
+        ):
+            with self.subTest(actor=actor):
+                self.assert_legacy_stop(actor, initiator, reason)
+
+    def test_migration_attributes_unfinished_cancel_request_without_terminal_event(self):
+        fixture, connection = self.restored()
+        attempt_id, task_id = connection.execute(
+            "SELECT attempt_id,task_id FROM attempts LIMIT 1").fetchone()
+        connection.execute("DELETE FROM events WHERE attempt_id=? AND kind='task.completed'", (attempt_id,))
+        connection.execute(
+            "UPDATE attempts SET execution_state='uncertain',finished_at=NULL,result_json=NULL,"
+            " shutdown_confirmed=0,cancel_requested_at=? WHERE attempt_id=?",
+            ('2026-01-01T00:00:00.000Z', attempt_id))
+        connection.execute(
+            "INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,'workflow.cancelled',?,'2026-01-01T00:00:00.000Z')",
+            (task_id, json.dumps({'actor': 'console:active-session'})))
+        connection.commit()
+        connection.close()
+        board_upgrade.migrate(fixture['state'])
+        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as current:
+            initiator, result = current.execute(
+                'SELECT stop_initiator,result_json FROM attempts WHERE attempt_id=?', (attempt_id,)).fetchone()
+            self.assertEqual(initiator, 'console')
+            self.assertIsNone(result)
+
     def test_migration_does_not_claim_an_unconfirmed_legacy_stop(self):
         fixture, connection = self.restored()
-        attempt_id, raw = connection.execute(
-            "SELECT attempt_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+        attempt_id, task_id, raw = connection.execute(
+            "SELECT attempt_id,task_id,result_json FROM attempts WHERE result_json IS NOT NULL LIMIT 1").fetchone()
+        connection.execute("DELETE FROM events WHERE attempt_id=? AND kind='task.completed'", (attempt_id,))
         receipt = json.loads(raw)
         native = {'terminationReason': 'user-cancel', 'origin': 'native report'}
         receipt.update(terminationReason='user-cancel', shutdownConfirmed=False, result=native)
-        connection.execute('UPDATE attempts SET shutdown_confirmed=0,result_json=? WHERE attempt_id=?',
-                           (json.dumps(receipt), attempt_id))
-        cached = {'task': {'runId': 'service-task', 'adapter': 'command', 'shutdownConfirmed': False,
+        connection.execute('UPDATE attempts SET shutdown_confirmed=0,cancel_requested_at=?,result_json=? WHERE attempt_id=?',
+                           ('2026-01-01T00:00:00.000Z', json.dumps(receipt), attempt_id))
+        cached = {'task': {'runId': task_id, 'adapter': 'command', 'shutdownConfirmed': False,
                            'terminationReason': 'user-cancel', 'result': native}}
         connection.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,created_at) VALUES('unconfirmed-stop','task.result','legacy-hash',?,'2026-01-01')",
                            (json.dumps(cached),))
-        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.unconfirmed',?,'2026-01-01')",
-                           (attempt_id, json.dumps({'terminationReason': 'user-cancel',
+        connection.execute(
+            "INSERT INTO events(task_id,kind,payload_json,created_at) VALUES(?,'workflow.cancelled',?,'2026-01-01T00:00:00.000Z')",
+            (task_id, json.dumps({'actor': 'host:fixture-host'})))
+        connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(?,?,'attempt.unconfirmed',?,'2026-01-01T00:00:00.000Z')",
+                           (task_id, attempt_id, json.dumps({'terminationReason': 'user-cancel',
                                                     'shutdownConfirmed': False, 'report': native})))
         connection.execute("INSERT INTO events(task_id,attempt_id,kind,payload_json,created_at) VALUES(NULL,?,'attempt.missing-stop-evidence',?,'2026-01-01')",
                            (attempt_id, json.dumps({'terminationReason': 'user-cancel', 'report': native})))
@@ -407,7 +455,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             initiator, deadline, raw = current.execute(
                 'SELECT stop_initiator,grace_deadline,result_json FROM attempts WHERE attempt_id=?',
                 (attempt_id,)).fetchone()
-            self.assertEqual((initiator, deadline), ('unknown', None))
+            self.assertEqual((initiator, deadline), ('host', None))
             converted = json.loads(raw)
             self.assertIsNone(converted['terminationReason'])
             self.assertNotIn('stopInitiator', converted)
@@ -415,7 +463,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             cached = json.loads(current.execute(
                 "SELECT response_json FROM commands WHERE command_id='unconfirmed-stop'").fetchone()[0])
             self.assertIsNone(cached['task']['terminationReason'])
-            self.assertEqual(cached['task']['stopInitiator'], 'unknown')
+            self.assertEqual(cached['task']['stopInitiator'], 'host')
             self.assertEqual(cached['task']['result'], native)
             event = json.loads(current.execute(
                 "SELECT payload_json FROM events WHERE kind='attempt.unconfirmed'").fetchone()[0])
