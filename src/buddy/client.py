@@ -175,18 +175,36 @@ class BoardClient:
             },
         )
 
-    def progress(self, worker_id: str, attempt_id: str, generation: int, nonce: str, message: str, *, phase: str | None = None) -> dict:
-        return self.call(
-            "worker_progress",
-            {
-                "workerId": worker_id,
-                "attemptId": attempt_id,
-                "generation": generation,
-                "nonce": nonce,
-                "message": message,
-                "phase": phase,
-            },
-        )
+    def progress(
+        self,
+        worker_id: str,
+        attempt_id: str,
+        generation: int,
+        nonce: str,
+        message: str | None = None,
+        *,
+        phase: str | None = None,
+        data: dict | None = None,
+    ) -> dict:
+        """Report one attempt observation.
+
+        ``data`` is the bounded structured channel; ``data.activity`` carries the
+        native-activity projection defined by ``buddy.activity`` (see the reference).
+        A plain heartbeat must not put fabricated activity there, and a structured
+        observation with no prose ``message`` records no prose progress event.
+        """
+        params: dict = {
+            "workerId": worker_id,
+            "attemptId": attempt_id,
+            "generation": generation,
+            "nonce": nonce,
+            "phase": phase,
+        }
+        if message is not None:
+            params["message"] = message
+        if data is not None:
+            params["data"] = data
+        return self.call("worker_progress", params)
 
     def submit_result(self, worker_id: str, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
         return self.call(

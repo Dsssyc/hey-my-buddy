@@ -15,12 +15,25 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from .. import activity as activity_module
 from ..adapters import ExecutionContext, adapter as get_adapter, local_capabilities
 from ..client import BoardClient, new_nonce
+from ..db import TERMINATION_REASONS
 from ..errors import BoardError
 
 DEFAULT_RETRY_SECONDS = 120
 CLAIM_IDLE_SECONDS = 2.0
+
+#: Result vocabulary, in the service-side order documented by
+#: ``buddy.db.TERMINATION_REASONS``: completed, user-cancel, deadline,
+#: harness-error, transport-error. The worker never invents another label.
+(
+    TERMINATION_COMPLETED,
+    TERMINATION_USER_CANCEL,
+    TERMINATION_DEADLINE,
+    TERMINATION_HARNESS_ERROR,
+    TERMINATION_TRANSPORT_ERROR,
+) = TERMINATION_REASONS
 
 #: Durable scale-down intent, observed by the owning Worker between attempts only.
 #: It is deliberately a different file from ``stop.request``: a stop may cancel the
@@ -48,6 +61,45 @@ def fsync_json(path: Path, value: dict) -> None:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def is_transport_failure(payload: Any) -> bool:
+    """Whether an adapter result names a transport-level failure.
+
+    Adapters may report ``failureKind: "transport"`` (or a ``transport-...``
+    status/code) when the harness itself could not be reached or its native channel
+    broke. Everything else that failed without a deadline or a cancel is a harness
+    error; the distinction is never inferred from prose.
+    """
+    if not isinstance(payload, dict):
+        return False
+    kind = payload.get("failureKind")
+    if isinstance(kind, str) and kind.strip().lower() in ("transport", "transport-error"):
+        return True
+    for key in ("status", "code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip().lower().startswith("transport"):
+            return True
+    return False
+
+
+def classify_termination(outcome, *, timed_out: bool, cancel_requested: bool) -> str:
+    """The real reason this attempt stopped.
+
+    Order matters: a genuine completion is never re-labelled, the worker's own
+    deadline outranks the cancellation it triggered, a user cancellation is named as
+    such, and a failure that the adapter attributed to transport is kept distinct
+    from an ordinary harness failure.
+    """
+    if outcome.status == "ok":
+        return TERMINATION_COMPLETED
+    if timed_out:
+        return TERMINATION_DEADLINE
+    if cancel_requested:
+        return TERMINATION_USER_CANCEL
+    if is_transport_failure(getattr(outcome, "result", None)):
+        return TERMINATION_TRANSPORT_ERROR
+    return TERMINATION_HARNESS_ERROR
 
 
 class ReceiptSpool:
@@ -491,6 +543,7 @@ class Worker:
                     "signal": None,
                     "shutdownConfirmed": shutdown_confirmed,
                     "artifacts": [],
+                    "terminationReason": TERMINATION_HARNESS_ERROR,
                 },
                 directory,
             )
@@ -529,6 +582,7 @@ class Worker:
                     "signal": None,
                     "shutdownConfirmed": True,
                     "artifacts": [],
+                    "terminationReason": TERMINATION_HARNESS_ERROR,
                 },
                 directory,
             )
@@ -545,6 +599,7 @@ class Worker:
                     "signal": None,
                     "shutdownConfirmed": True,
                     "artifacts": [],
+                    "terminationReason": TERMINATION_HARNESS_ERROR,
                 },
                 directory,
             )
@@ -607,6 +662,14 @@ class Worker:
             outcome.status = "failed"
             outcome.error = f"the worker deadline of {spec['timeoutSeconds']}s was reached before the adapter finished"
         report = outcome.to_report()
+        # The genuine reason this attempt stopped. It is recorded with the receipt,
+        # so a cancelled task, an expired deadline, a harness failure and a completed
+        # turn stay distinguishable even after a transport outage.
+        report["terminationReason"] = classify_termination(
+            outcome,
+            timed_out=timed_out,
+            cancel_requested=bool(handle.cancel_requested),
+        )
         report["elapsedSeconds"] = round(time.monotonic() - started, 1)
         report["logPaths"] = context.log_paths()
         report["runtimeIdentity"] = context.runtime.get("identity")
@@ -681,6 +744,9 @@ class _Renewal(threading.Thread):
         self._done = threading.Event()
         self.attempt = claim["attempt"]
         self.nonce = worker._nonce()
+        #: The last native activity this thread forwarded, so a repeated sidecar is
+        #: not published twice and the projection only moves forward.
+        self._activity: dict | None = None
 
     #: How often the durable cancel intent is checked with a read-only call. This is
     #: deliberately independent of the lease renewal period: a committed cancel must
@@ -690,9 +756,11 @@ class _Renewal(threading.Thread):
     def run(self) -> None:
         renew_interval = max(5.0, self.worker.lease_seconds / 3)
         next_renew = time.monotonic() + renew_interval
+        self._forward_activity()
         while not self._done.wait(self.CANCEL_POLL_SECONDS):
             if self._cancel_observed():
                 return
+            self._forward_activity()
             if time.monotonic() >= next_renew:
                 if not self._renew():
                     return
@@ -736,7 +804,103 @@ class _Renewal(threading.Thread):
             self.worker.log("durable cancel intent observed; cancelling this owned process group")
             self.implementation.cancel(self.handle)
             return False
+        if response.get("finished"):
+            # A committed result is terminal and immutable; the completion path in
+            # the owning thread already has (or is about to write) its own receipt.
+            self.worker.log(f"attempt {self.attempt['attemptId']} is already finished; stopping renewal")
+            self._done.set()
+            return False
+        if response.get("uncertain") or response.get("reconciliationRequired"):
+            return self._recover()
         return True
+
+    def _owns_live_child(self) -> bool:
+        """Whether this process still holds a live handle for the attempt it claimed."""
+        return self.handle is not None and not self.handle.shutdown_confirmed()
+
+    def _recover(self) -> bool:
+        """Reattach an attempt the service marked uncertain after a restart.
+
+        Recovery needs two independent facts: this process is the same worker
+        *instance* that claimed the attempt (the service verifies that and rejects
+        anything else), and it still owns the live child handle. A durable completion
+        receipt is replayed instead of reconciling execution state, because the child
+        already produced its outcome and must never be re-entered.
+        """
+        attempt_id = self.attempt["attemptId"]
+        receipt = self.worker.spool.read(attempt_id)
+        if receipt is not None:
+            # The child already produced a durable outcome. Replay that receipt; the
+            # execution state must never be reconciled back to executing when the
+            # attempt is in fact complete.
+            self.worker.log(f"attempt {attempt_id} already has a durable receipt; replaying it instead of reconciling")
+            if self.worker.deliver(receipt) or self.worker.spool.read(attempt_id) is None:
+                self._done.set()
+                return False
+            return True
+        if not self._owns_live_child():
+            # No handle means no evidence: the attempt stays explicitly uncertain
+            # instead of being adopted by a process that cannot observe it.
+            self.worker.log(
+                f"attempt {attempt_id} needs reconciliation but this process no longer holds a live child "
+                "handle; it stays uncertain"
+            )
+            return True
+        try:
+            response = self.worker.client.reconcile(
+                self.worker.worker_id,
+                attempt_id,
+                self.attempt["generation"],
+                self.nonce,
+                worker_instance=self.worker.instance_id,
+            )
+        except BoardError as error:
+            if error.code in ("STALE_GENERATION", "UNAUTHORIZED", "ATTEMPT_FINISHED", "NOT_FOUND"):
+                self.worker.log(f"reconciliation refused ({error.code}); this worker stops touching the attempt")
+                self._done.set()
+                return False
+            return True
+        except Exception:
+            # An unreachable daemon says nothing about ownership: keep the child, the
+            # deadline and this recovery identity, and retry on the next tick.
+            return True
+        if response.get("finished") or response.get("immutable"):
+            self.worker.log(f"attempt {attempt_id} is terminal and immutable; stopping renewal")
+            self._done.set()
+            return False
+        state = (response.get("attempt") or {}).get("executionState")
+        queue_reason = response.get("queueReason")
+        self.worker.log(
+            f"reattached attempt {attempt_id} as {state}"
+            + (f" (waiting reason cleared, was {queue_reason!r})" if response.get("restored") else "")
+        )
+        return True
+
+    def _forward_activity(self) -> None:
+        """Forward one changed, attempt-bound native activity receipt, never a heartbeat."""
+        directory = self.worker.attempt_directory(self.attempt.get("taskId"), self.attempt["attemptId"])
+        payload = activity_module.read_sidecar(
+            activity_module.sidecar_path(directory),
+            task_id=self.attempt["taskId"],
+            attempt_id=self.attempt["attemptId"],
+            generation=self.attempt["generation"],
+        )
+        if payload is None or not activity_module.is_newer(payload, self._activity):
+            return
+        try:
+            # Structured activity only: no prose progress event is fabricated for a
+            # native observation that the service records as a projection.
+            self.worker.client.progress(
+                self.worker.worker_id,
+                self.attempt["attemptId"],
+                self.attempt["generation"],
+                self.nonce,
+                data={"activity": payload},
+            )
+        except Exception as error:  # a progress hint is never worth losing the child
+            self.worker.log(f"activity not recorded ({error!r}); the owned child keeps running")
+            return
+        self._activity = payload
 
     def stop(self) -> None:
         self._done.set()
@@ -748,4 +912,11 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-__all__ = ["ReceiptSpool", "RETIRE_REQUEST_NAME", "Worker", "fsync_json"]
+__all__ = [
+    "ReceiptSpool",
+    "RETIRE_REQUEST_NAME",
+    "Worker",
+    "classify_termination",
+    "fsync_json",
+    "is_transport_failure",
+]

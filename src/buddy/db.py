@@ -45,6 +45,11 @@ ACTIVE_ATTEMPT_STATES = frozenset({"starting", "executing", "finalizing", "uncer
 MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "unavailable")
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
+#: Why an attempt really stopped. A user cancellation, an execution deadline, a
+#: harness failure, a transport failure and a genuine completion are separate
+#: facts; a completion that beat a cancellation is never relabelled by the race.
+TERMINATION_REASONS = ("completed", "user-cancel", "deadline", "harness-error", "transport-error")
+
 WORKER_STATES = ("starting", "idle", "busy", "stopping", "lost")
 
 CORE_SCHEMA = """
@@ -218,6 +223,24 @@ CREATE TABLE IF NOT EXISTS cursors (
     seq        INTEGER NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- One bounded latest activity projection per attempt. It is a projection, not a
+-- history: a native controller publishes phase/tool/waiting observations through
+-- the attempt-private sidecar, the Worker forwards them, and the newest monotone
+-- receipt replaces the previous row. The row is bound to the attempt generation and
+-- is never inherited by a replacement attempt.
+CREATE TABLE IF NOT EXISTS attempt_activity (
+    attempt_id     TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    task_id        TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    generation     INTEGER NOT NULL,
+    event_seq      INTEGER,
+    observed_at    TEXT,
+    activity_json  TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    revision       INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS attempt_activity_task_idx ON attempt_activity(task_id, updated_at);
 """
 
 #: Current evaluation tables: bounded assessments, reader/writer admission and

@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from . import activity as activity_module
 from . import delegation
 from . import scheduling
 from . import schemas
@@ -23,6 +24,7 @@ from .db import (
     MESSAGE_STATES,
     TASK_STATES,
     TERMINAL_TASK_STATES,
+    TERMINATION_REASONS,
     Database,
     canonical_json,
     sha256_text,
@@ -58,6 +60,10 @@ ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
 ACTIVE_ATTEMPT_STATES_SQL = tuple(sorted(ACTIVE_ATTEMPT_STATES))
 DEFAULT_LEASE_SECONDS = 120
 MAX_EVENT_PAGE = 200
+
+#: The one stale waiting reason a service restart writes. It is cleared only when
+#: the owning worker reattaches to the same attempt; a mere renewal never removes it.
+UNCERTAIN_QUEUE_REASON = "attempt-uncertain-after-restart"
 
 
 def _overlaps(left: str, right: str) -> bool:
@@ -352,6 +358,10 @@ class BoardStore:
             "acceptanceVerdict": row["acceptance_verdict"],
             "resultAvailable": False,
             "shutdownConfirmed": False,
+            # The bounded latest native activity of the selected attempt, or null.
+            # A task view always carries the field so a reader can distinguish
+            # "no observation" from "field not supported".
+            "activity": None,
         }
         return view
 
@@ -487,6 +497,9 @@ class BoardStore:
             view["logPaths"] = json.loads(attempt["log_paths"])
             view["cancelRequested"] = attempt["cancel_requested_at"] is not None
             view["timeoutSeconds"] = task["timeout_seconds"]
+            # The projection is looked up by the *selected* attempt, so a replacement
+            # generation never inherits the previous attempt's observation.
+            view["activity"] = self._activity_latest(connection, attempt["attempt_id"])
         artefacts = connection.execute(
             "SELECT * FROM artifacts WHERE task_id = ? ORDER BY created_at", (task["task_id"],)
         ).fetchall()
@@ -640,6 +653,57 @@ class BoardStore:
             "UPDATE resource_claims SET state='released', released_at=? WHERE attempt_id = ? AND state IN ('held','retained')",
             (self.now(), attempt_id),
         )
+
+    def _restore_claims(self, connection: sqlite3.Connection, attempt_id: str) -> None:
+        """Return retained claims to held when the owning attempt resumes for real."""
+        connection.execute(
+            "UPDATE resource_claims SET state='held', released_at=NULL WHERE attempt_id = ? AND state='retained'",
+            (attempt_id,),
+        )
+
+    # -- bounded activity projection -----------------------------------------
+    def _activity_latest(self, connection: sqlite3.Connection, attempt_id: str) -> dict | None:
+        """The newest stored activity of exactly this attempt, or ``None``."""
+        row = connection.execute(
+            "SELECT activity_json FROM attempt_activity WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(row["activity_json"])
+        except ValueError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _store_activity(self, connection: sqlite3.Connection, attempt: sqlite3.Row, activity: dict) -> bool:
+        """Persist one monotone activity receipt.
+
+        ``True`` means the projection advanced; an identical repeat and an older
+        receipt are both idempotent no-ops, so a replayed sidecar cannot move the
+        task view backwards or append another event.
+        """
+        previous = self._activity_latest(connection, attempt["attempt_id"])
+        if previous is not None and not activity_module.is_newer(activity, previous):
+            return False
+        now = self.now()
+        connection.execute(
+            "INSERT INTO attempt_activity(attempt_id, task_id, generation, event_seq, observed_at, activity_json,"
+            " created_at, updated_at, revision) VALUES(?,?,?,?,?,?,?,?,1)"
+            " ON CONFLICT(attempt_id) DO UPDATE SET generation=excluded.generation, event_seq=excluded.event_seq,"
+            " observed_at=excluded.observed_at, activity_json=excluded.activity_json, updated_at=excluded.updated_at,"
+            " revision=revision+1",
+            (
+                attempt["attempt_id"],
+                attempt["task_id"],
+                attempt["generation"],
+                activity.get("eventSeq"),
+                activity.get("observedAt"),
+                canonical_json(activity),
+                now,
+                now,
+            ),
+        )
+        return True
 
     # -- tasks ---------------------------------------------------------------
     def task_submit(
@@ -1632,6 +1696,7 @@ class BoardStore:
             and previous.get("artifacts", []) == request["artifacts"]
             and previous.get("logPaths") == request["logPaths"]
             and previous.get("runtimeIdentity") == request["runtimeIdentity"]
+            and previous.get("terminationReason") == request.get("terminationReason")
         )
 
     def _verify_attempt_actor(self, connection: sqlite3.Connection, params: dict) -> tuple[sqlite3.Row, sqlite3.Row]:
@@ -1732,18 +1797,27 @@ class BoardStore:
                     "finished": True,
                     "reattached": True,
                     "immutable": True,
+                    "restored": False,
                 }
             now = self.now()
             lease_expires_at = self._lease_deadline()
-            current_state = attempt["execution_state"]
-            if current_state == "uncertain":
-                # The same legitimate worker is alive again: its ownership was
-                # never reassigned, so the attempt returns to executing.
+            previous_state = attempt["execution_state"]
+            restored = previous_state == "uncertain"
+            if restored:
+                # The same worker *process* is alive again and still holds the child
+                # handle. Its ownership was never reassigned, so the attempt returns
+                # to executing, its retained resources return to held and the stale
+                # restart waiting reason is cleared — all in this one transaction.
                 self._transition_attempt(connection, attempt, "executing")
-                current_state = "executing"
+                self._restore_claims(connection, attempt["attempt_id"])
+                if task["state"] in ("running", "cancelling") and task["queue_reason"] == UNCERTAIN_QUEUE_REASON:
+                    connection.execute(
+                        "UPDATE tasks SET queue_reason=NULL, updated_at=? WHERE task_id=?",
+                        (now, attempt["task_id"]),
+                    )
             connection.execute(
-                "UPDATE attempts SET lease_expires_at=?, updated_at=?, runtime_identity=COALESCE(?, runtime_identity),"
-                " revision=revision+1 WHERE attempt_id=?",
+                "UPDATE attempts SET lease_expires_at=?, updated_at=?, ownership='owned',"
+                " runtime_identity=COALESCE(?, runtime_identity), revision=revision+1 WHERE attempt_id=?",
                 (lease_expires_at, now, schemas.optional_string(params, "runtimeIdentity"), attempt["attempt_id"]),
             )
             if worker is not None:
@@ -1759,18 +1833,27 @@ class BoardStore:
                 task_id=attempt["task_id"],
                 attempt_id=attempt["attempt_id"],
                 revision=task["revision"],
-                payload={"workerId": attempt["worker_id"], "generation": attempt["generation"]},
+                payload={
+                    "workerId": attempt["worker_id"],
+                    "generation": attempt["generation"],
+                    "previousState": previous_state,
+                    "restored": restored,
+                },
             )
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)).fetchone()
+            task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             response = {
                 "attempt": self._attempt_view(attempt_row),
-                "task": self._decorate(connection, task),
+                "task": self._decorate(connection, task_row),
                 "capability": capability,
                 "leaseSeconds": self.lease_seconds,
                 "leaseExpiresAt": lease_expires_at,
                 "cancelRequested": attempt_row["cancel_requested_at"] is not None,
                 "finished": attempt_row["execution_state"] == "finished",
                 "reattached": True,
+                "restored": restored,
+                "queueReason": task_row["queue_reason"],
+                "activity": self._activity_latest(connection, attempt["attempt_id"]),
             }
             head = self._head_of(connection)
         self._notify(head)
@@ -1794,7 +1877,12 @@ class BoardStore:
             phase = schemas.optional_string(params, "phase")
             now = self.now()
             lease_expires_at = self._lease_deadline()
-            if phase in ("executing", "finalizing"):
+            # Renewal proves the operation succeeded, never that the attempt resumed
+            # and never that the model advanced. After a service restart the attempt
+            # is authoritative-uncertain; a renewal may not clear that. Only the
+            # explicit, worker-instance-checked ``worker_reconcile`` may.
+            uncertain = attempt["execution_state"] == "uncertain"
+            if phase in ("executing", "finalizing") and not uncertain:
                 self._transition_attempt(connection, attempt, phase)
             connection.execute(
                 "UPDATE attempts SET lease_expires_at=?, updated_at=? WHERE attempt_id=?",
@@ -1808,10 +1896,13 @@ class BoardStore:
                 )
             # Keep this decision's fenced reader/writer lease alive for the length of
             # one bounded model call; renewal never resurrects a terminal decision.
+            # An uncertain attempt was already fenced by the restart, so it waits for
+            # its own reconciliation before it may hold the table again.
             renew_task = connection.execute(
                 "SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)
             ).fetchone()
-            self.decisions.renew(connection, task=renew_task, now=now)
+            if not uncertain:
+                self.decisions.renew(connection, task=renew_task, now=now)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
             attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)).fetchone()
             response = {
@@ -1820,6 +1911,8 @@ class BoardStore:
                 "cancelRequested": attempt_row["cancel_requested_at"] is not None,
                 "finished": False,
                 "leaseExpiresAt": lease_expires_at,
+                "uncertain": uncertain,
+                "reconciliationRequired": uncertain,
             }
             head = self._head_of(connection)
         self._notify(head)
@@ -1831,6 +1924,19 @@ class BoardStore:
         )
         message = schemas.optional_string(params, "message")
         phase = schemas.optional_string(params, "phase")
+        # ``data`` carries the bounded native-activity projection, and activity is
+        # its only accepted field: a typo can therefore never smuggle prose, tool
+        # arguments or credentials into the projection. Activity is stored only when
+        # a caller actually publishes one - a routine renewal or heartbeat is never
+        # turned into fake native progress.
+        activity = None
+        data = params.get("data")
+        if data is not None:
+            if not isinstance(data, dict):
+                raise BoardError("INVALID_ARGUMENT", "data must be an object")
+            schemas.reject_unknown(data, {"activity"}, "worker.progress.data")
+            if data.get("activity") is not None:
+                activity = activity_module.normalize_activity(data["activity"])
         with self.db.write() as connection:
             attempt, _worker = self._verify_attempt_actor(connection, params)
             if attempt["execution_state"] == "finished":
@@ -1842,16 +1948,30 @@ class BoardStore:
                 "UPDATE attempts SET updated_at=?, lease_expires_at=?, revision=revision+1 WHERE attempt_id=?",
                 (now, self._lease_deadline(), attempt["attempt_id"]),
             )
-            self._append_event(
-                connection,
-                "attempt.progress",
-                task_id=attempt["task_id"],
-                attempt_id=attempt["attempt_id"],
-                payload={"message": (message or "")[:2000], "phase": phase},
-            )
+            activity_state = None
+            if activity is not None:
+                # Monotone and idempotent: an identical or older receipt changes
+                # nothing and appends no event.
+                activity_state = "recorded" if self._store_activity(connection, attempt, activity) else "unchanged"
+            if activity_state == "recorded":
+                self._append_event(
+                    connection,
+                    "attempt.activity",
+                    task_id=attempt["task_id"],
+                    attempt_id=attempt["attempt_id"],
+                    payload={"activity": activity},
+                )
+            if message is not None or phase is not None:
+                self._append_event(
+                    connection,
+                    "attempt.progress",
+                    task_id=attempt["task_id"],
+                    attempt_id=attempt["attempt_id"],
+                    payload={"message": (message or "")[:2000], "phase": phase},
+                )
             head = self._head_of(connection)
         self._notify(head)
-        return {"recorded": True, "head": head}
+        return {"recorded": True, "head": head, "activity": activity_state}
 
     def worker_result(self, params: dict) -> dict:
         """Commit result, artifacts, task/attempt state and the completion event together.
@@ -1877,6 +1997,7 @@ class BoardStore:
                 "runtimeIdentity",
                 "elapsedSeconds",
                 "logPaths",
+                "terminationReason",
             },
             "worker.result",
         )
@@ -1894,6 +2015,17 @@ class BoardStore:
         if exit_code is not None and (isinstance(exit_code, bool) or not isinstance(exit_code, int)):
             raise BoardError("INVALID_ARGUMENT", "exitCode must be an integer or null")
         signal_name = schemas.optional_string(params, "signal", max_length=32)
+        # The real reason this attempt stopped. It is optional so a caller-owned
+        # external agent may report no classification, but a supplied value must be
+        # one of the documented reasons: a completion that beat a cancellation is
+        # recorded as completed rather than re-labelled by the losing race.
+        termination_reason = schemas.optional_string(params, "terminationReason", max_length=32)
+        if termination_reason is not None and termination_reason not in TERMINATION_REASONS:
+            raise BoardError(
+                "INVALID_ARGUMENT",
+                f"terminationReason must be one of {', '.join(TERMINATION_REASONS)}",
+                field="terminationReason",
+            )
         error_text = schemas.optional_string(params, "error", max_length=4000)
         command_id = schemas.optional_string(params, "commandId", max_length=128) or f"result:{params.get('attemptId')}"
         attempt_id_param = schemas.required_string(params, "attemptId", max_length=128)
@@ -1930,6 +2062,7 @@ class BoardStore:
             "error": error_text,
             "logPaths": log_paths,
             "runtimeIdentity": params.get("runtimeIdentity"),
+            "terminationReason": termination_reason,
         }
         with self.db.write() as connection:
             attempt, _worker = self._verify_attempt_actor(connection, params)
@@ -1994,6 +2127,7 @@ class BoardStore:
                 "shutdownConfirmed": shutdown_confirmed,
                 "logPaths": log_paths,
                 "runtimeIdentity": params.get("runtimeIdentity"),
+                "terminationReason": termination_reason,
                 "artifacts": verified_artifacts,
                 "completedAt": now,
             }
@@ -2561,7 +2695,7 @@ class BoardStore:
                 if task is not None and task["state"] in ("running", "cancelling"):
                     connection.execute(
                         "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
-                        ("attempt-uncertain-after-restart", now, attempt["task_id"]),
+                        (UNCERTAIN_QUEUE_REASON, now, attempt["task_id"]),
                     )
                 self._append_event(
                     connection,
