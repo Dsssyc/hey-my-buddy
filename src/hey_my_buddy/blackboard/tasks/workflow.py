@@ -5476,23 +5476,23 @@ class WorkflowCoordinator:
                 # A started removal keeps its fence even when its resumption is
                 # refused; no part of that journal may be rewritten here.
                 raise refusal
-            evidence = json.loads(plan["evidence_json"])
-            retention = json.loads(plan["retention_json"])
-            if inspection is not None:
-                evidence["workspace"] = {key: inspection.get(key) for key in
-                                         ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
-                                          "locked", "unsealedPaths", "sealedObservation", "workspaceId",
-                                          "manifestWorkspaceId", "allocation", "attachedBranch")}
-                retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
-                retention["checkoutRoot"] = inspection["path"]
-                retention["cwd"] = inspection["cwd"]
-            connection.execute(
-                "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
-                " command_id=?, revision=revision+1 WHERE plan_id=?"
-                " AND state=?",
-                ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
-                 canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id, plan["state"]),
-            )
+            if plan["state"] == "planned":
+                evidence = json.loads(plan["evidence_json"])
+                retention = json.loads(plan["retention_json"])
+                if inspection is not None:
+                    evidence["workspace"] = {key: inspection.get(key) for key in
+                                             ("eligible", "reasons", "kind", "checkoutId", "repositoryId", "worktree",
+                                              "locked", "unsealedPaths", "sealedObservation", "workspaceId",
+                                              "manifestWorkspaceId", "allocation", "attachedBranch")}
+                    retention["fixedRefs"] = sorted(set(retention["fixedRefs"]) | set(inspection["refs"]))
+                    retention["checkoutRoot"] = inspection["path"]
+                    retention["cwd"] = inspection["cwd"]
+                connection.execute(
+                    "UPDATE workspace_cleanup_plans SET state=?, evidence_json=?, retention_json=?, reasons_json=?,"
+                    " command_id=?, revision=revision+1 WHERE plan_id=? AND state='planned'",
+                    ("blocked" if blocked else "applying", canonical_json(evidence), canonical_json(retention),
+                     canonical_json(inspection["reasons"] if blocked else []), command_id, plan_id),
+                )
             head = self.board._head_of(connection)
         self.board._notify(head)
         if blocked:
@@ -5565,7 +5565,8 @@ class WorkflowCoordinator:
         resume = plan["state"] == "applying"
         reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest, allocation=allocation)
         planned = json.loads(plan["evidence_json"])
-        if planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"] or planned["acceptance"]["state"] != run_row["state"]:
+        if ((not resume and planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"])
+                or planned["acceptance"]["state"] != run_row["state"]):
             reasons.append("review-changed")
         if reasons:
             raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons)

@@ -277,6 +277,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.git("add", "src/file.txt", cwd=checkout)
         staged_index = workspace._entries(checkout)
         (checkout / "src/file.txt").write_text("base\n")
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
         self.git("worktree", "unlock", str(checkout))
         (checkout / ".git").unlink()
         (checkout / "docs/readme.md").unlink()
@@ -284,7 +285,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
         self.assertFalse(proof["eligible"], proof)
         self.assertEqual(proof["reasons"], ["unsealed-changes"])
-        self.assertEqual(proof["unsealedPaths"], [".git/index"])
+        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
         self.assertEqual(workspace._entries(git_dir), staged_index)
         self.assertEqual((checkout / "src/file.txt").read_text(), "base\n")
         workspace._git(git_dir, "read-tree", manifest["inputTree"])
@@ -299,16 +300,68 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         git_dir = Path(workspace.inspect(str(checkout))["gitDir"])
         self.git("commit", "--allow-empty", "-qm", "not sealed", cwd=checkout)
         unsealed_head = self.git("rev-parse", "HEAD", cwd=checkout)
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
         self.git("worktree", "unlock", str(checkout))
         (checkout / ".git").unlink()
         proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
         self.assertFalse(proof["eligible"], proof)
         self.assertEqual(proof["reasons"], ["unsealed-changes"])
-        self.assertEqual(proof["unsealedPaths"], [".git/HEAD"])
+        self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
         self.assertEqual(workspace._git(git_dir, "rev-parse", "HEAD"), unsealed_head)
         workspace._git(git_dir, "update-ref", "--no-deref", "HEAD", sealed["snapshot"]["headCommit"])
         self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])
         self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+
+    def test_resumed_cleanup_restores_missing_binary_modes_links_and_parents(self):
+        payload = self.repo / "src" / "deep" / "payload.bin"
+        payload.parent.mkdir()
+        payload.write_bytes(b"retained executable\x00\xff")
+        payload.chmod(0o755)
+        link = self.repo / "src" / "deep" / "link"
+        link.symlink_to("payload.bin")
+        self.git("add", ".")
+        self.git("commit", "-qm", "retained links and binary")
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        (checkout / "src/deep/payload.bin").unlink()
+        (checkout / "src/deep/link").unlink()
+        (checkout / "src/deep").rmdir()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertTrue(proof["eligible"], proof)
+        self.assertEqual((checkout / "src/deep/payload.bin").read_bytes(), b"retained executable\x00\xff")
+        self.assertEqual((checkout / "src/deep/link").readlink(), Path("payload.bin"))
+        if not workspace._WINDOWS:
+            self.assertEqual((checkout / "src/deep/payload.bin").stat().st_mode & 0o777, 0o755)
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertTrue(workspace.cleanup_remove(self.state, manifest, resume=True)["removed"])
+
+    def test_resumed_cleanup_never_overwrites_a_file_created_during_restoration(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["path"])
+        sealed = self.seal(manifest)
+        (checkout / "src/file.txt").unlink()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        materialize = workspace._materialize
+
+        def competing_write(root, entries):
+            self.assertEqual(set(entries), {"src/file.txt"})
+            (checkout / "src/file.txt").write_bytes(b"new unsealed bytes\x00\xff")
+            materialize(root, entries)
+
+        with patch.object(workspace, "_materialize", side_effect=competing_write):
+            self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_inspect,
+                              self.state, manifest, sealed=sealed, resume=True)
+        self.assertEqual((checkout / "src/file.txt").read_bytes(), b"new unsealed bytes\x00\xff")
+        self.assertEqual(workspace.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
+                         "hey-my-buddy:" + manifest["workspaceId"])
+        proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)
+        self.assertFalse(proof["eligible"], proof)
+        self.assertEqual(proof["unsealedPaths"], ["src/file.txt"])
 
 
 if __name__ == "__main__":

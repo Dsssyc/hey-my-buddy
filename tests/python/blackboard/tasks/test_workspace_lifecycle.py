@@ -1702,6 +1702,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
 
     def test_started_reclaim_resumes_after_unlock_before_removal(self):
         board, submitted, manifest, checkout, artifact = self.interrupted_reclaim()
+        with board.store.db.read() as connection:
+            before = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=?", (submitted["runId"],),
+            ).fetchone())
         recovered = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(recovered["removed"])
         self.assertFalse(recovered["alreadyRemoved"])
@@ -1713,8 +1717,14 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         for key in ("removed", "alreadyRemoved", "path", "planId", "retention"):
             self.assertEqual(replay[key], recovered[key])
         with board.store.db.read() as connection:
+            after = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
+            ).fetchone())
             events = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.cleanup_applied'",
                                         (submitted["runId"],)).fetchall()
+        for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
+            self.assertEqual(after[column], before[column], column)
+        self.assertEqual(after["revision"], before["revision"] + 1)
         self.assertEqual([json.loads(row["payload_json"])["alreadyRemoved"] for row in events], [False])
         self.assertTrue(Path(artifact["diffPath"]).is_file())
 
@@ -1766,7 +1776,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             board.store.workflow._cleanup_fence(str(checkout))
         self.assertEqual(fenced.exception.code, "PREPARATION_CONFLICT")
         self.assertEqual(fenced.exception.details["planId"], before["plan_id"])
-        self.assertFalse((checkout / "tracked.txt").exists())
+        self.assertEqual((checkout / "tracked.txt").read_bytes(), b"sealed output\n")
+        retained[Path("tracked.txt")] = b"sealed output\n"
         self.assertEqual({path.relative_to(checkout): path.read_bytes()
                           for path in checkout.rglob("*") if path.is_file()}, retained)
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
@@ -1777,7 +1788,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
 
-    def assert_started_reclaim_refused(self, board, run_id, checkout, reason, *, paths=None):
+    def assert_started_reclaim_refused(self, board, run_id, checkout, reason, *, paths=None, restored=()):
         with board.store.db.read() as connection:
             before = dict(connection.execute(
                 "SELECT * FROM workspace_cleanup_plans WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
@@ -1794,8 +1805,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(refused.exception.details["reclaim"]["path"], str(checkout))
         if paths is not None:
             self.assertEqual(refused.exception.details["reclaim"]["unsealedPaths"], paths)
-        self.assertEqual({path.relative_to(checkout): path.read_bytes()
-                          for path in checkout.rglob("*") if path.is_file()}, contents)
+        after_contents = {path.relative_to(checkout): path.read_bytes()
+                          for path in checkout.rglob("*") if path.is_file()}
+        self.assertEqual({path: after_contents[path] for path in contents}, contents)
+        self.assertEqual(set(after_contents) - set(contents), {Path(path) for path in restored})
         with board.store.db.read() as connection:
             after = dict(connection.execute(
                 "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
@@ -1816,27 +1829,91 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         added.parent.mkdir()
         added.write_bytes(b"not sealed\x00\xff")
         self.assert_started_reclaim_refused(board, submitted["runId"], checkout, "unsealed-changes",
-                                           paths=["new/payload.bin"])
+                                           paths=["new/payload.bin"], restored=(".git", "tracked.txt"))
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
+        self.assertEqual((checkout / "tracked.txt").read_bytes(), b"sealed output\n")
+        self.assertEqual(workspace_module.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        git(self.repo, "worktree", "prune", "--expire", "now")
+        self.assertIsNotNone(workspace_module._worktree_record(self.repo, checkout))
         added.unlink()
         recovered = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
 
-    def test_started_reclaim_refuses_an_added_ignored_file(self):
-        (self.repo / ".gitignore").write_text("cache/\n")
+    def test_started_reclaim_removes_an_ignored_cache_present_before_the_first_delete(self):
+        (self.repo / ".gitignore").write_text("__pycache__/\n")
         git(self.repo, "add", ".gitignore")
         git(self.repo, "commit", "-qm", "ignored cache")
-        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim()
-        added = checkout / "cache" / "payload.bin"
-        added.parent.mkdir()
-        added.write_bytes(b"ignored, not sealed\x00\xff")
-        self.assert_started_reclaim_refused(board, submitted["runId"], checkout, "unsealed-changes",
-                                           paths=["cache/payload.bin"])
-        self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
-                         "hey-my-buddy:" + manifest["workspaceId"])
-        added.unlink()
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
+        cache = checkout / "__pycache__" / "mod.cpython-313.pyc"
+        cache.parent.mkdir()
+        cache.write_bytes(b"ignored cache\x00\xff")
+        self.interrupt_reclaim(board, view, checkout, missing=("tracked.txt",), remove_git=True)
+        self.assertTrue(cache.is_file())
+        self.assertTrue(self.reclaim(board, self.view(board, submitted["runId"]))["removed"])
+        self.assertFalse(checkout.exists())
+
+    def test_started_reclaim_resumes_under_the_current_owner_after_takeover(self):
+        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(
+            missing=("tracked.txt",), remove_git=True)
+        view = self.view(board, submitted["runId"])
+        old_control = self.control(view)
+        with board.store.db.read() as connection:
+            before = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE run_id=?", (view["runId"],),
+            ).fetchone())
+        taken = board.call("workflow_takeover", {
+            "runId": view["runId"], "commandId": "reclaim-takeover",
+            "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **old_control,
+        })
+        self.controls[view["runId"]] = dict(taken["control"])
+        with self.assertRaises(BoardError) as stale:
+            board.call("workflow_reclaim", {"runId": view["runId"], **old_control})
+        self.assertEqual(stale.exception.code, "STALE_GENERATION")
+        result = self.reclaim(board, self.view(board, view["runId"]))
+        self.assertTrue(result["removed"])
+        self.assertFalse(result["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        with board.store.db.read() as connection:
+            after = dict(connection.execute(
+                "SELECT * FROM workspace_cleanup_plans WHERE plan_id=?", (before["plan_id"],),
+            ).fetchone())
+        for column in before.keys() - {"state", "revision", "applied_at", "result_json"}:
+            self.assertEqual(after[column], before[column], column)
+        self.assertEqual(after["state"], "applied")
+        self.assertEqual(after["revision"], before["revision"] + 1)
+
+    def test_planned_reclaim_still_refuses_owner_generation_changes(self):
+        board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
+        planned = board.store.workflow.cleanup_plan({
+            "runId": view["runId"], "commandId": "plan-before-takeover",
+            "expectedRevision": view["revision"], **self.control(view),
+        })
+        taken = board.call("workflow_takeover", {
+            "runId": view["runId"], "commandId": "planned-reclaim-takeover",
+            "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **self.control(view),
+        })
+        current = self.view(board, view["runId"])
+        with self.assertRaises(BoardError) as refused:
+            board.store.workflow.cleanup_apply({
+                "runId": view["runId"], "commandId": "apply-after-takeover",
+                "planId": planned["plan"]["planId"], "confirmPath": str(checkout),
+                "expectedRevision": current["revision"], **taken["control"],
+            })
+        self.assertEqual(refused.exception.details["reasons"], ["review-changed"])
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "planned")
+
+    def test_started_reclaim_accepts_relative_worktree_backlinks(self):
+        git(self.repo, "config", "worktree.useRelativePaths", "true")
+        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(
+            missing=("tracked.txt",), remove_git=True)
+        git_dir = next(path for path in (self.repo / ".git" / "worktrees").iterdir()
+                       if workspace_module._identity(path) == manifest["checkoutId"])
+        backlink = Path((git_dir / "gitdir").read_text().strip())
+        self.assertFalse(backlink.is_absolute())
+        self.assertEqual((git_dir / backlink).resolve(), checkout / ".git")
         self.assertTrue(self.reclaim(board, self.view(board, submitted["runId"]))["removed"])
         self.assertFalse(checkout.exists())
 
@@ -1855,6 +1932,20 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         shutil.rmtree(git_dir)
         self.assertIsNone(workspace_module._worktree_record(self.repo, checkout))
         self.assert_started_reclaim_refused(board, submitted["runId"], checkout, "unregistered-checkout")
+
+    def test_started_reclaim_removes_an_empty_directory_without_a_registration(self):
+        board, submitted, manifest, checkout, artifact = self.interrupted_reclaim()
+        git_dir = Path(workspace_module.inspect(str(checkout))["gitDir"])
+        shutil.rmtree(git_dir)
+        shutil.rmtree(checkout)
+        checkout.mkdir()
+        self.assertIsNone(workspace_module._worktree_record(self.repo, checkout))
+        result = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(result["removed"])
+        self.assertFalse(result["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["state"], "applied")
+        self.assertEqual(self.reclaim(board, self.view(board, submitted["runId"])), result)
 
     def test_a_planned_reclaim_still_refuses_missing_sealed_files(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
