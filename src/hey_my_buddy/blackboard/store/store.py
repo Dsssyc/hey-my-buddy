@@ -2623,14 +2623,18 @@ class BoardStore:
             )
             if micro_task is not None:
                 response["workflow"] = micro_task
-            self.workflow.child_settled(
-                connection,
-                task=task_row,
-                attempt=attempt_row,
-                payload=payload,
-                task_state=task_state,
-                now=now,
-            )
+            if micro_task is not None and micro_task.get("autoContinued"):
+                task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task["task_id"],)).fetchone()
+                response.update(task=self._decorate(connection, task_row), taskState=task_row["state"])
+            else:
+                self.workflow.child_settled(
+                    connection,
+                    task=task_row,
+                    attempt=attempt_row,
+                    payload=payload,
+                    task_state=task_state,
+                    now=now,
+                )
             self._store_receipt(
                 connection,
                 command_id,

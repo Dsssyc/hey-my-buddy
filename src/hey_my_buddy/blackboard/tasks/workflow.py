@@ -297,6 +297,8 @@ class WorkflowCoordinator:
             "attemptId": row["attempt_id"],
             "generation": row["generation"],
             "resumeMode": row["resume_mode"],
+            "resumeReason": context.get("resumeReason"),
+            "resumeDetail": context.get("resumeDetail"),
             "previousSessionId": row["previous_session_id"],
             "sessionId": row["session_id"],
             "state": row["state"],
@@ -709,6 +711,7 @@ class WorkflowCoordinator:
             "microTask": self._micro_task_view(micro_task, run_row["micro_task_fingerprint"]),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
+            "resumeRecovery": self._resume_recovery(connection, run_row["run_id"]),
             "workspace": self._workspace_view(run_row, connection=connection),
             "executionWorkspace": json.loads(run_row["execution_workspace_json"]),
             "access": json.loads(run_row["execution_workspace_json"])["access"],
@@ -5840,6 +5843,7 @@ class WorkflowCoordinator:
             "hostId": run_row["host_id"],
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
+            "resumeRecovery": self._resume_recovery(connection, run_row["run_id"]),
             "activeRequestId": run_row["active_request_id"],
             "resultSummary": summary or None,
             "hostConclusion": host_conclusions.view(host_conclusions.current(connection, run_row)),
@@ -5860,6 +5864,17 @@ class WorkflowCoordinator:
                 if boundary is not None:
                     extension["routingBoundary"] = boundary
         return extension
+
+    @staticmethod
+    def _resume_recovery(connection, run_id: str) -> dict | None:
+        event = connection.execute(
+            "SELECT seq,attempt_id,payload_json FROM events WHERE task_id=?"
+            " AND kind='workflow.auto_continued'"
+            " AND json_extract(payload_json,'$.reason')='native-resume-refused' ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return ({**json.loads(event["payload_json"]), "attemptId": event["attempt_id"], "eventSeq": event["seq"]}
+                if event is not None else None)
 
     # -- claim gate ----------------------------------------------------------
     def claim_blocker(self, connection, task_row) -> str | None:
@@ -6185,6 +6200,7 @@ class WorkflowCoordinator:
         prior = (connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
                                     (previous['attempt_id'],)).fetchone() if previous is not None else None)
         prior_result = json.loads(prior['result_json'] or '{}') if prior else {}
+        refused_resume = self._native_resume_refused(previous, prior_result)
         prior_native_session = (prior_result.get("result") or prior_result).get("nativeSession") or {}
         if previous is not None and previous["state"] == "interrupted" and previous_session is None:
             previous_session = prior_native_session.get("sessionId")
@@ -6205,7 +6221,7 @@ class WorkflowCoordinator:
         harness_changed = False
         native_home_changed = False
         permission_reconstruction = False
-        if previous is not None and native_completed and previous_session and buddy:
+        if previous is not None and native_completed and previous_session and buddy and not refused_resume:
             previous_input = json.loads(previous["input_json"])
             if previous_input.get("context", {}).get("buddy") == buddy:
                 executor = self._execution_adapter(buddy["harness"])
@@ -6246,7 +6262,10 @@ class WorkflowCoordinator:
                     "sessionId": checkpoint["sessionId"], "nativeTurnId": checkpoint["nativeTurnId"],
                     **checkpoint["lastAssistantMessage"],
                 }
-        if harness_changed:
+        if refused_resume:
+            context['resumeReason'] = 'native-resume-refused'
+            context['resumeDetail'] = self.result_payload(prior_result).get('error')
+        elif harness_changed:
             context['resumeReason'] = 'harness-version-changed'
         elif native_home_changed:
             context['resumeReason'] = ('native-storage-changed' if buddy['harness'] == 'codex'
@@ -6947,6 +6966,14 @@ class WorkflowCoordinator:
         disposition = outcome.get("disposition")
         return disposition if disposition in ("assistance", "attention", "waiting") else None
 
+    @classmethod
+    def _native_resume_refused(cls, turn_row, payload: dict | None) -> bool:
+        result = cls.result_payload(payload)
+        return (turn_row is not None and turn_row["resume_mode"] == "native-session"
+                and result.get("code") == "native-resume-unavailable"
+                and result.get("modelStarted") is False
+                and payload.get("shutdownConfirmed") is True)
+
     def settle_turn(
         self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str,
         seal_stash: dict | None = None,
@@ -7007,6 +7034,28 @@ class WorkflowCoordinator:
                     "conflictIds": conflict_ids,
                     "sharedStash": self._shared_refs_summary(shared_refs),
                 }
+            if task_state == "failed" and self._native_resume_refused(turn_row, payload):
+                # No model consumed this continuation. Requeue its exact frozen
+                # input, including helper authority and the prepared workspace.
+                continuation = connection.execute(
+                    "SELECT * FROM workflow_continuations WHERE turn_id=? AND state='consumed'",
+                    (turn_row["turn_id"],),
+                ).fetchone()
+                self._requeue(connection, task, run_row, reason="native-resume-refused",
+                              actor={"role": "workflow", "id": "auto"}, now=now,
+                              continuation_id=continuation["continuation_id"])
+                facts = {"turnId": turn_row["turn_id"], "continuationId": continuation["continuation_id"],
+                         "reason": "native-resume-refused", "detail": self.result_payload(payload).get("error"),
+                         "resumeMode": "reconstructed-new-session", "autoContinued": True}
+                self.board._append_event(connection, "workflow.native_resume_refused", task_id=run_row["run_id"],
+                                         attempt_id=attempt["attempt_id"], revision=run_row["revision"] + 1,
+                                         payload={**facts, "code": "native-resume-unavailable",
+                                                  "modelStarted": False, "shutdownConfirmed": True})
+                self.board._append_event(connection, "workflow.auto_continued", task_id=run_row["run_id"],
+                                         attempt_id=attempt["attempt_id"], revision=run_row["revision"] + 1,
+                                         payload=facts)
+                return {"accepted": False, "disposition": None, "state": "executing", "autoContinued": True,
+                        "sharedStash": self._shared_refs_summary(shared_refs)}
             if terminal is not None:
                 connection.execute(
                     "UPDATE workflow_runs SET state=?, updated_at=?, revision=revision+1 WHERE run_id=?",

@@ -176,6 +176,14 @@ class DescriptionSeamTests(DshRoleCase):
 
 
 class WorkerRegisteredRunTests(DshRoleCase):
+    def test_native_resume_without_a_binding_reports_no_model_start(self):
+        context = self.context(index=2, mode="native-session", previous="never-bound-session")
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "native-resume-unavailable")
+        self.assertIs(outcome.result["modelStarted"], False)
+        self.assertTrue(outcome.shutdown_confirmed)
+
     def test_a_noncompleted_native_turn_keeps_its_reason_without_a_finish_receipt(self):
         for reason in ("max_tokens", "refusal"):
             with self.subTest(reason=reason):

@@ -129,6 +129,68 @@ class LeadLifecycleTests(WorkflowTestCase):
                     self.assertEqual(event["task_id"], child["runId"])
                     self.assertEqual(event["revision"], self.current(board, child)["revision"])
 
+    def test_owned_native_resume_refusal_only_wakes_lead_if_rebuild_fails(self):
+        self.executors["dsh"].native_resume = True
+        board = self.board()
+        lead, lead_claim = self.lead(board)
+        child = self.owned(board, lead_claim)
+        child_view, _ = self.finish_owned(board, child, disposition="attention", result_mutator=lambda result: result.update(
+            nativeSession={"storageOwner": "hey-my-buddy-micro-task"}))
+        self.continue_run(board, child_view, credential=lead_claim["agentCredential"])
+        second = self.claim(board, "w2", claim_request_id="owned-native", run_id=child["runId"])
+        self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
+        # Consume the earlier attention boundary before parking for this native
+        # turn, so the wake under test can only come from its own result.
+        self.wait(board, lead_claim)
+        lead_claim = self.claim(board, claim_request_id="lead-after-attention", run_id=lead["runId"])["claim"]
+        self.wait(board, lead_claim)
+        self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
+        earlier_wakeups = len(self.wakeups(board, lead))
+
+        def refusal(result):
+            result.pop("turn")
+            result.update(code="native-resume-unavailable", modelStarted=False, error="Fixture refusal")
+
+        self.finish_turn(board, second, worker_id="w2", runner_status="failed", exit_code=1, seal=False,
+                         result_mutator=refusal)
+        self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
+        self.assertEqual(self.current(board, child)["state"], "executing")
+        self.assertEqual(len(self.wakeups(board, lead)), earlier_wakeups)
+        third = self.claim(board, "w2", claim_request_id="owned-rebuild", run_id=child["runId"])
+        self.assertEqual(third["claim"]["turn"]["resumeMode"], "reconstructed-new-session")
+        self.finish_turn(board, third, worker_id="w2", runner_status="failed", exit_code=1, seal=False)
+        self.assertEqual(self.current(board, lead)["state"], "executing")
+        self.assertEqual(len(self.wakeups(board, lead)), earlier_wakeups + 1)
+
+    def test_refused_lead_wakeup_requeues_the_same_trigger(self):
+        self.executors["dsh"].native_resume = True
+        board = self.board()
+        lead, claim = self.lead(board)
+        child = self.owned(board, claim)
+        self.finish_turn(board, {"claim": claim}, outcome={
+            "disposition": "waiting", "summary": "Waiting for owned work", "remaining": [],
+            "decisions": [], "artifacts": [], "request": None,
+        }, result_mutator=lambda result: result.update(nativeSession={"storageOwner": "hey-my-buddy-micro-task"}))
+        self.finish_owned(board, child)
+        second = self.claim(board, claim_request_id="lead-native", run_id=lead["runId"])
+        original = second["claim"]["turn"]["input"]
+        self.assertEqual(original["resumeMode"], "native-session")
+        self.assertEqual(original["context"]["continuation"]["kind"], "lead-wakeup")
+
+        def refusal(result):
+            result.pop("turn")
+            result.update(code="native-resume-unavailable", modelStarted=False, error="Fixture refusal")
+
+        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
+        wakeups = self.wakeups(board, lead)
+        self.assertEqual(len(wakeups), 1)
+        self.assertEqual(wakeups[0]["state"], "queued")
+        third = self.claim(board, claim_request_id="lead-rebuild", run_id=lead["runId"])
+        rebuilt = third["claim"]["turn"]["input"]
+        self.assertEqual(rebuilt["resumeMode"], "reconstructed-new-session")
+        self.assertEqual(rebuilt["context"]["resumeReason"], "native-resume-refused")
+        self.assertEqual(rebuilt["context"]["continuation"], original["context"]["continuation"])
+
     def test_proven_interruption_wakes_lead_once_with_partial_output(self):
         from blackboard.store.test_interruption_recovery import IDENTITY
         board = self.board()
