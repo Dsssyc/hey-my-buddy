@@ -2,7 +2,6 @@ import type { ConsoleSession, Snapshot, TaskPage, TaskQuery } from "./types";
 import type {
   ObjectiveFilter, ObjectivePage, ObjectiveQuery, ObjectiveSummary, ObjectiveTimeline, TimelineRow,
 } from "./objective-types";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
 
 export class ApiError extends Error {
   constructor(
@@ -22,41 +21,42 @@ const messages: Record<string, string> = {
   WRITER_NOT_ACTIVE: "编辑权限已失效。草稿仍然保留，需要重新取得权限。",
   STALE_GENERATION: "操作资格已失效，未提交任何变更。请刷新并核对当前负责人。",
   SHUTDOWN_UNCONFIRMED: "尚未确认前一次执行已停止，暂时不能重试。",
-  CONSOLE_READ_ONLY: LOGIN_EXPIRED_ACTION_REFUSAL,
+  STORAGE_INCOMPLETE: "清理尚未完成：删除已经开始，重试同一请求会继续完成它。",
+  PLAN_EXPIRED: "计划已过期。请重新检查占用。",
   CONSOLE_SESSION_EXPIRED: "登录已失效：在终端运行 buddy console 重新登录后，本页会自动恢复。",
   CONSOLE_ENTRY_EXPIRED: "控制台入口票据已过期或已被使用，请重新打开入口取得新链接。",
 };
 
 /**
- * Codes that prove the current browser session can no longer write (an
- * expired or invalid login). A callback receiving one of these must not
- * retry, renew or release anything: only the bounded lease expires by itself,
- * and a fresh `buddy console` login is the explicit way to restore authority.
+ * The one identity-loss refusal the board still issues: an HTTP 401
+ * `CONSOLE_SESSION_EXPIRED`. A callback receiving it must not retry, renew or
+ * release anything: only the bounded lease expires by itself, and a fresh
+ * `buddy console` login is the explicit way to restore authority.
  */
-export const READ_ONLY_REFUSAL_CODES = ["CONSOLE_READ_ONLY", "CONSOLE_SESSION_EXPIRED"] as const;
+export const SESSION_EXPIRED_CODE = "CONSOLE_SESSION_EXPIRED";
 
-export function isReadOnlyRefusal(error: unknown): boolean {
-  return error instanceof ApiError
-    && (READ_ONLY_REFUSAL_CODES as readonly string[]).includes(error.code);
+export function isSessionExpiredRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.code === SESSION_EXPIRED_CODE;
 }
 
 /**
- * Strict parse of the authenticated snapshot's session descriptor. Every
- * malformation is refused instead of defaulting to write access: a missing
- * descriptor, a non-boolean `canWrite`, an empty public id, an unknown reason
- * or a contradictory pair (`canWrite:true` with a read-only reason, or a
- * read-only session without its `superseded` reason) rejects the snapshot.
+ * Strict parse of the authenticated snapshot's session descriptor. The live
+ * service issues exactly `{id, canWrite: true, reason: null}` for a valid
+ * login; anything else — a missing descriptor, a non-string id, a non-true
+ * `canWrite` or any non-null reason — is malformed and never grants write
+ * access. An expired or absent login is reported by the HTTP layer as a 401
+ * `CONSOLE_SESSION_EXPIRED`, not by a writable-but-flagged descriptor.
  */
 export function parseConsoleSession(value: unknown): ConsoleSession {
   const session = value as Partial<ConsoleSession> | null | undefined;
   const valid = !!session && typeof session === "object" && !Array.isArray(session)
     && typeof session.id === "string" && session.id.trim().length > 0
-    && typeof session.canWrite === "boolean"
-    && (session.canWrite ? session.reason === null : session.reason === "superseded");
+    && session.canWrite === true
+    && session.reason === null;
   if (!valid) {
     throw new ApiError(
       "INVALID_RESPONSE",
-      "控制台会话信息缺失或无法识别；为安全起见不会授予写权限，请检查服务版本或重新打开入口。",
+      "控制台会话信息缺失或无法识别；为安全起见不会授予写权限，请检查服务版本或重新登录。",
     );
   }
   return session as ConsoleSession;
@@ -111,10 +111,12 @@ export type StoragePlan = {
 export type StorageApplyResult = {
   planId: string;
   removedBytes: number;
-  removed: number;
-  skipped: number;
-  /** Per-item skip reasons the server recorded, when it reports them. */
-  skippedDetails?: { id?: string; category?: string; path?: string; reason?: string }[];
+  /** Removed candidates; a record list, never a count. */
+  removed: { id: string; path: string; bytes: number }[];
+  /** Skipped candidates with their per-item reason codes. */
+  skipped: { id: string; path: string; reasons: string[] }[];
+  /** True only when the whole plan finished; anything else is unresolved. */
+  complete: boolean;
 };
 
 /** Strict shape checks for the storage plan reply; anything malformed is refused. */
@@ -141,8 +143,13 @@ export function parseStoragePlan(value: unknown): StoragePlan {
 export function validStorageApplyResult(value: unknown): value is StorageApplyResult {
   const result = value as StorageApplyResult | null;
   return !!result && typeof result === "object" && typeof result.planId === "string"
-    && Number.isFinite(result.removedBytes) && Number.isFinite(result.removed)
-    && Number.isFinite(result.skipped);
+    && Number.isFinite(result.removedBytes)
+    && Array.isArray(result.removed) && result.removed.every(row =>
+      !!row && typeof row === "object" && typeof row.id === "string"
+      && typeof row.path === "string" && Number.isFinite(row.bytes))
+    && Array.isArray(result.skipped) && result.skipped.every(row =>
+      !!row && typeof row === "object" && typeof row.id === "string"
+      && typeof row.path === "string" && Array.isArray(row.reasons));
 }
 
 /**
@@ -252,7 +259,7 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
       }
       return data;
     },
-    /** Read-only work-objective list; available to superseded sessions, no lease or model call. */
+    /** Read-only work-objective list for any logged-in session; no lease or model call. */
     async objectives(params: ObjectiveQuery, signal?: AbortSignal): Promise<ObjectivePage> {      const query = new URLSearchParams();
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== "") query.set(key, String(value));
@@ -305,12 +312,15 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     /**
      * `storage_apply` (0.16.0): applies one exact confirmed plan. The command
      * identity is the caller's; a lost reply keeps it so 重试同一请求 replays
-     * the same command instead of minting a second one.
+     * the same command instead of minting a second one. A reply whose planId
+     * does not match the request, or that lacks `complete: true`, resolves
+     * nothing — the caller keeps the identity and the unresolved state.
      */
     async storageApply(planId: string, commandId: string, csrfToken: string): Promise<StorageApplyResult> {
       const result = await command<StorageApplyResult>("storage_apply", { planId, commandId, confirm: true }, csrfToken);
-      if (!validStorageApplyResult(result)) {
-        throw new ApiError("INVALID_RESPONSE", "清理结果响应不完整；结果未知，可重试同一请求。");
+      const mismatch = !validStorageApplyResult(result) || result.planId !== planId || result.complete !== true;
+      if (mismatch) {
+        throw new ApiError("INVALID_RESPONSE", "清理尚未完成：回复不完整或与本计划不符，结果未知；可重试同一请求。");
       }
       return result;
     },

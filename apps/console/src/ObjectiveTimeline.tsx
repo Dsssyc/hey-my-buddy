@@ -7,7 +7,7 @@ import type { SpanOutcome, TimelineItem, FriendlyProfile } from "./objective-dis
 import {
   buildChronology, clockSeconds, clockTime, configurationNamer, displayTitle, durationShort, eventClusterGlyph,
   eventClusterLabel, eventSentence, outcomeLabel, paletteIndex, rowStateInfo, spanFacts, rowLabelItem, settleItem,
-  eventItem, toMs, configurationPalette, acceptanceWaitText,
+  eventItem, toMs, configurationPalette, acceptanceWaitText, titleLineTooltip,
 } from "./objective-display";
 import { ObjectiveChronology } from "./ObjectiveChronology";
 import { DelegationStrip, ObjectiveOverview } from "./ObjectiveOverview";
@@ -798,7 +798,7 @@ export function ObjectiveTimeline(props: ObjectiveTimelineProps) {
                     className={"tl-item tl-label" + (row.kind === "helper" ? " helper" : "") + (runSelected ? " selected-run" : "") + (runOpened ? " opened-run" : "")}
                     style={{ "--depth": row.depth } as CSSProperties}
                     data-key={label.key} data-x={-1} tabIndex={focusKey === label.key ? 0 : -1}
-                    title={title.fromTask ? `${title.text}（完整任务见详情）` : row.title} aria-label={itemAria(label)}
+                    title={titleLineTooltip(title)} aria-label={itemAria(label)}
                     onFocus={() => setFocusKey(label.key)}
                     onMouseEnter={() => setHoverKey(label.key)}
                     onMouseLeave={() => setHoverKey(current => (current === label.key ? null : current))}

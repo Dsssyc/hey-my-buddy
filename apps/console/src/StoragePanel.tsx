@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ConsoleApi, StorageApplyResult, StoragePlan } from "./api";
-import { errorText, uncertainResponse } from "./api";
+import { ApiError, errorText, uncertainResponse } from "./api";
 import { clockTime } from "./objective-display";
 
 /** Fixed display order (0.16 storage panel); unknown ids stay visible after these. */
@@ -14,15 +14,38 @@ const CATEGORY_LABEL: Record<string, string> = {
 };
 /** Categories whose reclaimable column is structurally protected. */
 const ALWAYS_PROTECTED = new Set(["backup", "durable"]);
-/** Short Chinese for known protection reason codes; unknown codes stay as is. */
+/**
+ * Short Chinese for the backend's stable protection reason codes
+ * (src/buddy/storage.py and workflow.py `_cleanup_reasons`); unknown codes
+ * stay visible as-is.
+ */
 const REASON_LABEL: Record<string, string> = {
-  "goal-may-continue": "目标仍可能续接",
-  "goal-not-terminal": "目标仍可能续接",
+  "shutdown-unconfirmed": "停止尚未确认",
   "grace-period": "宽限期未满",
-  "current-backup": "当前备份",
-  "workspace-ineligible": "检出未满足回收条件",
-  "live-references": "仍有进程或恢复引用",
-  "host-owned": "Host 自有，不在回收范围",
+  "acceptance-time-unproven": "验收时间未证实",
+  "pending-continuations": "有待处理的续接",
+  "open-requests": "有未决请求",
+  "continuation-supported": "仍可能续接",
+  "process-inspection-unavailable": "进程状态无法检查",
+  "runtime-in-use": "运行时正在使用",
+  "runtime-identity-unproven": "运行时身份未证实",
+  "retention-history-unproven": "保留期记录未证实",
+  "retained-runtime": "保留的运行时",
+  "owner-unproven": "归属未证实",
+  "linked-path": "存在链接路径",
+  "not-accepted": "目标尚未验收",
+  "final-artifact-missing": "最终产物缺失",
+  "integration-missing": "整合记录缺失",
+  "unresolved-conflict": "有未解决的冲突",
+  "active-children": "有进行中的协助任务",
+  "workspace-dependency": "检出依赖未满足",
+  "durable-record": "持久记录",
+  // Apply-time per-item codes.
+  "candidate-changed": "数据已变化",
+  "STORAGE_CHANGED": "候选已变化",
+  "STORAGE_UNSAFE": "移除路径身份已变化",
+  "STORAGE_PROTECTED": "受保护的数据",
+  "filesystem-error": "文件系统错误",
 };
 
 function reasonText(code: string): string {
@@ -46,7 +69,10 @@ type PlanPhase =
   | { kind: "planned" }
   | { kind: "applying" }
   | { kind: "applied" }
-  | { kind: "unknown" };
+  /** The reply was lost or unreadable; the result is unknown and replayable. */
+  | { kind: "unknown" }
+  /** STORAGE_INCOMPLETE: deletion already started; resume the same identity. */
+  | { kind: "incomplete" };
 
 /**
  * The settings 存储 panel (0.16): reads `storage_plan` only on an explicit
@@ -68,6 +94,7 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [applyCommandId, setApplyCommandId] = useState("");
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showRemoved, setShowRemoved] = useState(false);
   const [reasonsOpen, setReasonsOpen] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const alive = useRef(true);
@@ -130,9 +157,16 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
       const reply = await api.storageApply(planId, commandId, csrfToken);
       if (!alive.current) return;
       setResult(reply);
+      setShowRemoved(false);
       setPhase({ kind: "applied" });
     } catch (failure) {
       if (!alive.current) return;
+      if (failure instanceof ApiError && failure.code === "STORAGE_INCOMPLETE") {
+        // Deletion already started and is resumable with the same identity;
+        // this is neither a failure nor a claim that nothing ran.
+        setPhase({ kind: "incomplete" });
+        return;
+      }
       if (uncertainResponse(failure)) {
         setPhase({ kind: "unknown" });
         return;
@@ -181,8 +215,11 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
             ? "计划已过期，重新检查查看最新占用"
             : `检查于 ${clockTime(plan.createdAt)} · ${expiryText(plan, now)}内可清理`}</span>
         <button type="button" className="button small-button"
-          disabled={disabled || phase.kind === "planning" || phase.kind === "applying"}
-          title={disabledTitle ?? (phase.kind === "applying" ? "正在清理…" : undefined)}
+          disabled={disabled || phase.kind === "planning" || phase.kind === "applying" || phase.kind === "unknown" || phase.kind === "incomplete"}
+          title={disabledTitle
+            ?? (phase.kind === "applying" ? "正在清理…"
+              : phase.kind === "unknown" || phase.kind === "incomplete"
+                ? "结果尚未确认：换新计划会丢弃未完成的清理，请先重试同一请求" : undefined)}
           onClick={() => void requestPlan()}>重新检查</button>
       </div>
       <table className="storage-table">
@@ -239,28 +276,39 @@ export function StoragePanel({ api, csrfToken, connectionError }: {
         </ul>
       </div>}
       {phase.kind === "applied" && result && <div className="storage-outcome" role="status">
-        <p>已回收 {byteText(result.removedBytes).text}</p>
-        {result.skipped > 0 && <>
-          <p>跳过 {result.skipped} 项（数据已变化或条件不再满足）</p>
+        <p>已回收 {byteText(result.removedBytes).text}（{result.removed.length} 项）</p>
+        {result.removed.length > 0 && <>
+          <button type="button" className="inspector-link" aria-expanded={showRemoved}
+            onClick={() => setShowRemoved(current => !current)}>{showRemoved ? "收起已删项目" : "查看已删项目"}</button>
+          {showRemoved && <ul className="storage-skipped">
+            {result.removed.map((item, index) => <li key={item.id || index}
+              title={byteText(item.bytes).title}>{item.path}：{byteText(item.bytes).text}</li>)}
+          </ul>}
+        </>}
+        {result.skipped.length > 0 && <>
+          <p>跳过 {result.skipped.length} 项（数据已变化或条件不再满足）</p>
           <button type="button" className="inspector-link" aria-expanded={showSkipped}
             onClick={() => setShowSkipped(current => !current)}>{showSkipped ? "收起逐项原因" : "查看逐项原因"}</button>
           {showSkipped && <ul className="storage-skipped">
-            {(result.skippedDetails ?? []).map((item, index) => <li key={index}>
-              {item.path ?? item.id ?? item.category ?? "未知项目"}：{item.reason ? reasonText(item.reason) : "数据已变化或条件不再满足"}
+            {result.skipped.map((item, index) => <li key={item.id || index}>
+              {item.path}：{item.reasons.length ? item.reasons.map(reasonText).join("、") : "数据已变化或条件不再满足"}
             </li>)}
-            {!result.skippedDetails?.length && <li>服务端未返回逐项原因</li>}
           </ul>}
         </>}
       </div>}
       <div className="actions storage-actions">
-        {phase.kind === "unknown"
-          ? <>
-            <span role="status">清理结果未确认：可能已经执行。</span>
-            <button type="button" className="button small-button" disabled={disabled || expired}
-              title={expired ? "计划已过期，请重新检查" : disabledTitle}
-              onClick={() => void applyPlan(plan.planId, applyCommandId)}>重试同一请求</button>
-          </>
-          : phase.kind !== "applied" && <button type="button" className="button danger"
+        {(phase.kind === "unknown" || phase.kind === "incomplete") && <>
+          <span role="status">{phase.kind === "unknown"
+            ? "清理结果未确认：可能已经执行。"
+            : "清理尚未完成：删除已经开始，尚未全部完成。"}</span>
+          {/* The durable receipt stays replayable after plan expiry; only a
+              connection failure or a definitive reply ends the retry. */}
+          <button type="button" className="button small-button" disabled={disabled}
+            title={disabledTitle ?? "重试同一请求会继续或核对这次清理，不会开始新的清理"}
+            onClick={() => void applyPlan(plan.planId, applyCommandId)}>重试同一请求</button>
+        </>}
+        {phase.kind !== "unknown" && phase.kind !== "incomplete" && phase.kind !== "applied"
+          && <button type="button" className="button danger"
             disabled={disabled || phase.kind === "applying" || phase.kind === "planning" || totalReclaimable <= 0 || expired}
             title={disabledTitle
               ?? (totalReclaimable <= 0 ? "没有可回收数据"

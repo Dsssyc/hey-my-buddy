@@ -3,7 +3,7 @@ import type { ConsoleApi } from "./api";
 import { errorText } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
 import { Empty, formatDate, Status } from "./ui";
-import { excerpt, needsReview, taskStatus, taskTitle } from "./task-state";
+import { excerpt, needsReview, taskStatus, taskTitle, titleTooltip } from "./task-state";
 import { TaskDetails } from "./TaskDetails";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
 import { SplitView } from "./SplitView";
@@ -109,7 +109,7 @@ export function Tasks({ snapshot, api, refresh, active = true }: {
           return <li key={row.runId} data-run-id={row.runId}>
           <button className={"task-row " + (selected === row.runId ? "selected" : "")} aria-pressed={selected === row.runId} onClick={() => selectTask(row.runId)}>
             <span className="row-between"><Status status={taskStatus(row)} /><time className="small muted" dateTime={row.createdAt}>{formatDate(row.createdAt)}</time></span>
-            <strong className="task-title">{excerpt(taskTitle(rowTask).text, 100)}</strong>
+            <strong className="task-title" title={titleTooltip(taskTitle(rowTask))}>{excerpt(taskTitle(rowTask).text, 100)}</strong>
             <span className="small truncate" title={taskHost(row) + " → " + taskExecutor(row)}>{taskHost(row)} → {taskExecutor(row)}</span>
             {row.delegation?.kind !== "goal" && <span className="small muted">{row.delegation?.kind === "helper" ? "协助任务" : row.delegation?.kind === "decision" ? "内部路由 / 整理" : "执行记录"}</span>}
           </button>

@@ -1,26 +1,7 @@
 import type { Snapshot } from "./types";
 
 /**
- * The POST command routes the board still accepts from a read-only session.
- * This list mirrors the server contract so the UI can explain why a control is
- * unavailable; it is deliberately narrow and is never a security boundary —
- * the server rejects every other operation for a superseded session.
- */
-export const READ_ONLY_SESSION_OPERATIONS: readonly string[] = [
-  "evaluation_history",
-  "selection_get",
-  "selection_list",
-  "model_profiles",
-  "workflow_get",
-];
-
-/** Client-side mirror of the server's read-only allow list. */
-export function readOnlySessionAllows(operation: string): boolean {
-  return READ_ONLY_SESSION_OPERATIONS.includes(operation);
-}
-
-/**
- * Whether this snapshot grants write authority. A missing or non-boolean
+ * Whether this snapshot grants write authority. A missing or malformed
  * descriptor never counts as write access, so an unrecognized response cannot
  * enable a mutation control.
  */
@@ -31,13 +12,13 @@ export function sessionCanWrite(snapshot: Snapshot): boolean {
 /**
  * Session authority for one mounted page.
  *
- * A definite CONSOLE_READ_ONLY/CONSOLE_SESSION_EXPIRED refusal latches the loss
+ * A definite `CONSOLE_SESSION_EXPIRED` (HTTP 401) refusal latches the loss
  * for that public session id: the refusal proves the board no longer accepts
  * this session's writes, and a later render that still carries an older
- * `canWrite:true` snapshot must not silently restore write access. Only a
- * genuinely different session id (a fresh CLI entry, normally a page reload)
- * can be writable again. The latch is deliberately not a security boundary;
- * the board enforces authority regardless of UI state.
+ * writable snapshot must not silently restore write access. Only a genuinely
+ * different session id (a fresh login, normally a page reload) can be
+ * writable again. The latch is deliberately not a security boundary; the
+ * board enforces authority regardless of UI state.
  */
 export function createAuthorityLatch() {
   let lost: string | null = null;

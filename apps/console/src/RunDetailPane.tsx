@@ -5,7 +5,7 @@ import { errorText } from "./api";
 import type { Snapshot, Task } from "./types";
 import type { TimelineRow } from "./objective-types";
 import { TaskDetails } from "./TaskDetails";
-import { taskTitle } from "./task-state";
+import { taskTitle, titleTooltip } from "./task-state";
 import type { SectionId } from "./objective-display";
 
 export type DetailTarget = {
@@ -59,10 +59,11 @@ export function RunDetailPane({ mode = "layer", objectiveTitle, target, snapshot
     }).catch(reason => { if (current) setError(errorText(reason)); });
     return () => { current = false; };
   }, [api, target.runId, attempt]);
-  const crumbs = remote
-    ? { objective: objectiveTitle, delegation: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text }
-    : { objective: objectiveTitle, delegation: target.runId };
-  const crumbsTitle = `${crumbs.objective} › ${crumbs.delegation}`;
+  const delegationTitle = remote
+    ? { text: rowTitleFor?.(remote.runId) ?? taskTitle(remote).text, full: rowTitleFor?.(remote.runId) ?? titleTooltip(taskTitle(remote)) }
+    : { text: target.runId, full: target.runId };
+  const crumbs = { objective: objectiveTitle, delegation: delegationTitle.text };
+  const crumbsTitle = `${crumbs.objective} › ${delegationTitle.full}`;
   return <div className="run-view">
     <div className="locator">
       <button type="button" className="button small-button"

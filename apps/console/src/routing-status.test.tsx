@@ -13,7 +13,7 @@ const api = createApi("/test", vi.fn() as unknown as typeof fetch);
 
 function snapshot(routingHealth: Snapshot["routingHealth"]): Snapshot {
   return {
-    csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: "superseded" }, tableRevision: 1,
+    csrfToken: "csrf", consoleSession: { id: "s", canWrite: false, reason: null }, tableRevision: 1,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: null },
     profiles: [], cards: [], preferences: [], annotations: [], evidence: [], decisions: [],

@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { ConsoleApi } from "./api";
-import { ApiError, errorText, isReadOnlyRefusal, uncertainResponse } from "./api";
+import { ApiError, errorText, isSessionExpiredRefusal, uncertainResponse } from "./api";
 import { LOGIN_EXPIRED_ACTION_REFUSAL, LOGIN_EXPIRED_SAVE_REFUSAL, UNRESOLVED_SAVE_NOTE, createAuthorityLatch } from "./console-session";
 import type { AuthorityLatch } from "./console-session";
 import {
@@ -126,7 +126,7 @@ export function useEditor(
   /**
    * A staged publication. Once dispatched it keeps its command ID and payload
    * until a definite reply resolves it, even if this page becomes read-only in
-   * the meantime: a later CONSOLE_READ_ONLY refusal cannot prove that an earlier
+   * the meantime: a later 401 login-expired refusal cannot prove that an earlier
    * attempt with the same command ID did not commit.
    */
   const pendingSave = useRef<ReturnType<typeof publication> | null>(null);
@@ -219,7 +219,7 @@ export function useEditor(
 
   /**
    * Every write this page can dispatch checks this first. A definite
-   * CONSOLE_READ_ONLY/CONSOLE_SESSION_EXPIRED refusal latches the loss for this
+   * definite CONSOLE_SESSION_EXPIRED (HTTP 401) refusal latches the loss for this
    * session, so an in-flight or stale callback cannot dispatch another write
    * before the next poll and an older writable snapshot cannot restore rights.
    * This is not a security boundary; the board enforces authority regardless of
@@ -300,7 +300,7 @@ export function useEditor(
         setUncertain(false);
       } catch (failure) {
         if (!alive.current) return;
-        if (isReadOnlyRefusal(failure)) {
+        if (isSessionExpiredRefusal(failure)) {
           // The newer window owns the table now. No renew, release or retry is
           // sent; the short lease expires by itself and the draft stays local.
           // Any dispatched-but-unconfirmed command keeps its identity and status.
@@ -422,7 +422,7 @@ export function useEditor(
       return next;
     } catch (failure) {
       if (!alive.current) return null;
-      if (isReadOnlyRefusal(failure)) {
+      if (isSessionExpiredRefusal(failure)) {
         loseAuthority();
         dropGrantMirror();
         if (beginAmbiguous.current) {
@@ -706,7 +706,7 @@ export function useEditor(
           );
         } catch (failure) {
           if (!alive.current) return null;
-          if (isReadOnlyRefusal(failure)) {
+          if (isSessionExpiredRefusal(failure)) {
             // An in-flight wait lost write authority: stop renewing at once and
             // keep the draft; no release or retry is attempted automatically.
             loseAuthority();
@@ -802,7 +802,7 @@ export function useEditor(
       await refresh();
     } catch (failure) {
       if (!alive.current) return;
-      if (isReadOnlyRefusal(failure)) {
+      if (isSessionExpiredRefusal(failure)) {
         loseAuthority();
         dropGrantMirror();
         if (saveAmbiguous.current) {

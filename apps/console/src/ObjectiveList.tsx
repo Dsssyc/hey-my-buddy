@@ -3,7 +3,7 @@ import type { ObjectiveFilter, ObjectiveSummary } from "./objective-types";
 import { Empty } from "./ui";
 import { Popover } from "./Popover";
 import {
-  objectiveStateLabel, dayClock, displayTitle, relativeTime, TASK_SOURCE_NOTE,
+  objectiveStateLabel, dayClock, displayTitle, relativeTime, TASK_SOURCE_NOTE, titleLineTooltip,
 } from "./objective-display";
 
 export type ObjectiveListProps = {
@@ -63,7 +63,7 @@ function EntryRow({ row, selected, onSelect }: {
       title={`来源 Host：${row.sourceHostId || "未记录"} · 最近活动 ${dayClock(row.lastActivityAt)}`}
       onClick={() => onSelect(row.objectiveId)}>
       <strong className={"task-title" + (title.fromTask ? " single-line" : "")}
-        title={title.fromTask ? `${title.text}（完整任务见详情）` : row.title}>
+        title={titleLineTooltip(title)}>
         <span className="objective-list-title-text">{title.text}</span>
         {title.fromTask && <span className="title-source-note">{TASK_SOURCE_NOTE}</span>}
       </strong>

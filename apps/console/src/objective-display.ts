@@ -219,6 +219,8 @@ export const TASK_SOURCE_NOTE = "取自任务首行";
 export type TitleLine = {
   /** The text lists, labels and cards show; single line. */
   text: string;
+  /** The complete recorded title for tooltips (Host-revised 0.16 design). */
+  fullText: string;
   /** True when the recorded title was longer than the display cap. */
   clipped: boolean;
   /** True for `titleSource: "task"`; callers add the 取自任务首行 note. */
@@ -229,13 +231,18 @@ export type TitleLine = {
  * One-line title for lists, timeline labels, chronology and cards. A task
  * first-line fallback is capped at ~40 characters so a whole task paragraph
  * never masquerades as a title; explicit objective/Host titles keep their
- * recorded bounded text. Full task/title content is only shown in detail, so
- * callers must not put the full text into a `title` tooltip either.
+ * recorded bounded text. Display stays short while the tooltip carries the
+ * complete first line (`fullText`) plus the pointer to the detail view.
  */
 export function displayTitle(titleSource: string, title: string): TitleLine {
   const fromTask = titleSource === "task";
   const text = fromTask ? excerpt(title, TASK_TITLE_CHARS) : title;
-  return { text, clipped: text !== title, fromTask };
+  return { text, fullText: title, clipped: text !== title, fromTask };
+}
+
+/** The shared one-line-title tooltip: the complete text, plus the detail pointer for a task source. */
+export function titleLineTooltip(line: TitleLine): string {
+  return line.fromTask ? line.fullText + "（完整任务见详情）" : line.fullText;
 }
 
 /* ---- configuration identity, naming and colour assignment ---- */

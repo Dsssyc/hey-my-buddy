@@ -25,6 +25,20 @@ export const TASK_TITLE_SOURCE_LABEL: Record<TitleSource, string> = {
 export const UNTITLED_DELEGATION = "未命名委派";
 /** Task-first-line titles cap at roughly this many characters (0.16 0.1). */
 const TASK_LINE_CHARS = 40;
+/** Suffix pointing readers to the detail view for the full task text. */
+const FULL_TASK_POINTER = "（完整任务见详情）";
+
+export type TaskTitle = {
+  /** The bounded text lists, headings and breadcrumbs display. */
+  text: string;
+  /**
+   * The complete title for tooltips: the whole first task line for a task
+   * source (Host-revised 0.16 design), or the explicit title in full. The
+   * Worker's result summary never appears here.
+   */
+  fullText: string;
+  source: TitleSource;
+};
 
 /**
  * The one delegation title rule (0.16 0.1): explicit workflow.title, then the
@@ -32,14 +46,23 @@ const TASK_LINE_CHARS = 40;
  * resultSummary is never a title; callers show it only as a “结果” line. The
  * raw task text stays available in the detail view.
  */
-export function taskTitle(task: Task): { text: string; source: TitleSource } {
+export function taskTitle(task: Task): TaskTitle {
   const explicit = normalizeDisplay(typeof task.workflow?.title === "string" ? task.workflow.title : "");
-  if (explicit) return { text: explicit, source: "title" };
+  if (explicit) return { text: explicit, fullText: explicit, source: "title" };
   const firstLine = typeof task.task === "string"
     ? normalizeDisplay(task.task.trim().split("\n", 1)[0] ?? "")
     : "";
-  if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), source: "task" };
-  return { text: UNTITLED_DELEGATION, source: "none" };
+  if (firstLine) return { text: excerpt(firstLine, TASK_LINE_CHARS), fullText: firstLine, source: "task" };
+  return { text: UNTITLED_DELEGATION, fullText: UNTITLED_DELEGATION, source: "none" };
+}
+
+/**
+ * The shared title tooltip: the complete title text, plus the pointer to the
+ * detail view for a task first-line source. Display stays short; the tooltip
+ * is the only place the full first line appears outside details.
+ */
+export function titleTooltip(title: TaskTitle): string {
+  return title.source === "task" ? title.fullText + FULL_TASK_POINTER : title.fullText;
 }
 
 export function needsReview(task: Task): boolean {

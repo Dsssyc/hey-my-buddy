@@ -196,22 +196,23 @@ export type Configuration = {
   revision: number;
   decisionProfileId: string | null;
 };
-/**
- * Browser-session identity of the authenticated HTTP snapshot. `canWrite` is
- * true only for the current writer: a launch-created session that a newer
- * launch superseded stays readable with `reason: "superseded"`. The descriptor
- * never carries a credential; the session CSRF token stays separate.
- */
-export type ConsoleSession = {
-  id: string;
-  canWrite: boolean;
-  reason: null | "superseded";
-};
 export type RoutingHealth = {
   windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
   abstentionCount: number; cancelledCount: number; staleCount: number;
   lastSuccessAt: string | null; lastSuccessDecisionId: string | null;
   recentFailures: { decisionId: string; runId: string | null; at: string; code: string }[];
+};
+/**
+ * Identity of the authenticated HTTP snapshot's browser session. The live
+ * service issues exactly `{id, canWrite: true, reason: null}` for a valid
+ * login; a missing, malformed or non-writable descriptor never grants write
+ * access, and an expired login is reported by a 401 refusal instead. The
+ * descriptor never carries a credential; the session CSRF token stays separate.
+ */
+export type ConsoleSession = {
+  id: string;
+  canWrite: boolean;
+  reason: null;
 };
 export type Snapshot = {
   csrfToken: string;

@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import type { TimelineSpan } from "./objective-types";
 import type { ChronoEntry, ConfigurationStyle, SpanOutcome, TimelineItem } from "./objective-display";
-import { clockTime, configurationLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex } from "./objective-display";
+import { clockTime, configurationLabel, displayTitle, durationText, eventVocab, outcomeLabel, paletteIndex, titleLineTooltip } from "./objective-display";
 
 const RESULT_GLYPH: Partial<Record<SpanOutcome, string>> = { failed: "✕", cancelled: "⊘", unknown: "?", running: "▸" };
 
@@ -49,7 +49,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
           aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
           <time>{clockTime(entry.atMs)}</time>
           <span className="glyph" aria-hidden="true">{vocab.glyph}</span>
-          <span className="e-title single-line" title={line?.fromTask ? `${title}（完整任务见详情）` : title}>Host {entry.event.label || vocab.label} · {helper}{title}</span>
+          <span className="e-title single-line" title={line ? titleLineTooltip(line) : title}>Host {entry.event.label || vocab.label} · {helper}{title}</span>
           <span className="e-meta"><span>{entry.item.parts.slice(1).join(" · ")}</span></span>
         </button>;
       }
@@ -76,7 +76,7 @@ export function ObjectiveChronology({ entries, palette, onSelectItem, onOpenItem
         aria-label={entry.item.head + "，" + entry.item.parts.join("，")}>
         <time>{clockTime(entry.atMs)}</time>
         {swatch}
-        <span className="e-title single-line" title={titleLine.fromTask ? `${titleLine.text}（完整任务见详情）` : titleLine.text}>{entry.item.head} · {helper}{titleLine.text}</span>
+        <span className="e-title single-line" title={titleLineTooltip(titleLine)}>{entry.item.head} · {helper}{titleLine.text}</span>
         <span className="e-meta">
           {span.kind === "execution" && <span>{configurationLabel(span.configuration)}</span>}
           {duration && <span>{duration}{span.endAt == null ? "（至今）" : ""}</span>}

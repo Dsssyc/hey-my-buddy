@@ -52,3 +52,48 @@ describe("delegation history reads", () => {
     await expect(api.tasks({ rootsOnly: true }, new AbortController().signal)).rejects.toBe(cancelled);
   });
 });
+
+describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
+  const planEnvelope = {
+    planId: "plan-9", createdAt: "2026-09-27T12:00:00Z", expiresAt: "2026-09-27T12:15:00Z",
+    categories: [{ id: "zcode", label: "", bytes: 1, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: [] }],
+    candidates: [], orphanProcesses: [],
+  };
+  function commandApi(result: unknown) {
+    return createApi("/private", vi.fn(async () => new Response(JSON.stringify({ ok: true, result }))) as typeof fetch);
+  }
+
+  it("returns the plan as-is when its shape is complete", async () => {
+    await expect(commandApi(planEnvelope).storagePlan("csrf")).resolves.toMatchObject({ planId: "plan-9" });
+  });
+
+  it("refuses a plan missing any collection or scalar", async () => {
+    for (const broken of [
+      { ...planEnvelope, categories: "many" },
+      { ...planEnvelope, candidates: null },
+      { ...planEnvelope, orphanProcesses: {} },
+      { ...planEnvelope, planId: "" },
+      { ...planEnvelope, categories: [{ id: "zcode", bytes: "1", reclaimableBytes: 0, count: 0, eligibleCount: 0, reasons: [] }] },
+    ]) {
+      await expect(commandApi(broken).storagePlan("csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
+  });
+
+  it("parses the real apply result: removed/skipped record arrays with complete true", async () => {
+    const result = {
+      planId: "plan-9", removedBytes: 12, complete: true,
+      removed: [{ id: "c1", path: "/p/one", bytes: 8 }, { id: "c2", path: "/p/two", bytes: 4 }],
+      skipped: [{ id: "c3", path: "/p/three", reasons: ["candidate-changed", "shutdown-unconfirmed"] }],
+    };
+    await expect(commandApi(result).storageApply("plan-9", "cmd-1", "csrf")).resolves.toMatchObject({ removedBytes: 12, complete: true });
+  });
+
+  it("treats a numeric removed/skipped reply, a planId mismatch or a non-complete reply as unresolved", async () => {
+    const numeric = { planId: "plan-9", removedBytes: 12, removed: 2, skipped: 0, complete: true };
+    await expect(commandApi(numeric).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    const mismatch = { planId: "plan-other", removedBytes: 0, removed: [], skipped: [], complete: true };
+    await expect(commandApi(mismatch).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    const unfinished = { planId: "plan-9", removedBytes: 4, removed: [{ id: "c1", path: "/p/one", bytes: 4 }], skipped: [], complete: false };
+    await expect(commandApi(unfinished).storageApply("plan-9", "cmd-1", "csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  });
+});

@@ -13,7 +13,7 @@ import type { SpanOutcome, TimelineItem } from "./objective-display";
 import {
   clockTime, configurationLabel, configurationRawLabel, displayTitle, durationText, outcomeLabel,
   rowLabelItem, rowStateInfo, settleItem, spanHead, spanOutcome, toMs,
-  acceptanceWaitText, type FriendlyProfile,
+  acceptanceWaitText, titleLineTooltip, type FriendlyProfile,
 } from "./objective-display";
 import { latestExecutionResult, relatedEventsForRun, relatedEventsForSpan, runRollup, hasScopeLimitations, type RunRollup } from "./objective-metrics";
 
@@ -56,7 +56,7 @@ function delegationField(row: TimelineRow): CardField {
   return {
     label: "委派",
     value: title.text,
-    title: title.fromTask ? `${title.text}（完整任务见详情）` : row.title,
+    title: titleLineTooltip(title),
     link: { kind: "run", runId: row.runId, label: title.text },
   };
 }

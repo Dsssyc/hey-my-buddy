@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "./types";
-import { excerpt, taskTitle } from "./task-state";
+import { excerpt, taskTitle, titleTooltip } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
   runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
@@ -34,6 +34,11 @@ describe("delegation title rule (0.16 T1)", () => {
     expect(title.source).toBe("task");
     expect([...title.text]).toHaveLength(41);
     expect(title.text.endsWith("…")).toBe(true);
+    // Host-revised 0.16: the shared tooltip keeps the COMPLETE first line.
+    expect(title.fullText).toBe(long);
+    expect(titleTooltip(title)).toBe(long + "（完整任务见详情）");
+    const explicit = taskTitle(task({ workflow: { state: "delivered", awaitingHost: false, hostId: "h", ownerGeneration: 1, revision: 1, title: "完整显式标题" } }));
+    expect(titleTooltip(explicit)).toBe("完整显式标题");
   });
 
   it("normalizes whitespace in an explicit title to single spaces", () => {

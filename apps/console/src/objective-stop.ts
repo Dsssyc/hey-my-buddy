@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
-import { errorText, isReadOnlyRefusal, uncertainResponse } from "./api";
+import { errorText, isSessionExpiredRefusal, uncertainResponse } from "./api";
 import type { Snapshot } from "./types";
 import type { ObjectiveStopResult, ObjectiveSummary, ObjectiveTimeline } from "./objective-types";
 import { errorOfStopReply } from "./objective-stop-reply";
@@ -156,7 +156,7 @@ export function useObjectiveStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
     } catch (reason) {
       if (uncertainResponse(reason)) {
         patch(summary.objectiveId, { phase: "unknown", error: errorText(reason) });
-      } else if (isReadOnlyRefusal(reason) && replay) {
+      } else if (isSessionExpiredRefusal(reason) && replay) {
         // A replay that is definitely refused proves only that THIS request
         // was denied; the earlier unknown attempt stays unknown.
         patch(objectiveId, {

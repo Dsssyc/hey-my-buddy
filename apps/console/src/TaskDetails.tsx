@@ -6,7 +6,7 @@ import type { Snapshot, Task } from "./types";
 import type { TimelineRow } from "./objective-types";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { taskExecutor, taskHost, taskProject } from "./console-data";
-import { excerpt, resultText, taskStatus, taskTitle, TASK_TITLE_SOURCE_LABEL } from "./task-state";
+import { excerpt, resultText, taskStatus, taskTitle, titleTooltip, TASK_TITLE_SOURCE_LABEL } from "./task-state";
 import { Status } from "./ui";
 import { DecisionDetails } from "./DecisionDetails";
 import { TaskActivityView } from "./task-activity";
@@ -62,7 +62,7 @@ export function TaskDetails({ task, snapshot, api, refresh, selectTask, active, 
     <header className="detail-header">
       <div className="row-between">{!hideBackButton && <button className="button small-button mobile-back" onClick={() => selectTask(null)}>返回委派列表</button>}
         <span className="small muted truncate" title={project.path || project.label}>{project.label}</span><Status status={taskStatus(task)} /></div>
-      <h2 className="detail-title" title={title.source === "task" ? `${title.text}（完整任务见详情）` : title.text}>
+      <h2 className="detail-title" title={titleTooltip(title)}>
         {excerpt(title.text, 100)}{titleNote && <span className="title-source-note">{titleNote}</span>}
       </h2>
       <p className="assignment-line"><span title={taskHost(task)}>委派方：{taskHost(task)}</span>

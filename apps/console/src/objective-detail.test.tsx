@@ -302,7 +302,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
     await waitFor(() => expect(screen.getByText("已停止").textContent).toBe("已停止"), { timeout: 5000 });
   });
 
-  it("regression: a replay refused with CONSOLE_READ_ONLY keeps the earlier unknown outcome", async () => {
+  it("regression: a replay refused with a 401 keeps the earlier unknown outcome", async () => {
     stubViewport(true);
     const f = harness();
     let attempts = 0;
@@ -310,7 +310,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
       if (operation === "workflow_get") return workflowFixture(f.tasks.get("r2") ?? taskFixture("r2"));
       if (operation === "objective_stop") {
         attempts += 1;
-        throw attempts === 1 ? new ApiError("NETWORK", "lost reply") : new ApiError("CONSOLE_READ_ONLY", "superseded");
+        throw attempts === 1 ? new ApiError("NETWORK", "lost reply") : new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
       }
       throw new Error(`Unexpected command: ${operation}`);
     });
@@ -451,7 +451,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
     await f.user.click(screen.getByRole("button", { name: "停止目标" }));
     const dialog = await screen.findByRole("dialog", { name: "停止工作目标" });
     const snapshot = snapshotFixture();
-    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } }}
+    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
     await f.user.click(within(dialog).getByRole("button", { name: "确认停止目标" }));
     expect(await screen.findByText("停止请求未提交")).toBeTruthy();
@@ -469,7 +469,7 @@ describe("objective-level stop (0.15.1 U4)", () => {
     // unknown entry: its identity survives for the same-objective replay.
     await f.user.click(screen.getByRole("button", { name: "停止目标" }));
     const secondDialog = await screen.findByRole("dialog", { name: "停止工作目标" });
-    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } }}
+    f.rerender(<Objectives snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
     await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止目标" }));
     expect(screen.getByText("停止未确认")).toBeTruthy();

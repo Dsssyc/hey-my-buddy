@@ -6,7 +6,7 @@ import { Popover } from "./Popover";
 import { excerpt } from "./task-state";
 import {
   TASK_SOURCE_NOTE, categoryTone, clockTime, displayTitle, durationText,
-  objectiveProgressText, relativeTime, rowStateInfo,
+  objectiveProgressText, relativeTime, rowStateInfo, titleLineTooltip,
 } from "./objective-display";
 import { objectiveMetrics, rootRollups, type RunRollup } from "./objective-metrics";
 
@@ -57,7 +57,7 @@ function DelegationCard({ rollup, index, total, selected, tabbable, onSelect, on
     aria-pressed={selected} tabIndex={tabbable ? 0 : -1}
     aria-label={`第 ${index + 1} 个委派，共 ${total} 个：${title.text}，${state.label}（单击选中，双击打开详情）`}
     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(rollup.row.runId); } }}
-    title={title.fromTask ? `${title.text}（完整任务见详情）` : title.text}
+    title={titleLineTooltip(title)}
     onClick={() => onSelect(rollup.row.runId)}
     onDoubleClick={() => onOpen(rollup.row.runId)}>
     <span className="delegation-card-top">
@@ -183,9 +183,7 @@ export function ObjectiveOverview({ summary, timeline, loading, stale, onBackToL
 
   if (!shown) return null;
   const title = displayTitle(shown.titleSource, shown.title);
-  const titleAttr = title.fromTask
-    ? `${title.text}（完整任务见详情）`
-    : shown.title;
+  const titleAttr = titleLineTooltip(title);
   const cumulative = metrics && metrics.sumMs !== null && metrics.unionMs !== null && metrics.sumMs !== metrics.unionMs
     ? metrics.sumMs : null;
   const helpId = "hierarchy-help-popover";

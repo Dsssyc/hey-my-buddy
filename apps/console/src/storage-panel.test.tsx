@@ -13,11 +13,11 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
     createdAt: "2026-09-27T12:00:00Z",
     expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
     categories: [
-      { id: "zcode", label: "", bytes: 3_500_000_000, reclaimableBytes: 2_900_000_000, count: 71, eligibleCount: 60, reasons: ["goal-may-continue", "grace-period"] },
+      { id: "zcode", label: "", bytes: 3_500_000_000, reclaimableBytes: 2_900_000_000, count: 71, eligibleCount: 60, reasons: ["continuation-supported", "grace-period"] },
       { id: "workspaces", label: "", bytes: 3_400_000_000, reclaimableBytes: 1_200_000_000, count: 9, eligibleCount: 4, reasons: [] },
       { id: "runtimes", label: "", bytes: 2_100_000_000, reclaimableBytes: 2_100_000_000, count: 30, eligibleCount: 30, reasons: [] },
-      { id: "backup", label: "", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["current-backup"] },
-      { id: "durable", label: "", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["current-backup"] },
+      { id: "backup", label: "", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
+      { id: "durable", label: "", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
     ],
     candidates: [
       { id: "c1", category: "zcode", path: "/private/zcode/one", bytes: 1_000_000_000, eligible: true, reasons: [] },
@@ -31,13 +31,17 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
 }
 
 function applyResult(overrides: Partial<StorageApplyResult> = {}): StorageApplyResult {
-  return { planId: "plan-1", removedBytes: 2_700_000_000, removed: 58, skipped: 3,
-    skippedDetails: [{ id: "c1", category: "zcode", path: "/private/zcode/one", reason: "data-changed" }], ...overrides };
+  return { planId: "plan-1", removedBytes: 2_700_000_000, complete: true,
+    removed: [
+      { id: "c1", path: "/private/zcode/one", bytes: 1_500_000_000 },
+      { id: "c2", path: "/private/zcode/two", bytes: 1_200_000_000 },
+    ],
+    skipped: [{ id: "c3", path: "/private/runtimes/old", reasons: ["candidate-changed"] }], ...overrides };
 }
 
 type Script = {
   plan?: "ok" | "refused" | "lost";
-  apply?: "ok" | "refused" | "lost";
+  apply?: "ok" | "refused" | "lost" | "incomplete";
   planValue?: StoragePlan;
 };
 
@@ -53,6 +57,7 @@ function fixture(script: Script = {}) {
     if (operation === "storage_apply") {
       if (script.apply === "refused") throw new ApiError("CONFLICT", "changed");
       if (script.apply === "lost") throw new ApiError("NETWORK", "lost");
+      if (script.apply === "incomplete") throw new ApiError("STORAGE_INCOMPLETE", "Removal is incomplete");
       return applyResult();
     }
     throw new Error(`unexpected ${operation}`);
@@ -109,7 +114,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     expect(screen.getByText("future-thing")).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: /为何保留 ▸/ })[0]!);
-    expect(screen.getByText("目标仍可能续接")).toBeTruthy();
+    expect(screen.getByText("仍可能续接")).toBeTruthy();
     expect(screen.getByText("宽限期未满")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /为何保留 ▾/ }));
     await user.click([...screen.getAllByRole("button", { name: /为何保留 ▸/ })].at(-1)!);
@@ -154,10 +159,12 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
     await user.click(screen.getByRole("button", { name: "确认清理" }));
-    await screen.findByText(/已回收 2\.5 GB/);
-    expect(screen.getByText("跳过 3 项（数据已变化或条件不再满足）")).toBeTruthy();
+    expect(await screen.findByText(/已回收 2\.5 GB（2 项）/)).toBeTruthy();
+    expect(screen.getByText("跳过 1 项（数据已变化或条件不再满足）")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看逐项原因" }));
-    expect(screen.getByText(/\/private\/zcode\/one：data-changed/)).toBeTruthy();
+    expect(screen.getByText(/\/private\/runtimes\/old：数据已变化/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看已删项目" }));
+    expect(screen.getByText(/\/private\/zcode\/one：1\.4 GB/)).toBeTruthy();
     const applies = f.calls.filter(call => call.operation === "storage_apply");
     expect(applies).toHaveLength(1);
     expect(applies[0]!.params).toEqual({ planId: "plan-1", commandId: expect.any(String), confirm: true });
@@ -219,6 +226,58 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(check.disabled).toBe(true);
     expect(check.getAttribute("title")).toContain("连接已中断");
     expect(f.command).not.toHaveBeenCalled();
+  });
+
+  it("resumes an interrupted STORAGE_INCOMPLETE apply with the same identity and blocks a fresh plan", async () => {
+    const f = fixture({ apply: "incomplete" });
+    const user = userEvent.setup();
+    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "确认清理" }));
+    // Neither a failure nor a claim that nothing ran.
+    expect(await screen.findByText("清理尚未完成：删除已经开始，尚未全部完成。")).toBeTruthy();
+    const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(false);
+    // A fresh plan would discard the unresolved operation, so re-checking is refused.
+    const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
+    expect(recheck.disabled).toBe(true);
+    expect(recheck.getAttribute("title")).toContain("换新计划会丢弃未完成的清理");
+    expect(f.calls.filter(call => call.operation === "storage_plan")).toHaveLength(1);
+    // The retry replays the same planId/commandId and then completes.
+    f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
+    await user.click(retry);
+    expect(await screen.findByText(/已回收/)).toBeTruthy();
+    const applies = f.command.mock.calls.filter(([operation]) => operation === "storage_apply");
+    expect(applies).toHaveLength(2);
+    expect(applies[1]![1]).toMatchObject({ planId: "plan-1", commandId: (applies[0]![1] as { commandId: string }).commandId, confirm: true });
+  });
+
+  it("keeps the unresolved identity retryable after plan expiry instead of disabling it", async () => {
+    // First dispatch loses its reply; by the time the user retries, the plan's
+    // 15-minute window has passed. The durable receipt still replays.
+    const soon = plan({ expiresAt: new Date(Date.now() + 200).toISOString() });
+    const f = fixture({ apply: "lost", planValue: soon });
+    const user = userEvent.setup();
+    render(<StoragePanel api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    await user.click(screen.getByRole("button", { name: /清理可回收数据/ }));
+    await user.click(screen.getByRole("button", { name: "确认清理" }));
+    expect(await screen.findByText("清理结果未确认：可能已经执行。")).toBeTruthy();
+    const firstCommandId = (f.calls.find(call => call.operation === "storage_apply")!.params as { commandId: string }).commandId;
+    await new Promise(resolve => setTimeout(resolve, 400));
+    // The plan's window has passed, but the recovery retry stays enabled —
+    // the durable receipt replays regardless of plan expiry.
+    const retry = screen.getByRole("button", { name: "重试同一请求" }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(false);
+    expect(retry.getAttribute("title")).toContain("不会开始新的清理");
+    const recheck = screen.getByRole("button", { name: "重新检查" }) as HTMLButtonElement;
+    expect(recheck.disabled).toBe(true);
+    f.command.mockImplementation(async (operation: string) => operation === "storage_plan" ? plan() : applyResult());
+    await user.click(retry);
+    expect(await screen.findByText(/已回收/)).toBeTruthy();
+    const applies = f.command.mock.calls.filter(([operation]) => operation === "storage_apply");
+    expect(applies[1]![1]).toMatchObject({ planId: "plan-1", commandId: firstCommandId, confirm: true });
   });
 
   it("expires the confirm path once the plan's window passes", async () => {

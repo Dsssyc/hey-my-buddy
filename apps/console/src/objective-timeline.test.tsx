@@ -189,8 +189,10 @@ describe("objective timeline rendering", () => {
     expect(label.querySelector(".lbl-name")!.textContent).not.toBe(LONG_TASK_LINE);
     expect(label.textContent).toContain("取自任务首行");
     expect(label.getAttribute("title")).not.toBe(LONG_TASK_LINE);
-    // §5: the tooltip carries only the ~40-character line plus the pointer to detail.
-    expect(label.getAttribute("title")).toBe(`${label.querySelector(".lbl-name")!.textContent}（完整任务见详情）`);
+    // Host-revised 0.16: the tooltip carries the COMPLETE first line plus the
+    // pointer to detail, while the label stays at ~40 characters.
+    expect(label.getAttribute("title")).toBe(`${LONG_TASK_LINE}（完整任务见详情）`);
+    expect(label.getAttribute("title")!.length).toBeGreaterThan(50);
     // T3: the card title is the clipped line itself, with the note in the meta row.
     const single = container.querySelector(".delegation-card.single") as HTMLElement;
     expect(single.textContent).not.toContain("做什么");

@@ -26,7 +26,7 @@ function fixture() {
   };
   const snapshot = {
     csrfToken: "csrf",
-    consoleSession: { id: "session-a", canWrite: false, reason: "superseded" },
+    consoleSession: { id: "session-a", canWrite: false, reason: null },
   } as Snapshot;
   const calls: [string, Record<string, unknown>][] = [];
   const command = vi.fn(async (operation: string, params: Record<string, unknown>) => {

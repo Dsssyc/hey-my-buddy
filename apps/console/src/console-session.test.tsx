@@ -2,16 +2,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { ApiError, createApi, errorText, isReadOnlyRefusal } from "./api";
+import { ApiError, createApi, errorText, isSessionExpiredRefusal } from "./api";
 import type { ConsoleApi } from "./api";
-import { READ_ONLY_SESSION_OPERATIONS, createAuthorityLatch, readOnlySessionAllows, sessionCanWrite } from "./console-session";
+import { createAuthorityLatch, sessionCanWrite } from "./console-session";
 import { QUEUE_POLL_MS } from "./use-editor";
 import type { ConsoleSession, Profile, Snapshot, Task, TaskQuery, WriterGrant } from "./types";
 import type { Workflow } from "./workflow-types";
 
 const bannerNotice = /新窗口已取得写权限，此页面现在是只读/;
-const actionRefusal = /登录已失效，这项操作不会提交/;
-const saveRefusal = /登录已失效，保存已暂停/;
+const actionRefusal = /登录已失效/;
+const saveRefusal = /登录已失效/;
 
 /** Two families and three execution configurations, all available. */
 function catalog(): Profile[] {
@@ -55,24 +55,23 @@ function workflow(task: Task, overrides: Partial<Workflow> = {}): Workflow {
     ...overrides };
 }
 
-const session = (canWrite: boolean): ConsoleSession => canWrite
-  ? { id: "session-writer", canWrite: true, reason: null }
-  : { id: "session-writer", canWrite: false, reason: "superseded" };
+const session = (): ConsoleSession => ({ id: "session-writer", canWrite: true, reason: null });
 
-type PublishOutcome = "ok" | "network" | "read-only";
+type IdentityOutcome = "expired";
+type PublishOutcome = "ok" | "network" | IdentityOutcome;
 type Script = {
-  begin?: "active" | "queued" | "read-only";
-  renew?: "active" | "queued" | "read-only";
+  begin?: "active" | "queued" | IdentityOutcome;
+  renew?: "active" | "queued" | IdentityOutcome;
   publish?: PublishOutcome | PublishOutcome[];
 };
 
 function fixture(options: {
-  readOnly?: boolean; script?: Script; records?: Task[]; workflows?: Map<string, Workflow>; failAfter?: number;
+  script?: Script; records?: Task[]; workflows?: Map<string, Workflow>; failAfter?: number;
   failWith?: unknown; queuedForever?: boolean;
 } = {}) {
   const profiles = catalog();
   let state: Snapshot = {
-    csrfToken: "csrf", consoleSession: session(!options.readOnly), tableRevision: 2,
+    csrfToken: "csrf", consoleSession: session(), tableRevision: 2,
     gate: { phase: "open", readers: 0, waitingWriters: 0, writer: null },
     configuration: { revision: 1, decisionProfileId: flashOff },
     profiles,
@@ -100,12 +99,12 @@ function fixture(options: {
     operations.push(operation);
     const scripted = options.script ?? {};
     if (operation === "evaluation_write_begin") {
-      if (scripted.begin === "read-only") throw new ApiError("CONSOLE_READ_ONLY", "board refused the older session");
+      if (scripted.begin === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
       if (scripted.begin === "queued") return { ...grant, state: "waiting", phase: "draining", queuePosition: 2 };
       return grant;
     }
     if (operation === "evaluation_write_renew") {
-      if (scripted.renew === "read-only") throw new ApiError("CONSOLE_READ_ONLY", "board refused the older session");
+      if (scripted.renew === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
       if (options.queuedForever || scripted.renew === "queued")
         return { ...grant, state: "waiting", phase: "draining", queuePosition: 2 };
       return { ...grant, state: "active", phase: "writing" };
@@ -114,7 +113,7 @@ function fixture(options: {
       published.push(params);
       const outcome = nextPublish();
       if (outcome === "network") throw new ApiError("NETWORK", "lost publish reply");
-      if (outcome === "read-only") throw new ApiError("CONSOLE_READ_ONLY", "board refused the older session");
+      if (outcome === "expired") throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
       return { published: true, tableRevision: 3 };
     }
     if (operation === "evaluation_write_abort") return { aborted: true };
@@ -136,15 +135,17 @@ function fixture(options: {
         task: "路由计算", profileId: flashOff, tableRevision: 1, reason: "记录的选择依据",
         evidenceIds: [], createdAt: "2026-09-25T10:00:00Z" } };
     }
-    throw new ApiError("CONSOLE_READ_ONLY", "board refused a mutation from a read-only session");
+    throw new ApiError("FORBIDDEN", "board refused a mutation");
   });
   const tasks = vi.fn(async (query: TaskQuery) => {
     const runs = state.tasks.runs.filter(row => (!query.rootsOnly || row.delegation?.kind === "goal")
       && (!query.query || row.task.includes(query.query)));
     return { runs: structuredClone(runs), total: runs.length, nextCursor: null };
   });
+  let loginExpired = false;
   const snapshot = vi.fn(async () => {
     snapshots += 1;
+    if (loginExpired) throw new ApiError("CONSOLE_SESSION_EXPIRED", "login expired");
     if (options.failAfter !== undefined && snapshots > options.failAfter) {
       throw options.failWith ?? new ApiError("NETWORK", "无法连接本地黑板。已有任务仍由后台管理。");
     }
@@ -154,7 +155,7 @@ function fixture(options: {
     objectives: vi.fn(async () => ({ objectives: [], total: 0, nextCursor: null, cursor: 0, changed: false })) } as unknown as ConsoleApi;
   return { api, command, operations, published, snapshot, tasks,
     state: () => state,
-    setSession: (canWrite: boolean) => { state = { ...state, consoleSession: session(canWrite) }; } };
+    expireSession: () => { loginExpired = true; } };
 }
 
 afterEach(() => { cleanup(); window.location.hash = ""; document.documentElement.dataset.theme = ""; });
@@ -173,11 +174,15 @@ function apiFor(payload: unknown) {
 }
 
 describe("console session descriptor validation", () => {
-  it("accepts only a well-formed descriptor with a consistent reason", async () => {
+  it("accepts only the live service descriptor: canWrite true with a null reason", async () => {
     await expect(apiFor(envelope({ id: "session-a", canWrite: true, reason: null })).snapshot())
       .resolves.toMatchObject({ consoleSession: { id: "session-a", canWrite: true, reason: null } });
-    await expect(apiFor(envelope({ id: "session-b", canWrite: false, reason: "superseded" })).snapshot())
-      .resolves.toMatchObject({ consoleSession: { id: "session-b", canWrite: false, reason: "superseded" } });
+    // 0.16: a non-writable or flagged descriptor is no longer a session state;
+    // the board reports an expired login as a 401 refusal instead.
+    await expect(apiFor(envelope({ id: "session-b", canWrite: false, reason: null })).snapshot())
+      .rejects.toBeInstanceOf(ApiError);
+    await expect(apiFor(envelope({ id: "session-c", canWrite: true, reason: "superseded" })).snapshot())
+      .rejects.toBeInstanceOf(ApiError);
   });
 
   it("fails closed for a missing, malformed or contradictory descriptor", async () => {
@@ -192,9 +197,9 @@ describe("console session descriptor validation", () => {
       ["numeric id", { id: 7, canWrite: true, reason: null }, true],
       ["missing canWrite", { id: "session-a", reason: null }, true],
       ["string canWrite", { id: "session-a", canWrite: "true", reason: null }, true],
-      ["writer with a read-only reason", { id: "session-a", canWrite: true, reason: "superseded" }, true],
-      ["read-only without a reason", { id: "session-a", canWrite: false, reason: null }, true],
-      ["unknown reason", { id: "session-a", canWrite: false, reason: "expired" }, true],
+      ["writer with a stale reason", { id: "session-a", canWrite: true, reason: "superseded" }, true],
+      ["non-writable session", { id: "session-a", canWrite: false, reason: null }, true],
+      ["non-writable with a reason", { id: "session-a", canWrite: false, reason: "expired" }, true],
     ];
     for (const [label, value, include] of invalid) {
       const failure = await apiFor(envelope(value, include)).snapshot()
@@ -215,16 +220,7 @@ describe("console session descriptor validation", () => {
     expect(screen.queryByRole("button", { name: "保存更改" })).toBeNull();
   });
 
-  it("mirrors only the five read-only POST reads and never claims to be a security boundary", () => {
-    for (const operation of ["evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get"]) {
-      expect(readOnlySessionAllows(operation)).toBe(true);
-    }
-    for (const operation of ["user_policy_publish", "evaluation_write_begin", "evaluation_write_renew",
-      "evaluation_write_abort", "model_catalog_refresh", "task_cancel", "task_retry", "task_acknowledge",
-      "workflow_decide", "workflow_continue", "workflow_takeover", "workflow_cancel", "workflow_acknowledge"]) {
-      expect(readOnlySessionAllows(operation)).toBe(false);
-    }
-    expect(READ_ONLY_SESSION_OPERATIONS).toHaveLength(5);
+  it("treats a missing descriptor as no write authority", () => {
     expect(sessionCanWrite({} as Snapshot)).toBe(false);
   });
 
@@ -232,7 +228,7 @@ describe("console session descriptor validation", () => {
     const latch = createAuthorityLatch();
     const writer = { consoleSession: { id: "session-a", canWrite: true, reason: null } } as Snapshot;
     const staleCopy = { consoleSession: { id: "session-a", canWrite: true, reason: null } } as Snapshot;
-    const readOnly = { consoleSession: { id: "session-a", canWrite: false, reason: "superseded" } } as Snapshot;
+    const readOnly = { consoleSession: { id: "session-a", canWrite: false, reason: null } } as Snapshot;
     const fresh = { consoleSession: { id: "session-b", canWrite: true, reason: null } } as Snapshot;
     expect(latch.writable(writer)).toBe(true);
     latch.lose("session-a");
@@ -247,20 +243,17 @@ describe("console session descriptor validation", () => {
     expect(latch.writable(writer)).toBe(false);
   });
 
-  it("maps CONSOLE_READ_ONLY and CONSOLE_SESSION_EXPIRED to login-expired copy (0.16)", () => {
-    const readOnly = errorText(new ApiError("CONSOLE_READ_ONLY", "server raw text"));
-    expect(readOnly).toContain("登录已失效");
-    expect(readOnly).toContain("草稿");
-    expect(readOnly).not.toContain("server raw text");
-    expect(readOnly).not.toContain("新窗口");
+  it("maps the 401 CONSOLE_SESSION_EXPIRED refusal to login-expired copy (0.16)", () => {
     const expired = errorText(new ApiError("CONSOLE_SESSION_EXPIRED", "server raw text"));
     expect(expired).toContain("登录已失效");
     expect(expired).toContain("本页会自动恢复");
     expect(expired).not.toContain("server raw text");
-    expect(isReadOnlyRefusal(new ApiError("CONSOLE_READ_ONLY", ""))).toBe(true);
-    expect(isReadOnlyRefusal(new ApiError("CONSOLE_SESSION_EXPIRED", ""))).toBe(true);
-    expect(isReadOnlyRefusal(new ApiError("FORBIDDEN", ""))).toBe(false);
-    expect(isReadOnlyRefusal(new Error("CONSOLE_READ_ONLY"))).toBe(false);
+    expect(expired).not.toContain("新窗口");
+    // The retired single-writer code no longer exists anywhere in the client.
+    expect(isSessionExpiredRefusal(new ApiError("CONSOLE_SESSION_EXPIRED", ""))).toBe(true);
+    expect(isSessionExpiredRefusal(new ApiError("FORBIDDEN", ""))).toBe(false);
+    expect(isSessionExpiredRefusal(new ApiError("NETWORK", ""))).toBe(false);
+    expect(isSessionExpiredRefusal(new Error("CONSOLE_SESSION_EXPIRED"))).toBe(false);
   });
 });
 
@@ -285,7 +278,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
 
     // The cookie expires: the next authenticated poll reports a session that
     // can no longer write. This is the security bottom line, not a handoff.
-    f.setSession(false);
+    f.expireSession();
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "保存更改" }).getAttribute("aria-disabled")).toBe("true"));
     expect(screen.queryByText("只读会话")).toBeNull();
@@ -318,36 +311,37 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.operations).toEqual([]);
   });
 
-  it("refuses a new draft, discovery and task mutations once the session is invalid", async () => {
+  it("pauses discovery and saving once the login lapses (401), without any takeover copy", async () => {
     const record = goal("readonly-task", "只读普通任务", { workflow: undefined });
-    const f = fixture({ readOnly: true, records: [record] });
+    const f = fixture({ records: [record] });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
     await screen.findByRole("heading", { name: "模型 2" });
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    // No new draft entry: the switch explains instead of opening one.
-    const guardsBefore = document.querySelectorAll(".guard-banner").length;
+    // The next poll is a 401: the page stays browsable with the login-expired
+    // banner and no single-writer copy anywhere.
+    f.expireSession();
+    await user.click(screen.getByRole("button", { name: "刷新工作台" }));
+    expect(await screen.findByText(/登录已失效/)).toBeTruthy();
+    expect(screen.queryByText(bannerNotice)).toBeNull();
+    // A local draft may open, but discovery and saving stay disabled.
     await user.click(screen.getByRole("switch", { name: "编辑设置" }));
-    await waitFor(() => expect(document.querySelectorAll(".guard-banner").length).toBeGreaterThan(guardsBefore));
-    expect(await screen.findByText(actionRefusal)).toBeTruthy();
-    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("false");
-    expect(screen.queryByLabelText("我的意见")).toBeNull();
+    expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true");
     const discover = screen.getByRole("button", { name: "发现模型" });
     expect(discover.getAttribute("aria-disabled")).toBe("true");
-    const discoverGuards = document.querySelectorAll(".guard-banner").length;
+    const save = screen.getByRole("button", { name: "保存更改" });
+    expect(save.getAttribute("aria-disabled")).toBe("true");
     await user.click(discover);
-    await waitFor(() => expect(document.querySelectorAll(".guard-banner").length).toBeGreaterThan(discoverGuards));
-    expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/暂时不能发现模型/)).length).toBeGreaterThan(0);
+    // Browsing and the read-only detail keep working.
     await user.click(screen.getByRole("link", { name: "委派记录" }));
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await user.click(await screen.findByRole("button", { name: /只读普通任务/ }));
     await screen.findByRole("heading", { name: /只读普通任务/ });
-    // 0.15.1 U4: the browser exposes no task mutation at all, so an invalid
-    // session has nothing to refuse — the detail simply stays read-only.
     expect(screen.queryByRole("button", { name: "取消任务" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新尝试" })).toBeNull();
-    // Discovery, drafting and task control never reached the board.
+    // Discovery and task control never reached the board.
     expect(f.operations).toEqual([]);
   });
 
@@ -370,7 +364,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
 
     // The next poll reports the invalid login. The staged payload must not be
     // replayed or unfrozen: its command ID and unknown-result status persist.
-    f.setSession(false);
+    f.expireSession();
     await user.click(screen.getByRole("button", { name: "刷新工作台" }));
     await waitFor(() => expect(screen.getByRole("switch", { name: "编辑设置" }).getAttribute("aria-checked")).toBe("true"));
     expect(screen.queryByText(bannerNotice)).toBeNull();
@@ -388,7 +382,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("keeps an ambiguous publish unknown when its retry is refused before the next poll", async () => {
-    const f = fixture({ script: { publish: ["network", "read-only"] } });
+    const f = fixture({ script: { publish: ["network", "expired"] } });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -421,7 +415,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("treats a first publish that is definitely refused as a resolved rejection", async () => {
-    const f = fixture({ script: { publish: "read-only" } });
+    const f = fixture({ script: { publish: "expired" } });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -431,7 +425,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "首次被拒");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect(await screen.findByText(actionRefusal)).toBeTruthy();
+    expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     // No earlier attempt exists, so this is not an unknown result and the
     // retained draft is not frozen behind a confirmation state.
     expect(screen.queryByText(/保存结果未确认：可能已经生效/)).toBeNull();
@@ -441,8 +435,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(1);
   });
 
-  it("preserves the draft when an in-flight save is refused with CONSOLE_READ_ONLY", async () => {
-    const f = fixture({ script: { begin: "read-only" } });
+  it("preserves the draft when an in-flight save is refused with the 401 login-expired code", async () => {
+    const f = fixture({ script: { begin: "expired" } });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -452,7 +446,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(screen.getByRole("tab", { name: "评价与意见" }));
     await user.type(await screen.findByLabelText("我的意见"), "被拒绝的保存");
     await user.click(screen.getByRole("button", { name: "保存更改" }));
-    expect(await screen.findByText(actionRefusal)).toBeTruthy();
+    expect((await screen.findAllByText(actionRefusal)).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见被拒绝的保存");
     // A definite refusal is not retried: no begin replay, no renew, no abort.
     await new Promise(resolve => setTimeout(resolve, 900));
@@ -460,8 +454,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(0);
   });
 
-  it("stops renewing a queued intent refused with CONSOLE_READ_ONLY and releases nothing", async () => {
-    const f = fixture({ script: { begin: "queued", renew: "read-only" } });
+  it("stops renewing a queued intent refused with the 401 login-expired code and releases nothing", async () => {
+    const f = fixture({ script: { begin: "queued", renew: "expired" } });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -482,7 +476,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
   });
 
   it("stops a queued wait on a polled invalid snapshot without sending another renew", async () => {
-    const f = fixture({ script: { begin: "queued" }, queuedForever: true });
+    const f = fixture({ script: { begin: "queued", renew: "expired" }, queuedForever: true });
     const user = userEvent.setup();
     window.location.hash = "#models";
     render(<App suppliedApi={f.api} />);
@@ -498,17 +492,21 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
         await act(async () => { await Promise.resolve(); });
       }
       expect(screen.getByRole("button", { name: "取消等待" })).toBeTruthy();
-      // The authenticated poll reports the invalid login before the first queue poll.
-      f.setSession(false);
+      // The queue poll's renew is answered with the 401 login-expired refusal.
+      f.expireSession();
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "刷新工作台" })); });
       for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
         await act(async () => { await Promise.resolve(); });
       }
       await act(async () => { await vi.advanceTimersByTimeAsync(QUEUE_POLL_MS * 2); });
-      // A polled canWrite:false stops the wait without any server refusal, renew
-      // or release attempt, and the draft stays. No takeover copy appears.
-      expect(f.operations).not.toContain("evaluation_write_renew");
+      for (let i = 0; i < 50 && screen.queryByRole("button", { name: "取消等待" }); i++) {
+        await act(async () => { await Promise.resolve(); });
+      }
+      // The queue poll's renew is refused with the 401: the wait stops there,
+      // nothing is released or retried, and the draft stays. No takeover copy.
+      expect(f.operations.filter(operation => operation === "evaluation_write_renew")).toHaveLength(1);
       expect(f.operations).not.toContain("evaluation_write_abort");
+      expect(f.operations).not.toContain("user_policy_publish");
       expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
       expect(screen.queryByText(bannerNotice)).toBeNull();
       expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见排队后只读");
@@ -517,7 +515,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     }
   });
 
-  it("keeps task details read-only for every record kind, read-only session or writer alike (U4)", async () => {
+  it("keeps task details read-only for every record kind, whichever session renders them (U4)", async () => {
     const plain = goal("plain-task", "普通待执行任务", { workflow: undefined });
     const failed = retryable("failed-task", "可重试任务");
     const awaiting = goal("governed-task", "待协助目标", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
@@ -538,9 +536,9 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     ]);
     const records = [plain, failed, awaiting, delivered];
 
-    const readOnly = fixture({ readOnly: true, records, workflows });
+    const first = fixture({ records, workflows });
     const user = userEvent.setup();
-    render(<App suppliedApi={readOnly.api} />);
+    render(<App suppliedApi={first.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
     await screen.findByRole("button", { name: /普通待执行任务/ });
     const detail = await screen.findByRole("complementary", { name: "任务详情" });
@@ -560,11 +558,11 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await user.click(await screen.findByRole("tab", { name: "产物与验收" }));
     expect(within(detail).queryByRole("group", { name: "最终验收" })).toBeNull();
     // Reading the governed record is allowed; no mutation reached the board.
-    expect(readOnly.operations.every(operation => operation === "workflow_get")).toBe(true);
+    expect(first.operations.every(operation => operation === "workflow_get")).toBe(true);
     cleanup();
 
-    // The writer session gets the same read-only detail: no browser control
-    // writes to a delegation anymore (0.15.1 U4).
+    // A second session renders the same read-only detail: no browser control
+    // writes to a delegation (0.15.1 U4).
     const writer = fixture({ records, workflows });
     render(<App suppliedApi={writer.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
@@ -580,14 +578,14 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(writer.operations.every(operation => operation === "workflow_get")).toBe(true);
   });
 
-  it("keeps browsing, task details, routing and evaluation history readable while read-only", async () => {
+  it("keeps browsing, task details, routing and evaluation history readable for any logged-in session", async () => {
     const awaiting = goal("browse-task", "可浏览任务", { workflow: { state: "awaiting-host", awaitingHost: true, hostId: "current-host", ownerGeneration: 2, revision: 1 } });
     const workflows = new Map<string, Workflow>([["browse-task", workflow(awaiting, {
       executionConfiguration: { adapter: "dsh", provider: "deepseek-official", model: "deepseek-flash", effort: "off" },
       executionConfigurationRevision: 2,
       routing: { status: "selected", decisionId: "decision-1", reason: "记录的路由原因" },
     })]]);
-    const f = fixture({ readOnly: true, records: [awaiting], workflows });
+    const f = fixture({ records: [awaiting], workflows });
     const user = userEvent.setup();
     render(<App suppliedApi={f.api} />);
     await user.click(await screen.findByRole("button", { name: "全部执行记录" }));
@@ -606,7 +604,8 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     await waitFor(() => expect(f.operations).toContain("model_profiles"));
     expect(f.operations).toContain("selection_get");
     expect(f.operations).toContain("evaluation_history");
-    expect(f.operations.every(operation => readOnlySessionAllows(operation))).toBe(true);
+    // Only read operations were dispatched.
+    expect(f.operations.every(operation => ["evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
   });
 
   const failedPolls: [string, ApiError][] = [
@@ -648,7 +647,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(within(detail).queryByRole("group", { name: "手工接续" })).toBeNull();
     // A failed poll is not a new-window takeover.
     expect(screen.queryByText(bannerNotice)).toBeNull();
-    expect(f.operations.every(operation => readOnlySessionAllows(operation))).toBe(true);
+    expect(f.operations.every(operation => ["evaluation_history", "selection_get", "selection_list", "model_profiles", "workflow_get"].includes(operation))).toBe(true);
     // The dirty model draft is preserved and its save stays disabled.
     await user.click(screen.getByRole("link", { name: "模型卡片" }));
     expect(screen.getByLabelText("我的意见")).toHaveProperty("value", "原人工意见断线草稿");
