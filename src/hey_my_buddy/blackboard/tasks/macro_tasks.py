@@ -398,7 +398,13 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
         [group_id, *values],
     ).fetchone()["count"]
+    failed_conclusions = {row["run_id"] for row in connection.execute(
+        "SELECT run_id FROM workflow_host_conclusions WHERE execution_status='failed' AND run_id IN "
+        "(SELECT run_id FROM workflow_runs WHERE macro_task_id=? UNION SELECT ?)",
+        (group_id, group_id.removeprefix("run:")),
+    )}
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
+              "failed": 0,
               "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
     from .workflow import IN_PROGRESS_STATES
     for row in members:
@@ -408,6 +414,9 @@ def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -
         counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
+        counts["failed"] += int(row["child_parent_run_id"] is None and (
+            row["run_state"] == "failed" or row["task_id"] in failed_conclusions
+        ))
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("macro-"):

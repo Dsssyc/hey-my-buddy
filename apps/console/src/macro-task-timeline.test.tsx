@@ -146,16 +146,16 @@ describe("macroTask timeline rendering", () => {
   it("shows the overview context and state counts with recorded details in the popover", async () => {
     const timeline = macroTaskTimelineFixture();
     render(<MacroTaskTimeline {...baseProps(timeline)} />);
-    const head = document.querySelector(".tl-head") as HTMLElement;
+    const head = document.querySelector('[data-slot="macro-overview-header"]') as HTMLElement;
     expect(within(head).getByText("宏任务时间轴：设计、接口与实现")).toBeTruthy();
-    expect(head.querySelector(".macro-overview-facts")!.textContent).toMatch(/项目hey-my-buddy.*Hostcodex-desktop.*开始.*历时/);
-    expect(head.querySelector(".macro-overview-counts")!.textContent).toContain("1进行中");
-    expect(head.querySelector(".macro-overview-counts")!.textContent).toContain("2已验收");
+    expect(head.querySelector('[data-slot="macro-overview-facts"]')!.textContent).toMatch(/项目hey-my-buddy.*Hostcodex-desktop.*开始.*历时/);
+    expect(head.querySelector('[data-slot="macro-overview-counts"]')!.textContent).toContain("1进行中");
+    expect(head.querySelector('[data-slot="macro-overview-counts"]')!.textContent).toContain("2已验收");
     expect(head.textContent).not.toContain("按用户认可的第 X 节");
-    const stats = head.querySelector(".time-stats") as HTMLElement;
+    const stats = within(head).getByRole("button", { name: "时间统计" });
     expect(within(head).getByRole("button", { name: "时间统计" })).toBe(stats);
     await userEvent.setup().click(stats);
-    const body = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".time-stats-body") as HTMLElement;
+    const body = screen.getByRole("dialog", { name: "时间统计" }).querySelector('[data-slot="time-stats-body"]') as HTMLElement;
     expect(body.textContent).toContain("按用户认可的第 X 节");
     expect(body.textContent).toMatch(/从开始到最近一次活动：\S+/);
     expect(body.textContent).toMatch(/其间至少有一项在运行的时间：\S+/);
@@ -315,7 +315,7 @@ describe("macroTask timeline rendering", () => {
     expect(first.container.querySelector(".trunc-chip")!.textContent).toContain("‹ 3 条事件未返回");
     // The overview marks the duration numbers as recorded-part only.
     fireEvent.click(screen.getByRole("button", { name: "时间统计" }));
-    const warn = screen.getByRole("dialog", { name: "时间统计" }).querySelector(".metric-warn") as HTMLElement;
+    const warn = screen.getByRole("dialog", { name: "时间统计" }).querySelector('[data-slot="time-stats-limitations"]') as HTMLElement;
     expect(warn.textContent).toContain("不完整");
     expect(warn.textContent).toContain("执行片段已截断");
     first.unmount();

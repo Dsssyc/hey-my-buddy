@@ -8,6 +8,8 @@ export type MacroTaskCounts = {
   roots: number; helpers: number;
   /** Accepted root micro tasks; the numerator of progress against the root count. */
   accepted: number;
+  /** Root micro tasks whose turn failed, including failures later concluded by the Host. */
+  failed: number;
   active: number; host: number; review: number; ended: number;
   /** Exact workflow-state counts across the whole group, independent of display filters. */
   stoppableRoots: number; stoppableHelpers: number; delivered: number; awaitingHost: number;

@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * or on a state carries a transition of 100 to 150ms and switches it off under
  * `motion-reduce`, and what opens and closes does so through the Collapsible.
  */
-const views = import.meta.glob<string>(["../App.tsx", "../buddies/*.tsx", "../task-detail/*.tsx"], { query: "?raw", import: "default", eager: true });
+const views = import.meta.glob<string>(["../App.tsx", "../MacroTaskList.tsx", "../MacroTaskOverview.tsx", "../MacroTasks.tsx", "../buddies/*.tsx", "../task-detail/*.tsx"], { query: "?raw", import: "default", eager: true });
 const shared = import.meta.glob<string>(["./ui/*.tsx"], { query: "?raw", import: "default", eager: true });
 const support = /\.(test|testing|fixtures)\.tsx?$/;
 const changes = /\b(?:hover|aria-pressed|aria-checked|aria-expanded|aria-selected):(?:[a-z-]+:)*(?:bg|text|border|ring|opacity)-/;
@@ -36,7 +36,7 @@ describe("the colour changes of the Buddy page", () => {
     const bare: string[] = [];
     for (const [path, source] of Object.entries(shared).filter(([path]) => !support.test(path))) {
       // Floating surfaces and tabs are not on this page; they enter with the library's own animation.
-      if (/tooltip|dialog|popover|select|tabs|badge/.test(path)) continue;
+      if (/tooltip|dialog|popover|select|tabs|badge|collapsible/.test(path)) continue;
       if (!changes.test(source)) continue;
       if (!source.includes("motion-reduce:transition-none") || !/\bduration-(?:100|150)\b/.test(source)) bare.push(path);
     }
@@ -49,7 +49,8 @@ describe("the colour changes of the Buddy page", () => {
     expect(source).toContain("animation-duration-200");
     expect(source).toContain("motion-safe:data-[state=open]:animate-collapsible-down");
     expect(source).toContain("motion-safe:data-[state=closed]:animate-collapsible-up");
-    expect(source).toMatch(/transition-transform duration-200 motion-reduce:transition-none/);
+    expect(source).toContain("transition-[transform,color] duration-[200ms,150ms]");
+    expect(source).toContain("motion-reduce:transition-none");
     // No height of ours: the page measures nothing.
     for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path)))
       expect(view, path).not.toMatch(/getBoundingClientRect|scrollHeight|offsetHeight|ResizeObserver/);

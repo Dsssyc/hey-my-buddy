@@ -58,7 +58,7 @@ describe("work macro task reads", () => {
     }
   });
 
-  it("accepts the 0.15.1 nullable description and accepted count, refusing malformed ones", async () => {
+  it("accepts nullable descriptions and root outcome counts, refusing malformed ones", async () => {
     const good = macroTaskTimelineFixture();
     const withDescription = { ...good, macroTask: { ...good.macroTask, description: "用户口述的目标描述。", counts: { ...good.macroTask.counts, accepted: 2 } } };
     // The read resolves to {timeline, verifiedAtMs}; verifiedAtMs is the
@@ -74,6 +74,8 @@ describe("work macro task reads", () => {
     for (const malformed of [
       { ...good, macroTask: { ...good.macroTask, description: 7 } },
       { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, accepted: "2" } } },
+      { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: undefined } } },
+      { ...good, macroTask: { ...good.macroTask, counts: { ...good.macroTask.counts, failed: -1 } } },
       { ...good, macroTask: { ...good.macroTask, counts: { roots: 1, helpers: 0, active: 0, host: 0, review: 0, ended: 0 } } },
       { ...good, rows: good.rows.map(row => ({ ...row, taskSummary: 5 })) },
     ]) {
@@ -88,6 +90,7 @@ describe("work macro task reads", () => {
       { ...good.macroTask, sourceHostId: undefined },
       { ...good.macroTask, project: { ...good.macroTask.project, path: 4 } },
       { ...good.macroTask, counts: { ...good.macroTask.counts, host: -1 } },
+      { ...good.macroTask, counts: { ...good.macroTask.counts, failed: "1" } },
     ]) {
       const reader = createApi("/private", vi.fn(async () => new Response(JSON.stringify({
         macroTasks: [malformed], totals: { all: 1, active: 1, host: 0, review: 0 },

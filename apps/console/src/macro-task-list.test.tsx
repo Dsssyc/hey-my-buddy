@@ -10,13 +10,13 @@ import type { MacroTaskListProps } from "./MacroTaskList";
 const props = (): MacroTaskListProps => ({
   rows: listFixture(), totals: { all: 12, active: 2, host: 1, review: 3 }, loading: false, error: "", nextCursor: null, reorder: null,
   filter: "all", query: "", selected: null, listNavigation: <span>宏任务</span>,
-  onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onRetry: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
+  onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
 });
 afterEach(cleanup);
 describe("macro task list", () => {
   it("groups by project with loaded counts and puts collapsed standalone micro tasks last", async () => {
     const p = props(); render(<MacroTaskList {...p}/>);
-    const groups = [...document.querySelectorAll(".macro-group-heading")];
+    const groups = [...document.querySelectorAll('[data-slot="macro-group-heading"]')];
     expect(groups[0].textContent).toContain("hey-my-buddy");
     expect(groups[0].textContent).toContain("2");
     expect(groups.at(-1)?.textContent).toContain("独立微任务");
@@ -48,12 +48,32 @@ describe("macro task list", () => {
     expect(within(row).getByLabelText("已验收 2")).toBeTruthy();
     await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
   });
+  it("combines waiting counts and chooses waiting, running, failure, accepted and idle marks in that order", () => {
+    const p = props();
+    const variants = [
+      { host: 1, review: 2, active: 1, failed: 1, accepted: 0 },
+      { host: 0, review: 0, active: 1, failed: 1, accepted: 0 },
+      { host: 0, review: 0, active: 0, failed: 1, accepted: 0 },
+      { host: 0, review: 0, active: 0, failed: 0, accepted: 1 },
+      { host: 0, review: 0, active: 0, failed: 0, accepted: 0 },
+    ];
+    p.rows = variants.map((counts, index) => ({ ...p.rows[0], macroTaskId: `macro-${index}`, title: `标题 ${index}`, counts: { ...p.rows[0].counts, roots: 1, ...counts } }));
+    render(<MacroTaskList {...p}/>);
+    const rows = [...document.querySelectorAll('[data-slot="macro-entry"]')];
+    expect(rows.map(row => row.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind"))).toEqual(["hand", "live", "fail", "done", "idle"]);
+    expect(within(rows[0] as HTMLElement).getByLabelText("等人接手 3")).toBeTruthy();
+    expect(rows[0].querySelectorAll('[data-slot="macro-entry-counts"] [data-kind="hand"]')).toHaveLength(1);
+    expect(within(rows[2] as HTMLElement).getByLabelText("失败 1")).toBeTruthy();
+    expect(rows[0].hasAttribute("aria-description")).toBe(false);
+    expect(screen.getByRole("tab", { name: "等待 Host 1" }).hasAttribute("aria-description")).toBe(false);
+    expect(screen.getByRole("textbox").getAttribute("data-slot")).toBe("macro-search");
+  });
   it("uses first line with provenance in Hint, clips it at 40 characters and names missing titles", () => {
     const p = props(); p.rows = [{ ...p.rows[0], titleSource: "task", title: "任".repeat(80) }, { ...p.rows[1], titleSource: "none", title: "" }];
     render(<MacroTaskList {...p}/>);
     const row = screen.getByRole("button", { name: new RegExp("任".repeat(40)) });
     expect(row.getAttribute("aria-description")).toContain("取自首行");
-    expect(row.querySelector(".macro-entry-title")?.textContent).toBe("任".repeat(40));
+    expect(row.querySelector('[data-slot="macro-entry-title"]')?.textContent).toBe("任".repeat(40));
     expect(screen.getByText("未命名")).toBeTruthy();
   });
   it("distinguishes empty and unmatched and preserves entries after read failure", () => {
@@ -65,8 +85,8 @@ describe("macro task list", () => {
   it("renders the nullable fields the service can return without inventing a time", async () => {
     const p=props(); p.rows=[{...p.rows[0],kind:"standalone",project:null,createdAt:null,lastActivityAt:null}];
     render(<MacroTaskList {...p}/>); await userEvent.click(screen.getByRole("button",{name:/独立微任务/}));
-    expect(document.querySelector(".macro-entry time")?.textContent).toBe("未记录");
-    expect(document.querySelector(".macro-entry time")?.hasAttribute("datetime")).toBe(false);
+    expect(document.querySelector('[data-slot="macro-entry"] time')?.textContent).toBe("未记录");
+    expect(document.querySelector('[data-slot="macro-entry"] time')?.hasAttribute("datetime")).toBe(false);
   });
   it("loads earlier only when available and idle, and collapses through one button", async () => {
     const p=props(); const f=render(<MacroTaskList {...p} nextCursor="older"/>);

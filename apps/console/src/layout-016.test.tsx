@@ -330,8 +330,10 @@ describe("§9 the inspector drawer stays reachable", () => {
       disconnect() {}
     });
     let column = 700;
-    const sections: Record<string, number> = { "tl-head": 120, "tl-toolbar": 40, "inspector-separator": 10 };
+    let headerHeight = 120;
+    const sections: Record<string, number> = { "tl-toolbar": 40, "inspector-separator": 10 };
     const sectionHeight = (element: HTMLElement) => {
+      if (element.dataset.slot === "macro-overview-header") return headerHeight;
       for (const [name, height] of Object.entries(sections)) if (element.classList.contains(name)) return height;
       return 0;
     };
@@ -369,7 +371,7 @@ describe("§9 the inspector drawer stays reachable", () => {
     fireEvent.keyDown(separator(), { key: "Enter" });
     expect(valueNow()).toBe(168);
     // A taller header makes the drawer yield.
-    sections["tl-head"] = 300;
+    headerHeight = 300;
     resize(700);
     expect(valueNow()).toBe(700 - 350 - 200);
   });

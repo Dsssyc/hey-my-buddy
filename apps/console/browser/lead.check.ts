@@ -130,8 +130,8 @@ for (const { locale, language, tasks } of [
       await stop.click();
       const dialog = page.getByRole("dialog", { name: stopName, exact: true });
       const summary = timeline.macroTask;
-      await expect(dialog.locator(".stop-dialog-task-title")).toHaveAttribute("aria-description", summary.title);
-      await expect(dialog.locator(".stop-dialog-task-title")).toHaveText(summary.title);
+      await expect(dialog.locator("#stop-macro-task-name")).toHaveAttribute("aria-description", summary.title);
+      await expect(dialog.locator("#stop-macro-task-name")).toHaveText(summary.title);
       await expect(dialog.locator("#stop-macro-task-counts li")).toHaveCount(5);
       await expect(dialog.locator("#stop-macro-task-body")).not.toContainText(summary.title);
       await expect(dialog.locator("#stop-macro-task-counts")).toContainText(zh
@@ -143,8 +143,8 @@ for (const { locale, language, tasks } of [
       await expect(dialog.getByRole("button", { name: cancelName, exact: true })).toBeFocused();
       await settle(page);
       await expectWholeAndApart(page.locator("body"), dialog);
-      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > .actions"));
-      await expectWholeAndApart(dialog.locator(".actions"), dialog.getByRole("button"));
+      await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
+      await expectWholeAndApart(dialog.locator("[data-slot=stop-dialog-actions]"), dialog.getByRole("button"));
       await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
       await dialog.press("Escape");
       await expect(dialog).toBeHidden();
@@ -166,7 +166,7 @@ for (const { locale, language, tasks } of [
       expect(commands).toEqual([{ operation: "macro_task_stop", params: { macroTaskId: MACRO, commandId: expect.any(String) } }]);
       expect(response.request().postDataJSON().params.commandId).not.toBe("");
       await expect(dialog).toBeHidden();
-      const status = page.locator(".macro-stop-state");
+      const status = page.locator("[data-slot=macro-stop-state]");
       await expect(status).toHaveText(zh ? "停止请求未提交" : "Stop request was refused");
       await expect(status).toHaveAttribute("aria-description", /This synthetic preview never performs mutations/);
       await expectTextUncut(status);
@@ -209,7 +209,7 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     await page.getByRole("button", { name: locale === "zh-CN" ? "更多" : "More", exact: true }).click();
     await page.getByRole("button", { name: locale === "zh-CN" ? "停止宏任务" : "Stop macro task", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    const titleLine = dialog.locator(".stop-dialog-task-title");
+    const titleLine = dialog.locator("#stop-macro-task-name");
     await settle(page);
     await expect(titleLine).toHaveAttribute("aria-description", title);
     await expect(titleLine).toHaveText(title);
@@ -218,7 +218,7 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
       const style = getComputedStyle(element);
       return style.whiteSpace === "nowrap" && element.scrollWidth > element.clientWidth;
     })).toBe(true);
-    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > .actions"));
+    await expectWholeAndApart(dialog, dialog.locator(":scope > h2, :scope > p, :scope > ul, :scope > [data-slot=stop-dialog-actions]"));
     await expectTextUncut(dialog.locator("h2, #stop-macro-task-body, li, button"));
     await expectNoSidewaysScroll(page);
   });

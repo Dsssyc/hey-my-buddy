@@ -10,6 +10,7 @@ export default {
   active: "进行中",
   ended: "已结束",
   accepted: "已验收",
+  failed: "失败",
   hostWait: "等待 Host",
   statsTitle: "时间统计",
   statsLoading: "时间统计：读取中",

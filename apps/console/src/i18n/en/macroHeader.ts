@@ -12,6 +12,7 @@ export default {
   active: "Running",
   ended: "Ended",
   accepted: "Accepted",
+  failed: "Failed",
   hostWait: "Waiting for Host",
   statsTitle: "Time statistics",
   statsLoading: "Reading time statistics",

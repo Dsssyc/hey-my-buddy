@@ -2,7 +2,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { ReactElement } from "react";
 import { act, cleanup, fireEvent, render as baseRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot, Task, TaskQuery } from "./types";
@@ -42,14 +42,22 @@ function harness() {
   return { ...view, api, refresh, user, timeline };
 }
 
-afterEach(() => cleanup());
+beforeEach(() => window.history.replaceState(null, "", "#tasks"));
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("微任务记录 tab views", () => {
-  it("opens on the work macro task view with the unselected placeholder", async () => {
+  it("opens the first macro task and replaces the root URL", async () => {
+    const replace = vi.spyOn(window.history, "replaceState");
+    const push = vi.spyOn(window.history, "pushState");
     const f = harness();
-    await screen.findByRole("heading", { name: "选择一个宏任务" });
+    const first = await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
+    await waitFor(() => expect(first.getAttribute("aria-pressed")).toBe("true"));
+    await waitFor(() => expect(f.api.macroTaskTimeline).toHaveBeenCalledWith("macro-1", expect.anything(), expect.any(AbortSignal)));
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
-    expect(screen.getByText(/选择一个宏任务/)).toBeTruthy();
+    expect(window.location.hash).toBe("#tasks/macro-1");
+    expect(replace).toHaveBeenCalledWith(null, "", "#tasks/macro-1");
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "选择一个宏任务" })).toBeNull();
     await waitFor(() => expect(f.api.macroTasks).toHaveBeenCalledTimes(1));
     expect(f.api.tasks).not.toHaveBeenCalled();
   });
@@ -57,7 +65,7 @@ describe("微任务记录 tab views", () => {
   it("keeps the raw, raw task history reachable through the labelled secondary switch", async () => {
     const f = harness();
     const user = f.user;
-    await screen.findByRole("heading", { name: "选择一个宏任务" });
+    await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     await user.click(screen.getByRole("button", { name: "记录" }));
     // The existing records view: its toolbar, checkbox and rows stay as before.
     expect(await within(screen.getByRole("region", { name: "微任务列表" })).findByRole("heading", { name: "全部执行记录" })).toBeTruthy();

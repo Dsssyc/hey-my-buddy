@@ -194,6 +194,26 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.read()
             self.assert_recomputed(counter,[group])
 
+    def test_host_conclusion_execution_status_invalidates_failed_count(self):
+        group = self.fixture.macros[0]
+        root = self.root_for(group)
+        self.sql("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (root,))
+        self.sql(
+            "INSERT INTO workflow_host_conclusions("
+            "conclusion_id,run_id,run_revision,owner_generation,execution_status,note,"
+            "actor_role,actor_id,command_id,created_at) VALUES(?,?,1,1,'failed','reviewed',"
+            "'host','fictional-host','fictional-conclusion-command','2026-01-01T00:00:00Z')",
+            ('fictional-conclusion', root),
+        )
+        self.assertEqual(self.rows()[group]['counts']['failed'], 1)
+        with patch.object(macro_tasks, '_summary', wraps=macro_tasks._summary) as counter:
+            self.sql("UPDATE workflow_host_conclusions SET execution_status='delivered' WHERE run_id=?", (root,))
+            self.assertEqual(self.rows()[group]['counts']['failed'], 0)
+            self.assert_recomputed(counter, [group])
+            self.sql("UPDATE workflow_host_conclusions SET execution_status='failed' WHERE run_id=?", (root,))
+            self.assertEqual(self.rows()[group]['counts']['failed'], 1)
+            self.assert_recomputed(counter, [group])
+
     def test_attempt_execution_fact_alone_recomputes_only_its_macro(self):
         """C2: the attempt marker must work even with frozen review_ready."""
         group = self.fixture.macros[1]

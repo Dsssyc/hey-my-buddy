@@ -13,7 +13,7 @@ function summary(overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary {
     description: null, summary: null,
     project: { id: "p", path: null, label: "p" }, sourceHostId: "codex", currentHostIds: ["codex"],
     createdAt: "2026-09-26T01:00:00Z", lastActivityAt: "2026-09-26T08:00:00Z", lastActivitySeq: 1,
-    state: "active", counts: { roots: 3, helpers: 0, accepted: 1, active: 1, host: 0, review: 0, ended: 2, ...stopCounts },
+    state: "active", counts: { roots: 3, helpers: 0, accepted: 1, failed: 0, active: 1, host: 0, review: 0, ended: 2, ...stopCounts },
     matchingRuns: 3, rootRunIds: [],
     ...overrides,
   };
@@ -21,16 +21,16 @@ function summary(overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary {
 
 describe("0.16 status vocabulary (0.2)", () => {
   it("derives 已完成 only from full acceptance counts, never from Worker summaries", () => {
-    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
+    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
       .toBe("已完成");
-    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 2, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
+    expect(macroTaskStateLabel(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 2, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts }, summary: "全部完成" })))
       .toBe("已结束");
     expect(macroTaskStateLabel(summary({ state: "host" }))).toBe("等待 Host");
     expect(macroTaskStateLabel(summary({ state: "review" }))).toBe("等待验收");
   });
 
   it("composes the header progress sentence", () => {
-    expect(macroTaskProgressText(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, active: 0, host: 0, review: 0, ended: 3, ...stopCounts } })))
+    expect(macroTaskProgressText(summary({ state: "ended", counts: { roots: 3, helpers: 0, accepted: 3, failed: 0, active: 0, host: 0, review: 0, ended: 3, ...stopCounts } })))
       .toBe("已完成 · 3 / 3 个微任务已验收");
     expect(macroTaskProgressText(summary())).toBe("进行中 · 1 / 3 个微任务已验收");
   });

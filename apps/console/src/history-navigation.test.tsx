@@ -50,7 +50,7 @@ function harness(paged = false) {
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "#"); });
 
 
-const preference = VIEW_PREFERENCE_PREFIX + "micro-task-list-collapsed";
+const preference = VIEW_PREFERENCE_PREFIX + "macro-task-list-collapsed";
 const macroTaskRow = () => screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
 function narrow(matches: boolean) {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
@@ -88,7 +88,7 @@ describe("macro task and record navigation", () => {
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
-    expect(document.querySelector(".macro-workspace.list-collapsed .macro-list")).toBeNull();
+    expect(document.querySelector('[data-slot="macro-sidebar"] [data-slot="macro-list"]')).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
     expect(screen.getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
     await f.user.click(await screen.findByRole("button", { name: "更早" }));
@@ -97,7 +97,7 @@ describe("macro task and record navigation", () => {
     f.unmount();
     const next = harness();
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
-    await next.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
+    await next.user.click(await screen.findByRole("button", { name: "展开宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("false");
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
@@ -131,12 +131,19 @@ describe("macro task and record navigation", () => {
     expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
+  it("ignores the retired micro task list preference", async () => {
+    localStorage.setItem(VIEW_PREFERENCE_PREFIX + "micro-task-list-collapsed", "true");
+    harness();
+    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    expect(localStorage.getItem(preference)).toBeNull();
+  });
+
   it("offers expansion in the narrow macro header without a residual rail", async () => {
     narrow(true);
     const f = harness();
     await f.user.click(await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ }));
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
-    const header = document.querySelector(".macro-overview-header") as HTMLElement;
+    const header = document.querySelector('[data-slot="macro-overview-header"]') as HTMLElement;
     expect(within(header).getByRole("button", { name: "展开宏任务列表" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).toBeNull();
     expect(document.querySelector(".history-view:not([hidden]) .rail-panel")).toBeNull();

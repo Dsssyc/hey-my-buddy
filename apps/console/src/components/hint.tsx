@@ -1,6 +1,12 @@
-import { Tooltip as TooltipPrimitive } from "radix-ui";
-import type { ReactElement } from "react";
+import { Tooltip as TooltipPrimitive, Slot } from "radix-ui";
+import type { ReactElement, ComponentProps } from "react";
 import { Tooltip, TooltipContent } from "@/components/ui/tooltip";
+
+/** Tooltip state belongs to the tooltip; the target may have its own state (tabs, disclosures). */
+function HintTarget({ children, "data-state": tooltipState, ...props }: ComponentProps<typeof Slot.Root> & { "data-state"?: string }) {
+  void tooltipState;
+  return <Slot.Root {...props}>{children}</Slot.Root>;
+}
 
 /**
  * A few words that explain a control, shown on hover and on keyboard focus and
@@ -15,7 +21,7 @@ import { Tooltip, TooltipContent } from "@/components/ui/tooltip";
 export function Hint({ text, children }: { text?: string; children: ReactElement }) {
   return <Tooltip>
     <TooltipPrimitive.Trigger asChild aria-description={text || undefined}
-      onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>{children}</TooltipPrimitive.Trigger>
+      onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}><HintTarget>{children}</HintTarget></TooltipPrimitive.Trigger>
     {text && <TooltipContent>{text}</TooltipContent>}
   </Tooltip>;
 }

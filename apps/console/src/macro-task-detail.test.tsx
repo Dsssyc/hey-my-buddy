@@ -64,13 +64,13 @@ function harness(options: StopOptions = {}) {
   const listed = options.secondStoppable
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
         lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
-        counts: { roots: 2, helpers: 0, accepted: 0, active: 1, host: 0, review: 1, ended: 0,
+        counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 1, ended: 0,
           stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
     : options.secondMacroTask
     ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
         title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
-        counts: { roots: 1, helpers: 0, accepted: 0, active: 0, host: 0, review: 0, ended: 1,
+        counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
           stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]
     : [timeline.macroTask];
   const tasks = new Map(["r1", "r2", "r3", "r4", "r7"].map(id => [id, taskFixture(id)]));
@@ -392,8 +392,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     // The confirmation names the macroTask and the honest scope.
     expect(dialog.textContent).toContain("宏任务时间轴：设计、接口与实现");
-    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBeNull();
-    expect(dialog.querySelector(".stop-dialog-task-title")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
+    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
+    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe("宏任务时间轴：设计、接口与实现");
     expect(dialog.textContent).toContain("停止 1 个微任务");
     expect(dialog.textContent).toContain("停止 0 个协助任务");
     expect(dialog.textContent).toContain("保留 1 个已交付微任务");
@@ -420,8 +420,8 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await openMacroTask(f);
     await requestStop(f);
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    expect(dialog.querySelector(".stop-dialog-task-title")?.textContent).toBe(title);
-    expect(dialog.querySelector(".stop-dialog-task-title")?.getAttribute("title")).toBeNull();
+    expect(dialog.querySelector("#stop-macro-task-name")?.textContent).toBe(title);
+    expect(dialog.querySelector("#stop-macro-task-name")?.getAttribute("title")).toBeNull();
     expect(dialog.getAttribute("aria-describedby")?.split(" ")).toContain("stop-macro-task-body");
     expect(dialog.querySelector("#stop-macro-task-body")?.textContent).not.toContain(title);
   });

@@ -285,7 +285,7 @@ function validMacroTaskSummary(value: unknown): boolean {
     && Number.isSafeInteger(summary.lastActivitySeq) && summary.lastActivitySeq >= 0
     && ["host", "active", "review", "ended"].includes(summary.state)
     && !!counts && typeof counts === "object" && !Array.isArray(counts)
-    && ["roots", "helpers", "accepted", "active", "host", "review", "ended", "stoppableRoots",
+    && ["roots", "helpers", "accepted", "failed", "active", "host", "review", "ended", "stoppableRoots",
       "stoppableHelpers", "delivered", "awaitingHost"].every(key => {
       const count = counts[key as keyof typeof counts];
       return Number.isSafeInteger(count) && count >= 0;

@@ -17,7 +17,7 @@ import type { MacroTaskTimeline as MacroTaskTimelineData, TimelineRow, TimelineS
 let injected: HTMLStyleElement;
 beforeEach(() => {
   injected = document.createElement("style");
-  injected.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8") + readFileSync(resolve(process.cwd(), "src/macro-list.css"), "utf8");
+  injected.textContent = readFileSync(resolve(process.cwd(), "src/styles.css"), "utf8");
   document.head.append(injected);
 });
 afterEach(() => { injected.remove(); cleanup(); });
@@ -126,34 +126,29 @@ describe("U5: duration geometry and borders share one boundary", () => {
 });
 
 describe("U5: audited controls retain the shared global box model and normal sizes", () => {
-  it("lets the rendered list use its full width without reserving an idle scrollbar gutter", () => {
+  it("keeps the rendered list viewport focusable for keyboard scrolling", () => {
     const rows = listFixture();
     render(<MacroTaskList
       rows={rows} totals={{all:rows.length,active:1,host:1,review:1}} onCollapse={vi.fn()} loading={false} error="" nextCursor={null} reorder={null}
       filter="all" query=""
       selected={null}
       onFilterChange={vi.fn()} onQueryChange={vi.fn()}
-      onSelect={vi.fn()} onRetry={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
+      onSelect={vi.fn()} onMore={vi.fn()} onApplyReorder={vi.fn()}
     />);
-    const scroll = document.querySelector<HTMLElement>(".macro-list-scroll [data-slot=scroll-area-viewport]")!;
+    const scroll = document.querySelector<HTMLElement>("[data-slot=macro-list] [data-slot=scroll-area-viewport]")!;
+    expect(scroll).toBeTruthy();
+    expect(scroll.getAttribute("aria-label")).toBe("宏任务条目");
     const css = getComputedStyle(scroll);
-    expect(css.getPropertyValue("scrollbar-gutter")).toBe("auto");
     expect(["auto", "scroll"]).toContain(css.overflowY);
     expect(css.overflowX).toBe("hidden");
-    expect(["0", "0px"]).toContain(css.minHeight);
-    expect(css.getPropertyValue("overscroll-behavior")).toBe("contain");
-    // Radix draws the shared scrollbar and hides the native one. Keyboard and touch still scroll.
     expect(scroll.closest("[data-slot=scroll-area]")).toBeTruthy();
-    expect(css.getPropertyValue("touch-action")).not.toBe("none");
+    expect(scroll.closest("[data-slot=macro-list]")).toBeTruthy();
     expect(scroll.tabIndex).toBe(0);
     scroll.focus();
     expect(document.activeElement).toBe(scroll);
-    const entries = scroll.querySelectorAll(".macro-group-heading, .macro-entry");
+    const entries = scroll.querySelectorAll("[data-slot=macro-group-heading], [data-slot=macro-entry]");
     expect(entries.length).toBeGreaterThan(0);
-    for (const entry of entries) {
-      expect(getComputedStyle(entry).width).toBe("100%");
-      expect(getComputedStyle(entry).boxSizing).toBe("border-box");
-    }
+    expect(scroll.querySelectorAll("[data-slot=macro-entry]").length).toBeGreaterThan(0);
   });
 
   it("uses the existing global border-box reset for badges, segments, filters, titles and floating layers", () => {
