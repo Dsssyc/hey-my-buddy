@@ -415,7 +415,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 if os.name == "nt":
                     process = owned_popen(argv, env=env, cwd=evidence, stdout=subprocess.PIPE,
                                           stderr=subprocess.PIPE, text=True, encoding="utf-8", job_name=job_name)
-                    handle = ProcessHandle(process, own_group=True, log_paths={})
+                    handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
                     try:
                         stdout, stderr = process.communicate(timeout=35)
                     finally:

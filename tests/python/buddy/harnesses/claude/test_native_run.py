@@ -156,7 +156,8 @@ class NativeInquiryTests(NativeRunCase):
         report_ref = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
         if result.end.status != expected_status:
             stderr = next((ref for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
-            self.fail(Path(stderr.location).read_text(encoding="utf-8") if stderr else result.end.message)
+            self.fail(f"{result.end.reason_code}: {result.end.message}\n"
+                      + (Path(stderr.location).read_text(encoding="utf-8") if stderr else ""))
         return result, json.loads(Path(report_ref.location).read_text(encoding="utf-8"))
 
     def test_root_signed_answer_binds_to_running_turn(self):
@@ -225,6 +226,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertNotIn("reason", self.bridge.entries["q1"])
         self.assertFalse((self.cwd / "unadmitted-followup-write.txt").exists())
         self.assertFalse(self.fixture_state().get("unadmittedFollowupRan", False))
+        self.assertTrue(self.fixture_state()["interrupted"])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         reference = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
         observations = json.loads(Path(reference.location).read_text(encoding="utf-8"))
@@ -909,8 +911,11 @@ class SettlementGuardTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
         self.fixture_case("ok")
         observed: list[ProcessHandle] = []
+        observe = ProcessHandle.shutdown_confirmed
 
         def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            if "--version" in handle.process.args:
+                return observe(handle, settle_seconds=settle_seconds)
             observed.append(handle)
             return False
 
@@ -1134,8 +1139,10 @@ class DiscoveryTests(NativeRunCase):
         # instead of trusting the error to mean the group is gone.
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
         self.fixture_case("invalid-catalog")
-        with mock.patch.object(ProcessHandle, "shutdown_confirmed",
-                               side_effect=lambda settle_seconds=2.0: False):
+        observe = ProcessHandle.shutdown_confirmed
+        def unknown_native(handle, settle_seconds=2.0):
+            return observe(handle, settle_seconds=settle_seconds) if "--version" in handle.process.args else False
+        with mock.patch.object(ProcessHandle, "shutdown_confirmed", unknown_native):
             with self.assertRaises(native_run.ClaudeProtocolError) as caught:
                 run_discovery(cwd=str(self.cwd), invocation_root=self.base / "ds-unk",
                               native_root=self.base / "ds-unk-n", timeout_seconds=25, cancelled=lambda: False)

@@ -395,10 +395,21 @@ class ConnectionTests(unittest.TestCase):
         self._write_frame({"type": "result", "subtype": "success", "session_id": "s"})
         self.process.native_writes.close()
         self.connection.drain_until_closed(2)
-        # Without the end-of-stream sentinel the bounded cap rejects the turn.
+        self.assertTrue(self.connection.stream_closed)
+        self.connection.drain_until_closed(0.1)
+
+    def test_drain_without_observed_eof_rejects_the_turn(self):
+        self._write_frame({"type": "result", "subtype": "success", "session_id": "s"})
         with self.assertRaises(ClaudeProtocolError) as caught:
             self.connection.drain_until_closed(0.1)
         self.assertEqual(caught.exception.code, "transport-error")
+
+    def test_eof_observed_during_interrupt_is_retained_for_the_final_drain(self):
+        self.process.native_writes.close()
+        with self.assertRaises(ClaudeProtocolError):
+            self.connection.pump()
+        self.assertTrue(self.connection.stream_closed)
+        self.connection.drain_until_closed(0.1)
 
     def test_error_control_response_surfaces_as_rpc_error(self):
         def respond_error():

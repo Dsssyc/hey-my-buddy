@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from hey_my_buddy.protocol.process_handle import ProcessHandle
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
 from hey_my_buddy.protocol.process_start import process_start
@@ -195,13 +196,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                         raise OSError("fixture Job emptiness observation unavailable")
 
                     return patch.object(OwnedJob, "active", autospec=True, side_effect=unobserved_job)
-                terminate = discovery._terminate_group
-
-                def unobserved_group(process):
-                    terminate(process)
-                    return False
-
-                return patch.object(discovery, "_terminate_group", side_effect=unobserved_group)
+                return patch.object(ProcessHandle, "shutdown_confirmed", return_value=False)
 
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
@@ -1123,16 +1118,15 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                     first = False
                     raise ValueError('fixture reader failed')
                 return select(timeout) if eof else []
-            terminate = discovery._terminate_group
-            def actual_stop(process):
-                result = terminate(process)
-                self.assertTrue(result)
+            observe = ProcessHandle.shutdown_confirmed
+            def actual_stop(handle, **kwargs):
+                self.assertTrue(observe(handle, **kwargs))
                 return stopped
             with patch.object(discovery, '_launch_command',
                               side_effect=lambda path, _environment, **_kwargs: [sys.executable, str(path)]), \
                  patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
                  patch.object(selector, 'select', side_effect=failed_once), \
-                 patch.object(discovery, '_terminate_group', side_effect=actual_stop):
+                 patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):
                 with self.assertRaises(ValueError) as caught:
                     if scan:
                         with patch.object(discovery, '_home', return_value=Path(directory)), \
@@ -1155,11 +1149,12 @@ class ProbeStopEvidenceTests(unittest.TestCase):
     def test_normal_exit_without_group_stop_evidence_is_unverified(self):
         with TemporaryDirectory() as directory:
             cli = HarnessDiscoveryTests().plain_file(Path(directory) / 'cli', 'print("fixture 1.0")\n')
-            terminate = discovery._terminate_group
-            def unobserved(process):
-                self.assertTrue(terminate(process))
-                return False
-            with patch.object(discovery, '_terminate_group', side_effect=unobserved):
+            terminate = ProcessHandle.terminate
+            def unobserved(handle, **kwargs):
+                stopped, escalated = terminate(handle, **kwargs)
+                self.assertTrue(stopped)
+                return False, escalated
+            with patch.object(ProcessHandle, 'terminate', unobserved):
                 code, output = discovery.probe([sys.executable, str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
         self.assertEqual((code, output), ('shutdown-unverified', b''))
 

@@ -1,5 +1,6 @@
 """One process owns one execution, its native work and durable result delivery."""
 
+import os
 import signal
 
 # Preserve stops received while the execution imports its runtime and reads its
@@ -9,14 +10,13 @@ _early_signals = []
 def _defer_signal(sig, _frame):
     _early_signals.append(sig)
 
-if __name__ == "__main__":
-    for _signal in (signal.SIGTERM, signal.SIGINT,
-                    *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
-        signal.signal(_signal, _defer_signal)
+if __name__ == "__main__" and os.name != "nt":
+    # The owned stop fallback and identity-verified orphan recovery send TERM.
+    # Windowless Windows executions receive their stop only over C-Two.
+    signal.signal(signal.SIGTERM, _defer_signal)
 
 import argparse
 import math
-import os
 import sys
 import threading
 import time
@@ -905,8 +905,8 @@ def main():
                           log=lambda message: print(message, flush=True))
     def interrupted(_signal, _frame):
         execution.request_stop("unknown", None, force=True)
-    for sig in (signal.SIGTERM, signal.SIGINT, *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
-        signal.signal(sig, interrupted)
+    if os.name != "nt":
+        signal.signal(signal.SIGTERM, interrupted)
     for pending in _early_signals:
         interrupted(pending, None)
     _early_signals.clear()

@@ -77,7 +77,7 @@ def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None
                           stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
                           start_new_session=True, close_fds=True)
     try:
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
     except BaseException as error:
         receipt = error.owned_popen_evidence
         evidence = {"leaderExited": receipt.exit_code is not None,

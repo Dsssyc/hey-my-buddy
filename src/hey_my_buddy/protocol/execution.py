@@ -85,6 +85,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         for key in ("HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD"):
             environment.pop(key, None)
         handle = launch_controller(
+            stop_channel="protocol",
             prepare=lambda: ([sys.executable, "-m", "hey_my_buddy.buddy.runtime.execution",
                               "--startup", str(startup)], str(evidence), environment),
             log_paths={"stdout": str(evidence / "execution.stdout.log"),

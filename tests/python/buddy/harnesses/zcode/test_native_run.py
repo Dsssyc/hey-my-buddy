@@ -406,8 +406,11 @@ class FastSeamTests(NativeRunCase):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
         observed: list[ProcessHandle] = []
+        observe = ProcessHandle.shutdown_confirmed
 
         def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            if "--version" in handle.process.args:
+                return observe(handle, settle_seconds=settle_seconds)
             observed.append(handle)
             return False
 
@@ -422,11 +425,9 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNotNone(result.end.native_exit_code)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        # The halt really signalled: the pre-terminate check and the final
-        # confirmation were both denied for this run's own one handle.
-        self.assertEqual(len(observed), 2)
-        self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        # Denied confirmation applies to this run's owned handle. An EOF exit
+        # needs no signal; withholding evidence still refuses settlement.
+        self.assertGreaterEqual(len(observed), 1)
         # No orphan: with the patch gone, the run's own captured handle shows
         # the leader reaped and the whole group confirmed gone by the real
         # observation the halt performed.
@@ -481,7 +482,7 @@ class FastSeamTests(NativeRunCase):
                          {"id": "srv-before-reply", "refused": True})
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-stop")
 
     def test_a_late_foreign_tool_frame_reaches_the_role_before_the_protocol_check(self):
         # A late tool frame from a child session keeps its projected fact and
@@ -1668,7 +1669,7 @@ class DiscoveryStopTests(NativeRunCase):
             creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
                              if windows_api is not None else nullcontext())
             with creation_time:
-                owner = native_run.ProcessHandle(child, own_group=True, log_paths={})
+                owner = native_run.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
 
             def reap():
                 try:
@@ -1762,7 +1763,7 @@ class DiscoveryStopTests(NativeRunCase):
         api = FakeAPI(process)
         close_error = OSError("fixture stderr close failed")
         stop_error = OSError("fixture wait observation failed")
-        with mock.patch.object(process, "wait", side_effect=stop_error):
+        with mock.patch.object(process, "poll", side_effect=stop_error):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(close_error, windows_api=api, process=process)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)

@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import Literal
 
 from ..private_dirs import ensure_private_dir, open_regular_fd
 from .process_identity import COMMAND_STOP_GRACE_SECONDS
@@ -18,10 +19,13 @@ class ProcessHandle:
     orphan only after the full durable identity and absent creator are checked.
     """
 
-    def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict):
+    def __init__(self, process: subprocess.Popen, *, own_group: bool, log_paths: dict,
+                 stop_channel: Literal["stdin", "protocol", "signal"]):
         self.process = process
         self.own_group = own_group
         self.log_paths = log_paths
+        self.stop_channel = stop_channel
+        self.close_input = process.stdin.close if stop_channel == "stdin" else None
         self.cancel_requested = False
         self.signalled_at: float | None = None
         self.stop_lock = threading.RLock()
@@ -55,9 +59,7 @@ class ProcessHandle:
             from .owned_process import ProcessCreationEvidence
 
             try:
-                self.terminate(grace_seconds=0)
-                process.wait(timeout=2)
-                stopped = self.shutdown_confirmed(settle_seconds=0)
+                stopped, _ = self.terminate(grace_seconds=0)
             except BaseException:
                 stopped = False
             evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,
@@ -84,16 +86,11 @@ class ProcessHandle:
     def finished(self) -> bool:
         return self.process.poll() is not None
 
-    def signal_group(self, sig: int) -> None:
+    def _signal_group(self, sig: int) -> None:
         if self.process.pid is None:
             return
         try:
-            if self.job is not None:
-                if sig == signal.SIGTERM and hasattr(signal, "CTRL_BREAK_EVENT"):
-                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
-                elif sig != signal.SIGTERM:
-                    self.job.terminate()
-            elif self.own_group and self.pgid is not None:
+            if self.own_group and self.pgid is not None:
                 os.killpg(self.pgid, sig)
             else:
                 self.process.send_signal(sig)
@@ -126,27 +123,60 @@ class ProcessHandle:
             # An unavailable process-group observation is not termination evidence.
             return True
 
-    def terminate(self, *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS) -> None:
-        """Ask the child to stop, then terminate only its owned group or Job."""
-        self.cancel_requested = True
-        self.signalled_at = time.monotonic()
-        self.signal_group(signal.SIGTERM)
-        deadline = time.monotonic() + grace_seconds
-        while time.monotonic() < deadline:
+    def _wait_for_group(self, seconds: float) -> bool:
+        deadline = time.monotonic() + seconds
+        while True:
             if self.process.poll() is not None and not self.group_alive():
-                return
-            time.sleep(0.05)
-        if self.job is not None:
-            self.signal_group(-1)
-        elif os.name == 'nt':
-            self.process.kill()
-        else:
-            self.signal_group(signal.SIGKILL)
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None and not self.group_alive():
-                return
-            time.sleep(0.05)
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.025, remaining))
+
+    def terminate(self, *, grace_seconds: float = COMMAND_STOP_GRACE_SECONDS,
+                  settle_seconds: float = 2.0) -> tuple[bool, bool]:
+        """Request, wait, POSIX TERM, force and observe the entire owned group.
+
+        Protocol owners send their native interrupt (or C-Two stop) before
+        calling this primitive. Stdio owners then close input here. A signal
+        channel is SIGTERM on POSIX and has no Windows counterpart, so Windows
+        children without a channel go straight to Job termination. Returns
+        (confirmed, escalated); a reaped leader alone never confirms shutdown.
+        """
+        with self.stop_lock:
+            self.cancel_requested = True
+            self.signalled_at = time.monotonic()
+            windows = self.job is not None or os.name == "nt"
+            if self.stop_channel == "stdin":
+                try:
+                    self.close_input()
+                except OSError:
+                    pass
+            elif self.stop_channel == "signal" and not windows:
+                self._signal_group(signal.SIGTERM)
+            if self.stop_channel != "signal" or not windows:
+                if self._wait_for_group(grace_seconds):
+                    return self.shutdown_confirmed(settle_seconds=0), False
+            elif self._wait_for_group(0):
+                return self.shutdown_confirmed(settle_seconds=0), False
+            if not windows and self.stop_channel != "signal":
+                self._signal_group(signal.SIGTERM)
+                if self._wait_for_group(1.0):
+                    return self.shutdown_confirmed(settle_seconds=0), True
+            if self.job is not None:
+                self.job.terminate()
+            elif windows:
+                self.process.kill()
+            deadline = time.monotonic() + settle_seconds
+            while True:
+                if not windows:
+                    # A child can join the group while the first KILL is in
+                    # flight. Keep stopping that owned group until observed empty.
+                    self._signal_group(signal.SIGKILL)
+                if self._wait_for_group(min(0.025, max(0.0, deadline - time.monotonic()))):
+                    return self.shutdown_confirmed(settle_seconds=0), True
+                if time.monotonic() >= deadline:
+                    return False, True
 
     def wait(self, timeout: float | None) -> int | None:
         try:

@@ -273,6 +273,17 @@ class WriterTest(AcpTestCase):
         self.assertNotIn("writerStopped", evidence)
         self.assertNotIn("stdinCloseSkippedWriterBusy", evidence)
 
+    def test_owned_stop_still_runs_when_writer_shutdown_raises(self):
+        from unittest import mock
+        client = self.start_client()
+        client.initialize(timeout=15)
+        with mock.patch.object(client.connection._writer_thread, "join",
+                               side_effect=RuntimeError("fixture writer shutdown failed")):
+            with self.assertRaisesRegex(RuntimeError, "fixture writer shutdown failed"):
+                client.shutdown(drain_seconds=0.1, settle_seconds=0.1)
+        self.assertTrue(client.handle.shutdown_confirmed(),
+                        "a connection cleanup error must still stop its owned group")
+
 
 class EofTest(AcpTestCase):
     def test_eof_while_request_pending_is_not_accepted_as_a_reply(self):

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import signal
 import sys
 import threading
 from pathlib import Path
@@ -19,7 +18,13 @@ from ..harnesses.registry import native_operation
 _cancelled = threading.Event()
 
 
-def _interrupt(_sig, _frame):
+def _read_stop():
+    # The parent alone holds stdin's write end. EOF is this controller's one
+    # stop channel, including on Windows with CREATE_NO_WINDOW.
+    # A raw read lets a normally completed operation exit while this daemon
+    # thread is still waiting, without holding Python's buffered-stdin lock.
+    while os.read(sys.stdin.fileno(), 1):
+        pass
     _cancelled.set()
 
 
@@ -69,9 +74,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control", required=True)
     args = parser.parse_args()
-    for sig in (signal.SIGTERM, signal.SIGINT,
-                *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
-        signal.signal(sig, _interrupt)
+    threading.Thread(target=_read_stop, daemon=True, name="controller-input").start()
     try:
         control = decode_strict_json(read_bytes(Path(args.control)))
         frame, code = execute(control, _cancelled)

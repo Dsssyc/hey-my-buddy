@@ -322,7 +322,10 @@ def run_turn(case):
                            "tool_use_id": "unadmitted-tool", "content": "unadmitted result"}]}}]
             sys.stdout.write("".join(json.dumps(item) + "\n" for item in frames))
             sys.stdout.flush()
-            time.sleep(0.5)
+            # Stopping a pending query uses the CLI's native interrupt before
+            # closing stdin. EOF alone still permits this unwanted work.
+            for line in sys.stdin:
+                handle_control(json.loads(line), case)
             Path("unadmitted-followup-write.txt").write_text("unadmitted native work", encoding="utf-8", newline="\n")
             write_state({"unadmittedFollowupRan": True})
             sys.exit(0)

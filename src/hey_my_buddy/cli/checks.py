@@ -100,7 +100,7 @@ def _suite_popen(root: Path, command: list[str], **kwargs):
     children = _windows_suite_children.setdefault(key, [])
     try:
         process = owned_popen(command, windows_api=_SuiteWindowsAPI(), **kwargs)
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
         children.append(handle)
         return process
     except BaseException as error:

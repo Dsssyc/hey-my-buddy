@@ -99,7 +99,7 @@ class _ReviewCases:
             adapter.prepare(context)
             handle = adapter.start(context)
             self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
-            self.assertEqual(handle.wait(20), 0, handle.error)
+            self.assertEqual(handle.wait(20), 0, handle.error or handle.result.end)
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertEqual(outcome.result["correctionCount"], 1)
@@ -120,7 +120,7 @@ class _ReviewCases:
             adapter.prepare(context)
             handle = adapter.start(context)
             self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
-            self.assertEqual(handle.wait(20), 0, handle.error)
+            self.assertEqual(handle.wait(20), 0, handle.error or handle.result.end)
             frozen = handle.router_input[1]
             outcome = adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.result)
@@ -141,7 +141,7 @@ class _ReviewCases:
             adapter.prepare(context)
             handle = adapter.start(context)
             self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
-            self.assertEqual(handle.wait(20), 0, handle.error)
+            self.assertEqual(handle.wait(20), 0, handle.error or handle.result.end)
             self.assertEqual(handle.request.permission, "read")
             self.assertTrue(handle.shutdown_confirmed())
             frozen = handle.router_input[1]

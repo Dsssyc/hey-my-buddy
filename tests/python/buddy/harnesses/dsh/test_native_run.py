@@ -551,7 +551,7 @@ class FastSeamTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--die-before-answer", "initialize"]
         unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
                        "leaderExited": True, "leaderExitCode": 0}
-        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+        with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.stop_evidence", return_value=dict(unconfirmed)), \
                 mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
             result = run(self.fast_request("prompt", scope="write"),
                          observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -664,10 +664,10 @@ class FastSeamTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
         unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
                        "leaderExited": True, "leaderExitCode": 0}
-        # The synthetic observation stays fully in memory: the shutdown and the
-        # follow-up group observation both report unconfirmed, while the real
-        # agent (already stopped) is terminated once more without any effect.
-        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+        # Stop the real agent through its owned input channel, then withhold
+        # that observation at the client's evidence boundary. Cleanup itself
+        # must still run, including when Windows holds the working directory.
+        with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.stop_evidence", return_value=dict(unconfirmed)), \
                 mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
             result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
@@ -1168,12 +1168,12 @@ class ContinuationTests(NativeRunCase):
         self.assertFalse(any(self.root.glob("*.json")),
                          "no micro task binding may exist for an incomplete turn")
 
-    def test_a_confirmed_turn_without_a_real_group_stop_saves_no_binding(self):
+    def test_a_confirmed_turn_without_group_stop_evidence_saves_no_binding(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount)
         unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
                        "leaderExited": True, "leaderExitCode": 0}
-        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+        with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.stop_evidence", return_value=dict(unconfirmed)), \
                 mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
             result = run(request, observer=worker_observer, services=bound.services,
                          cancelled=lambda: False)
@@ -1519,7 +1519,7 @@ class DiscoveryTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--die-before-answer", "initialize"]
         unconfirmed = {"shutdownConfirmed": False, "groupObserved": "unknown",
                        "leaderExited": True, "leaderExitCode": 0}
-        with mock.patch.object(native_run.AcpClient, "shutdown", return_value=dict(unconfirmed)), \
+        with mock.patch("hey_my_buddy.buddy.harnesses.dsh.acp.client.stop_evidence", return_value=dict(unconfirmed)), \
                 mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
             with self.assertRaises(native_run.NativeError) as caught:
                 self.discover()
