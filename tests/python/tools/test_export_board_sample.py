@@ -310,7 +310,12 @@ class ExportBoardSampleTests(WorkflowTestCase):
         sample = export_sample(fixture['state'], self.directory / 'sample31')
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], '31')
+            self.assertGreater(connection.execute('SELECT SUM(samples) FROM kind_statistics').fetchone()[0], 0)
+            statistics = list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort'))
         self.assertEqual(upgrade_state(sample), {'sourceSchema': 31, 'targetSchema': SCHEMA_VERSION})
+        with closing(sqlite3.connect(sample / DB_FILE)) as connection:
+            self.assertEqual(list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort')),
+                             statistics)
         self.assert_source_unchanged(before, files(fixture['state']))
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):

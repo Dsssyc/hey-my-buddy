@@ -205,7 +205,8 @@ def export_sample(source: Path, output: Path) -> Path:
                         columns = ','.join(f'"{key}"' for key in row)
                         writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
                                        f'({",".join("?" for _ in row)})', tuple(row.values()))
-                if version == str(SCHEMA_VERSION):
+                if int(version) >= 31:
+                    # Cumulative statistics were introduced in schema 31.
                     # This is a new private board containing only the selected
                     # history. Its cumulative facts describe that same history;
                     # no source-wide statistics or maintenance records escape.
