@@ -183,8 +183,9 @@ class InterruptionRecoveryTests(BoardTestCase):
             journal.assert_not_called()
         self.assertEqual(client.result(runId=task['taskId'])['result'], {'finalText': 'durable'})
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT kind FROM commands WHERE command_id='receipt-first'").fetchone()[0],
-                             'execution.result')
+            self.assertIsNone(connection.execute("SELECT kind FROM commands WHERE command_id='receipt-first'").fetchone())
+            self.assertEqual(connection.execute('SELECT result_command_id FROM attempts WHERE attempt_id=?',
+                                                (actor['attemptId'],)).fetchone()[0], 'receipt-first')
         self.assertEqual(board.store.recover_executions(), [])
 
     def test_no_receipt_preserves_the_persisted_stop_reason(self):
@@ -287,14 +288,14 @@ class InterruptionRecoveryTests(BoardTestCase):
         original = client.result(runId=task['taskId'])['selectedAttempt']['result']
         with board.store.db.read() as db:
             attempt = dict(board.store._attempt_row(db, actor['attemptId']))
-            command = dict(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone())
+            self.assertIsNone(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone())
         fsync_json(interruption._directory(board.store, attempt) / RECEIPT, {
             'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
             'commandId': command_id, 'createdAt': board.store.now(), 'report': report})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assert_idempotently_confirmed(board, client, task, actor, original, state='completed')
         with board.store.db.read() as db:
-            self.assertEqual(dict(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone()), command)
+            self.assertIsNone(db.execute('SELECT * FROM commands WHERE command_id=?', (command_id,)).fetchone())
 
     def test_bad_receipt_is_visible_once_and_does_not_block_startup_or_later_attempts(self):
         cases = (

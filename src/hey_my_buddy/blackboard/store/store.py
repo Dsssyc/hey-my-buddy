@@ -165,10 +165,21 @@ class BoardStore:
             (task_id, attempt_id, revision, kind, canonical_json(event_payload),
              actor["role"] if actor is not None else None, actor["id"] if actor is not None else None, at),
         )
+        seq = int(cursor.lastrowid)
+        if kind == "attempt.activity":
+            connection.execute(
+                "DELETE FROM events WHERE kind=? AND attempt_id=? AND seq<?",
+                (kind, attempt_id, seq),
+            )
+        elif kind in ("harness.checked", "harness.probe_unknown", "harness.account_observed"):
+            connection.execute(
+                "DELETE FROM events WHERE kind=? AND json_extract(payload_json,'$.harness')=? AND seq<?",
+                (kind, event_payload["harness"], seq),
+            )
         from ..tasks.macro_tasks import record_activity
-        record_activity(connection, task_id, int(cursor.lastrowid), at)
-        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=int(cursor.lastrowid), now=at)
-        return int(cursor.lastrowid)
+        record_activity(connection, task_id, seq, at)
+        self.workflow.owned_event(connection, task_id=task_id, kind=kind, seq=seq, now=at)
+        return seq
 
     def head(self) -> int:
         return self._head
@@ -291,7 +302,9 @@ class BoardStore:
                 "This commandId already belongs to a different request; use a new commandId",
                 commandId=command_id,
             )
-        return json.loads(row["response_json"])
+        from ..tasks.command_receipts import replay_response
+
+        return replay_response(self.workflow, connection, kind, json.loads(row["response_json"]))
 
     def _store_receipt(
         self,
@@ -305,6 +318,8 @@ class BoardStore:
         attempt_id: str | None = None,
         subject: str | None = None,
     ) -> None:
+        from ..tasks.command_receipts import stored_response
+
         connection.execute(
             "INSERT OR REPLACE INTO commands(command_id, task_id, attempt_id, kind, request_hash, response_json,"
             " subject, created_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -314,7 +329,7 @@ class BoardStore:
                 attempt_id,
                 kind,
                 sha256_text(canonical_json(request)),
-                canonical_json(response),
+                canonical_json(stored_response(kind, response)),
                 subject,
                 self.now(),
             ),
@@ -2050,7 +2065,6 @@ class BoardStore:
                 if known_console_stop is None:
                     raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
                                      field="terminationReason")
-            subject = ("recovery:" + attempt_id_param) if recovered else self._subject(params["nonce"], attempt_id_param)
             if attempt["result_json"] is not None and shutdown_evidence is None:
                 previous = json.loads(attempt["result_json"])
                 # A later service proof changes only shutdownConfirmed. An exact
@@ -2085,10 +2099,6 @@ class BoardStore:
                 previous = json.loads(attempt["result_json"])
                 if not self._same_result(previous, {**request, "shutdownConfirmed": False}):
                     raise BoardError("CONFLICT", "Shutdown proof may not change the committed result")
-            else:
-                receipt = self._receipt(connection, command_id, "execution.result", request, subject)
-                if receipt is not None:
-                    return receipt
             now = self.now()
             for artifact in verified_artifacts:
                 connection.execute(
@@ -2275,11 +2285,6 @@ class BoardStore:
             if recovered and shutdown_confirmed:
                 connection.execute("UPDATE attempt_interruptions SET state='settled',seal_error=NULL WHERE attempt_id=?",
                                    (attempt_id_param,))
-            if shutdown_evidence is None:
-                self._store_receipt(
-                    connection, command_id, "execution.result", request, response,
-                    task_id=attempt["task_id"], attempt_id=attempt["attempt_id"], subject=subject)
-
             head = self._head_of(connection)
         self._notify(head)
         return response
