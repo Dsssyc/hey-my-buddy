@@ -4,7 +4,7 @@ version = "0.51.0"
 description = "A durable agent blackboard with independent workers and C-Two RPC"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "c-two==0.7.6",
+    "c-two==0.8.0",
     "portalocker>=3,<4",
     "psutil>=7,<8",
     "pywin32; sys_platform == 'win32'",

@@ -691,7 +691,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.7.6")
+        self.assertEqual(cc.__version__, "0.8.0")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
