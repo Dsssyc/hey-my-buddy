@@ -13,8 +13,8 @@
 | `--strict-mcp-config`、空的 `--mcp-config` | 两种调用删除 | 不再清空用户 MCP 或挑选来源 |
 | `--no-session-persistence` | 发现保留，执行新增 | ADR-030 第 3 条；没有原生续接能力 |
 | `--settings <native-root>/settings.json` | 执行保留 | 只表达当前沙盒权限，顶层只有 `sandbox` |
-| `--restricted` | 执行保留 | 现有原生文件权限边界，属于冻结的权限档而非设置来源选择 |
-| `--tools` | 执行保留 | 写入为现有 WRITABLE_TOOLS，只读为 READONLY_TOOLS |
+| `--restricted` | 执行删除 | Host 提供的 2.1.284 帮助说明它同时忽略用户、项目与本地设置；原归类有误 |
+| `--tools` | 执行保留并补 Skill | 写入为 WRITABLE_TOOLS，只读为 READONLY_TOOLS；Skill 在两边均可调用 |
 | `--permission-prompt-tool stdio` | 执行保留 | 原生权限请求由控制器明确拒绝 |
 | `--permission-mode acceptEdits/default` | 执行保留 | 写入接受普通检出编辑，只读沿用 default |
 | `--disallowedTools` | 按请求保留 | 只读写工具拒绝与已有额外会话级拒绝；不在这一批改变 Router 工具政策 |
@@ -212,3 +212,42 @@ blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTest
 blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_a_turn_publishes_the_bound_root_message_tokens
 blackboard.evaluation.test_other_native_observations.ZcodeAdapterObservationTests.test_no_native_usage_reports_unknown_not_zero
 ```
+
+## Host 第二轮打回后的修正
+
+Host 在 `cf780888` 上报告检查运行器正常、前端全量通过、Python 完整检查 216 个文件中 215 个通过，并认可 anthropic 身份连续性；这是 Host 提供的验证事实，本回合不代称运行或复验完整检查。以下三处在当前候选修正，真实权限效果仍由 Host 验收。
+
+### 测试环境的封闭性
+
+检查运行器 `checks.test_environment` 与公共夹具 `support._child_environment` 使用完全相同的四个前缀过滤：`BUDDY_`、`ANTHROPIC_`、`CLAUDE_CODE_`、`C2_`，另保留各自运行时 pin 的删除。测试自己的封闭环境与产品允许读取用户配置是两回事；没有恢复删除的逐项供应方清单。测试既放入已知的 Bedrock/Vertex/Foundry 开关，也放入没有被枚举过的 CLAUDE_CODE_UNLISTED_PROVIDER，按前缀断言；不在这四个前缀下的变量不再因旧清单被误当成必须删除的项。测试随后自行注入的私有根与 fixture 控制照旧。
+
+### 删除 restricted 后的权限边界
+
+`--restricted` 整个删除；其余已有模式、允许内置工具、只读写工具拒绝、额外会话拒绝、stdio 权限回调和沙盒设置照旧，Skill 是本轮补入的唯一内置工具。`settings.json` 顶层仍只有 sandbox，没有新增用户配置覆盖、路径白名单、模式开关或权限档。
+
+| 要守住的事 | 现有原生机制与控制器 | 从硬模式变成请求拒绝的部分、用户可放开的部分 |
+| --- | --- | --- |
+| Bash 在沙盒内运行，无沙盒外退路 | `sandbox.enabled/failIfUnavailable`、`allowUnsandboxedCommands:false`、现有 `excludedCommands:[]`，加上 stdio 权限请求统一 deny | 禁止的是沙盒失败后的自动重试退路，不能宣称覆盖所有用户主动例外；额外目录、sandbox.filesystem.allowWrite/disabled 或合并后仍有效的 excludedCommands 可能扩大或取消对应隔离，排除命令走普通权限流程，触发请求时由控制器拒绝，用户预批准则随配置放开；managed 策略仍由 Claude 决定，本批不清空这些用户字段 |
+| 可写回合的文件工具只在普通检出内自动编辑 | 启动 cwd 是分配的检出，CLI `--permission-mode acceptEdits` 只对原生工作目录里的普通编辑自动允许；剩余请求由 `_native_request_response` 一律 deny | restricted 的固定目录围栏已经消失，检出之外的访问依赖原生路径权限判定；用户 additionalDirectories、allow 规则或 skill 的工具预授权可能使访问直接被批准，不到达控制器，这些随用户自己的配置放开，不能再声称只写检出是无条件硬保证 |
+| 只读回合不调用写内置工具 | `--tools Glob,Grep,LS,Read,Skill`，`--disallowedTools Bash,Edit,MultiEdit,NotebookEdit,Write`，`--permission-mode default`，权限请求统一 deny | Skill 只是加载指令，不给它另建执行通道；会话中的内置写工具仍受 deny 规则约束，普通 allow 与 skill 预授权不能覆盖 deny；MCP 和钩子是用户原有配置，内置 tools 列表不管它们，不能以此声称任意 MCP/钩子的副作用都被阻止；Router 已有额外 MCP 等拒绝保持原样 |
+| 不进入绕过权限模式 | 两种执行均显式传一次 `--permission-mode acceptEdits/default`，不传 dangerously-skip-permissions、allow-dangerously-skip-permissions 或 bypassPermissions | 显式模式覆盖设置文件里的默认模式，包括默认 bypassPermissions；用户自己的 allow 规则/skill 授权让某些操作不触发请求，这属于原生预批准，并不等于本产品启用了 bypass 模式；其余权限请求仍 deny，不注入 disableBypassPermissionsMode 来再盖住用户设置 |
+
+命令行模式的优先级直接核对官方 [CLI reference 的 permission-mode 项](https://code.claude.com/docs/en/cli-reference)：该参数覆盖设置文件的 defaultMode，因此无需另加开关。`--tools` 只限定内置工具，`--disallowedTools` 是会话 deny，依据同页的对应项；原生规则先 deny 再 ask 再 allow，工作目录可被 additionalDirectories 扩展，依据 [Configure permissions](https://code.claude.com/docs/en/permissions)。Bash 沙盒是单独的机制，不约束 MCP/钩子或直接文件工具，路径扩展与禁止沙盒外重试的依据是 [sandboxing](https://code.claude.com/docs/en/sandboxing)。这些是文档核对和由已有原生机制推得的边界，未在 2.1.284 上做真实优先级或越界实验；Host 给出的该版本 restricted 帮助是删除它的直接版本依据。
+
+### Skill 的名字与授权
+
+官方 [Extend Claude with skills 的权限章节](https://code.claude.com/docs/en/skills) 直接以 Skill 作为工具名，并给出 Skill(name) 权限规则；因此两份原生内置工具清单加入 `Skill`，不使用旧 SlashCommand 名字。该文档也说明 skill 的 allowed-tools 可以预授权调用，本产品不删除它；它不能把已经被会话 deny 的写内置工具重新允许。只读调用中 Skill 仍可载入用户指令和只读流程，其后调用的内置工具仍过原有可用工具/deny/权限判定；任意用户 MCP、钩子或其他外部执行的副作用不在这份只读内置清单的保证内，真实回合由 Host 观察。
+
+来源核对只读取以上官方文档，没有读取厂商代码、用户配置或凭据，也没有启动 Claude CLI；本文保留当前版本和原生事件证据边界，不把模拟测试当作真实权限证明。新版参数回归断言读写启动均无 restricted，模式、stdio 权限回调、沙盒设置和只读写工具拒绝保持，读写都含 Skill；prefix 与参数回归在修复前分别因泄漏 CLAUDE_CODE_、仍有 restricted、缺 Skill 失败，修复后通过。
+
+当前 Router 工具事件表没有把 Skill 注册为只读类别，仍会把该工具事实记成 other，审阅答案可能因此不能发布；本轮只修原生工具可用性，没有把一个可带动态授权和 fork 的 Skill 调用冒称 read，也没有修改批次 4 所属的分类和判定规则，后续由 Host 在真实 Router 验收与后续批次里处理。
+
+本回合 `cli.test_support_cleanup` 运行五个不启动真实服务且不需要共享内存的用例，包含 Host 指定的 `test_child_environment_drops_inherited_ownership_and_credentials`；以下三个未运行，文件级完整通过仍需 Host 在其环境确认，不能把五项局部通过称作全文件通过：
+
+```text
+cli.test_support_cleanup.FixtureCleanupTests.test_r06_child_uses_private_state_and_explicit_catalog
+cli.test_support_cleanup.FixtureCleanupTests.test_cleanup_stops_cli_started_replacement_after_restart
+cli.test_support_cleanup.FixtureCleanupTests.test_private_state_context_stops_its_cli_started_service
+```
+
+本回合最终复验 245 项通过，日志在忽略的 `tmp/batch3a-third-review-tests-final.log`；另外单独运行 `cli.test_support_cleanup` 的上述五项，五项全部通过，指定失败用例明确为 ok；完整八项没有在此环境运行。`git diff --check` 通过，src/tests/packaging/skills 的 18 个删除项审计仍无匹配，Claude 生产启动构造器也没有 restricted。测试目录里保留的 restricted 字样仅用于断言它不存在，文档字样仅用于说明删除依据。没有运行前端、真实 Claude 回合、完整检查或故障注入。

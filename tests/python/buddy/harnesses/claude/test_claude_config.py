@@ -104,7 +104,7 @@ class ClaudeConfigTests(unittest.TestCase):
                               output_schema=ending)
         for flag, value in (("-p", None), ("--input-format", "stream-json"), ("--output-format", "stream-json"),
                             ("--verbose", None), ("--no-session-persistence", None),
-                            ("--restricted", None), ("--permission-prompt-tool", "stdio"),
+                            ("--permission-prompt-tool", "stdio"),
                             ("--settings", "/private/settings.json"),
                             ("--session-id", "1b2f9c34-1111-4222-8333-444455556666"),
                             ("--model", "claude-opus-5"), ("--effort", "high"),
@@ -113,7 +113,7 @@ class ClaudeConfigTests(unittest.TestCase):
                 self.assertIn(flag, args)
             else:
                 self.assertEqual(flag_value(args, flag), value, flag)
-        for flag in ("--safe-mode", "--strict-mcp-config", "--mcp-config", "--setting-sources"):
+        for flag in ("--restricted", "--safe-mode", "--strict-mcp-config", "--mcp-config", "--setting-sources"):
             self.assertNotIn(flag, args)
         self.assertNotIn("--resume", args)
         self.assertEqual(flag_value(args, "--tools"), ",".join(WRITABLE_TOOLS))
@@ -122,6 +122,7 @@ class ClaudeConfigTests(unittest.TestCase):
         self.assertNotIn("bypassPermissions", args)
         self.assertIn("Bash", WRITABLE_TOOLS)
         self.assertIn("Write", WRITABLE_TOOLS)
+        self.assertIn("Skill", flag_value(args, "--tools").split(","))
 
     def test_default_effort_omits_the_effort_flag(self):
         args = execution_args(session_id="1b2f9c34-1111-4222-8333-444455556666", model="claude-haiku-4-5",
@@ -135,6 +136,8 @@ class ClaudeConfigTests(unittest.TestCase):
                               effort="high", settings_path="/s.json", read_only=True,
                               output_schema={"type": "object"})
         self.assertEqual(flag_value(args, "--tools"), ",".join(READONLY_TOOLS))
+        self.assertIn("Skill", flag_value(args, "--tools").split(","))
+        self.assertNotIn("--restricted", args)
         self.assertEqual(set(READONLY_TOOLS) & {"Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"}, set())
         self.assertEqual(flag_value(args, "--permission-mode"), "default")
         self.assertEqual(flag_value(args, "--disallowedTools").split(","),

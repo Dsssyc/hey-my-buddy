@@ -29,17 +29,17 @@ PACKAGE_REGISTRY_DOMAINS = (
     "static.crates.io",
 )
 
-#: Explicit built-in tools under ``--restricted``. File and Bash tools confine
-#: file access to the allocated cwd; subagents stay available through both the
+#: Explicit built-in tools; native permissions govern file access and the
+#: sandbox governs Bash. Skills and subagents stay available through Skill and the
 #: current ``Agent`` tool and the older ``Task`` spelling, and their models are
 #: recorded only as an observed set. ``--json-schema`` contributes its own
 #: StructuredOutput tool by itself.
 WRITABLE_TOOLS = ("Agent", "Bash", "Edit", "Glob", "Grep", "LS", "MultiEdit",
-                  "NotebookEdit", "Read", "Task", "TodoWrite", "Write")
+                  "NotebookEdit", "Read", "Skill", "Task", "TodoWrite", "Write")
 
 #: A read-only workspace must refuse writes, and sandboxed Bash can still write
 #: inside the cwd, so a read-only turn exposes no Bash and no write tools at all.
-READONLY_TOOLS = ("Glob", "Grep", "LS", "Read")
+READONLY_TOOLS = ("Glob", "Grep", "LS", "Read", "Skill")
 
 #: Session-wide hard denials for read-only turns. The disallow list binds native
 #: child agents too, so read-only is enforced by the permission layer rather
@@ -131,7 +131,6 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     """
     args = [*base_args(),
             "--no-session-persistence",
-            "--restricted",
             "--tools", ",".join(READONLY_TOOLS if read_only else WRITABLE_TOOLS),
             "--permission-prompt-tool", "stdio",
             "--settings", settings_path,
@@ -144,9 +143,10 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
     else:
         # Ordinary in-worktree edits must not become manual approvals (default
         # mode would deny every edit and always end as attention). acceptEdits
-        # plus --restricted keeps edits confined to the allocated checkout;
-        # Bash still runs only in the sandbox with no unsandboxed fallback, and
-        # bypassPermissions is never used.
+        # auto-approves edits in native working directories; user allow rules
+        # can extend access. Any remaining request is denied by the controller.
+        # Bash uses the sandbox without an unsandboxed fallback, and this
+        # explicit CLI mode overrides the user's permissions.defaultMode.
         args += ["--permission-mode", "acceptEdits"]
     if effort != DEFAULT_EFFORT:
         args += ["--effort", effort]

@@ -41,20 +41,19 @@ def wait_until(predicate, timeout: float = 5.0, interval: float = 0.01):
 
 
 class ChecksEnvironmentTests(unittest.TestCase):
-    def test_shell_provider_flags_need_no_retired_isolation_list(self):
+    def test_shell_provider_flags_are_removed_by_prefix_in_both_test_environments(self):
         from hey_my_buddy.buddy.harnesses.discovery import native_environment
         from support import _child_environment
 
-        with patch.dict(os.environ, {"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1"}):
+        inherited = {"CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1",
+                     "CLAUDE_CODE_UNLISTED_PROVIDER": "synthetic", "CLAUDE_CODE_EFFORT_LEVEL": "max"}
+        with patch.dict(os.environ, inherited):
             environment = checks.test_environment(Path("/repo"))
             with tempfile.TemporaryDirectory() as directory:
                 fixture_environment = _child_environment(Path(directory))
-        self.assertEqual(environment["CLAUDE_CODE_USE_BEDROCK"], "1")
-        self.assertEqual(fixture_environment["CLAUDE_CODE_USE_BEDROCK"], "1")
-        native = native_environment(environment)
-        self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", native)
-        self.assertNotIn("CLAUDE_CODE_USE_VERTEX", native)
-        self.assertNotIn("CLAUDE_CODE_USE_BEDROCK", native_environment(fixture_environment))
+        for values in (environment, fixture_environment):
+            self.assertFalse(any(key.startswith("CLAUDE_CODE_") for key in values))
+            self.assertFalse(any(key.startswith("CLAUDE_CODE_") for key in native_environment(values)))
 
     def test_environment_is_private_and_unpinned(self):
         inherited = {

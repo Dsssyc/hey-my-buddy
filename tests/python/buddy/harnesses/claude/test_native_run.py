@@ -261,7 +261,7 @@ class ReadCarrierTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["profileId"], "legal")
         policy = result.effective_policy.tools
-        self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read"])
+        self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read", "Skill"])
         self.assertEqual(policy.requested.value["permissionMode"], "default")
         # The denials and the offline allowlist are the request's own values.
         self.assertEqual(policy.requested.value["disallowedTools"],
@@ -621,7 +621,7 @@ class DiscoveryTests(NativeRunCase):
                             for p in profiles))
         self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
         self.assertEqual(self.fixture_state()["userTurns"], 0)
-        for flag in ("--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
+        for flag in ("--restricted", "--setting-sources", "--strict-mcp-config", "--mcp-config", "--safe-mode"):
             self.assertNotIn(flag, self.fixture_state()["argv"])
         request = self.request().model_copy(update={"configuration": RunConfiguration(**{k: selected[k] for k in ("provider", "model", "effort")})})
         result = self.execute(request)

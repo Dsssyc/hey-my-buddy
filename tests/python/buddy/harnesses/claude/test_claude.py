@@ -496,7 +496,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
-        self.assertIn("--restricted", argv)
+        self.assertNotIn("--restricted", argv)
         self.assertIn("--no-session-persistence", argv)
         for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources", "--mcp-config"):
             self.assertNotIn(flag, argv)
@@ -523,7 +523,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
         tools = flag_value(argv, "--tools")
-        self.assertEqual(set(tools.split(",")), {"Glob", "Grep", "LS", "Read"})
+        self.assertEqual(set(tools.split(",")), {"Glob", "Grep", "LS", "Read", "Skill"})
         self.assertEqual(flag_value(argv, "--permission-mode"), "default")
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
