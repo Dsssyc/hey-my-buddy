@@ -11,6 +11,7 @@ import threading
 import time
 
 from ...errors import BoardError
+from ...json_codec import canonical_json
 from .live_registry import LiveRegistry
 from ...protocol.execution import BUDGET, execution_directory, launch_execution, read_execution_endpoint, read_execution_receipt
 from ...protocol.process_identity import inspect_process_identity, boot_id, kill_verified_process_group
@@ -363,7 +364,12 @@ class ExecutionScheduler:
     def _unknown(self, attempt_id: str, error) -> None:
         self.store.execution_connection(attempt_id, connected=False)
         detail = error.message if isinstance(error, BoardError) else str(error)
-        self._issue(attempt_id, "connection", BoardError("EXECUTION_UNKNOWN", detail))
+        details = error.details if isinstance(error, BoardError) else {}
+        if details:
+            # execution_issues stores the message; retain the structured cause
+            # there as well as on the error passed to the recording boundary.
+            detail += f"; {canonical_json(details)}"
+        self._issue(attempt_id, "connection", BoardError("EXECUTION_UNKNOWN", detail, **details))
 
     def _recover_if_gone(self, attempt_id: str, identity: dict, observation: str | None = None) -> bool:
         observation = observation or inspect_process_identity(identity)

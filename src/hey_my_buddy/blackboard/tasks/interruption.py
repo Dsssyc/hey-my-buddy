@@ -161,6 +161,21 @@ def _cleanup_dead_material(board, attempt, identity, observation):
         except OSError as error:
             cleaned = False
             board.record_execution_issue(attempt['attempt_id'], 'private-material-cleanup', error)
+    # Execution death precedes this function, but surviving native work can
+    # still be unknown. Only committed complete stop proof permits deletion.
+    with board.db.read() as connection:
+        stopped = board._attempt_row(connection, attempt['attempt_id'])['shutdown_confirmed']
+    if stopped:
+        from ...private_dirs import cleanup_attempt_credentials
+        adapter = attempt['model_harness'] if attempt['adapter'] == 'decision' else attempt['adapter']
+        try:
+            cleanup_attempt_credentials(board.directory, adapter, attempt['task_id'], attempt['attempt_id'])
+            board.clear_execution_issue(attempt['attempt_id'], 'credential-cleanup')
+        except (BoardError, OSError) as error:
+            cleaned = False
+            board.record_execution_issue(attempt['attempt_id'], 'credential-cleanup', error)
+    else:
+        cleaned = False
     if cleaned:
         board.complete_execution_cleanup(attempt['attempt_id'])
 

@@ -5654,8 +5654,6 @@ class WorkflowCoordinator:
         from ... import private_dirs
         for micro_task_id, attempt_ids in failed_attempts.items():
             for adapter in private_dirs.ADAPTERS:
-                for attempt_id in attempt_ids:
-                    private_dirs.cleanup_attempt_credentials(self.board.directory, adapter, micro_task_id, attempt_id)
                 private_dirs.remove_tree(
                     private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
                     keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)

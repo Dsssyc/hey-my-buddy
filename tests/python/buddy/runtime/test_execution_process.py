@@ -28,17 +28,59 @@ from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
 
 class ExecutionEndpointTests(unittest.TestCase):
     def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
-        claim = {"turn": {"turnId": "turn-1", "input": {
+        base = {"task": {"taskId": "task", "spec": {"adapter": "command"}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
+                "agentCredential": "private-fixture"}
+        claim = {**base, "turn": {"turnId": "turn-1", "input": {
             "executionWorkspace": {"path": "/workspace"}}}}
-        validate_claim_turn({})  # Internal command and decision executions have no turn.
+        validate_claim_turn(base)  # Internal command executions have no turn.
         validate_claim_turn(claim)
         for bad in (None, [], {"turnId": "", "input": claim["turn"]["input"]},
                     {"turnId": "turn-1", "input": []},
                     {"turnId": "turn-1", "input": {"executionWorkspace": []}},
                     {"turnId": "turn-1", "input": {"executionWorkspace": {"path": ""}}}):
             with self.subTest(turn=bad), self.assertRaises(BoardError) as refused:
-                validate_claim_turn({"turn": bad})
+                validate_claim_turn({**base, "turn": bad})
             self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
+        with self.assertRaises(BoardError):
+            validate_claim_turn({**claim, "agentCredential": None})
+
+    def test_decision_claim_requires_explicit_mode_buddy_and_budget(self):
+        base = {"task": {"taskId": "task", "spec": {"adapter": "decision"}},
+                "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1}}
+        decision = {"routingMode": "review", "buddy": {"harness": "codex"}, "budget": {"timeoutSeconds": 60}}
+        validate_claim_turn({**base, "decisionInput": decision})
+        for bad in (None, {}, {**decision, "routingMode": None}, {**decision, "buddy": {}},
+                    {**decision, "budget": []}):
+            with self.subTest(decision=bad), self.assertRaises(BoardError) as caught:
+                validate_claim_turn({**base, "decisionInput": bad})
+            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_endpoint_connection_and_call_errors_retain_structured_cause(self):
+        identity = launch_protocol.RunIdentity(task_id="task", attempt_id="attempt", generation=1,
+                                              invocation_id="execution")
+        client = launch_protocol.ExecutionLiveClient(identity, address="private-address", name="fixture",
+            instance_id="i" * 64, token="t" * 64, state_dir=Path("/private/fixture"))
+        details = {"io_kind": "permission_denied", "raw_os_error": 13, "io_operation": "connect"}
+        for stage in ("connection", "call"):
+            with self.subTest(stage=stage):
+                error = RuntimeError("native IPC failed")
+                for field, value in details.items():
+                    setattr(error, field, value)
+                peer = mock.Mock()
+                peer.stop.side_effect = error
+                connection = mock.MagicMock()
+                connection.__enter__.return_value = peer
+                with mock.patch.object(launch_protocol.rpc_config, "configure_client"), \
+                     mock.patch.object(launch_protocol.cc, "connect", return_value=connection,
+                                       side_effect=error if stage == "connection" else None), \
+                     mock.patch.object(launch_protocol.cc, "with_call_options", return_value=peer), \
+                     self.assertRaises(BoardError) as caught:
+                    client.stop("service", force=True)
+                self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
+                for field, value in details.items():
+                    self.assertEqual(caught.exception.details[field], value)
+                self.assertIs(caught.exception.__cause__, error)
 
     def test_context_uses_validated_turn_and_optional_private_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -66,6 +108,8 @@ class ExecutionEndpointTests(unittest.TestCase):
                 "argv": ["/bin/echo", "hello"]}},
                 "attempt": {"taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1}}
             execution = Execution(claim, state, "n" * 64, client=object())
+            execution.directory.mkdir(parents=True, mode=0o700)
+            execution.evidence_directory.mkdir(parents=True, mode=0o700)
             execution.control = mock.Mock(cancel_view=None)
             journal = process_identity.NativeProcessJournal(state / "native-journal.json", {
                 "taskId": "task-identity", "attemptId": "attempt-identity", "generation": 1})

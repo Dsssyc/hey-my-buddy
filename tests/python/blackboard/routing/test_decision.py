@@ -684,6 +684,8 @@ class DecisionFailureTests(DecisionTestCase):
         request = self.request(board, request_id="pick-cancel")
         claim = admit_execution(board.client(), 'n' * 32)['claim']
         execution = Execution(claim, self.directory, 'n' * 32, client=board.client())
+        execution.directory.mkdir(parents=True, mode=0o700)
+        execution.evidence_directory.mkdir(parents=True, mode=0o700)
         thread = threading.Thread(target=execution.run, daemon=True)
         thread.start()
         self.assertTrue(wait_for(lambda: self.readonly_start.called, timeout=20))
@@ -718,7 +720,9 @@ class DecisionFailureTests(DecisionTestCase):
         claim = admit_execution(client, "n" * 32, task_id=first["runId"])["claim"]
         self.assertIsNotNone(claim)
         from hey_my_buddy.protocol.execution import fsync_json
-        fsync_json(board.directory / 'attempts' / first['runId'] / claim['attempt']['attemptId'] / 'spawn.intent',
+        evidence = board.directory / 'attempts' / first['runId'] / claim['attempt']['attemptId']
+        evidence.mkdir(parents=True)
+        fsync_json(evidence / 'spawn.intent',
                    {'taskId': first['runId'], 'attemptId': claim['attempt']['attemptId'], 'generation': 1})
 
         # Startup retains the request while the scheduler reconnects its execution.
@@ -759,6 +763,7 @@ class DecisionFailureTests(DecisionTestCase):
                     "startedAt": 123250000, "processGroupId": 123, "jobName": None}
         from hey_my_buddy.protocol.execution import fsync_json
         evidence = board.directory / "attempts" / first["runId"] / attempt["attemptId"]
+        evidence.mkdir(parents=True)
         binding = {"taskId": first["runId"], "attemptId": attempt["attemptId"], "generation": attempt["generation"]}
         fsync_json(evidence / "spawn.intent", binding)
         fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": identity})

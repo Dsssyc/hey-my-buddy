@@ -27,6 +27,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         claim = admit_execution(client, 'n' * 32)['claim']
         actor = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'],
                  'nonce': 'n' * 32}
+        (board.directory / 'attempts' / task['taskId'] / actor['attemptId']).mkdir(parents=True)
         if identity:
             board.call('execution_progress', {**actor, 'processIdentity': IDENTITY})
             journal = self.journal(board, actor['attemptId'])
@@ -187,6 +188,101 @@ class InterruptionRecoveryTests(BoardTestCase):
             self.assertIsNone(connection.execute("SELECT kind FROM commands WHERE kind='execution.result'").fetchone())
         self.assertEqual(board.store.recover_executions(), [])
 
+    def test_credentials_are_cleaned_by_service_after_complete_stop_on_each_exit_path(self):
+        for exit_path in ('delivered', 'crashed', 'forced'):
+            with self.subTest(exit_path=exit_path):
+                board, client, task, _, actor = self.claimed()
+                root = Path(self.journal(board, actor['attemptId'])['path']).parent
+                credential = root / 'agent-credential.json'
+                credential.write_text('private fixture')
+                if exit_path == 'delivered':
+                    board.call('execution_result', {**actor, 'status': 'ok', 'shutdownConfirmed': True})
+                elif exit_path == 'forced':
+                    client.cancel(runId=task['taskId'])
+                    board.store.record_execution_deadline(actor['attemptId'], 'forced-stop')
+                with patch.object(processes, 'inspect_process_identity', return_value='alive'):
+                    board.store.recover_executions()
+                self.assertTrue(credential.exists(), 'execution identity still exists')
+                with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+                    board.store.recover_executions()
+                self.assertTrue(client.get(runId=task['taskId'])['shutdownConfirmed'])
+                self.assertFalse(credential.exists())
+                with board.store.db.read() as connection:
+                    self.assertFalse(board.store._attempt_row(connection, actor['attemptId'])['cleanup_pending'])
+
+    def test_native_stop_unknown_keeps_credentials_until_complete_proof_arrives(self):
+        board, client, task, _, actor = self.claimed()
+        root = Path(self.journal(board, actor['attemptId'])['path']).parent
+        credential = root / 'agent-credential.json'
+        credential.write_text('private fixture')
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
+                patch.object(interruption, '_stop_native', return_value=(False, None)):
+            board.store.recover_executions()
+        self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+        self.assertTrue(credential.exists())
+        with board.store.db.read() as connection:
+            self.assertTrue(board.store._attempt_row(connection, actor['attemptId'])['cleanup_pending'])
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            board.store.recover_executions()
+        self.assertTrue(client.get(runId=task['taskId'])['shutdownConfirmed'])
+        self.assertFalse(credential.exists())
+
+    def test_credential_cleanup_failure_is_visible_and_retried_without_losing_receipt(self):
+        board, client, task, _, actor = self.claimed()
+        root = Path(self.journal(board, actor['attemptId'])['path']).parent
+        credential = root / 'agent-credential.json'
+        credential.write_text('private fixture')
+        receipt = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
+                   'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
+        fsync_json(root / RECEIPT, receipt)
+        original = (root / RECEIPT).read_bytes()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
+                patch('hey_my_buddy.private_dirs.cleanup_attempt_credentials', side_effect=OSError('remove denied')):
+            board.store.recover_executions()
+        issues = client.get(runId=task['taskId'])['selectedAttempt']['issues']
+        self.assertTrue(any(issue['stage'] == 'credential-cleanup' and 'remove denied' in issue['message']
+                            for issue in issues), issues)
+        self.assertTrue(credential.exists())
+        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            board.store.recover_executions()
+        self.assertFalse(credential.exists())
+        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        self.assertFalse(client.get(runId=task['taskId'])['selectedAttempt']['issues'])
+
+    def test_failed_recovery_commit_retains_exact_receipt_and_credentials(self):
+        board, client, task, _, actor = self.claimed()
+        root = Path(self.journal(board, actor['attemptId'])['path']).parent
+        credential = root / 'agent-credential.json'
+        credential.write_text('private fixture')
+        receipt = {'taskId': task['taskId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
+                   'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
+        fsync_json(root / RECEIPT, receipt)
+        original = (root / RECEIPT).read_bytes()
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
+                patch.object(board.store, 'execution_result', side_effect=RuntimeError('commit failed')):
+            self.assertEqual(board.store.recover_executions(), [])
+        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        self.assertTrue(credential.exists())
+        self.assertTrue(any(issue['stage'] == 'recovery' for issue in
+                            client.get(runId=task['taskId'])['selectedAttempt']['issues']))
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+            self.assertEqual(len(board.store.recover_executions()), 1)
+        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        self.assertFalse(credential.exists())
+
+    def test_unknown_connection_retains_structured_transport_details_in_issue(self):
+        from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
+        board, client, task, _, actor = self.claimed()
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
+        scheduler._unknown(actor['attemptId'], BoardError('LIVE_UNAVAILABLE', 'connect failed',
+            io_kind='permission_denied', raw_os_error=13, io_operation='connect'))
+        issue = client.get(runId=task['taskId'])['selectedAttempt']['issues'][0]
+        self.assertEqual(issue['code'], 'EXECUTION_UNKNOWN')
+        for field in ('io_kind', 'raw_os_error', 'io_operation'):
+            self.assertIn(field, issue['message'])
+        self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+
     def test_no_receipt_preserves_the_persisted_stop_reason(self):
         for initiator, expected in (('console', 'console-stop'), ('service', 'service-stop'),
                                     ('unknown', 'unknown-stop')):
@@ -331,7 +427,9 @@ class InterruptionRecoveryTests(BoardTestCase):
                 fsync_json(path, envelope)
                 if name == 'json':
                     path.write_text(bad, encoding="utf-8", newline="\n")
-                fsync_json(interruption._directory(board.store, later) / RECEIPT, {
+                later_root = interruption._directory(board.store, later)
+                later_root.mkdir(parents=True)
+                fsync_json(later_root / RECEIPT, {
                     'taskId': good_task['taskId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
                     'createdAt': board.store.now(),
                     'report': {'status': 'ok', 'result': {'native': 'later'}, 'shutdownConfirmed': True}})

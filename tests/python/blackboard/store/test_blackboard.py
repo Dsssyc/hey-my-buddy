@@ -304,6 +304,8 @@ class TestCrashWindows(BoardTestCase):
         }
         execution = Execution(claim, self.directory, "a" * 32,
                               client=client, log=lambda _message: None)
+        execution.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
         return execution, claim
 
     @staticmethod
@@ -405,9 +407,9 @@ class TestCrashWindows(BoardTestCase):
             receipt = worker.execute()
         self.assertEqual(calls, 2)
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
-        self.assertFalse(credential.exists(), "native stop proof permits credential cleanup")
+        self.assertTrue(credential.exists(), "service owns cleanup after execution death")
 
-    def test_persistent_cleanup_error_cannot_erase_native_stop_or_prevent_receipt(self):
+    def test_execution_writes_receipt_without_deleting_its_credentials(self):
         import hey_my_buddy.buddy.runtime.execution as worker_module
 
         worker, claim = self._isolated_worker_claim("claude")
@@ -424,12 +426,11 @@ class TestCrashWindows(BoardTestCase):
             cancel=lambda _handle: self.fail("complete native stop proof already exists"),
         )
         with mock.patch.object(worker_module.role_seam, "worker_executor", return_value=fake_adapter), \
-                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}), \
-                mock.patch.object(worker, "_cleanup_attempt_credentials", side_effect=RuntimeError("cleanup unavailable")):
+                mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "test"}):
             receipt = worker.execute()
         self.assertTrue(receipt["report"]["shutdownConfirmed"])
         self.assertEqual(receipt["report"]["status"], "failed")
-        self.assertTrue(credential.exists(), "cleanup failed, so credentials must remain for diagnosis")
+        self.assertTrue(credential.exists(), "service owns cleanup after execution death")
 
     def test_virtual_adapter_receipt_retains_evidence_failure_paths(self):
         import hey_my_buddy.buddy.runtime.execution as worker_module

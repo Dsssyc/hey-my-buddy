@@ -200,7 +200,7 @@ class FastSeamTests(NativeRunCase):
         os.environ["HMB_ZCODE_TEST_CASE"] = "usage-quota"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         with mock.patch("hey_my_buddy.buddy.harnesses.zcode.protocol.ZcodeAttemptUsage.capture_final",
-                        side_effect=native_run.NativeError("native-disconnected", "fixture disconnect")) as final:
+                        side_effect=native_run.NativeError("transport-error", "fixture disconnect")) as final:
             result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
                          services=None, cancelled=lambda: False)
         final.assert_not_called()

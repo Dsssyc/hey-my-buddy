@@ -9,8 +9,8 @@ from ...protocol.execution import fsync_json, read_execution_receipt as read_rec
 from ...errors import BoardError
 
 DELIVERY = "result-delivery.json"
-RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "SERVICE_START_TIMEOUT", "SERVICE_START_FAILED",
-                       "INVALID_RESPONSE", "INTERNAL_ERROR", "UPGRADE_IN_PROGRESS"})
+RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"})
+REFUSED = frozenset({"ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT"})
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -35,13 +35,13 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
                 client.submit_result(receipt["attemptId"], receipt["generation"],
                                      nonce, reference)
             except BoardError as error:
-                if error.code not in RETRYABLE:
+                if error.code in REFUSED:
                     accepted = False
                     log(f"result refused: {error.code}")
                     break
+                if error.code not in RETRYABLE:
+                    raise
                 log(f"result delivery pending: {error.code}")
-            except Exception as error:
-                log(f"result delivery unavailable: {error!r}")
             else:
                 accepted = True
                 break

@@ -27,6 +27,9 @@ def run_next(client, nonce='test-execution-nonce-000000000000'):
     # Production has one journal per execution process. This in-process fixture
     # gives each simulated process that same isolated module lifetime.
     with patch.object(process_identity, '_active_native_journal', None):
-        Execution(claim, client.state_dir, nonce, client=client,
-                  session_record_path=claim["sessionRecordPath"]).run()
+        execution = Execution(claim, client.state_dir, nonce, client=client,
+                              session_record_path=claim["sessionRecordPath"])
+        execution.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        execution.run()
     return 'ran'

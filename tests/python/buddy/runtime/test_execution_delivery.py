@@ -32,8 +32,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_receipt_is_private_durable_and_has_no_authority_secret(self):
         report = {"status": "failed", "shutdownConfirmed": True,
                   "terminationReason": "harness-error"}
-        with mock.patch.object(self.execution, "_cleanup_attempt_credentials"):
-            receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
+        receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
         raw = (self.execution.directory / "result-receipt.json").read_text(encoding="utf-8")
@@ -86,6 +85,42 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, reference))
         self.assertFalse((self.execution.directory / "result-receipt.json").exists())
         self.assertTrue((self.execution.directory / "result-delivery.json").exists())
+
+    def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+        write_receipt(self.execution.directory, receipt)
+        original = (self.execution.directory / RECEIPT).read_bytes()
+        for error in (BoardError("INTERNAL_ERROR", "commit failed"),
+                      BoardError("INVALID_RESPONSE", "reply lost"), RuntimeError("unexpected defect")):
+            with self.subTest(error=error):
+                client = mock.Mock()
+                client.submit_result.side_effect = error
+                with self.assertRaises(type(error)) as caught, \
+                     mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause:
+                    deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
+                self.assertIs(caught.exception, error)
+                client.submit_result.assert_called_once()
+                pause.assert_not_called()
+                self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
+                self.assertFalse((self.execution.directory / DELIVERY).exists())
+
+    def test_explicit_attempt_refusal_records_rejection_and_removes_receipt(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY
+        for code in ("ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT"):
+            with self.subTest(code=code):
+                directory = self.execution.directory / code
+                directory.mkdir()
+                receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                           "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+                write_receipt(directory, receipt)
+                client = mock.Mock()
+                client.submit_result.side_effect = BoardError(code, "attempt refused")
+                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64))
+                self.assertIsNone(read_execution_receipt(directory))
+                self.assertEqual(json.loads((directory / DELIVERY).read_text()),
+                                 {"attemptId": "attempt-1", "accepted": False})
 
     def test_result_waits_for_hint_already_in_backoff(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,

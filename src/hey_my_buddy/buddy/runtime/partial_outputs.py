@@ -10,7 +10,7 @@ def capture(context, outcome):
     payload = outcome.result
     if payload.get("modelStarted") is False:
         return
-    manifest = getattr(context, "effective_workspace", None) or context.turn_input.get("executionWorkspace")
+    manifest = context.effective_workspace or context.turn_input["executionWorkspace"]
     state = context.environment.get("HMB_STATE_DIR")
     if not manifest or not state:
         return
@@ -33,7 +33,7 @@ def enrich(context, outcome):
     capture(context, outcome)
     if not outcome.shutdown_confirmed or not context.turn_input:
         return False
-    manifest = getattr(context, "effective_workspace", None) or context.turn_input.get("executionWorkspace")
+    manifest = context.effective_workspace or context.turn_input["executionWorkspace"]
     original = context.turn_input.get("context", {}).get("microTaskInputCommit")
     seal = outcome.result.get("workspaceSeal") or outcome.result.get("partialWorkspaceSeal")
     if not manifest or not original or not seal:

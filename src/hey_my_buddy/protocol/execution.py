@@ -30,7 +30,6 @@ BUDGET = "execution-budget.json"
 
 def fsync_json(path: Path, value: dict, *, immutable: bool = False) -> None:
     """Serialize the execution envelope unchanged and publish complete bytes."""
-    ensure_private_dir(path.parent)
     publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"), immutable=immutable)
 
 
@@ -78,7 +77,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         handle.budget_path = directory / BUDGET
         handle.role_run_identity = RunIdentity(task_id=binding["taskId"],
             attempt_id=binding["attemptId"], generation=binding["generation"],
-            invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
+            invocation_id="execution", turn_id=claim["turn"]["turnId"] if "turn" in claim else None)
         handle.process_identity = None
         handle.process_identity = capture_process_identity(handle)
         fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": handle.process_identity})
@@ -92,7 +91,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
             surviving_handle.budget_path = directory / BUDGET
             surviving_handle.role_run_identity = RunIdentity(task_id=binding["taskId"],
                 attempt_id=binding["attemptId"], generation=binding["generation"],
-                invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
+                invocation_id="execution", turn_id=claim["turn"]["turnId"] if "turn" in claim else None)
             if not hasattr(surviving_handle, "process_identity"):
                 surviving_handle.process_identity = None
         error.spawn_created = surviving_handle is not None or bool(
@@ -194,7 +193,16 @@ class ExecutionLiveClient:
                 bounded = cc.with_call_options(peer, timeout=timeout)
                 raw = getattr(bounded, method)(self._frame(**values))
         except Exception as error:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable") from error
+            details = dict(getattr(error, "details", {}))
+            for source in (error.__cause__, error):
+                if source is None:
+                    continue
+                for field in ("io_kind", "raw_os_error", "io_operation", "retryable", "transport_phase"):
+                    value = getattr(source, field, None)
+                    if value is not None:
+                        details[field] = value
+            raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable",
+                             **{**details, "causeType": type(error).__name__, "cause": str(error)}) from error
         try:
             response = decode_strict_json(raw)
         except (TypeError, ValueError, RecursionError) as error:

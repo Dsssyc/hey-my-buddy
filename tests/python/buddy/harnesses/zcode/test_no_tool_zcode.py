@@ -129,7 +129,7 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
 
     def test_tool_and_truncated_stream_fail_closed(self):
         for case, code in (("tool", "no-tool-violation"), ("post-close-tool", "no-tool-violation"),
-                           ("truncated", "native-disconnected")):
+                           ("truncated", "transport-error")):
             with self.subTest(case=case):
                 outcome = self.execute(case)
                 self.assertEqual(outcome.status, "failed")

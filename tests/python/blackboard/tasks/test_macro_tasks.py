@@ -779,7 +779,9 @@ class MacroTaskReadTests(WorkflowTestCase):
         claim = self.claim(board, run_id=run['runId'])
         from hey_my_buddy.protocol.execution import fsync_json
         attempt = claim['claim']['attempt']
-        fsync_json(board.directory / 'attempts' / run['runId'] / attempt['attemptId'] / 'spawn.intent',
+        evidence = board.directory / 'attempts' / run['runId'] / attempt['attemptId']
+        evidence.mkdir(parents=True)
+        fsync_json(evidence / 'spawn.intent',
                    {'taskId': run['runId'], 'attemptId': attempt['attemptId'], 'generation': attempt['generation']})
         self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
         # The execution reports after service restart: its result and stop proof
@@ -800,7 +802,9 @@ class MacroTaskReadTests(WorkflowTestCase):
         claim = self.claim(board, run_id=run['runId'])
         from hey_my_buddy.protocol.execution import fsync_json
         attempt = claim['claim']['attempt']
-        fsync_json(board.directory / 'attempts' / run['runId'] / attempt['attemptId'] / 'spawn.intent',
+        evidence = board.directory / 'attempts' / run['runId'] / attempt['attemptId']
+        evidence.mkdir(parents=True)
+        fsync_json(evidence / 'spawn.intent',
                    {'taskId': run['runId'], 'attemptId': attempt['attemptId'], 'generation': attempt['generation']})
         self.assertEqual(board.store.reconcile_startup()['uncertain'], 1)
         self.finish_turn(board, claim, disposition='attention', shutdown=False)
