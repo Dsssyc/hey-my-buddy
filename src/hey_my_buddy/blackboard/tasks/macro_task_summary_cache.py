@@ -67,16 +67,25 @@ class SummaryCache:
         self.entries = OrderedDict()
         self.bytes = 0
 
-    def get(self, key, marker, compute, *, reusable=True):
-        now = self.clock()
+    def lookup(self, key, marker, *, reusable=True):
+        """Probe before batching derivation for the groups that actually miss."""
         with self.lock:
+            previous = self.entries.get(key)
+            if (previous is not None and reusable and previous[0] == marker
+                    and self.clock() - previous[2] < MAX_AGE_SECONDS):
+                self.entries.move_to_end(key)
+                return copy.deepcopy(previous[1])
+            return None
+
+    def get(self, key, marker, compute, *, reusable=True):
+        with self.lock:
+            cached = self.lookup(key, marker, reusable=reusable)
+            if cached is not None:
+                return cached
             previous = self.entries.pop(key, None)
             if previous is not None:
                 self.bytes -= previous[3]
-                if reusable and previous[0] == marker and now - previous[2] < MAX_AGE_SECONDS:
-                    self.entries[key] = previous
-                    self.bytes += previous[3]
-                    return copy.deepcopy(previous[1])
+            now = self.clock()
             value = compute()
             # Byte accounting covers the marker as well as the cached summary.
             size = len(json.dumps([key, marker, value], ensure_ascii=False).encode())
