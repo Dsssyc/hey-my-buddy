@@ -249,22 +249,20 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.addCleanup(release)
         return release
 
-    def startup_inspection(self):
-        path = self.root / "startup-inspection.json"
+    def startup_credential(self):
+        path = self.root / "startup-credential.json"
         result = self.until(lambda: json.loads(path.read_text(encoding="utf-8")) if path.exists() else None,
-                            "execution did not inspect its endpoint under the namespace lock")
-        self.assertEqual(result["status"], "io-error", result)
-        self.assertEqual(result["io_kind"], "WouldBlock", result)
-        self.assertIs(result["retryable"], True, result)
+                            "execution did not obtain its listener credential under the namespace lock")
+        self.assertEqual(cc.EndpointCredential.from_json(result["credential"]).address, result["address"])
         return result
 
-    def test_execution_starts_after_another_process_releases_the_namespace_gate(self):
+    def test_execution_publishes_its_credential_while_the_namespace_gate_is_held(self):
         release = self.hold_startup_namespace()
         self.submit_execution()
-        self.startup_inspection()
-        # Retire the held namespace only after the real inspection encountered it.
-        # An endpoint cannot be published while that inspection keeps retrying.
-        self.assertIsNone(exchange(self.service, {"op": "status"})["execution"])
+        credential = self.startup_credential()
+        material = self.until(lambda: read_execution_material(self.root), "execution did not publish its descriptor")
+        self.assertEqual(material["descriptor"]["endpointCredential"], credential["credential"])
+        self.assertFalse((self.root / "namespace-release").exists())
         release()
         value = self.attach_execution()
         self.assertTrue(value["nativeReady"])
@@ -276,12 +274,14 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.until(finished, "execution did not finish after the namespace was released")
 
     def test_cancel_during_endpoint_startup_confirms_the_execution_is_gone(self):
+        (self.root / "pause-registration").touch()
         release = self.hold_startup_namespace()
         with cc.connect(BuddyControl, name=CONTROL_NAME, address=self.service_endpoint["address"], timeout=180) as peer:
             # The command adapter is admitted only by this model-free fixture's
             # store writer. It shares execution startup and has no wrap-up turn.
             self.run_id = exchange(self.service, {"op": "submit-command"})["runId"]
-            inspection = self.startup_inspection()
+            credential = self.startup_credential()
+            self.until(lambda: (self.root / "registration-paused").exists(), "execution did not pause during registration")
             query = canonical_json({"token": self.service_endpoint["token"], "runId": self.run_id})
             before = json.loads(peer.task_get(query))["task"]
             attempt = before["selectedAttempt"]
@@ -305,12 +305,8 @@ class CTwoIntegrationTests(unittest.TestCase):
         release()
         # The forced startup had no published descriptor. Retire only its exact
         # owned native endpoint after its process was independently observed gone.
-        inspected = self.endpoint_status(inspection["address"])
-        if inspected["status"] == "present":
-            reaped = cc.reap_endpoint(inspection["address"], inspected["credential"])
-            self.assertIn(reaped["status"], ("reaped", "already-absent"), reaped)
-        else:
-            self.assertEqual(inspected["status"], "absent", inspected)
+        reaped = cc.reap_endpoint(credential["address"], cc.EndpointCredential.from_json(credential["credential"]))
+        self.assertIn(reaped["status"], ("reaped", "already-absent"), reaped)
 
     def stop_owned(self):
         # Finally only asks objects created here to stop. No PID scan or signals.

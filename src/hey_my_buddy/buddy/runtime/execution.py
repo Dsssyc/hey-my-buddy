@@ -88,7 +88,7 @@ class LiveEndpointDescriptor(InternalModel):
 
     The holder consumes ``endpointCredential`` through C-Two's codec. Address,
     instance and the held process PID remain independent binding checks.
-    Windows has no reap credential and uses the native default pipe domain.
+    Windows uses a kernel-managed credential in the native pipe domain.
     """
 
     address: Text(256)
@@ -223,19 +223,12 @@ class _ExecutionLive:
                     concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
         self._started = True
         address = cc.server_address()
-        while True:
-            inspected = cc.inspect_endpoint(address)
-            if inspected["status"] in ("present", "not-applicable"):
-                break
-            if not inspected["retryable"]:
-                details = {key: inspected[key] for key in ("status", "reason", "io_kind")}
-                raise BoardError("LIVE_UNAVAILABLE", f"Execution endpoint credential is unavailable: {details}",
-                                 **details)
-            time.sleep(.05)
-        credential = inspected["credential"]
+        credential = cc.server_credential()
+        if credential is None:
+            raise BoardError("LIVE_UNAVAILABLE", "Registered execution endpoint credential is absent")
         descriptor = LiveEndpointDescriptor(address=address, name=self.name,
             instance_id=self.instance_id, host_pid=process_identity["pid"],
-            endpoint_credential=credential.to_json() if credential is not None else None)
+            endpoint_credential=credential.to_json())
         fsync_json(self.execution.directory / execution_protocol.LIVE, {
             "identity": self.identity.to_payload(), "processIdentity": process_identity,
             "descriptor": descriptor.to_payload(), "token": self.token})
