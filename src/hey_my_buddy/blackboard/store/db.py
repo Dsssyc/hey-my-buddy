@@ -1030,15 +1030,16 @@ CREATE TABLE IF NOT EXISTS kind_summaries (
     maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
     PRIMARY KEY (harness, model, effort)
 );
-CREATE TABLE IF NOT EXISTS kind_summary_citations (
+CREATE TABLE IF NOT EXISTS kind_summary_evidence (
     harness TEXT NOT NULL,
     model   TEXT NOT NULL,
     effort  TEXT NOT NULL,
     run_id  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    cited   INTEGER NOT NULL CHECK (cited IN (0, 1)),
     PRIMARY KEY (harness, model, effort, run_id),
     FOREIGN KEY (harness, model, effort) REFERENCES kind_summaries(harness, model, effort) ON DELETE RESTRICT
 );
-CREATE INDEX IF NOT EXISTS kind_summary_citations_run_idx ON kind_summary_citations(run_id);
+CREATE INDEX IF NOT EXISTS kind_summary_evidence_run_idx ON kind_summary_evidence(run_id);
 
 CREATE TABLE IF NOT EXISTS routing_judgments (
     decision_id    TEXT NOT NULL PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,

@@ -465,10 +465,9 @@ class BoardService(_BaseResource):
         def handler(params):
             self._require_console()
             schemas.reject_unknown(params, set(), "maintenance.pending")
-            from ..routing.maintenance_data import PENDING_WHERE, stale_kinds
+            from ..routing.maintenance_data import pending_count
             with self.store.db.read() as connection:
-                unclassified = connection.execute("SELECT COUNT(*) FROM workflow_runs r WHERE " + PENDING_WHERE).fetchone()[0]
-                return {"unclassifiedMicroTaskCount": unclassified, "staleBuddyKindCount": len(stale_kinds(connection))}
+                return {"pendingMicroTaskCount": pending_count(connection)}
         return self._guard("maintenance.pending", request_json, handler)
 
     def domain_rename(self, request_json: str) -> str:

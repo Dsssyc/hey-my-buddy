@@ -19,11 +19,19 @@ TASK_TYPES = {
     "research": "Investigate a question and synthesize findings.",
     "write": "Write or revise explanatory content.",
 }
-TERMINAL_STATES = ("accepted", "concluded", "cancelled", "failed")
-PENDING_WHERE = (
-    "r.state IN ('accepted','concluded','cancelled','failed')"
-    " AND NOT EXISTS (SELECT 1 FROM micro_task_classifications x WHERE x.run_id=r.run_id)"
-)
+PENDING_WHERE = """r.state IN ('accepted','concluded','cancelled','failed') AND (
+    NOT EXISTS (SELECT 1 FROM micro_task_classifications c WHERE c.run_id=r.run_id)
+    OR EXISTS (
+        SELECT 1 FROM workflow_turns w WHERE w.run_id=r.run_id AND w.input_json IS NOT NULL
+        AND json_type(w.input_json,'$.context.buddy')='object'
+        AND NOT EXISTS (
+            SELECT 1 FROM kind_summary_evidence e WHERE e.run_id=r.run_id
+            AND e.harness=json_extract(w.input_json,'$.context.buddy.harness')
+            AND e.model=json_extract(w.input_json,'$.context.buddy.model')
+            AND e.effort=json_extract(w.input_json,'$.context.buddy.effort')
+        )
+    )
+)"""
 
 
 def _kind(value):
@@ -36,106 +44,51 @@ def _node_rows(connection):
 
 
 def pending(connection) -> bool:
-    """Whether a settled micro task still needs classification, without building a packet."""
+    """Classification and every participating kind's reading must both exist."""
     return connection.execute(
         "SELECT 1 FROM workflow_runs r WHERE " + PENDING_WHERE + " LIMIT 1").fetchone() is not None
 
 
-def stale_kinds(connection) -> dict:
-    """Kinds with classified work newer than their current summary's maintenance."""
-    summaries = {_kind(row): row["started_at"] for row in connection.execute(
-        "SELECT s.harness,s.model,s.effort,m.started_at FROM kind_summaries s"
-        " JOIN maintenance_runs m ON m.maintenance_run_id=s.maintenance_run_id")}
-    stale = {}
-    for row in connection.execute(
-        "SELECT c.run_id,m.started_at,w.input_json FROM micro_task_classifications c"
-        " JOIN maintenance_runs m ON m.maintenance_run_id=c.maintenance_run_id"
-        " JOIN workflow_turns w ON w.run_id=c.run_id"):
-        key = _kind(turn_buddy(row["input_json"]))
-        if key not in summaries or row["started_at"] > summaries[key]:
-            stale.setdefault(key, set()).add(row["run_id"])
-    return stale
-
-
-def summary_pending(connection) -> bool:
-    return bool(stale_kinds(connection))
+def pending_count(connection) -> int:
+    return connection.execute("SELECT COUNT(*) FROM workflow_runs r WHERE " + PENDING_WHERE).fetchone()[0]
 
 
 def build_packet(connection) -> dict | None:
-    """Prefer 50 unclassified tasks, then 50 cited or newer classified tasks."""
+    """The oldest 50 tasks still needing classification or a kind's reading."""
     runs = list(connection.execute(
         "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,r.buddy_revision,"
         " t.spec_json,m.project_id,m.project_path,c.note AS conclusion_note,"
         " c.reason_code AS conclusion_reason,c.execution_status,"
+        " x.domain_node_id,x.task_type,"
         " (SELECT i.verification_json FROM workflow_integrations i"
         " WHERE i.run_id=r.run_id AND i.artifact_id=r.final_artifact_id"
         " ORDER BY i.created_at DESC,i.integration_id DESC LIMIT 1) AS integration_json"
         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
         " LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id"
         " LEFT JOIN workflow_host_conclusions c ON c.run_id=r.run_id"
+        " LEFT JOIN micro_task_classifications x ON x.run_id=r.run_id"
         " WHERE " + PENDING_WHERE +
         " ORDER BY r.updated_at,r.run_id LIMIT 50"))
-    classification_ids = [row["run_id"] for row in runs]
-    selected_kinds = None
-    if not runs:
-        stale = stale_kinds(connection)
-        if not stale:
-            return None
-        selected_kinds = set(stale)
-        newer_ids = set().union(*stale.values())
-        chosen = []
-        for row in connection.execute(
-            "SELECT c.run_id FROM micro_task_classifications c"
-            " JOIN maintenance_runs m ON m.maintenance_run_id=c.maintenance_run_id"
-            " JOIN workflow_runs r ON r.run_id=c.run_id"
-            " ORDER BY m.started_at,r.updated_at,c.run_id"):
-            if row["run_id"] in newer_ids:
-                chosen.append(row["run_id"])
-                if len(chosen) == 50:
-                    break
-        if len(chosen) < 50:
-            seen = set(chosen)
-            for row in connection.execute(
-                "SELECT x.harness,x.model,x.effort,x.run_id FROM kind_summary_citations x"
-                " JOIN micro_task_classifications c ON c.run_id=x.run_id"
-                " JOIN maintenance_runs m ON m.maintenance_run_id=c.maintenance_run_id"
-                " JOIN workflow_runs r ON r.run_id=x.run_id"
-                " ORDER BY m.started_at,r.updated_at,x.run_id"):
-                if _kind(row) in stale and row["run_id"] not in seen:
-                    seen.add(row["run_id"])
-                    chosen.append(row["run_id"])
-                    if len(chosen) == 50:
-                        break
-        placeholders = ",".join("?" for _ in chosen)
-        runs = list(connection.execute(
-            "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,"
-            " r.buddy_revision,t.spec_json,m.project_id,m.project_path,"
-            " c.note AS conclusion_note,c.reason_code AS conclusion_reason,c.execution_status,"
-            " (SELECT i.verification_json FROM workflow_integrations i"
-            " WHERE i.run_id=r.run_id AND i.artifact_id=r.final_artifact_id"
-            " ORDER BY i.created_at DESC,i.integration_id DESC LIMIT 1) AS integration_json"
-            " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-            " JOIN micro_task_classifications cl ON cl.run_id=r.run_id"
-            " JOIN maintenance_runs cm ON cm.maintenance_run_id=cl.maintenance_run_id"
-            " LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id"
-            " LEFT JOIN workflow_host_conclusions c ON c.run_id=r.run_id"
-            f" WHERE r.run_id IN ({placeholders})"
-            " ORDER BY cm.started_at,r.updated_at,r.run_id", chosen))
+    classification_ids = [row["run_id"] for row in runs if row["domain_node_id"] is None]
     if not runs:
         return None
     run_ids = [row["run_id"] for row in runs]
     placeholders = ",".join("?" for _ in run_ids)
     turns = defaultdict(list)
     kinds = {}
+    unread = defaultdict(set)
+    read = {(_kind(row), row["run_id"]) for row in connection.execute(
+        f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", run_ids)}
     for row in connection.execute(
         "SELECT w.run_id,w.turn_index,w.state,w.input_json,a.started_at,a.finished_at,"
         " a.result_json FROM workflow_turns w"
         " LEFT JOIN attempts a ON a.attempt_id=w.attempt_id"
         f" WHERE w.run_id IN ({placeholders}) ORDER BY w.run_id,w.turn_index", run_ids):
         buddy = turn_buddy(row["input_json"])
-        kind = {key: buddy[key] for key in ("harness", "model", "effort")}
-        if selected_kinds is None or _kind(kind) in selected_kinds:
+        kind = {key: buddy[key] for key in ("harness", "model", "effort")} if buddy is not None else None
+        if kind is not None and (_kind(kind), row["run_id"]) not in read:
             kinds[_kind(kind)] = kind
+            unread[_kind(kind)].add(row["run_id"])
         receipt = json.loads(row["result_json"]) if row["result_json"] else None
         result = (receipt or {}).get("result") or {}
         turns[row["run_id"]].append({
@@ -163,6 +116,8 @@ def build_packet(connection) -> dict | None:
         micro_tasks.append({
             "runId": row["run_id"], "title": row["title"], "task": spec.get("task"),
             "project": {"id": row["project_id"], "path": row["project_path"] or spec.get("cwd")},
+            "classification": ({"domainNodeId": row["domain_node_id"], "taskType": row["task_type"]}
+                               if row["domain_node_id"] is not None else None),
             "result": {"state": row["state"], "conclusion": row["conclusion_note"],
                        "conclusionReason": row["conclusion_reason"],
                        "executionStatus": row["execution_status"],
@@ -179,7 +134,7 @@ def build_packet(connection) -> dict | None:
         key = _kind(row)
         if key in kinds:
             summaries[key] = {"text": row["text"], "citations": []}
-    for row in connection.execute("SELECT harness,model,effort,run_id FROM kind_summary_citations"):
+    for row in connection.execute("SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE cited=1"):
         key = _kind(row)
         if key in summaries:
             summaries[key]["citations"].append(row["run_id"])
@@ -192,7 +147,7 @@ def build_packet(connection) -> dict | None:
         "classificationRunIds": classification_ids,
         "domainNodes": list(_node_rows(connection).values()),
         "taskTypes": [{"id": key, "definition": value} for key, value in TASK_TYPES.items()],
-        "kinds": [{**kind, "summary": summaries.get(key),
+        "kinds": [{**kind, "unreadRunIds": sorted(unread[key]), "summary": summaries.get(key),
                    "statistics": statistics[buddy_ids[key]]}
                   for key, kind in kinds.items()],
     }
@@ -212,7 +167,7 @@ def answer_schema(packet) -> dict:
     ids = packet["classificationRunIds"]
     kind_schema = {key: {"type": "string", "enum": sorted({kind[key] for kind in packet["kinds"]})}
                    for key in ("harness", "model", "effort")}
-    return _object({
+    schema = _object({
         "newNodes": {"type": "array", "items": _object({
             "id": _string(128), "name": _string(120), "definition": _string(400),
             "parentId": {"type": ["string", "null"]}})},
@@ -226,6 +181,14 @@ def answer_schema(packet) -> dict:
             **kind_schema, "text": _string(4000),
             "citations": {"type": "array", "items": {"type": "string"}}})},
     })
+    if not ids:
+        schema["properties"]["classifications"]["maxItems"] = 0
+        schema["properties"]["classifications"]["items"]["properties"]["runId"] = {"type": "string"}
+    if not packet["kinds"]:
+        schema["properties"]["summaries"]["maxItems"] = 0
+        for key in ("harness", "model", "effort"):
+            schema["properties"]["summaries"]["items"]["properties"][key] = {"type": "string"}
+    return schema
 
 
 def _shape_errors(value, schema, path="answer"):
@@ -343,7 +306,10 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
     valid = {}
     for field, field_schema in schema["properties"].items():
         items = answer.get(field)
-        if not isinstance(items, list):
+        field_errors = _shape_errors(items, {key: part for key, part in field_schema.items() if key != "items"},
+                                     f"answer.{field}")
+        if field_errors:
+            errors.extend(field_errors)
             valid[field] = []
             continue
         valid[field] = []
@@ -362,11 +328,16 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
     batch = set(packet["classificationRunIds"]) & surviving
     evidence = packet_run_ids & surviving
     surviving_kinds = {_kind(turn["kind"]) for task in packet["microTasks"]
-                       if task["runId"] in surviving for turn in task["result"]["turns"]}
+                       if task["runId"] in surviving for turn in task["result"]["turns"] if turn["kind"] is not None}
     deleted_kinds = {_kind(turn["kind"]) for task in packet["microTasks"]
-                     if task["runId"] not in surviving for turn in task["result"]["turns"]}
+                     if task["runId"] not in surviving for turn in task["result"]["turns"] if turn["kind"] is not None}
     packet_kinds = {_kind(kind): kind for kind in packet["kinds"]
-                    if _kind(kind) in surviving_kinds}
+                    if _kind(kind) in surviving_kinds and set(kind["unreadRunIds"]) & surviving}
+    read = {(_kind(row), row["run_id"]) for row in connection.execute(
+        f"SELECT harness,model,effort,run_id FROM kind_summary_evidence WHERE run_id IN ({placeholders})", tuple(packet_run_ids))}
+    missing_reads = {key: {run_id for run_id in kind["unreadRunIds"]
+                          if run_id in surviving and (key, run_id) not in read}
+                     for key, kind in packet_kinds.items()}
     nodes = _node_rows(connection)
     new_counts = Counter(item["id"] for item in valid["newNodes"])
     for node_id, count in new_counts.items():
@@ -476,9 +447,7 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
                 continue
             errors.append(f"summaries[{key}]: kind is not in packet")
             continue
-        previous = connection.execute(
-            "SELECT maintenance_run_id FROM kind_summaries WHERE harness=? AND model=? AND effort=?", key).fetchone()
-        if previous and previous["maintenance_run_id"] == maintenance_run_id:
+        if not missing_reads[key]:
             continue
         original = set((packet_kinds[key].get("summary") or {}).get("citations") or ())
         cited = item["citations"]
@@ -496,13 +465,13 @@ def apply_answer(connection, *, packet, answer, maintenance_run_id) -> dict:
             "INSERT INTO kind_summaries(harness,model,effort,text,maintenance_run_id) VALUES(?,?,?,?,?)"
             " ON CONFLICT(harness,model,effort) DO UPDATE SET text=excluded.text,"
             " maintenance_run_id=excluded.maintenance_run_id", (*key, item["text"], maintenance_run_id))
-        connection.execute("DELETE FROM kind_summary_citations WHERE harness=? AND model=? AND effort=?", key)
-        connection.executemany("INSERT INTO kind_summary_citations VALUES(?,?,?,?)",
-                               [(*key, run_id) for run_id in cited])
+        connection.execute("UPDATE kind_summary_evidence SET cited=0 WHERE harness=? AND model=? AND effort=?", key)
+        connection.executemany(
+            "INSERT INTO kind_summary_evidence(harness,model,effort,run_id,cited) VALUES(?,?,?,?,?)"
+            " ON CONFLICT(harness,model,effort,run_id) DO UPDATE SET cited=excluded.cited",
+            [(*key, run_id, int(run_id in cited)) for run_id in missing_reads[key] | set(cited)])
         counts["summaries"] += 1
     for key in packet_kinds.keys() - seen_kinds:
-        previous = connection.execute(
-            "SELECT maintenance_run_id FROM kind_summaries WHERE harness=? AND model=? AND effort=?", key).fetchone()
-        if previous is None or previous["maintenance_run_id"] != maintenance_run_id:
+        if missing_reads[key]:
             errors.append(f"summaries[{key}]: missing summary")
     return {"errors": errors, "written": counts}

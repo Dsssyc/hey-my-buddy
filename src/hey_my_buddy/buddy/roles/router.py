@@ -35,9 +35,10 @@ one. Add child nodes when the recorded outcomes distinguish kinds of expertise;
 merge nodes that describe the same expertise. New nodes may name another new
 node as their parent. Keep names unique, parents acyclic, and merge into an
 active retained node. A task has exactly one domain and one of the seven task types.
-Classify exactly the classificationRunIds. Other microTasks are evidence for
-updating stale summaries and must not be reclassified. Summarize every supplied
-buddy kind, using qualitative observations and structured micro task citations.
+Classify exactly the classificationRunIds. A task with an existing classification
+must not be reclassified. For each supplied buddy kind, integrate its unreadRunIds
+into its current summary, using qualitative observations and structured citations.
+The blackboard records every task read, including tasks the summary does not cite.
 Only cite the packet's tasks or that summary's existing citations. Do not write
 sample counts or rates into prose: the program calculates and displays them.
 Return the supplied JSON Schema. The blackboard saves valid entries immediately;

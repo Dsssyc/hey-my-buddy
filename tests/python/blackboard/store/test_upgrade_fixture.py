@@ -12,7 +12,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.routing import router, router_sequence
+from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
@@ -170,7 +170,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('queued','running')").fetchone()[0], 0)
         self.assertEqual({row[0] for row in connection.execute(
             "SELECT json_extract(execution_workspace_json,'$.kind') FROM workflow_runs")}, {'existing', 'worktree'})
-        self.assertEqual(router.configuration(connection)['routerBuddyIds'], fixture['routerBuddyIds'])
+        self.assertEqual([row[0] for row in connection.execute('SELECT buddy_id FROM router_buddies ORDER BY position')], fixture['routerBuddyIds'])
         self.assertEqual(tuple(connection.execute(
             'SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings').fetchone()),
             ('review', 'deep', 47))
@@ -254,8 +254,9 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual(actual, original, name)
                 self.assertEqual(after['fingerprints'][name], before['fingerprints'][name], name)
         for name in ('maintenance_runs', 'domain_nodes', 'micro_task_classifications',
-                     'kind_summaries', 'kind_summary_citations', 'routing_judgments'):
+                     'kind_summaries', 'kind_summary_evidence', 'routing_judgments'):
             self.assertEqual(after['tables'][name], 0, name)
+        self.assertNotIn('kind_summary_citations', after['tables'])
         with self.assertRaises(BoardError) as caught:
             upgrade_state(state)
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')

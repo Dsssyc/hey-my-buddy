@@ -95,8 +95,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
     def valid_answer(self, packet):
         return {"newNodes": [{"id": "software", "name": "Software", "definition": "Software work",
                                "parentId": None}], "merges": [],
-                "classifications": [{"runId": self.evidence_id, "domainNodeId": "software",
-                                     "taskType": "debug"}],
+                "classifications": [{"runId": run_id, "domainNodeId": "software",
+                                     "taskType": "debug"} for run_id in packet["classificationRunIds"]],
                 "summaries": [{"harness": kind["harness"], "model": kind["model"],
                                "effort": kind["effort"], "text": "Parser repair",
                                "citations": [self.evidence_id]} for kind in packet["kinds"]]}
@@ -182,13 +182,13 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 0)
 
-    def test_console_pending_read_counts_unclassified_work_and_stale_kinds(self):
+    def test_console_pending_read_counts_tasks_missing_classification_or_kind_evidence(self):
         with self.assertRaises(BoardError) as caught:
             self.board_.call("maintenance_pending", {})
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         before = self.board_.store.head()
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
-                         {"unclassifiedMicroTaskCount": 1, "staleBuddyKindCount": 0})
+                         {"pendingMicroTaskCount": 1})
         self.assertEqual(self.board_.store.head(), before)
         self.configure()
         claim = self.claim_maintenance(self.start()["runId"])
@@ -197,10 +197,13 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         answer["summaries"] = []
         self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
-                         {"unclassifiedMicroTaskCount": 0, "staleBuddyKindCount": len(packet["kinds"])})
+                         {"pendingMicroTaskCount": 1})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence").fetchone()[0], 0)
         self.assertEqual(self.submit_answer(claim, 1, self.valid_answer(packet))["errors"], [])
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
-                         {"unclassifiedMicroTaskCount": 0, "staleBuddyKindCount": 0})
+                         {"pendingMicroTaskCount": 0})
 
     def test_start_claim_frozen_packet_budget_and_no_router_table_pollution(self):
         self.configure(preset="deep")
@@ -213,6 +216,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(document["budget"]["preset"], "deep")
         self.assertGreater(document["budget"]["timeoutSeconds"], 60)
         self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
+        self.assertEqual(self.packet(claim)["microTasks"][0]["classification"], None)
+        self.assertEqual(self.packet(claim)["kinds"][0]["unreadRunIds"], [self.evidence_id])
         self.assertEqual(claim["task"]["spec"]["decision"]["kind"], "maintain")
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT task_id,state FROM maintenance_runs").fetchone()
@@ -256,6 +261,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT task_type FROM micro_task_classifications").fetchone()[0], "debug")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summaries").fetchone()[0], len(packet["kinds"]))
+            self.assertEqual(tuple(db.execute("SELECT run_id,cited FROM kind_summary_evidence").fetchone()),
+                             (self.evidence_id, 1))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM router_outcomes").fetchone()[0], 0)
 
     def test_observer_corrects_twice_in_one_run_and_stops_before_tool_use(self):
@@ -314,6 +321,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         claim = self.claim_maintenance(started["runId"])
         feedback = self.submit_answer(claim, 0, self.valid_answer(self.packet(claim)))
         self.assertEqual(feedback["errors"], [])
+        self.assertEqual(self.start()["maintenanceRunId"], started["maintenanceRunId"])
         self.settle_success(claim)
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
@@ -332,7 +340,9 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         first_packet = {**full_packet,
                         "classificationRunIds": [self.evidence_id],
                         "microTasks": [item for item in full_packet["microTasks"]
-                                       if item["runId"] == self.evidence_id]}
+                                       if item["runId"] == self.evidence_id],
+                        "kinds": [{**kind, "unreadRunIds": [self.evidence_id]}
+                                  for kind in full_packet["kinds"]]}
         with patch("hey_my_buddy.blackboard.routing.maintenance_data.build_packet",
                    return_value=first_packet):
             started = self.start()
@@ -349,31 +359,123 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual([(row["trigger_type"], row["state"]) for row in runs],
                          [("manual", "completed"), ("interval", "running")])
 
-    def test_stale_summary_without_unclassified_work_waits_then_manual_bypasses(self):
+    def test_classification_survives_rejected_summary_and_next_batch_reads_only_missing_kind(self):
         self.configure(interval=120)
         started = self.start()
         claim = self.claim_maintenance(started["runId"])
-        self.assertEqual(self.submit_answer(claim, 0, self.valid_answer(self.packet(claim)))["errors"], [])
+        answer = self.valid_answer(self.packet(claim))
+        answer["summaries"] = []
+        self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.settle_success(claim)
-        second_id = self.add_settled_evidence("newer")
-        task_id = self.board_.submit_execution(
-            requestId="later-maintenance-evidence", task="Later classification run",
-            adapter="command", argv=["true"], cwd=str(self.workdir("later-maintenance")))["task"]["runId"]
-        self.clock.advance(1)
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 1})
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO maintenance_runs(maintenance_run_id,trigger_type,buddy_id,task_id,state,"
-                       "started_at,finished_at) VALUES(?, 'interval', ?, ?, 'completed', ?, ?)",
-                       ("later-summary-fixture", BUDDY_ID, task_id, self.clock.value, self.clock.value))
-            db.execute("INSERT INTO micro_task_classifications(run_id,domain_node_id,task_type,maintenance_run_id)"
-                       " VALUES(?,'software','debug','later-summary-fixture')", (second_id,))
+            self.assertEqual(db.execute("SELECT task_type FROM micro_task_classifications WHERE run_id=?",
+                                        (self.evidence_id,)).fetchone()[0], "debug")
         self.assertEqual(self.board_.store.maintenance.collect(), 120)
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 1)
         manual = self.start()
         self.assertEqual(manual["status"], "running")
         packet = self.packet(self.claim_maintenance(manual["runId"]))
         self.assertEqual(packet["classificationRunIds"], [])
-        self.assertIn(second_id, {item["runId"] for item in packet["microTasks"]})
+        self.assertEqual([item["runId"] for item in packet["microTasks"]], [self.evidence_id])
+        self.assertEqual(packet["microTasks"][0]["classification"]["taskType"], "debug")
+        self.assertEqual(packet["kinds"][0]["unreadRunIds"], [self.evidence_id])
+
+    def test_summary_survives_rejected_classification_and_next_batch_does_not_reread_kind(self):
+        self.configure()
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        answer = self.valid_answer(self.packet(claim))
+        answer["classifications"][0]["domainNodeId"] = "missing"
+        self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
+        self.settle_success(claim)
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT text FROM kind_summaries").fetchone()[0], "Parser repair")
+            self.assertEqual(tuple(db.execute("SELECT run_id,cited FROM kind_summary_evidence").fetchone()),
+                             (self.evidence_id, 1))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 0)
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 1})
+        next_run = self.start()
+        next_claim = self.claim_maintenance(next_run["runId"])
+        packet = self.packet(next_claim)
+        self.assertEqual(packet["classificationRunIds"], [self.evidence_id])
+        self.assertIsNone(packet["microTasks"][0]["classification"])
+        self.assertEqual(packet["kinds"], [])
+        correction = self.valid_answer(packet)
+        correction["newNodes"] = []
+        self.assertEqual(self.submit_answer(next_claim, 0, correction)["errors"], [])
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 0})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT text FROM kind_summaries").fetchone()[0], "Parser repair")
+
+    def test_one_run_with_two_kinds_remains_pending_until_both_kinds_are_read(self):
+        with self.board_.store.db.write() as db:
+            turn = db.execute("SELECT input_json,access,expected_seconds FROM workflow_turns"
+                              " WHERE run_id=? ORDER BY turn_index DESC LIMIT 1", (self.evidence_id,)).fetchone()
+            another_input = json.loads(turn["input_json"])
+            another_input["context"]["buddy"]["model"] = "maintenance-other"
+            next_index = db.execute("SELECT MAX(turn_index)+1 FROM workflow_turns WHERE run_id=?",
+                                    (self.evidence_id,)).fetchone()[0]
+            db.execute("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,"
+                       "expected_seconds,state,created_at,updated_at)"
+                       " VALUES(?,?,?,'reconstructed-new-session',?,?,?,'returned',?,?)",
+                       ("maintenance-other-turn", self.evidence_id, next_index, canonical_json(another_input),
+                        turn["access"], turn["expected_seconds"], T0, T0))
+        self.configure()
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        packet = self.packet(claim)
+        self.assertEqual(len(packet["kinds"]), 2)
+        self.assertTrue(all(kind["unreadRunIds"] == [self.evidence_id] for kind in packet["kinds"]))
+        answer = self.valid_answer(packet)
+        answer["summaries"] = answer["summaries"][:1]
+        self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
+        self.settle_success(claim)
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 1})
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence").fetchone()[0], 1)
+        next_run = self.start()
+        next_claim = self.claim_maintenance(next_run["runId"])
+        packet = self.packet(next_claim)
+        self.assertEqual(packet["classificationRunIds"], [])
+        self.assertEqual(len(packet["kinds"]), 1)
+        self.assertEqual(packet["kinds"][0]["unreadRunIds"], [self.evidence_id])
+        self.assertEqual(packet["kinds"][0]["model"], "maintenance-other")
+        correction = self.valid_answer(packet)
+        correction["newNodes"] = []
+        self.assertEqual(self.submit_answer(next_claim, 0, correction)["errors"], [])
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 0})
+
+    def test_new_evidence_refreshes_summary_without_forgetting_earlier_read_run(self):
+        self.configure()
+        first = self.start()
+        first_claim = self.claim_maintenance(first["runId"])
+        self.assertEqual(self.submit_answer(first_claim, 0, self.valid_answer(self.packet(first_claim)))["errors"], [])
+        self.settle_success(first_claim)
+        second_id = self.add_settled_evidence("newer")
+        next_run = self.start()
+        next_claim = self.claim_maintenance(next_run["runId"])
+        packet = self.packet(next_claim)
+        self.assertEqual(packet["classificationRunIds"], [second_id])
+        self.assertEqual(packet["kinds"][0]["unreadRunIds"], [second_id])
+        self.assertEqual(packet["kinds"][0]["summary"]["citations"], [self.evidence_id])
+        answer = self.valid_answer(packet)
+        answer["newNodes"] = []
+        answer["summaries"][0]["citations"] = [second_id]
+        self.assertEqual(self.submit_answer(next_claim, 0, answer)["errors"], [])
+        with self.board_.store.db.read() as db:
+            evidence = {row["run_id"]: row["cited"] for row in db.execute(
+                "SELECT run_id,cited FROM kind_summary_evidence")}
+        self.assertEqual(evidence, {self.evidence_id: 0, second_id: 1})
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 0})
 
     def test_large_packet_stays_in_private_file_and_claim_is_bounded(self):
         self.configure()
@@ -403,6 +505,29 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(held["reason"], "capacity")
         release_before_spawn(self.board_.client(), blocker["attempt"]["attemptId"])
         self.assertIsNotNone(self.claim_maintenance(started["runId"]))
+
+    def test_worker_and_maintenance_share_the_same_model_service_limit(self):
+        from blackboard.tasks.test_workflow import BUDDY
+
+        self.board_.store.max_concurrent = 8
+        with self.board_.store.db.write() as db:
+            buddy_id = ":".join(BUDDY[key] for key in ("harness", "provider", "model", "effort"))
+            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
+                       " VALUES(?,?,?,?,?,?,1,1,'[]')", (buddy_id, "Shared model service", *(
+                           BUDDY[key] for key in ("harness", "provider", "model", "effort"))))
+            db.execute("INSERT INTO model_service_concurrency VALUES(?,?,?,1)"
+                       " ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=1",
+                       tuple(BUDDY[key] for key in ("harness", "provider", "model")))
+        work = self.submit(self.board_, request_id="same-service-worker", task="Occupy a model slot",
+                           cwd=str(self.workdir("same-service-worker")), kind="worktree")
+        occupied = self.claim(self.board_, run_id=work["runId"])
+        self.configure(buddy_id=buddy_id)
+        maintenance = self.start()
+        blocked = admit_board(self.board_, {"nonce": NONCE, "taskId": maintenance["runId"]})
+        self.assertIsNone(blocked["claim"])
+        self.assertEqual(blocked["reason"], "model-capacity")
+        release_before_spawn(self.board_.client(), occupied["claim"]["attempt"]["attemptId"])
+        self.assertIsNotNone(self.claim_maintenance(maintenance["runId"]))
 
     def test_queued_cancellation_closes_maintenance_and_releases_single_flight(self):
         self.configure()

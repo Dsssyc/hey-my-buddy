@@ -670,6 +670,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         board = self.board()
         run = self.closed(board, "owned-facts", macro_task="Owned facts")
         other = self.closed(board, "other-facts", macro_task="Other facts", project="other-facts")
+        uncited = self.closed(board, "uncited-facts", macro_task="Uncited facts", project="uncited-facts")
         now = board.store.now()
         with board.store.db.write() as db:
             db.execute("INSERT INTO workflow_scope_versions(run_id,scope_version,actor_role,actor_id,"
@@ -721,11 +722,11 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES('domain','Domain','Retained expertise','maintenance')")
             db.execute("INSERT INTO kind_summaries(harness,model,effort,text,maintenance_run_id)"
                        " VALUES('codex','fixture','high','Retained observations','maintenance')")
-            for task in (run, other):
+            for task, cited in ((run, 1), (other, 1), (uncited, 0)):
                 db.execute("INSERT INTO micro_task_classifications VALUES(?, 'domain','review','maintenance')",
                            (task["runId"],))
-                db.execute("INSERT INTO kind_summary_citations VALUES('codex','fixture','high',?)",
-                           (task["runId"],))
+                db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,?)",
+                           (task["runId"], cited))
             db.execute("INSERT INTO routing_judgments VALUES('owned-decision','domain','review')")
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
                        " VALUES('retained-decision','completed',?)", (now,))
@@ -757,16 +758,17 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 ("decision_requests", "decision_id", "owned-decision"),
                 ("evaluation_decisions", "decision_id", "owned-decision"),
                 ("micro_task_classifications", "run_id", run["runId"]),
-                ("kind_summary_citations", "run_id", run["runId"]),
+                ("kind_summary_evidence", "run_id", run["runId"]),
                 ("routing_judgments", "decision_id", "owned-decision"),
             ):
                 with self.subTest(table=table):
                     self.assertIsNone(db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (value,)).fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-content-command'").fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-stop-command'").fetchone())
-            for table in ("micro_task_classifications", "kind_summary_citations"):
-                self.assertEqual([row[0] for row in db.execute(f"SELECT run_id FROM {table}")],
-                                 [other["runId"]], table)
+            self.assertEqual({row[0] for row in db.execute("SELECT run_id FROM micro_task_classifications")},
+                             {other["runId"], uncited["runId"]})
+            self.assertEqual({tuple(row) for row in db.execute("SELECT run_id,cited FROM kind_summary_evidence")},
+                             {(other["runId"], 1), (uncited["runId"], 0)})
             self.assertEqual([tuple(row) for row in db.execute("SELECT * FROM routing_judgments")],
                              [("retained-decision", None, "research")])
             for table in ("domain_nodes", "maintenance_runs", "kind_summaries"):

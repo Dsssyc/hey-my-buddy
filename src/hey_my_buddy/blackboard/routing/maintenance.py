@@ -37,15 +37,15 @@ class Maintenance:
         now = self.store.now()
         settings = connection.execute("SELECT * FROM router_settings WHERE id=1").fetchone()
         interval = settings["maintenance_interval_seconds"]
-        # An explicit empty-board request reports that fact regardless of setup.
-        unclassified = maintenance_data.pending(connection)
-        if not unclassified and not maintenance_data.summary_pending(connection):
-            return {"status": "no-new-evidence"}, interval
         active = connection.execute("SELECT m.* FROM maintenance_runs m WHERE m.state='running' OR EXISTS"
             " (SELECT 1 FROM (SELECT * FROM attempts WHERE " + self.store.UNRESOLVED_SQL + ") a"
             " WHERE a.task_id=m.task_id) ORDER BY m.started_at LIMIT 1").fetchone()
         if active is not None:
             return {"status": "running", "maintenanceRunId": active["maintenance_run_id"]}, None
+        # An explicit empty-board request reports that fact regardless of setup.
+        has_pending = maintenance_data.pending(connection)
+        if not has_pending:
+            return {"status": "no-new-evidence"}, interval
         buddy_id = settings["maintenance_buddy_id"]
         if buddy_id is None:
             return {"status": "not-configured"}, None
@@ -55,8 +55,8 @@ class Maintenance:
             # its actual finish; missed intervals are never replayed.
             finish = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='maintenance.finished' ORDER BY seq DESC LIMIT 1",
                                         (latest["task_id"],)).fetchone()
-            drain = (latest["state"] == "completed" and unclassified and finish is not None
-                     and json.loads(finish[0])["continueUnclassified"])
+            drain = (latest["state"] == "completed" and has_pending and finish is not None
+                     and json.loads(finish[0])["continuePending"])
             if not drain:
                 remaining = interval - (datetime.fromisoformat(now) - datetime.fromisoformat(latest["finished_at"])).total_seconds()
                 if remaining > 0:
@@ -139,7 +139,7 @@ class Maintenance:
                            ("failed" if code else "completed", code, canonical_json(params or {}) if code else None, now, task_id))
         self.store._append_event(connection, "maintenance.finished", task_id=task_id,
             payload={"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed", "code": code,
-                     "continueUnclassified": code is None and maintenance_data.pending(connection)})
+                     "continuePending": code is None and maintenance_data.pending(connection)})
         return {"maintenanceRunId": run["maintenance_run_id"], "status": "failed" if code else "completed"}
 
     def complete(self, connection, *, task, attempt, status, result, shutdown_confirmed, error, now):
