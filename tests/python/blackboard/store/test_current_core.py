@@ -33,7 +33,7 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        self.assertEqual(CONTRACT_VERSION, "0.32.0")
+        self.assertEqual(CONTRACT_VERSION, "0.33.0")
         self.assertEqual(SCHEMA_VERSION, 18)
         board = self.board()
         with board.store.db.read() as connection:
