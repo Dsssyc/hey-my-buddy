@@ -10,6 +10,23 @@ from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES
 
 
 class ResultViewTests(BoardTestCase):
+    def test_result_views_preserve_shared_and_separate_patch_paths(self):
+        from hey_my_buddy.blackboard.store.store import _public_result_payload
+
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            for path in ("/private/output.patch", "/private/cumulative.patch"):
+                with self.subTest(seal=key, path=path):
+                    seal = {"diffPath": "/private/output.patch", "diffSha256": "digest",
+                            "changedPaths": ["src/file.py"],
+                            "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
+                    payload = {"status": "ok", "result": {key: seal}}
+                    view = _public_result_payload(payload)["result"][key]
+                    self.assertEqual(view["diffPath"], seal["diffPath"])
+                    self.assertEqual(view["diffSha256"], seal["diffSha256"])
+                    self.assertEqual(view["cumulativePatch"]["path"], path)
+                    self.assertEqual(view["cumulativePatch"]["sha256"], "digest")
+                    self.assertNotIn("changedPathsCount", seal)
+
     def test_large_workspace_seal_is_bounded_in_all_public_result_replies(self):
         board = self.board()
         task = board.submit_execution(requestId="large-workspace-result", task="collect workspace output",

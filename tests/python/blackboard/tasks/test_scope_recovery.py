@@ -630,6 +630,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(cumulative["outputCommit"], resolved["outputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/feature.py"])
         self.assertTrue(native_path(Path(cumulative["path"])).is_file())
+        self.assertEqual(cumulative["path"], resolved["artifact"]["diffPath"])
+        self.assertEqual(cumulative["sha256"], resolved["artifact"]["diffSha256"])
+        self.assertEqual([path.name for path in native_path(Path(cumulative["path"]).parent).glob("*.patch")],
+                         ["resolve-restore.patch"])
         self.assertIsNone(resolved["nextBoundaryRequestId"])
         self.assertFalse((checkout / "outside.txt").exists())
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "base\n")
@@ -692,6 +696,10 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(cumulative["baseCommit"], submitted["workspace"]["inputCommit"])
         self.assertIn("outside.txt", cumulative["changedPaths"])
         self.assertTrue(native_path(Path(cumulative["path"])).is_file())
+        self.assertEqual(cumulative["path"], adopted["artifact"]["diffPath"])
+        self.assertEqual(cumulative["sha256"], adopted["artifact"]["diffSha256"])
+        self.assertEqual([path.name for path in native_path(Path(cumulative["path"]).parent).glob("*.patch")],
+                         ["resolve-adopt.patch"])
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
 

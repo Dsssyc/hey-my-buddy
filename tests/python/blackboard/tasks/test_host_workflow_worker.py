@@ -43,6 +43,10 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         self.assertFalse(partial["final"])
         self.assertIn("tracked.txt", partial["changedPaths"])
         self.assertTrue(native_path(Path(partial["diffPath"])).is_file())
+        self.assertEqual(partial["cumulativePatch"]["path"], partial["diffPath"])
+        self.assertEqual(partial["cumulativePatch"]["sha256"], partial["diffSha256"])
+        self.assertEqual([path.name for path in native_path(Path(partial["diffPath"]).parent).glob("*.patch")],
+                         ["output.patch"])
         self.assertIsNone(current["finalArtifactId"])
         # The quota death keeps its machine classification end to end: the
         # private session record's turn-end code is the only native failure

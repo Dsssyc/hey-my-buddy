@@ -23,6 +23,22 @@ class WorkspaceOutputViewTests(unittest.TestCase):
     def assert_bounded(self, value):
         self.assertLess(len(json.dumps(value).encode()), MAX_MESSAGE_BYTES)
 
+    def test_output_artifact_keeps_shared_and_separate_patch_paths(self):
+        for kind in ("output", "partial-output", "resolved-output"):
+            for path in ("/private/output.patch", "/private/cumulative.patch"):
+                with self.subTest(kind=kind, path=path):
+                    manifest = {"commit": "commit", "diffPath": "/private/output.patch", "diffSha256": "digest",
+                                "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
+                    row = {"artifact_id": "artifact", "kind": kind, "attempt_id": "attempt", "turn_id": "turn",
+                           "run_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
+                           "manifest_json": json.dumps(manifest)}
+                    view = WorkflowCoordinator._artifact_view(row)
+                    self.assertEqual(view["diffPath"], manifest["diffPath"])
+                    self.assertEqual(view["diffSha256"], manifest["diffSha256"])
+                    self.assertEqual(view["cumulativePatch"]["path"], path)
+                    self.assertEqual(view["cumulativePatch"]["sha256"], "digest")
+                    self.assertEqual(json.loads(row["manifest_json"]), manifest)
+
     def test_output_artifact_preserves_stored_paths_and_exposes_patch(self):
         manifest = {
             "commit": "output-commit", "diffPath": "/private/output.patch", "diffSha256": "diff-digest",

@@ -114,6 +114,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         still = self.view(board, run_id)
         self.assertEqual(still["cleanup"]["state"], "applied")
         self.assertTrue(still["cleanup"]["retention"]["artifactIds"])
+        self.assertEqual(artifact["cumulativePatch"]["path"], artifact["diffPath"])
+        self.assertEqual(still["cleanup"]["retention"]["outputPatches"], [artifact["diffPath"]])
         self.assertIn(str(Path(self.directory) / "workspaces" / manifest["workspaceId"]),
                       still["cleanup"]["retention"]["workspaceDirectory"])
         # Reclaiming an already removed allocation is the same achieved outcome.
@@ -469,6 +471,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, first, second, final, view = self.two_turn_worktree()
         checkout = Path(first["checkoutRoot"])
         run_id = submitted["runId"]
+        cumulative = final["cumulativePatch"]
+        self.assertNotEqual(cumulative["path"], final["diffPath"])
+        self.assertNotEqual(cumulative["sha256"], final["diffSha256"])
+        self.assertNotEqual(native_path(Path(cumulative["path"])).read_bytes(),
+                            native_path(Path(final["diffPath"])).read_bytes())
+        self.assertEqual({path.name for path in native_path(Path(final["diffPath"]).parent).glob("*.patch")},
+                         {"output.patch", f"cumulative-{first['inputCommit']}.patch"})
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], first["checkoutRoot"])
@@ -484,6 +493,20 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertEqual(evidence["evidence"]["workspace"]["manifestWorkspaceId"], second["workspaceId"])
         self.assertTrue(evidence["retention"]["artifactIds"])
         self.assertTrue(any("outputs" in ref for ref in evidence["retention"]["fixedRefs"]))
+        outputs = [row for row in view["artifacts"] if row["kind"] == "output"]
+        retained = evidence["retention"]["outputPatches"]
+        self.assertEqual(len(retained), 3)
+        self.assertEqual(len(retained), len(set(retained)))
+        self.assertEqual(set(retained), {path for row in outputs
+                                        for path in (row["diffPath"], row["cumulativePatch"]["path"])})
+        for path in retained:
+            self.assertTrue(native_path(Path(path)).is_file())
+        # The whole-task patch alone reconstructs both turns after checkout removal.
+        target = self.directory / "cumulative-target"
+        git(self.directory, "clone", "-q", str(self.repo), str(target))
+        git(target, "apply", "--binary", cumulative["path"])
+        self.assertEqual((target / "tracked.txt").read_text(encoding="utf-8"), "first turn output\n")
+        self.assertEqual((target / "second.txt").read_text(encoding="utf-8"), "second turn output\n")
         # Only the checkout is removed: both turns' manifests, patches and refs stay.
         self.assertTrue((Path(self.directory) / "workspaces" / first["workspaceId"] / "manifest.json").exists())
         self.assertTrue((Path(self.directory) / "workspaces" / second["workspaceId"] / "manifest.json").exists())

@@ -86,6 +86,7 @@ class CliViewTests(RealWorkspaceTestCase):
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         native_path(Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
+        seal["cumulativePatch"] = workspace_module.cumulative_patch(manifest, seal, manifest["inputCommit"])
         self.finish_turn(self.board_instance, claimed, seal)
         return submitted, self.view(self.board_instance, run_id)
 
@@ -149,7 +150,8 @@ class CliViewTests(RealWorkspaceTestCase):
         output = next(row for row in service_view["artifacts"] if row["kind"] == "output")
         self.assertEqual(brief["artifacts"], [{key: output[key] for key in (
             "artifactId", "kind", "turnId", "manifestSha256", "outputCommit", "diffPath", "diffSha256",
-            "changedPaths", "changedPathsCount", "changedPathsTruncated") if key in output}])
+            "cumulativePatch", "changedPaths", "changedPathsCount", "changedPathsTruncated") if key in output}])
+        self.assertEqual(brief["artifacts"][0]["cumulativePatch"]["path"], output["diffPath"])
         self.assertEqual(brief["otherArtifacts"], len(service_view["artifacts"]) - 1)
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])
