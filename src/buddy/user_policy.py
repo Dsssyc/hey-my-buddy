@@ -251,14 +251,22 @@ def publish(evaluation, connection, *, revision: int, writer, now: str, params: 
         from . import router
         current = router.configuration(connection)
         merged = {**current, **configuration}
-        if merged["routerProfileId"] is not None and ({"routerProfileId", "defaultRoutingMode"} & configuration.keys()):
-            profile, code, reason = router.profile_problem(connection, merged["routerProfileId"], merged["defaultRoutingMode"])
-            if profile is None:
-                raise BoardError('UNSUPPORTED' if code in ('router-no-tool-unsupported', 'router-review-unsupported')
-                                 else 'CONFIGURATION_UNAVAILABLE', reason)
-        for key, value in configuration.items():
-            connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                               (router.CONFIG_KEYS[key], value or ""))
+        if 'routerProfileIds' in configuration:
+            # Every listed ID must reference a published buddy with a complete
+            # identity. Enabled, availability, harness health, quota and mode
+            # eligibility are deliberately not save requirements: the resolver
+            # explains them per item, and a temporarily unhealthy first item never
+            # blocks saving the whole list.
+            for profile_id in merged['routerProfileIds']:
+                row = connection.execute('SELECT * FROM evaluation_profiles WHERE profile_id=?',
+                                         (profile_id,)).fetchone()
+                if row is None:
+                    raise BoardError('NOT_FOUND', 'Unknown profileId', profileId=profile_id)
+                if any(not row[key] for key in ('adapter', 'provider', 'model', 'effort')):
+                    raise BoardError('INVALID_ARGUMENT',
+                                     'routerProfileIds entries must reference published buddies with complete '
+                                     'harness/provider/model/effort identities', profileId=profile_id)
+        router._write_settings(connection, configuration)
         if 'routingBudget' in configuration:
             evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',
                                            payload={'preset': configuration['routingBudget'], 'revision': revision})

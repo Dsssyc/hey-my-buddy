@@ -207,6 +207,15 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled','decision.stale');
+-- Router outcome facts are read per buddy in list order (ADR-021 第 2 条): this
+-- partial expression index serves router_history's per-profile reads as an
+-- index-only range. json_valid guards the expression so a malformed payload can
+-- never fail a write or a read, and the kinds are code-owned literals for the same
+-- reason as events_review_seq_idx: bind parameters would leave SQLite unable to
+-- prove the partial predicate.
+CREATE INDEX IF NOT EXISTS events_router_outcome_idx
+    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.profileId'), seq)
+    WHERE kind IN ('router.answered','router.no_answer');
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id      TEXT PRIMARY KEY,
