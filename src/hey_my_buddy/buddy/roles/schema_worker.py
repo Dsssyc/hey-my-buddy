@@ -57,7 +57,6 @@ class NativeSchemaWorker:
     display_name: str
     interaction_kind: str
     follow_workspace_access: bool = False
-    bind_account_environment: bool = False
     native_quota_failure: bool = False
     native_identity_keys: tuple[str, ...] = ()
     validation_error_key: str | None = None

@@ -62,12 +62,6 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {PREVIOUS_SCHEMA_VERSION} or {SCHEMA_VERSION} only; no conversion was performed')
         active = connection.execute("SELECT task_id,state FROM tasks WHERE state IN ('queued','running','cancelling','reconciliation-needed')").fetchall()
         unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
-        accounts_pending = connection.execute(
-            "SELECT key FROM meta WHERE key LIKE 'account-mutation:%'"
-            " OR (key LIKE 'account-operation:%' AND json_extract(value,'$.status')='active')"
-        ).fetchall()
-        if accounts_pending:
-            raise BoardError('UPGRADE_NOT_IDLE', 'An active native account operation or retained credential mutation blocks upgrade; no account was stopped')
         if active or unresolved:
             raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
                              active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
@@ -310,7 +304,7 @@ def migrate_board(state: Path, before: dict) -> tuple[dict, dict]:
         raise BoardError('UPGRADE_MIGRATION_FAILED', 'Board no longer matches its verified backup',
                          tables=sorted(set(changed + inventory)))
     with closing(sqlite3.connect(state / 'board.sqlite3', isolation_level=None, timeout=10)) as connection:
-        summary = migrations.migrate_15_to_16(connection)
+        summary = migrations.migrate_16_to_17(connection)
     expected = idle_snapshot(state, event_head=before.get('eventHead'))
     expected['runtimeSettings'] = before.get('runtimeSettings', {})
     return summary, expected

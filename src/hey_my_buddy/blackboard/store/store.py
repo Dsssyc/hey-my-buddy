@@ -504,8 +504,6 @@ class BoardStore:
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
             view["quotaFailure"] = failure_view(recorded.get("result"), adapter=attempt["adapter"])
             view["selectedAttempt"] = self._attempt_view(attempt)
-            from ..catalog.accounts import attempt_account
-            view['selectedAttempt']['account'] = attempt_account(connection, attempt)
             view["resultAvailable"] = attempt["result_json"] is not None
             view["shutdownConfirmed"] = bool(attempt["shutdown_confirmed"])
             view["attemptGeneration"] = attempt["generation"]
@@ -720,14 +718,6 @@ class BoardStore:
             return scheduling.REASON_TOTAL_CAPACITY
         family = scheduling.model_family(spec)
         if family is not None:
-            from ..catalog.accounts import selection, assert_credentials_current, ADAPTERS
-            if family[0] in ADAPTERS:
-                try:
-                    assert_credentials_current(connection, selection(connection, family[0]))
-                except BoardError as error:
-                    if error.code != 'ACCOUNT_IN_USE':
-                        raise
-                    return 'awaiting-configuration-validation'
             active = self._model_active_counts(connection)
             if active.get(family, 0) >= self._effective_model_limit(connection, family):
                 return scheduling.REASON_MODEL_CAPACITY
@@ -1804,21 +1794,12 @@ class BoardStore:
                 ),
             )
             effective_cwd = chosen["cwd"] or spec["cwd"]
-            from ..catalog.accounts import freeze
-            account_adapter = chosen_family[0] if chosen_family else chosen['adapter']
-            frozen_account = freeze(connection, attempt_id, account_adapter)
-            if frozen_account is not None:
+            from ...protocol.harness_names import HARNESS_NAMES
+            harness = chosen_family[0] if chosen_family else chosen['adapter']
+            if harness in HARNESS_NAMES:
                 from ..service.harness_health import read_health
                 connection.execute('INSERT INTO meta(key,value) VALUES(?,?)',
-                                   ('attempt-harness:' + attempt_id, canonical_json(read_health(connection, account_adapter))))
-            if chosen_input is not None:
-                from ..catalog.accounts import identity, selection
-                names = {profile['adapter'] for profile in chosen_input.get('profiles', [])}
-                if frozen_account is not None:
-                    names.add(frozen_account['adapter'])
-                connection.execute('INSERT INTO meta(key,value) VALUES(?,?)',
-                                   ('attempt-routing-accounts:' + attempt_id,
-                                    canonical_json(chosen_input.get('accounts') or {name: identity(selection(connection, name)) for name in names})))
+                                   ('attempt-harness:' + attempt_id, canonical_json(read_health(connection, harness))))
             for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
                 for resource in values:
                     # (task, resource) is unique, so a retried task re-holds its own
@@ -1860,8 +1841,6 @@ class BoardStore:
                 },
                 "reason": None,
             }
-            if frozen_account is not None:
-                response['claim']['account'] = frozen_account
             if chosen_input is not None:
                 # The bounded decision payload the service persisted for this attempt.
                 # It travels only to the claiming worker and is written to the private
@@ -2986,7 +2965,7 @@ class BoardStore:
 
     # -- recovery ------------------------------------------------------------
     def reconcile_startup(self) -> dict:
-        """Make pre-restart in-flight attempts and account operations uncertain.
+        """Make pre-restart in-flight attempts uncertain.
 
         A restarted service never infers "stopped" from an expired lease or a
         missing PID: it marks possible external work uncertain and keeps its
@@ -2995,10 +2974,6 @@ class BoardStore:
         """
         summary = {"uncertain": 0, "retained": 0}
         with self.db.write() as connection:
-            account_operations = connection.execute(
-                "UPDATE meta SET value=json_set(value,'$.status','uncertain')"
-                " WHERE key LIKE 'account-operation:%' AND json_extract(value,'$.status')='active'"
-            ).rowcount
             now = self.now()
             rows = connection.execute(
                 "SELECT * FROM attempts WHERE execution_state IN ('starting','executing','finalizing')"
@@ -3050,7 +3025,7 @@ class BoardStore:
                     "UPDATE workers SET state='lost', revision=revision+1 WHERE worker_id=?", (worker["worker_id"],)
                 )
             head = self._head_of(connection)
-        if account_operations or summary["uncertain"] or head:
+        if summary["uncertain"] or head:
             self._notify(head)
         return summary
 

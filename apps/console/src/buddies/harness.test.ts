@@ -27,9 +27,8 @@ function row(entry: Partial<HarnessHealth> = {}): HarnessHealth {
 function quota(entry: Partial<HarnessQuota> = {}): HarnessQuota {
   return { observedAt: "2026-09-29T09:00:00.000Z", source: "dsh-native", windows: [], ...entry };
 }
-const account: HarnessAccount = { adapter: "dsh", source: "native", revision: 1, credentialRevision: 0, status: "ready",
-  accountType: null, checkedAt: null, reasonCode: null, guidance: null,
-  capabilities: { workerAccount: false, oauth: false, apiKey: false, logout: false, remove: false } };
+const account: HarnessAccount = { adapter: "dsh", status: "ready",
+  accountType: null, checkedAt: null, reasonCode: null, guidance: null };
 
 describe("times and words", () => {
   it("writes a time as month-day and hour-minute, and nothing for what is not a time", () => {
@@ -58,14 +57,14 @@ describe("times and words", () => {
 });
 
 describe("a harness summary", () => {
-  it("writes each recorded harness state and reads its account source and state in details", () => {
+  it("writes each recorded harness state and reads its native login state in details", () => {
     expect(statusText("ready", t)).toBe("已找到");
     expect(statusText("login-required", t)).toBe("未登录");
     expect(statusText("paused", t)).toBe("paused");
     expect(harnessDetailsView(row(), t).account).toBeNull();
-    expect(harnessDetailsView(row({ account }), t).account).toMatchObject({ source: "共用登录", state: "已配置" });
-    expect(harnessDetailsView(row({ account: { ...account, source: "worker", status: "logged-out" } }), t).account)
-      .toMatchObject({ source: "独立账户", state: "未登录" });
+    expect(harnessDetailsView(row({ account }), t).account).toMatchObject({ state: "已配置" });
+    expect(harnessDetailsView(row({ account: { ...account, status: "logged-out" } }), t).account)
+      .toMatchObject({ state: "未登录" });
     expect(harnessDetailsView(row({ account: { ...account, status: "unsupported" } }), t).account?.state).toBe("未验证");
     expect(harnessDetailsView(row({ account: { ...account, status: "unknown" } }), t).account?.state).toBe("未知");
   });
@@ -159,18 +158,18 @@ describe("harness details", () => {
     expect(exception("unhealthy")?.reason).toBeNull();
   });
 
-  it("writes the account's source, status, type and check, the billing of each provider and the guidance", () => {
+  it("writes the account's status, type and check, the billing of each provider and the guidance", () => {
     expect(harnessDetailsView(row(), t).account).toBeNull();
-    const view = harnessDetailsView(row({ account: { ...account, source: "worker", status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
+    const view = harnessDetailsView(row({ account: { ...account, status: "ready", accountType: "chatgpt", checkedAt: "2026-09-29T09:00:00.000Z" },
       billingByProvider: { openai: { kind: "subscription", source: "native", observedAt: "x" }, deepseek: { kind: "metered", source: "native", observedAt: "x" },
         other: { kind: "unknown", source: "native", observedAt: "x" } } }), t).account!;
-    expect(view).toMatchObject({ source: "独立账户", state: `已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`,
+    expect(view).toMatchObject({ state: `已配置 · ChatGPT · ${clock("2026-09-29T09:00:00.000Z")}`,
       billing: [{ provider: "openai", plan: "订阅" }, { provider: "deepseek", plan: "按量" }, { provider: "other", plan: "未知" }], guidance: null });
     expect(harnessDetailsView(row({ account: { ...account, accountType: "mystery" } }), t).account?.state).toBe("已配置 · 未知");
     expect(harnessDetailsView(row({ account }), t).account?.billing).toEqual([]);
     const guided = (reasonCode: string | null, guidance: string | null) =>
       harnessDetailsView(row({ account: { ...account, status: "logged-out", reasonCode, guidance } }), t).account!.guidance;
-    expect(guided("ACCOUNT_LOGIN_REQUIRED", "recorded")).toBe("完成当前来源的登录后检测。");
+    expect(guided("ACCOUNT_LOGIN_REQUIRED", "recorded")).toBe("在 Harness 中登录后检测。");
     expect(guided("ACCOUNT_NEW", "recorded as is")).toBe("recorded as is");
     expect(guided("ACCOUNT_LOGIN_REQUIRED", null)).toBeNull();
   });

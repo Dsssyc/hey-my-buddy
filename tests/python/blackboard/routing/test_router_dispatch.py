@@ -6,7 +6,7 @@ the complete actor-free packet — even with no usable Router — and each item 
 its own immutable internal task. Pre-claim preparation advances a model-前
 unavailable item after recording its real preflight no-answer, refuses to borrow a
 changed configuration, queue behind writer gates, retries and capacity, and a
-claim freezes the actual family, account, tool policy and Router binding onto the
+claim freezes the actual family, tool policy and Router binding onto the
 attempt inside one transaction. Old dispatch documents, hashes and receipts are
 never rewritten by a later dispatch of the same request.
 """
@@ -133,7 +133,6 @@ class AdmissionTests(RouterDispatchTestCase):
         self.assertEqual([item["profileId"] for item in base["profiles"]], [A, B])
         self.assertIn("policyFacts", base)
         self.assertIn("outputSchema", base)
-        self.assertIn("accounts", base)
         self.assertNotIn("profile", base)
         self.assertNotIn("routerProfileId", base)
         self.assertEqual(snapshot["facts"]["routerProfileIds"], [])
@@ -283,18 +282,6 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.assertEqual([row["state"] for row in self.tasks()], ["cancelled"])
         self.assertEqual(self.router_events("router.no_answer"), [])
 
-    def test_account_drift_does_not_advance(self):
-        result = self.request()
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('account-selection:dsh',?)",
-                       (canonical_json({"source": "worker", "revision": 1}),))
-        blocked = self.claim("drift")
-        self.assertIsNone(blocked["claim"])
-        decision = self.decision_row(result["decisionId"])
-        self.assertEqual(decision["status"], "stale")
-        self.assertEqual(decision["error"], "ACCOUNT_BINDING_CHANGED")
-        self.assertEqual([row["state"] for row in self.tasks()], ["cancelled"])
-        self.assertEqual(self.router_events("router.no_answer"), [])
 
     def test_writer_gate_only_queues(self):
         result = self.request()
@@ -397,7 +384,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
 
 
 class ClaimTests(RouterDispatchTestCase):
-    def test_claim_freezes_the_actual_family_account_policy_and_binding(self):
+    def test_claim_freezes_the_actual_family_policy_and_binding(self):
         result = self.request()
         committed = self.claim("ok")
         self.assertIsNotNone(committed["claim"])
@@ -411,9 +398,7 @@ class ClaimTests(RouterDispatchTestCase):
         self.assertEqual(document["routerIndex"], 0)
         self.assertEqual(document["profile"], {"adapter": "dsh", "provider": "fixture",
                                                "model": "alpha", "effort": "max"})
-        # The claim froze the account binding and the tool policy for this attempt.
-        self.assertEqual(self.meta("attempt-routing-accounts:" + attempt["attemptId"]),
-                         {"dsh": {"source": "native", "credentialRevision": 0}})
+        # The claim froze the tool policy for this attempt.
         self.assertEqual(self.meta("attempt-tool-policy:" + attempt["attemptId"]), {"systemSandbox": False})
         with self.board_.store.db.read() as db:
             binding = router_sequence.claim(db, attempt["attemptId"])

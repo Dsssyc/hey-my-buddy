@@ -64,7 +64,6 @@ export default {
     refused: "The connection is lost or this session cannot write, so models cannot be discovered now; the draft is kept.",
     reason: {
       harness: "Harness unavailable",
-      account: "Account changed",
       gone: "No longer in the harness's model catalog",
     },
     empty: {

@@ -149,9 +149,6 @@ class FastRegisteredRunTests(FakeAppServerTests):
         self.assertEqual(request.tool_scope, "none")
         self.assertEqual(request.session_services, ())
         self.assertIsNone(request.identity.turn_id)
-        # The internal request frame carries no account reference at all; the
-        # frozen account selection stays an outer environment choice.
-        self.assertNotIn("frozenAccount", request.to_payload())
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(outcome.result["rawAnswer"], result.value.raw)
         self.assertEqual(outcome.result["nativeEvidence"], {"eventCount": result.native_event_count,
@@ -225,7 +222,6 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
     def test_worker_consumes_frames_without_publishing_private_service_credentials(self):
         context = self.context()
         context.agent_credential = "synthetic-attempt-secret"
-        context.runtime["account"] = {"adapter": "zcode", "source": "native", "revision": 3, "credentialRevision": 2}
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         request_bytes = Path(handle.role_run_control["requestFile"]).read_bytes()
@@ -233,8 +229,6 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         result = decode_run_result(Path(handle.log_paths["stdout"]).read_bytes())
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.tool_scope, "write")
-        # The runtime holds the account; the request frame carries none of it.
-        self.assertNotIn("frozenAccount", request.to_payload())
         self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
         self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
         self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)

@@ -69,8 +69,8 @@ class CatalogRefreshServiceTests(BoardTestCase):
             hook("dsh")
         finally:
             self.service.harnesses.refresh = refresh
-        self.assertEqual(calls, [("dsh", {"force": True, "expected_binding": None})],
-                         "A hook called without a claim binding refreshes unbound")
+        self.assertEqual(calls, [("dsh", {"force": True, "catalog_scan_claimed": True})],
+                         "A reread hook uses the claimed scan window")
 
 
 class ConsoleSnapshotContractTests(BoardTestCase):

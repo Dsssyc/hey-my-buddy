@@ -435,9 +435,9 @@ def _verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
         if manifest.get('schema') == PREVIOUS_SCHEMA_VERSION:
             # A pre-upgrade backup must also prove it migrates cleanly.
-            from .migrations import migrate_15_to_16
+            from .migrations import migrate_16_to_17
             with closing(sqlite3.connect(trial / 'board.sqlite3', isolation_level=None)) as connection:
-                migrate_15_to_16(connection)
+                migrate_16_to_17(connection)
         # Exercise the real current-schema opener in a separate private directory.
         Database(trial).initialize()
     return manifest

@@ -46,7 +46,7 @@ class RouterFailoverTests(unittest.TestCase):
         self.assertEqual(self.classify(code="router-out-of-bounds"), "no-answer")
         self.assertEqual(self.classify(code="router-out-of-bounds", circumstances_changed=True), "changed")
         for code in ("input-changed", "router-configuration-changed", "router-table-changed",
-                     "account-selection-changed", "reader-expired", "owner-fenced"):
+                     "reader-expired", "owner-fenced"):
             with self.subTest(code=code):
                 self.assertEqual(self.classify(code=code, circumstances_changed=True), "changed")
 

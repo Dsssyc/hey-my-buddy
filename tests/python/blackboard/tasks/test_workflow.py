@@ -196,6 +196,29 @@ class WorkflowTestCase(BoardTestCase):
 
 
 class LifecycleTests(WorkflowTestCase):
+    def test_host_command_execution_reads_have_no_native_quota_projection(self):
+        board = self.board()
+        self.register(board)
+        # The real read projection must not classify a command as a harness.
+        with patch('hey_my_buddy.blackboard.evaluation.native_observations.latest_quota',
+                   side_effect=AssertionError('command has no native quota reader')):
+            submitted = self.submit(board, adapter='command', argv=['echo', 'fixture'])
+            run_id = submitted['runId']
+            self.assertEqual(submitted['quotaWarnings'], [])
+            claim = self.claim(board, run_id=run_id)
+            self.assertEqual(claim['claim']['task']['spec']['adapter'], 'command')
+            self.assertNotIn('account', claim['claim'])
+            self.finish_turn(board, claim)
+            view = board.call('workflow_get', {'runId': run_id})
+            self.assertEqual(view['executionConfiguration'], {'adapter': 'command'})
+            self.assertEqual(view['quotaWarnings'], [])
+            self.assertEqual(view['task']['spec']['adapter'], 'command')
+            self.assertTrue(board.call('task_result', {'runId': run_id})['resultDelivered'])
+            self.assertEqual(board.call('task_get', {'runId': run_id})['task']['adapter'], 'command')
+            rows = board.call('task_list', {})['tasks']
+            row = next(item for item in rows if item['taskId'] == run_id)
+            self.assertEqual(row['adapter'], 'command')
+
     def test_yield_approve_helper_continuation_and_acknowledgement(self):
         board = self.board(max_concurrent=1)
         self.register(board)

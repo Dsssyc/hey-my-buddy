@@ -49,7 +49,7 @@ RETIRED_EFFORT_REASON = "not present in the latest complete native discovery"
 #: Unavailable reasons that are catalog facts, never undone by health recovery.
 #: A 0 left behind by a harness health failure is a health fact, not evidence
 #: that the native model disappeared (ADR-027 rules 1 and 2).
-CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON, "ACCOUNT_BINDING_CHANGED")
+CATALOG_FACT_REASONS = (CONFIRMED_ABSENCE_REASON, RETIRED_EFFORT_REASON)
 
 #: ADR-027 rule 3: how an operator refreshes harness catalogs and their readings.
 CATALOG_REMEDY = "Run buddy adapters with refresh:true"
@@ -62,127 +62,58 @@ _READ_AT_PREFIX = "catalog-read-at:"
 _ACCOUNT_STATUS_PREFIX = "catalog-account-status:"
 _SCAN_AFTER_PREFIX = "catalog-scan-after:"
 
-#: ADR-027 rule 3: per-directory hooks the service registers so an explicitly
-#: rejected configuration can borrow the service's own bounded native refresh
-#: (its environment, account binding and subprocess deadlines) exactly once.
-#: The hook receives the reread claim's account binding and must carry it to
-#: its native read admission, so a claim made under one account never reads
-#: under whichever account is selected later.
-_catalog_reread: dict[str, Callable[[str, str | None], None]] = {}
-
-#: Bounded wait for a caller joining another caller's in-flight shared re-read.
-#: Past it the caller judges on the recorded facts; it never starts a second
-#: native read and never waits inside a database transaction.
+#: The service's bounded native re-read uses its existing harness execution path.
+_catalog_reread: dict[str, Callable[[str], None]] = {}
 CATALOG_REREAD_JOIN_SECONDS = 55
-
-#: Guards the in-process flight registry and every window claim; the write
-#: transaction inside the claim fences other processes.
 _catalog_reread_gate = threading.Lock()
 
 
 class _CatalogRereadFlight:
-    """One claimed bounded native read of one harness and account binding."""
-
-    def __init__(self, account_key: str) -> None:
-        self.account_key = account_key
+    def __init__(self) -> None:
         self.finished = threading.Event()
 
 
-#: In-flight shared reads, keyed by (directory, adapter, account binding).
-_catalog_reread_flights: dict[tuple[str, str, str], _CatalogRereadFlight] = {}
+_catalog_reread_flights: dict[tuple[str, str], _CatalogRereadFlight] = {}
 
 
 def register_catalog_reread(directory: Path | str, hook: Callable[[str], None] | None) -> None:
-    """Register (or clear) this state directory's single-harness catalog re-read."""
     if hook is None:
         _catalog_reread.pop(str(directory), None)
     else:
         _catalog_reread[str(directory)] = hook
 
 
-def _binding_key(db, adapter: str) -> str:
-    from .accounts import binding_key
-    return binding_key(db, adapter)
-
-
-def _reread_binding_matches(directory: Path | str, adapter: str, account_key: str) -> bool:
-    """Whether the claimed read's account binding is still the selected one.
-
-    Checked immediately before the native call, outside any write transaction:
-    a switched or re-credentialed account cleared the window with the other
-    read facts, so the old claim must neither read under the new binding nor
-    keep the new account from claiming its own read. The reader receives the
-    claimed binding and re-checks it again at its own read admission, so a
-    switch in the remaining gap still never starts a native read.
-    """
-    from ..store.db import Database
-    with Database(directory).read() as db:
-        return _binding_key(db, adapter) == account_key
-
-
-def coordinate_catalog_reread(directory: Path | str, adapter: str, *, reader: Callable[[str], None],
+def coordinate_catalog_reread(directory: Path | str, adapter: str, *, reader: Callable[[], None],
                               wait: bool, timeout: float | None = None) -> str:
-    """Claim, join or skip the one bounded native catalog read of this harness.
-
-    Rule 3's explicit-validation re-read and the health scan's stale-catalog
-    re-read share this single flight and the ``catalog-scan-after`` window
-    (SCAN_SECONDS), so one harness gets at most one bounded native read per
-    window however the reads are triggered. The flight key includes the
-    selection epoch, so an A→B→A round trip never joins the departed epoch's
-    in-flight read. Outcomes:
-
-    - ``started``: this caller claimed the window and ``reader`` ran with the
-      claimed account binding.
-    - ``joined``: this caller boundedly waited for another caller's in-flight
-      read; its facts are recorded, so re-judge on them.
-    - ``inflight``: another caller's read is in flight and this caller does not
-      wait (a health scan skips; the facts arrive with that read).
-    - ``window``: the window is open with nothing in flight; the recorded facts
-      rule and no native read starts.
-    - ``timeout``: the bounded join ran out; the recorded facts rule.
-    - ``aborted``: the account binding changed between the claim and the native
-      call, so ``reader`` did not run under the new binding.
-
-    The claim is one short write transaction; no waiting and no native call ever
-    happen inside a transaction, and the flight is unregistered even when
-    ``reader`` raises. A failed or unknown read still consumes its window; the
-    manual ``adapters refresh:true`` path forces its own read and never passes
-    here.
-    """
+    """Claim or join one bounded harness read shared by validation and health."""
     from ..store.db import Database
     from ..service.harness_health import SCAN_SECONDS, _later
     if timeout is None:
         timeout = CATALOG_REREAD_JOIN_SECONDS
+    key = (str(directory), adapter)
     with _catalog_reread_gate:
         with Database(directory).write() as db:
-            account_key = _binding_key(db, adapter)
-            key = (str(directory), adapter, account_key)
             flight = _catalog_reread_flights.get(key)
             joined = flight is not None
             if flight is None:
-                row = db.execute("SELECT value FROM meta WHERE key=?", (_SCAN_AFTER_PREFIX + adapter,)).fetchone()
-                window = _parse_time(row[0]) if row is not None else None
+                row = db.execute('SELECT value FROM meta WHERE key=?', (_SCAN_AFTER_PREFIX + adapter,)).fetchone()
+                window = _parse_time(row[0]) if row else None
                 if window is not None and datetime.now(timezone.utc) < window:
-                    return "window"
-                db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    return 'window'
+                db.execute('INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                            (_SCAN_AFTER_PREFIX + adapter, _later(SCAN_SECONDS)))
-                flight = _CatalogRereadFlight(account_key)
+                flight = _CatalogRereadFlight()
                 _catalog_reread_flights[key] = flight
     if joined:
         if not wait:
-            return "inflight"
-        if not flight.finished.wait(timeout):
-            return "timeout"
-        return "joined"
+            return 'inflight'
+        return 'joined' if flight.finished.wait(timeout) else 'timeout'
     try:
-        if not _reread_binding_matches(directory, adapter, flight.account_key):
-            return "aborted"
-        reader(flight.account_key)
-        return "started"
+        reader()
+        return 'started'
     finally:
         with _catalog_reread_gate:
-            if _catalog_reread_flights.get(key) is flight:
-                _catalog_reread_flights.pop(key, None)
+            _catalog_reread_flights.pop(key)
         flight.finished.set()
 
 
@@ -200,18 +131,7 @@ def _family_key(provider: str, model: str) -> str:
     return provider + "\x1f" + model
 
 
-def catalog_account_matches(db, adapter: str, *, account: dict | None = None) -> bool:
-    """Whether retained catalog facts belong to the selected credential identity."""
-    from .accounts import identity, selection
-    saved = db.execute("SELECT value FROM meta WHERE key=?", ("catalog-account:" + adapter,)).fetchone()
-    retained = json.loads(saved[0]) if saved else {"source": "native", "credentialRevision": 0}
-    selected = account if account is not None else selection(db, adapter)
-    return identity(retained) == identity(selected)
-
-
 def _pending_map(db, adapter: str) -> dict:
-    if not catalog_account_matches(db, adapter):
-        return {}
     return {_family_key(row["provider"], row["model"]):
             {"since": row["since"], "efforts": json.loads(row["efforts_json"])}
             for row in db.execute("SELECT provider,model,since,efforts_json FROM catalog_pending WHERE adapter=?",
@@ -228,10 +148,9 @@ def _write_pending_map(db, adapter: str, pending: dict) -> None:
 
 
 def pending_families(db) -> dict[tuple[str, str, str], str]:
-    """Pending model families and their first absence, scoped to the current account."""
+    """Pending model families and their first absence, scoped to the harness."""
     return {(row["adapter"], row["provider"], row["model"]): row["since"]
-            for row in db.execute("SELECT adapter,provider,model,since FROM catalog_pending")
-            if catalog_account_matches(db, row["adapter"])}
+            for row in db.execute("SELECT adapter,provider,model,since FROM catalog_pending")}
 
 
 def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[str] | None:
@@ -242,8 +161,6 @@ def pending_model_efforts(db, adapter: str, provider: str, model: str) -> list[s
 
 def catalog_read_at(db, adapter: str) -> str | None:
     """When an actual trusted catalog reading was applied; legacy times prove nothing."""
-    if not catalog_account_matches(db, adapter):
-        return None
     row = db.execute("SELECT value FROM meta WHERE key=?", (_READ_AT_PREFIX + adapter,)).fetchone()
     return row[0] if row is not None else None
 
@@ -288,8 +205,6 @@ def restore_retained_availability(db, adapter: str) -> int:
     confirmed absence, a retired effort and a native unavailable declaration are
     catalog facts and are never restored here.
     """
-    if not catalog_account_matches(db, adapter):
-        return 0
     row = db.execute(
         "SELECT d.payload_json FROM catalog_current c"
         " LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.adapter=?",
@@ -318,8 +233,6 @@ def restore_retained_availability(db, adapter: str) -> int:
 
 def catalog_account_status(db, adapter: str) -> str:
     """The account-status fact of the last trusted reading; unknown without one."""
-    if not catalog_account_matches(db, adapter):
-        return "unknown"
     row = db.execute("SELECT value FROM meta WHERE key=?", (_ACCOUNT_STATUS_PREFIX + adapter,)).fetchone()
     return row[0] if row is not None and row[0] in ACCOUNT_STATUSES else "unknown"
 
@@ -330,18 +243,6 @@ def note_confirmed_read(db, adapter: str, *, now: str, account_status: str) -> N
                (_READ_AT_PREFIX + adapter, now))
     db.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                (_ACCOUNT_STATUS_PREFIX + adapter, account_status if account_status in ACCOUNT_STATUSES else "unknown"))
-
-
-def clear_confirmed_read(db, adapter: str) -> None:
-    """Drop the read facts a replaced account binding must not hand forward.
-
-    The confirmed-read time, the account-status fact, the open disappearance
-    windows and the bounded re-read window all belong to the account whose
-    native readings produced them; the next binding starts each of them fresh.
-    """
-    _write_pending_map(db, adapter, {})
-    db.execute("DELETE FROM meta WHERE key IN (?,?,?)",
-               (_READ_AT_PREFIX + adapter, _ACCOUNT_STATUS_PREFIX + adapter, _SCAN_AFTER_PREFIX + adapter))
 
 
 def _text(value: Any, limit: int = MAX_TEXT) -> str:
@@ -487,7 +388,7 @@ def discovery_available() -> bool:
     return any(item.model_discovery and item.discovery_available()[0] for item in adapters().values())
 
 
-def discover(*, directory: Path, database=None) -> dict:
+def discover(*, directory: Path, harnesses=None) -> dict:
     override = _override()
     if override is not None:
         return override
@@ -497,12 +398,10 @@ def discover(*, directory: Path, database=None) -> dict:
         if not instance.model_discovery:
             continue
         from ...buddy.harnesses.runtime_selection import selected, bound
-        selected_health = selected(name)
+        selected_health = (next((item for item in harnesses if item['adapter'] == name), None)
+                           if harnesses is not None else selected(name))
         try:
             environment = dict(os.environ)
-            if selected_health and selected_health.get('account'):
-                from .accounts import execution_environment
-                environment = execution_environment(directory, selected_health['account'], environment, purpose='catalog')
             with bound([selected_health], environment=environment) if selected_health else nullcontext():
                 usable, reason = instance.discovery_available()
                 if not usable:
@@ -510,17 +409,7 @@ def discover(*, directory: Path, database=None) -> dict:
                     discoveries.append({"adapter": name, "status": "unknown", "accountStatus": "unknown",
                                         "reason": reason or "harness unavailable"})
                     continue
-                from .accounts import native_operation
-                with native_operation(database, selected_health['account'], 'catalog') if database and selected_health and selected_health.get('account') else nullcontext() as stop:
-                    try:
-                        payload = instance.discover_models()
-                    except Exception as error:
-                        if stop is not None:
-                            stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
-                        raise
-                    else:
-                        if stop is not None:
-                            stop['shutdownConfirmed'] = True
+                payload = instance.discover_models()
             payload = canonical_payload(payload)
             if any(entry["adapter"] != name for entry in payload["providers"]):
                 raise BoardError("CATALOG_INVALID", "A harness advertised another adapter identity")
@@ -609,14 +498,9 @@ def validate_configuration(configuration: dict, *, directory: Path) -> dict:
     if hook is None:
         raise first
 
-    def run_reread(binding: str) -> None:
+    def run_reread() -> None:
         try:
-            # ADR-027 rule 3: one bounded re-read of exactly this harness,
-            # borrowing the service's own refresh (environment, account
-            # binding, deadlines). The claimed binding rides along so the
-            # service's read admission — not this synthetic boundary — decides
-            # whether the selection still holds it.
-            hook(selected["adapter"], binding)
+            hook(selected['adapter'])
         except (BoardError, OSError, ValueError, sqlite3.Error):
             pass  # A failed bounded re-read leaves the rejection to speak for itself.
 

@@ -63,17 +63,9 @@ def _state(connection, profile_id, facts, now):
 
 
 def _cached_available(connection, adapter):
-    """Secret-free cached health/account matching, without native eligibility probes."""
-    from ..catalog.accounts import identity, selection
-    health = connection.execute("SELECT status,record_json FROM harness_health WHERE adapter=?", (adapter,)).fetchone()
-    if health is None or health["status"] != "ready":
-        return False
-    record = _json(health["record_json"], {})
-    observed = record.get("account") or {"source": "native", "credentialRevision": 0}
-    try:
-        return identity(observed) == identity(selection(connection, adapter))
-    except BoardError:
-        return False
+    """Cached native health; no native probe during routing observation."""
+    health = connection.execute('SELECT status FROM harness_health WHERE adapter=?', (adapter,)).fetchone()
+    return health is not None and health['status'] == 'ready'
 
 
 def _quota_recovery(connection, profile, now):

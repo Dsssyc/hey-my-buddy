@@ -1,12 +1,10 @@
-"""Provider denial reaches the existing account quota route on private boards."""
+"""Provider denial reaches the harness/provider quota route on private boards."""
 from copy import deepcopy
-import json
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, latest_quota, persist
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.routing.quota_routing import RETRY_WAIT_SECONDS, routing_facts
-from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.harnesses.zcode.protocol import quota_failure
 from support import BoardTestCase, FakeClock, FIXTURE_CATALOG
 from buddy.harnesses.test_quota_failures import PROVIDER_RATE_LIMIT_FAILURE
@@ -15,8 +13,6 @@ from buddy.harnesses.test_quota_failures import PROVIDER_RATE_LIMIT_FAILURE
 PROVIDER = "fixture-api"
 PROFILE_IDS = [f"zcode:{PROVIDER}:{model}:low" for model in ("alpha", "beta")]
 OTHER_PROVIDER_ID = "zcode:other-api:gamma:low"
-NATIVE = {"source": "native", "credentialRevision": 0}
-OTHER_ACCOUNT = {"source": "native", "credentialRevision": 1}
 CONFIG = {"adapter": "zcode", "provider": PROVIDER, "model": "alpha", "effort": "low"}
 
 
@@ -99,22 +95,14 @@ class NonretryableQuotaRoutingTests(BoardTestCase):
         with self.board_.store.db.read() as db:
             self.assertIsNotNone(exhausted(db, CONFIG, now=self.clock()))
 
-    def test_other_provider_and_other_account_keep_their_candidates(self):
+    def test_other_provider_keeps_its_candidates(self):
         self.record_failure()
-        with self.board_.store.db.write() as db:
-            self.assertIsNone(exhausted(db, {**CONFIG, "provider": "other-api"}, now=self.clock()))
-            self.assertIsNone(exhausted(db, CONFIG, account=OTHER_ACCOUNT, now=self.clock()))
-            db.execute("INSERT INTO meta(key,value) VALUES(?,?)", ("account-credential:" + canonical_json(["zcode", "native"]),
-                       canonical_json(1)))
-            # This private harness fixture confirms readiness for the new account;
-            # stale health belonging to the exhausted account cannot do that.
-            row = db.execute("SELECT record_json FROM harness_health WHERE adapter='zcode'").fetchone()
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='zcode'",
-                       (canonical_json({**json.loads(row[0]), "account": OTHER_ACCOUNT}),))
-        self.assertEqual(self.candidates(), ([*PROFILE_IDS, OTHER_PROVIDER_ID], []))
+        self.assertEqual(self.candidates(), ([OTHER_PROVIDER_ID], []))
         with self.board_.store.db.read() as db:
-            self.assertIsNotNone(exhausted(db, CONFIG, account=NATIVE, now=self.clock()))
-            self.assertEqual(routing_facts(db, "zcode", now=self.clock()), [])
+            self.assertIsNone(exhausted(db, {**CONFIG, "provider": "other-api"}, now=self.clock()))
+            self.assertIsNotNone(exhausted(db, CONFIG, now=self.clock()))
+            facts = routing_facts(db, "zcode", now=self.clock())
+            self.assertEqual([item["provider"] for item in facts], [PROVIDER])
 
     def test_retryable_or_unspecified_rate_limits_do_not_create_blocking_observations(self):
         for retryable in (True, None):

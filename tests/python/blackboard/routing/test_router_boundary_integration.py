@@ -60,7 +60,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual([item["profileId"] for item in boundary["candidates"]], list(ids))
         facts = boundary["facts"]
         self.assertEqual([item["profileId"] for item in facts["profiles"]], list(ids))
-        self.assertIn("accounts", facts)
         self.assertIn("policyFacts", facts)
         if require_schema:
             self.assertIn("outputSchema", facts)
@@ -293,7 +292,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             self.assertEqual(self.tasks(), [])
             self.assertEqual(self.attempts(), [])
 
-    def test_later_profiles_accounts_and_preferences_cannot_replace_frozen_facts(self):
+    def test_later_profiles_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO family_annotations VALUES('dsh','fixture','alpha','private note',0,?)", (T0,))
@@ -304,7 +303,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             db.execute("UPDATE evaluation_profiles SET model='later-model'")
             db.execute("UPDATE evaluation_preferences SET reason='later preference'")
             db.execute("DELETE FROM family_annotations")
-            db.execute("INSERT INTO meta(key,value) VALUES('account-selection:dsh',?)", (canonical_json({"source": "worker", "revision": 42}),))
         current = self.boundary(request["decisionId"])
         self.assertEqual(current["facts"], frozen["facts"])
         self.assertEqual(current["candidates"], frozen["candidates"])
@@ -405,17 +403,14 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertIsNone(self.boundary(no_candidate["decisionId"]))
         self.assertIsNone(self.snapshot_of(no_candidate["decisionId"]))
 
-    def test_account_and_reader_changes_are_program_changes_not_failed_router_trials(self):
+    def test_reader_changes_are_program_changes_not_failed_router_trials(self):
         request, first = self.start()
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO meta(key,value) VALUES('account-selection:dsh',?)",
-                       (canonical_json({"source": "worker", "revision": 1}),))
             db.execute("UPDATE evaluation_readers SET released_at=?", (T0,))
         self.report(first, self.failure(first), status="failed")
         boundary = self.boundary(request["decisionId"])
         self.assertEqual(boundary["kind"], "routing-changed")
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "changed")
-        self.assertEqual(boundary["facts"]["accounts"]["dsh"]["source"], "native")
         self.assertEqual(self.router_events("router.no_answer", "router.answered"), [])
 
     def test_cancelled_dispatch_stays_cancelled_without_new_router_failure(self):
@@ -644,18 +639,6 @@ class GovernedBoundaryTests(WorkflowTestCase):
         self.assertTrue(all(isinstance(item["params"]["configuration"], dict)
                             for item in awaited["nextCommands"] if "configuration" in item.get("params", {})))
 
-    def test_cached_health_account_mismatch_blocks_choices_without_replacing_frozen_account(self):
-        view = self.routed()
-        frozen = view["routing"]["routingBoundary"]
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='dsh'",
-                       (canonical_json({"account": {"source": "worker", "credentialRevision": 1}}),))
-        current = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
-        self.assertEqual(current["facts"], frozen["facts"])
-        self.assertTrue(current["commands"]["continue"]["blocked"])
-        self.assertTrue(all(choice["blocked"] and choice["reason"]
-                            for choice in current["commands"]["continue"]["choices"]))
-        self.assertEqual(current["facts"]["accounts"]["dsh"]["source"], "native")
 
     def test_governed_valid_abstention_payload_has_program_nature_before_answered_notification(self):
         with self.board_.store.db.write() as db:

@@ -698,10 +698,6 @@ class Worker:
             turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
             agent_credential=claim.get("agentCredential") or None,
         )
-        if isinstance(claim.get('account'), dict):
-            from ...blackboard.catalog.accounts import execution_environment
-            context.runtime['account'] = dict(claim['account'])
-            context.environment = execution_environment(self.state_dir, claim['account'], context.environment)
         implementation = role_seam.worker_executor(spec["adapter"])
         preparation = role_seam.prepare_worker_run(implementation, context)
         if not preparation.available:

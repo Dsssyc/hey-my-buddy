@@ -37,12 +37,6 @@ CONTROL_OPERATIONS = (
     "health",
     "capabilities",
     "accounts",
-    "account_set",
-    "account_login",
-    "account_status",
-    "account_cancel",
-    "account_logout",
-    "account_remove",
     "harness_set",
     "harness_prepare",
     "quota_redetect",
@@ -273,8 +267,6 @@ class BoardService(_BaseResource):
         register_catalog_reread(store.directory, self._reread_catalog_for_validation)
         from ..catalog.accounts import Accounts
         self.account_settings = Accounts(store)
-        from ..catalog.account_operations import AccountOperations
-        self.account_operations = AccountOperations(self)
         # Startup/upgrade verification must not mutate health or retained model
         # facts. A missing record projects as unknown until a Host-triggered scan.
         # Console-user authority: only a session the console itself registered can
@@ -540,32 +532,16 @@ class BoardService(_BaseResource):
     def evaluation_history(self, request_json: str) -> str:
         return self._guard("evaluation.history", request_json, self.evaluation.history)
 
-    def _refresh_harness_catalog(self, name, record, expected_binding=None):
+    def _refresh_harness_catalog(self, name, record, catalog_scan_claimed=False):
         from ..catalog import catalog_store
-        if expected_binding is not None and not self.harnesses._binding_is_current(name, expected_binding):
-            # The read admission of a reread claim: the selection moved on after
-            # the claim (an A→B→A round trip keeps the identity but not the
-            # epoch), so this claim starts no native read under the new binding.
-            # The publication fence would keep its result from being adopted;
-            # this boundary keeps the read itself from starting.
-            return
         from ...buddy.harnesses.registry import adapter
         from ...buddy.harnesses.runtime_selection import bound
+        if self.harnesses.get(name)['revision'] != record['revision']:
+            return
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
         try:
-            from ..catalog.accounts import execution_environment, native_operation
-            environment = execution_environment(self.store.directory, record['account'], self.harnesses.environment(), purpose='catalog')
-            with bound([record], environment=environment):
-                with native_operation(self.store.db, record['account'], 'catalog') as stop:
-                    try:
-                        payload = adapter(name).discover_models()
-                    except Exception as error:
-                        stop['shutdownConfirmed'] = getattr(error, 'discovery_shutdown_confirmed', False) is True
-                        raise
-                    else:
-                        stop['shutdownConfirmed'] = True
-            # The harness's own observation carries this session's account-status
-            # fact; the service never hardcodes a confirmed reading over it.
+            with bound([record], environment=self.harnesses.environment()):
+                payload = adapter(name).discover_models()
             native_fact = next((item for item in payload.get('discoveries', [])
                                 if isinstance(item, dict) and item.get('adapter') == name), None)
             payload['discoveries'] = [{'adapter': name, 'status': 'complete',
@@ -573,18 +549,11 @@ class BoardService(_BaseResource):
             catalog_store.record(self.evaluation, payload, observation['observationId'], health_generation=(name, record['revision']))
         except BoardError as error:
             if error.code != 'UPGRADE_IN_PROGRESS':
-                self.harnesses.invalidate(name, record['revision'], error.code, account=record['account'])
+                self.harnesses.invalidate(name, record['revision'], error.code)
 
-    def _reread_catalog_for_validation(self, name, binding=None):
-        """ADR-027 rule 3: one bounded re-read through the service's own refresh.
-
-        The health refresh keeps the service environment, the account binding and
-        the native subprocess deadlines; no second native channel exists here.
-        The reread claim's account binding rides along to the refresh admission
-        and its catalog read, so a claim made under one account never reads
-        under whichever account is selected later.
-        """
-        self.harnesses.refresh(name, force=True, expected_binding=binding)
+    def _reread_catalog_for_validation(self, name):
+        """One bounded re-read through the service's ordinary refresh path."""
+        self.harnesses.refresh(name, force=True, catalog_scan_claimed=True)
 
     def harness_set(self, request_json: str) -> str:
         def handler(params):
@@ -604,60 +573,6 @@ class BoardService(_BaseResource):
             return {'accounts': self.account_settings.all()}
         return self._guard('accounts', request_json, handler)
 
-    def account_set(self, request_json: str) -> str:
-        def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'source', 'expectedRevision'}, 'account.set')
-            name = schemas.required_string(params, 'adapter', max_length=32)
-            source = schemas.required_string(params, 'source', max_length=16)
-            if 'expectedRevision' not in params:
-                raise BoardError('INVALID_ARGUMENT', 'expectedRevision is required')
-            return {'account': self.account_settings.set(name, source, params['expectedRevision'])}
-        return self._guard('account.set', request_json, handler)
-
-    def account_login(self, request_json: str) -> str:
-        def handler(params):
-            if set(params) - {'adapter', 'mode', 'expectedRevision', 'apiKey'}:
-                raise BoardError('INVALID_ARGUMENT', 'Unknown private account login field')
-            schemas.reject_unknown(params, {'adapter', 'mode', 'expectedRevision', 'apiKey'}, 'account.login')
-            schemas.required_string(params, 'adapter', max_length=32)
-            schemas.required_string(params, 'mode', max_length=16)
-            if params['mode'] == 'api-key':
-                schemas.required_string(params, 'apiKey', max_length=16384)
-            if 'expectedRevision' not in params:
-                raise BoardError('INVALID_ARGUMENT', 'expectedRevision is required')
-            schemas.optional_int(params, 'expectedRevision', 0, 0, 2**53 - 1)
-            return self.account_operations.login(params)
-        return self._guard('account.login', request_json, handler)
-
-    def account_status(self, request_json: str) -> str:
-        def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'loginId'}, 'account.status')
-            schemas.required_string(params, 'adapter', max_length=32)
-            schemas.required_string(params, 'loginId', max_length=128)
-            return self.account_operations.status(params)
-        return self._guard('account.status', request_json, handler)
-
-    def account_cancel(self, request_json: str) -> str:
-        def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'loginId'}, 'account.cancel')
-            schemas.required_string(params, 'adapter', max_length=32)
-            schemas.required_string(params, 'loginId', max_length=128)
-            return self.account_operations.cancel(params)
-        return self._guard('account.cancel', request_json, handler)
-
-    def account_logout(self, request_json: str) -> str:
-        def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'expectedRevision'}, 'account.logout')
-            schemas.required_string(params, 'adapter', max_length=32)
-            return self.account_operations.logout(params)
-        return self._guard('account.logout', request_json, handler)
-
-    def account_remove(self, request_json: str) -> str:
-        def handler(params):
-            schemas.reject_unknown(params, {'adapter', 'expectedRevision'}, 'account.remove')
-            schemas.required_string(params, 'adapter', max_length=32)
-            return self.account_operations.logout(params, remove=True)
-        return self._guard('account.remove', request_json, handler)
 
     def harness_prepare(self, request_json: str) -> str:
         def handler(params):
@@ -676,10 +591,6 @@ class BoardService(_BaseResource):
                 name = attempt['model_adapter'] or attempt['adapter']
                 if name not in ('dsh', 'zcode', 'codex', 'claude'):
                     return {'harness': None}
-                from ..catalog.accounts import attempt_account, identity, selection
-                account = attempt_account(db, attempt)
-                saved = db.execute('SELECT value FROM meta WHERE key=?', ('attempt-harness:' + attempt['attempt_id'],)).fetchone()
-                frozen_health = json.loads(saved[0]) if saved else None
                 request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
                 subject = self.store._subject(params['workerId'], params['nonce'], attempt['attempt_id'])
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
@@ -687,24 +598,9 @@ class BoardService(_BaseResource):
                     return receipt
                 if retry and db.execute("SELECT 1 FROM events WHERE task_id=? AND kind='harness.start_retry' AND json_extract(payload_json,'$.attemptId')=?", (attempt['task_id'], attempt['attempt_id'])).fetchone():
                     raise BoardError('HARNESS_RETRY_EXHAUSTED', 'Only one pre-model retry is permitted per attempt')
-            with self.store.db.read() as db:
-                current_account = selection(db, name)
-            current_source = identity(account) == identity(current_account)
-            if current_source and (retry or failed_only):
-                self.harnesses.invalidate(name, params.get('healthRevision'), account=account)
-            try:
-                record = (self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True, account=account)) if current_source else frozen_health
-            except BoardError as error:
-                if error.code != 'ACCOUNT_BINDING_CHANGED':
-                    raise
-                record = frozen_health
-            if record is None:
-                raise BoardError('ACCOUNT_BINDING_UNAVAILABLE', 'The attempt has no retained harness for its frozen account')
-            if identity(record['account']) != identity(account):
-                record = frozen_health
-            if record is None:
-                raise BoardError('ACCOUNT_BINDING_UNAVAILABLE', 'The attempt has no retained harness for its frozen account')
-            record = {**record, 'account': {**record['account'], **account}}
+            if retry or failed_only:
+                self.harnesses.invalidate(name, params.get('healthRevision'))
+            record = self.harnesses.get(name) if failed_only else self.harnesses.refresh(name, force=retry, preflight=True)
             with self.store.db.write() as db:
                 attempt, _worker = self.store._verify_attempt_actor(db, params)
                 receipt = self.store._receipt(db, command_id, 'harness.prepare', request, subject)
@@ -788,19 +684,15 @@ class BoardService(_BaseResource):
             if self.automatic_discovery:
                 from .harness_health import HARNESSES
                 for name in HARNESSES:
-                    try:
-                        self.harnesses.refresh(name, force=True, account=observation['accounts'][name])
-                    except BoardError as error:
-                        if error.code != 'ACCOUNT_BINDING_CHANGED':
-                            raise
+                    self.harnesses.refresh(name, force=True)
                 with self.store.db.read() as db:
-                    cached = catalog_store.current(db, accounts=observation['accounts'])
+                    cached = catalog_store.current(db)
                 discovered = cached.payload if cached else {'source': 'harness-health', 'providers': [], 'discoveries': [
                     {'adapter': row['adapter'], 'status': 'unknown', 'reason': row.get('reasonCode')} for row in self.harnesses.all()]}
             else:
                 from ...buddy.harnesses.runtime_selection import bound
                 with bound(observation['harnesses']):
-                    discovered = catalog.discover(directory=self.store.directory, database=self.store.db)
+                    discovered = catalog.discover(directory=self.store.directory, harnesses=observation['harnesses'])
             recorded = self.evaluation.record_catalog(discovered, observation["observationId"])
             return {**recorded, "requestId": request_id}
 

@@ -32,7 +32,7 @@ from ..harnesses.run_contract import (
 from . import turn_io, worker_services
 from .run_observers import FastCorrection, ReviewObserver, worker_observer
 from .structured_call import (
-    _NoToolEvidence, _account_environment, no_tool_prompt, valid_answer,
+    _NoToolEvidence, no_tool_prompt, valid_answer,
 )
 from .turn_io import input_hash, private_json, validate_outcome, guard_private_path, canonical_json
 
@@ -326,7 +326,7 @@ def _native_services(control: dict, module, tool_scope: str):
     if factory is None:
         return None
     import inspect
-    values = dict(account=control.get("account"), tool_scope=tool_scope)
+    values = dict(tool_scope=tool_scope)
     # These are this project's registered factories, not vendor qualification.
     parameters = inspect.signature(factory).parameters
     return factory(**{key: value for key, value in values.items() if key in parameters})
@@ -455,7 +455,7 @@ def _read_structured_result(handle, path, project, allowed_reasons):
 
 def start_fast(module, name: str, context: ExecutionContext, request) -> ProcessHandle:
     """Run the selected fast role with no turn, tools or blackboard authority."""
-    native_environment = _account_environment(name, context, purpose="router")
+    native_environment = context.environment
     cwd = Path(request.cwd)
     if (context.turn is not None or context.agent_credential is not None
             or type(request.timeout_seconds) is not int or not 0 < request.timeout_seconds <= 60
@@ -479,7 +479,6 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> Process
     control = {
         "operation": "fast", "harness": name, "privateRoot": str(invocation),
         "directory": str(invocation), "nativeRoot": str(invocation / "native"),
-        "account": context.runtime.get("account"),
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
         "timeoutSeconds": request.timeout_seconds,
@@ -500,14 +499,13 @@ def start_review(name: str, context: ExecutionContext, request) -> ProcessHandle
     """Use the same process owner and run seam over the frozen review mirror."""
     from ..harnesses.registry import adapter
 
-    environment = _account_environment(name, context, purpose="review")
+    environment = context.environment
     ensure_private_dir(context.directory)
     private = ensure_private_dir(context_root(context, name) / ("review-" + uuid.uuid4().hex))
     control = {
         "operation": "review", "harness": name, "privateRoot": str(private),
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
-        "account": context.runtime.get("account"),
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
@@ -540,8 +538,6 @@ class WorkerRunExecutor:
         context.private_adapter = self.name
         from ..harnesses.registry import worker_format
         format = worker_format(self.name)
-        if format is not None and format.bind_account_environment:
-            context.environment = _account_environment(self.name, context, purpose="execution")
         if any(not isinstance(context.spec.get(key), str) or not context.spec[key].strip()
                for key in ("provider", "model", "effort")):
             raise BoardError("INVALID_ARGUMENT", "Coding requires a complete provider, model and effort after routing", adapter=self.name)
@@ -568,7 +564,6 @@ class WorkerRunExecutor:
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),
             "inquiry": {key: inquiry[key] for key in ("resultsPath",)},
-            "account": context.runtime.get("account"),
             "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         })
 

@@ -140,8 +140,8 @@ class SeamCase(unittest.TestCase):
 
     def worker_services(self, live=None) -> RunServices:
         return RunServices(
-            credential_source={"home": str(self.home), "source": "worker",
-                               "credentialRevision": 1, "identity": "a" * 64},
+            credential_source={"home": str(self.home), "source": "native",
+                               "credentialRevision": 0, "identity": "a" * 64},
             live=live)
 
 

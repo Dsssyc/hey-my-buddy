@@ -136,12 +136,6 @@ def parse_objective_query(query: str, allowed: frozenset[str]) -> dict:
 #: permits authenticated user policy patches; assessment cards stay Harness-owned.
 CONSOLE_OPERATIONS = (
     "accounts",
-    "account_set",
-    "account_login",
-    "account_status",
-    "account_cancel",
-    "account_logout",
-    "account_remove",
     "capabilities",
     "harness_set",
     "quota_redetect",

@@ -278,3 +278,97 @@ Host 修改的 owning reference 包括 harnesses、workers、codex、claude、cl
 实现仍等 Host 过目后授权；受影响 Python 模块按用户规定使用 uv frozen unittest，先清继承的 runtime／Worker／agent 环境，前端仅 typecheck/test，装不上照实交 Host。完整 Python 检查、真实浏览器、构建、空 HOME 安装演练、真实数据副本与故障注入都由 Host 执行，本回合没有宣称它们通过。
 
 与角色说明微任务重叠的 schema_worker.py、worker_services.py、turn_io.py、router.py、router_input.py 及 packaging/runtime-assets.json，只改账户载体相关行；其他提示词与资源接线保留整合方的版本，不借批次 2 重写。
+
+
+## 9. 冻结的存储方案
+
+本节落实第二回合 Host 的定案，优先于上文第一回合建议：唯一升级基点改为已安装 0.29.0、提交 `2bee001e9ef37acb256c19f97a29b2a5ece3a7fb`、schema16，目标17；旧15→16迁移与专属夹具／测试退休。Host 在副本上已量到没有独立来源或账户目录，因此本批不做文件系统与钥匙串清理，也不保留清理协议。原生登录身份只作事实，不用于本批判断。
+
+额度状态的键为 adapter/provider/limit_id；空字符串 limit_id 明确表示供应方整体限额，公开读取仍投影为 null，不保留两种存储形式。最新额度观察每个 harness 一行，与现有显示粒度一致；其 quota JSON 是规范化的原生正文，account 本地桶标签删除，原生标识同时在 native_account_id 列记录事实。主动账户读取的180秒窗口每个 harness 一行；目录可信读取与扫描窗口继续由 ADR-027 所有者管理，本批只清旧来源的存量。
+
+```sql
+CREATE TABLE quota_current (
+    adapter TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    limit_id TEXT NOT NULL,
+    blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
+    available INTEGER NOT NULL CHECK (available IN (0,1)),
+    code TEXT NOT NULL,
+    source TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    last_observed_at TEXT NOT NULL,
+    resets_at TEXT,
+    native_account_id TEXT,
+    retry_basis TEXT,
+    retry_manual_at TEXT,
+    retry_consumed_at TEXT,
+    retry_consumed_by TEXT,
+    PRIMARY KEY (adapter, provider, limit_id)
+);
+CREATE TABLE harness_quota_observations (
+    adapter TEXT PRIMARY KEY,
+    observed_at TEXT NOT NULL,
+    native_account_id TEXT,
+    quota_json TEXT NOT NULL
+);
+CREATE TABLE harness_account_reads (
+    adapter TEXT PRIMARY KEY,
+    checked_at TEXT NOT NULL
+);
+```
+
+| 旧键／字段 | 16→17 的处置 | 当前代码的唯一去向 |
+| --- | --- | --- |
+| account-selection、account-credential、account-mutation、attempt-account、account-operation 前缀 | 清除所有行，不判断状态 | 来源选择、变更与预留功能删除 |
+| account-quota、quota-routing、quota-retry 前缀与 harness_health.quota_json | 清除存量，不把旧桶归到用户原生登录 | 新观察写 harness_quota_observations 与 quota_current；旧 quota_json 列物理删除 |
+| account-read-at 前缀与 codex_account_read_at | 清除存量 | harness_account_reads 记录一次主动原生读取的限频时刻 |
+| catalog-accounts、catalog-account、attempt-routing-accounts、attempt-harness 前缀 | 清除存量 | 账户 CAS 链删除；目录 observationId、health revision 守门保留 |
+| catalog-harnesses:<observationId> 快照的 account 字段 | 清除整个旧快照缓存 | 新快照只带只读登录事实，不用于账户选择 |
+| harness_health.record_json 的 account、billingByProvider、quotaCheckedAt 等旧当前投影 | 清当前观察并置 unknown，保留 manual_path 与 revision | 健康重读后写无来源／代次的只读登录、计费投影 |
+| catalog-read-at、catalog-account-status、catalog-scan-after 与 catalog_pending | 清旧当前窗口／确认状态和 pending，catalog_current 置 unknown 并清当前payload指针 | ADR-027 继续按 harness 重建可信读取与缺席窗口，不继承独立来源的事实 |
+| 封存 workflow_turns／Router 输入、result 与 events 中的历史 account | 原样保留，连同哈希不改 | 新执行不再读取历史账户作绑定 |
+
+迁移在单个 SQLite 事务中建三表、删除旧键、重建 harness_health 去掉 quota_json、清当前目录／健康与 profile 可用投影并更新 schema marker；SQL 不带任何外部副作用。精确计划值验证允许变化的 meta、健康、目录、pending 与 evaluation_profiles（仅 available/unavailable_reason），其余业务表逐值保留；新表为空并与新建schema形式一致。夹具由新基点自己的公开操作生成到 tests/fixtures/upgrade-base，基点metadata与来源一起记录；不手写SQL来补账户存量。
+
+
+## 10. 第二回合实现候选与待完成验证
+
+本节记录实现候选，尚不是验收：六个账户管理命令、契约／服务入口、独立账户 owner、钥匙串／私有登录实现与账户选择／凭据 CAS 已删除；accounts.py 只保留从健康读取登录与计费的 view/Accounts.all。控制台账户管理对话框、操作数据层与专属测试已删，登录／计费／额度／重试仍是只读事实；没有构建产物变更。Host 授权的公共文档只删除退休功能描述。
+
+三个新表已接入当前额度状态、最新原生观察与180秒读取窗口，旧 meta 双读／materialize 与本地账户桶去掉；原生 native_account_id 只作事实。执行用量归原 attempt，评价保留四段配置；额度归 harness/provider/limit。原生观察比较解析后的时间，避免整秒与小数秒字符串顺序误判；unknown／迟到观察不清耗尽，reset／更新的可用观察与单次重试规则保留。共享 harness 名称放 protocol/harness_names.py，黑板的 command/external 额度边界不再导入原生 runner 契约。
+
+目录重读仍单飞与限频，去掉来源 epoch，保留 observationId 顺序、health revision、ADR-027 accountStatus 与缺席确认。升级清旧 evaluation_profiles 的 available/unavailable_reason 并全列核验其他字段不变，避免健康恢复而目录仍 unknown 时旧来源模型继续路由；enabled、身份、卡片与偏好不清。attempt-harness 也是旧来源健康快照，迁移一并清，之后新 claim 只写当前只读形状。
+
+Codex 私有主目录未删除；它原有 native credentialSource 的 home/source=native/credentialRevision=0/identity 形状本批保留，仅由本机路径生成，用于私有会话绑定，不是额度桶，不再读取账户选择或 workerAccount。修改此私有持久形式与撤销 home 仍属于批次3b，避免本批在禁止文件系统升级时让旧 native 会话失去绑定。
+
+Host command 读取缺陷修在 native_observations.warnings 的原生事实边界：非 harness 的 command/external 返回空提醒，不触发原生额度查询。新增 tests/python/blackboard/tasks/test_workflow.py 的 test_host_command_execution_reads_have_no_native_quota_projection 经 Host submit、claim、结果导入、workflow_get、task_get/list/result 覆盖该触发；该服务链回归尚未跑到，不能仅凭源码说已验证。
+
+### 实际检查边界
+
+父回合在最终源码上执行 compileall 与 git diff --check 通过；实际导入当前 quota／native_observations／accounts 模块、使用私有内存 SQLite 的检查通过：原生ID列只记录事实，整秒到小数秒的新观察能替换，unknown／迟到观察不清耗尽，重检测后只允许一个 decision 消费重试，新的可用观察清耗尽与标记，command/external 提醒为空，以及只读 ready/billing/login-required 形状不含来源／能力。静态 AST 核对 CLI METHODS 与 BuddyControl 六个管理入口不存在、accounts 保留。标准库DDL检查证明空 schema16 的实际新增表／health重建形式与新建17一致，BEGIN失败检查证明 foreign_keys 恢复；这些窄检查不等于完整升级／服务测试。
+
+规定的 uv unittest 命令未进入测试，多个聚焦组在依赖下载／构建依赖阶段失败：PyPI DNS不可达，涉及 typing-inspection、typing-extensions、fastdb4py、zstandard、hatchling／portalocker。没有以系统 Python 或安装运行时替代规定的完整测试，也没有绕过网络沙盒。前端使用支持的 Node24尝试 npm ci，沙盒连接拒绝 EPERM；npm typecheck 缺 vitest/globals 退出2，npm test 因 vitest 不存在退出127。前端的语法／解析与文案静态核对不能替代这两个命令。
+
+以下 Python 模块需在依赖可用后运行；路径均相对于 tests/python，执行时设置 PYTHONPATH=tests/python:src，清用户指定的十个继承绑定，用 uv run --frozen python -m unittest 加对应点分模块名。
+
+| 组 | 模块 |
+| --- | --- |
+| 新基点与迁移（已尝试，未进入测试） | blackboard.store.test_migrations、blackboard.store.test_upgrade_fixture、install.test_upgrade_migration、install.test_upgrade_service |
+| 原生观察与额度（已尝试，未进入测试） | blackboard.evaluation.test_native_observations、blackboard.routing.test_quota_retry、blackboard.routing.test_nonretryable_quota、protocol.test_billing_quota |
+| 目录信任（已尝试，未进入测试） | blackboard.catalog.test_catalog、test_catalog_observations、test_catalog_trust、test_native_discovery_stop；blackboard.tasks.test_catalog_trust；blackboard.routing.test_catalog_trust |
+| command读取／续接／Router（已尝试，未进入测试） | blackboard.tasks.test_workflow、test_dsh_resume_selection；blackboard.routing.test_router_settings、test_router_dispatch、test_router_failover_integration、test_router_boundary_integration、test_router_sequence、test_single_router_requests、test_router_failover、test_router_probe |
+| 补退休转换引用（源码已改，未启动） | blackboard.routing.test_routing_modes、test_router_list_configuration |
+| 运行时调用（部分组已尝试，其余未启动） | buddy.harnesses.codex.test_codex、test_native_run、test_codex_continuation、test_codex_tool_evidence；buddy.roles.test_registered_review、test_registered_run_wiring、test_run_execution、test_schema_worker |
+| 只读服务／存储／环境（未启动） | blackboard.service.test_harness_service、test_harness_health、test_service、test_service_environment；blackboard.tasks.test_storage、test_workspace_lifecycle；test_private_directories；protocol.test_rpc_config；console.test_console |
+| CLI／文档／分发（未启动） | cli.test_cli、test_host_cli、test_skill_workflow、test_support_cleanup、test_checks_parallel、test_host_preview；install.test_packaging、test_runtime、test_first_install |
+| 原有备份边界（未启动） | install.test_backup、test_backup_preflight、test_backup_windows |
+
+### 实质剩余工作：新夹具尚未产出
+
+生成器已改为固定 0.29.0 基点的公开操作，目标五文件为 tests/fixtures/upgrade-base/board.sql、operations.json、catalog.json、workspace-resources.json、metadata.json；18类可写前缀的生产writer覆盖与计数assert已经接入。codex_account_read_at 在此基点没有writer，生成器不伪造该键，metadata 明确这个边界，私有迁移测试另行覆盖其清除。尝试曾在私有基点的 workflow_integration_record 得到 METHOD_NOT_FOUND，已改用现行 workflow_accept/continue/cancel；新增的 Router、账户及额度writer接线尚未重新实跑，可能仍需根据实际错误修正。
+
+受依赖限制，upgrade-base 的五个固定产物尚未生成，tests/fixtures/adr021-l18 暂时保留，当前测试源码已经指向新目录，故迁移交付不完整；不能把这件事仅记成“Host补跑测试”。依赖准备好后，本 Worker 仍须真实生成、核对 provenance／哈希／全类存量、退休旧stock，并继续修实际生成或测试揭示的范围内缺陷。本批不会手写SQL补造fixture，也不会把schema15旧stock改marker冒充16。
+
+可在本检出内恢复生成：先准备冻结依赖，再运行 `uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/adr030-upgrade-base --output-dir tests/fixtures/upgrade-base`；work-dir须尚未存在，生成器会在此检出的ignored tmp归档固定基点、建立自己的私有工作区与依赖环境，不启动服务或模型。当前请求只需 Host 在本检出准备Python／前端依赖并让本 Worker 继续；若另授权一个 prepared-python，也必须明确它的读取范围，不自行借用日常运行时。
+
+完整检查、浏览器检查、控制台构建、空HOME演练、真实看板副本与故障注入仍由 Host 执行；本回合没有运行或宣称通过它们。

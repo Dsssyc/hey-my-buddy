@@ -180,23 +180,18 @@ class StorageTests(BoardTestCase):
             board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
         self.assertEqual(sentinel.read_bytes(),b'outside')
 
-    def test_all_adapters_private_goals_are_visible_and_accounts_stay_protected(self):
+    def test_all_adapters_private_goals_are_visible(self):
         board = self.board()
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
             root = private_dirs.ensure_private_dir(private_dirs.native_root(state, adapter, 'unknown-goal'))
             (root / 'session.json').write_text('retained')
-        account = private_dirs.ensure_private_dir(private_dirs.account_root(state, 'codex'))
-        (account / 'auth.json').write_text('user account')
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             goals = [row for row in planned['candidates'] if row['category'] == 'harnesses']
             self.assertEqual({row['adapter'] for row in goals}, {'codex', 'claude', 'dsh', 'zcode'})
             self.assertTrue(all(not row['eligible'] and 'owner-unproven' in row['reasons'] for row in goals))
-            account_row = next(row for row in planned['candidates'] if row['path'] == str(account.parent))
-            self.assertIn('user-account-protected', account_row['reasons'])
             board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-goals', 'confirm':True})
-        self.assertEqual((account / 'auth.json').read_text(), 'user account')
 
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
         board = self.board()

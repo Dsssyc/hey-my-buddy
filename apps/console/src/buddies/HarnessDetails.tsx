@@ -5,11 +5,9 @@ import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
-import type { ConsoleApi } from "../api";
 import type { HarnessHealth } from "../types";
 import { harnessDetailsView, statusText } from "./harness";
 import type { HarnessDetailsView, WindowRow } from "./harness";
-import { HarnessAccountDialog } from "./HarnessAccountDialog";
 import { HarnessPathDialog } from "./HarnessPathDialog";
 
 const hintTarget = "rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -52,7 +50,7 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
   const [pathOpen, setPathOpen] = useState(false);
   const { location } = view;
   const inert = gate.busy || !gate.canWrite;
-  const refusal = gate.refusal || (gate.busy ? t("harness.dialog.loginState.running") : undefined);
+  const refusal = gate.refusal || (gate.busy ? t("harness.running") : undefined);
   return <Block title={t("harness.pane.location")} head={<>
     <StateMark kind={row.status === "ready" ? "live" : "idle"} />
     <Hint text={location.exception?.remedy ?? undefined}><span tabIndex={0} className={hintTarget}>{statusText(row.status, t)}</span></Hint>
@@ -81,28 +79,18 @@ function LocationBlock({ row, name, view, gate, onCheck, onSavePath }: {
   </Block>;
 }
 
-function AccountBlock({ name, view, api, csrfToken, gate, onRefreshed }: {
-  name: string; view: HarnessDetailsView; api: ConsoleApi; csrfToken: string; gate: Gate; onRefreshed: () => Promise<unknown>;
-}) {
+function AccountBlock({ view }: { view: HarnessDetailsView }) {
   const { t } = useTranslation("buddies");
-  const [open, setOpen] = useState(false);
   const { account } = view;
-  return <Block title={t("harness.account.name")} head={account?.source}>
-    {account ? <>
-      <div className={fields}>
-        <span className={label}>{t("harness.account.state")}</span>
-        <Hint text={account.guidance ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
-        <span className={label}>{t("harness.account.billing")}</span>
-        <span className="flex flex-col">{account.billing.length
-          ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)
-          : t("harness.account.plan.unknown")}</span>
-      </div>
-      <div className={buttons}>
-        <Hint text={account.guidance ?? undefined}><Button variant="outline" onClick={() => setOpen(true)}>{t("harness.account.manage")}</Button></Hint>
-      </div>
-      {open && <HarnessAccountDialog account={account.parsed} name={name} api={api} csrfToken={csrfToken}
-        canWrite={gate.canWrite} reason={gate.refusal || undefined} onRefreshed={onRefreshed} onClose={() => setOpen(false)} />}
-    </> : <span className="text-xs text-ink3">{t("harness.unrecorded")}</span>}
+  return <Block title={t("harness.account.name")}>
+    {account ? <div className={fields}>
+      <span className={label}>{t("harness.account.state")}</span>
+      <Hint text={account.guidance ?? undefined}><span tabIndex={0} className={hintTarget}>{account.state}</span></Hint>
+      <span className={label}>{t("harness.account.billing")}</span>
+      <span className="flex flex-col">{account.billing.length
+        ? account.billing.map(entry => <span key={entry.provider}>{entry.provider} <span className="text-ink3">{entry.plan}</span></span>)
+        : t("harness.account.plan.unknown")}</span>
+    </div> : <span className="text-xs text-ink3">{t("harness.unrecorded")}</span>}
   </Block>;
 }
 
@@ -120,7 +108,7 @@ function QuotaBlock({ view, gate, onRetry }: { view: HarnessDetailsView; gate: G
   const { t } = useTranslation("buddies");
   const { quota, exhausted, retryProviders } = view;
   const inert = gate.busy || !gate.canWrite;
-  const refusal = gate.refusal || (gate.busy ? t("harness.dialog.loginState.running") : "");
+  const refusal = gate.refusal || (gate.busy ? t("harness.running") : "");
   return <Block title={t("harness.quota.name")} head={quota && <>
     <Hint text={quota.note}><span tabIndex={0} className={hintTarget}>{t("harness.quota.observed")}</span></Hint>
     <span className="tabular-nums">{quota.observed ?? t("harness.unrecorded")}</span>
@@ -154,10 +142,9 @@ function QuotaBlock({ view, gate, onRetry }: { view: HarnessDetailsView; gate: G
 }
 
 /** The account expansion belongs to its harness header, independent of model drawers. */
-export function HarnessDetails({ row, name, api, csrfToken, canWrite, refusal, busy, onCheck, onSavePath, onRetry, onRefreshed }: {
-  row: HarnessHealth; name: string; api: ConsoleApi; csrfToken: string;
+export function HarnessDetails({ row, name, canWrite, refusal, busy, onCheck, onSavePath, onRetry }: {
+  row: HarnessHealth; name: string;
   onCheck: () => void; onSavePath: (path: string | null) => void; onRetry: (provider: string) => void;
-  onRefreshed: () => Promise<unknown>;
 } & Gate) {
   const { t } = useTranslation("buddies");
   const view = harnessDetailsView(row, t);
@@ -165,7 +152,7 @@ export function HarnessDetails({ row, name, api, csrfToken, canWrite, refusal, b
   return <div role="group" aria-label={t("harness.detailsLabel", { name })} data-slot="harness-details"
     className="grid border-b-2 border-ink3 bg-card text-sm min-[900px]:pl-[38px] min-[900px]:grid-cols-3 min-[900px]:divide-x max-[899px]:divide-y">
     <LocationBlock row={row} name={name} view={view} gate={gate} onCheck={onCheck} onSavePath={onSavePath} />
-    <AccountBlock name={name} view={view} api={api} csrfToken={csrfToken} gate={gate} onRefreshed={onRefreshed} />
+    <AccountBlock view={view} />
     <QuotaBlock view={view} gate={gate} onRetry={onRetry} />
   </div>;
 }

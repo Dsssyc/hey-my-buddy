@@ -43,27 +43,7 @@ class RoutingModesTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
         self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
-    def test_pure_conversion_is_idempotent_and_retains_default_review_slot(self):
-        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
-        legacy = {'fastRouterProfileId': SECOND_PROFILE_ID, 'reviewRouterProfileId': PROFILE_ID,
-                  'defaultRoutingMode': 'review', 'routingBudget': 'quick'}
-        before = dict(legacy)
-        converted = convert_legacy_router_settings(legacy)
-        self.assertEqual(converted, convert_legacy_router_settings(legacy))
-        self.assertEqual(legacy, before)
-        self.assertEqual(converted.settings.as_dict(), {'routerProfileIds': [PROFILE_ID, SECOND_PROFILE_ID],
-                         'routerRetryIntervalSeconds': 600, 'defaultRoutingMode': 'review', 'routingBudget': 'brief'})
-        self.assertEqual(converted.source_slots, (SECOND_PROFILE_ID, PROFILE_ID))
 
-    def test_pure_conversion_keeps_missing_or_unavailable_default_slot(self):
-        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
-        for chosen in (None, 'unavailable-profile'):
-            with self.subTest(chosen=chosen), patch('hey_my_buddy.blackboard.routing.router.profile_problem', side_effect=AssertionError('no eligibility reads')):
-                converted = convert_legacy_router_settings({'fastRouterProfileId': PROFILE_ID,
-                    'reviewRouterProfileId': chosen, 'defaultRoutingMode': 'review'})
-            self.assertEqual(converted.settings.router_profile_ids, (chosen, PROFILE_ID) if chosen else (PROFILE_ID,))
-            self.assertEqual(converted.settings.default_routing_mode, 'review')
-            self.assertEqual(converted.source_slots, (PROFILE_ID, chosen))
 
     def test_fast_input_is_repo_free_and_fixed_at_sixty_seconds(self):
         board = self.board()
@@ -189,24 +169,6 @@ class RoutingModesTests(BoardTestCase):
             if expected == 'needs-host':
                 self.assertEqual(decision['error'], code)
 
-    def test_conversion_is_pure_and_does_not_migrate_board_or_schema(self):
-        from hey_my_buddy.blackboard.routing.router_settings import convert_legacy_router_settings
-        from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-        board = self.board()
-        self.seed(board)
-        with board.store.db.read() as connection:
-            before = list(connection.execute('SELECT key,value FROM meta ORDER BY key'))
-            revision = tuple(connection.execute('SELECT * FROM evaluation_state').fetchone())
-        legacy = {'fastRouterProfileId': SECOND_PROFILE_ID, 'reviewRouterProfileId': PROFILE_ID,
-                  'defaultRoutingMode': 'review', 'routingBudget': 'quick'}
-        with patch('hey_my_buddy.blackboard.routing.router.configuration', side_effect=AssertionError('conversion must not read state')):
-            settings = convert_legacy_router_settings(legacy).settings.as_dict()
-        self.assertEqual(settings['routerProfileIds'], [PROFILE_ID, SECOND_PROFILE_ID])
-        self.assertEqual(settings['routingBudget'], 'brief')
-        with board.store.db.read() as connection:
-            self.assertEqual([tuple(row) for row in before], [tuple(row) for row in connection.execute('SELECT key,value FROM meta ORDER BY key')])
-            self.assertEqual(revision, tuple(connection.execute('SELECT * FROM evaluation_state').fetchone()))
-        self.assertEqual(board.store.db.meta('schema_version'), str(SCHEMA_VERSION))
 
     def test_file_evidence_is_rejected_even_if_schema_was_bypassed(self):
         with self.assertRaises(BoardError) as caught:

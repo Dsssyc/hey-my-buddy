@@ -136,9 +136,8 @@ export function harnessStateText(state: string, t: TFunction<"buddies">): string
 }
 
 /** The reasons the board records for a buddy that cannot work, by their name in the text. */
-const REASONS: Record<string, "harness" | "account" | "gone"> = {
+const REASONS: Record<string, "harness" | "gone"> = {
   HARNESS_UNHEALTHY: "harness",
-  ACCOUNT_BINDING_CHANGED: "account",
   "not present in the latest confirmed native discovery": "gone",
   "not present in the latest complete native discovery": "gone",
 };

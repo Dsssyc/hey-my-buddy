@@ -298,9 +298,6 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
                 prefixes.append(parent)
     inherited_path = result.get("PATH", "")
     result["PATH"] = os.pathsep.join([*prefixes, *([inherited_path] if inherited_path else [])])
-    if adapter == 'claude':
-        from .account_integrations import inject_claude_key
-        result = inject_claude_key(result, environment)
     return result
 
 

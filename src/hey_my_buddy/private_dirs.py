@@ -120,11 +120,6 @@ def attempt_root(state: Path, adapter: str, task_id: str, attempt_id: str) -> Pa
     return goal_root(state, adapter, task_id) / 'attempts' / attempt_id
 
 
-def account_root(state: Path, adapter: str) -> Path:
-    """Reserved path for later Worker account support; this does not create it."""
-    return _absolute(state) / 'harnesses' / _adapter(adapter) / 'accounts' / 'worker'
-
-
 def context_root(context, adapter: str | None = None) -> Path:
     """Resolve an execution's private root from its explicit service state root."""
     state = context.environment['BUDDY_STATE_DIR']

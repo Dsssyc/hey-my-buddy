@@ -1,4 +1,4 @@
-"""Ordered Router list settings and the explicit-upgrade conversion; no state access."""
+"""Ordered Router list settings; no state access."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -8,7 +8,6 @@ from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
 FIELDS = frozenset({"routerProfileIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"})
-LEGACY_FIELDS = frozenset({"fastRouterProfileId", "reviewRouterProfileId", "defaultRoutingMode", "routingBudget"})
 MODES = ("fast", "review")
 PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
@@ -37,10 +36,6 @@ class RouterSettings:
                 "routingBudget": self.routing_budget}
 
 
-@dataclass(frozen=True)
-class RouterConversion:
-    settings: RouterSettings
-    source_slots: tuple[str | None, str | None]
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
@@ -54,10 +49,6 @@ def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
     return value
 
 
-def _profile(value: object, name: str) -> str | None:
-    if value is not None and (not isinstance(value, str) or not IDENTIFIER_PATTERN.fullmatch(value)):
-        raise BoardError("INVALID_ARGUMENT", f"{name} must be a profileId or null")
-    return value
 
 
 def _profile_entries(ids: Sequence[object], name: str) -> None:
@@ -109,26 +100,3 @@ def validate_router_settings_patch(value: object) -> dict:
     if "routingBudget" in entry:
         result["routingBudget"] = _choice(entry["routingBudget"], PRESETS, "routingBudget")
     return result
-
-
-def convert_legacy_router_settings(value: object) -> RouterConversion:
-    """Convert dual-slot legacy settings into the ordered list; no state access.
-
-    Only L18's explicit schema upgrade may call this for production state. The default
-    mode's slot leads and the other slot follows it even when unavailable, so no
-    user-entered ID is dropped; source_slots keeps the two raw slots in fixed
-    fast/review order for audit.
-    """
-    entry = _object(value, LEGACY_FIELDS, "legacy Router settings")
-    mode = _choice(entry.get("defaultRoutingMode", "fast"), MODES, "defaultRoutingMode")
-    preset = entry.get("routingBudget", "standard")
-    preset = _choice("brief" if preset == "quick" else preset, PRESETS, "routingBudget")
-    fast = _profile(entry.get("fastRouterProfileId"), "fastRouterProfileId")
-    review = _profile(entry.get("reviewRouterProfileId"), "reviewRouterProfileId")
-    ordered = (fast, review) if mode == "fast" else (review, fast)
-    ids: list[str] = []
-    for slot in ordered:
-        if slot is not None and slot not in ids:
-            ids.append(slot)
-    return RouterConversion(RouterSettings(tuple(ids), default_routing_mode=mode, routing_budget=preset),
-                            (fast, review))

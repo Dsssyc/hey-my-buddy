@@ -122,8 +122,6 @@ class FailoverTests(RouterDispatchTestCase):
         second = self.next_claim(request)
         self.assertEqual(second["decisionInput"]["routerProfileId"], B)
         self.assertEqual(second["attempt"]["modelFamily"], {"adapter": "dsh", "provider": "fixture", "model": "bravo"})
-        self.assertEqual(self.meta("attempt-routing-accounts:" + second["attempt"]["attemptId"]),
-                         {"dsh": {"source": "native", "credentialRevision": 0}})
         self.assertEqual(self.meta("attempt-tool-policy:" + second["attempt"]["attemptId"]), {"systemSandbox": False})
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
@@ -593,7 +591,6 @@ for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}), ("
     install_change_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
 install_change_case("revision", execute_change("UPDATE evaluation_state SET configuration_revision=configuration_revision+1 WHERE id=1"))
 install_change_case("table", execute_change("UPDATE evaluation_state SET table_revision=table_revision+1 WHERE id=1"))
-install_change_case("account", execute_change("INSERT INTO meta(key,value) VALUES('account-selection:dsh',?)", (canonical_json({"source": "worker", "revision": 1}),)))
 install_change_case("reader_release", execute_change("UPDATE evaluation_readers SET released_at=?", (T0,)))
 install_change_case("reader_lease", execute_change("UPDATE evaluation_readers SET expires_at=?", (T0,)))
 install_change_case("identity", execute_change("UPDATE evaluation_profiles SET model='replacement' WHERE profile_id=?", (A,)))

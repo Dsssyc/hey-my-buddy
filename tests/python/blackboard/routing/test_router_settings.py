@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 import unittest
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.blackboard.routing.router_settings import RouterSettings, convert_legacy_router_settings, validate_router_settings_patch
+from hey_my_buddy.blackboard.routing.router_settings import RouterSettings, validate_router_settings_patch
 
 PROFILE = "codex:openai:example:high"
 RETRY_MIN_SECONDS = 1
@@ -106,94 +106,12 @@ class RouterSettingsTests(unittest.TestCase):
         ids.append("changed:after:the:call")
         self.assertEqual(result["routerProfileIds"], [PROFILE])
 
-    def test_each_default_mode_keeps_both_slots_in_mode_order(self):
-        # Rewritten from the single-slot contract: the other slot is no longer
-        # discarded; the default mode's slot leads and the other one follows.
-        for mode, expected in (("fast", ("fast-id", "review-id")), ("review", ("review-id", "fast-id"))):
-            with self.subTest(mode=mode):
-                result = convert_legacy_router_settings({"fastRouterProfileId": "fast-id", "reviewRouterProfileId": "review-id",
-                                                         "defaultRoutingMode": mode, "routingBudget": "deep"})
-                self.assertEqual(result.settings.as_dict(),
-                                 {"routerProfileIds": list(expected), "routerRetryIntervalSeconds": 600,
-                                  "defaultRoutingMode": mode, "routingBudget": "deep"})
-                self.assertEqual(result.source_slots, ("fast-id", "review-id"))
 
-    def test_missing_or_null_selected_slot_keeps_the_other_slot_first(self):
-        # Rewritten: the surviving other slot is kept (was discarded) and, when the
-        # selected slot is empty or absent, it becomes the first list item.
-        for mode, selected, other in (("fast", "fastRouterProfileId", "reviewRouterProfileId"),
-                                      ("review", "reviewRouterProfileId", "fastRouterProfileId")):
-            for present in (False, True):
-                entry = {"defaultRoutingMode": mode, other: "other-id"}
-                if present:
-                    entry[selected] = None
-                with self.subTest(mode=mode, present=present):
-                    result = convert_legacy_router_settings(entry)
-                    self.assertEqual(result.settings.router_profile_ids, ("other-id",))
-                    self.assertEqual(result.settings.default_routing_mode, mode)
-                    self.assertIsNone(result.source_slots[0 if mode == "fast" else 1])
 
-    def test_conversion_matrix_keeps_order_deduplicates_and_audits_slots(self):
-        cases = [
-            ({}, (), (None, None)),
-            ({"defaultRoutingMode": "fast"}, (), (None, None)),
-            ({"defaultRoutingMode": "review"}, (), (None, None)),
-            ({"fastRouterProfileId": "f"}, ("f",), ("f", None)),
-            ({"reviewRouterProfileId": "r"}, ("r",), (None, "r")),
-            ({"fastRouterProfileId": "f", "reviewRouterProfileId": "r"}, ("f", "r"), ("f", "r")),
-            ({"fastRouterProfileId": "f", "reviewRouterProfileId": "r", "defaultRoutingMode": "review"},
-             ("r", "f"), ("f", "r")),
-            ({"fastRouterProfileId": "same", "reviewRouterProfileId": "same"}, ("same",), ("same", "same")),
-            ({"fastRouterProfileId": "same", "reviewRouterProfileId": "same", "defaultRoutingMode": "review"},
-             ("same",), ("same", "same")),
-        ]
-        for entry, expected_ids, expected_slots in cases:
-            with self.subTest(entry=entry):
-                result = convert_legacy_router_settings(entry)
-                self.assertEqual(result.settings.router_profile_ids, expected_ids)
-                self.assertEqual(result.source_slots, expected_slots)
-                self.assertEqual(result.settings.default_routing_mode, entry.get("defaultRoutingMode", "fast"))
-                self.assertEqual(result.settings.router_retry_interval_seconds, 600)
-                self.assertEqual(result.settings.routing_budget, "standard")
 
-    def test_conversion_defaults_and_old_budget_are_explicit(self):
-        self.assertEqual(convert_legacy_router_settings({}).settings, RouterSettings())
-        for preset, converted in (("brief", "brief"), ("standard", "standard"), ("deep", "deep"), ("quick", "brief")):
-            with self.subTest(preset=preset):
-                self.assertEqual(convert_legacy_router_settings({"routingBudget": preset}).settings.routing_budget,
-                                 converted)
 
-    def test_conversion_is_pure_repeatable_and_keeps_unavailable_identity(self):
-        # No connection or harness exists here: even an unavailable/unknown ID
-        # stays in the list at its slot order, rather than being screened out.
-        entry = {"defaultRoutingMode": "review", "reviewRouterProfileId": "unavailable-id",
-                 "fastRouterProfileId": "healthy-id", "routingBudget": "quick"}
-        before = deepcopy(entry)
-        first = convert_legacy_router_settings(entry)
-        self.assertEqual(first, convert_legacy_router_settings(entry))
-        self.assertEqual(entry, before)
-        self.assertEqual(first.settings.router_profile_ids, ("unavailable-id", "healthy-id"))
-        self.assertEqual(first.settings.routing_budget, "brief")
-        with self.assertRaises(FrozenInstanceError):
-            first.settings.router_profile_ids = ("healthy-id",)
-        with self.assertRaises(FrozenInstanceError):
-            first.source_slots = (None, None)
 
-    def test_duplicate_slots_remain_a_deterministic_audit_record(self):
-        # Rewritten: the duplicate is dropped from the list (first occurrence wins)
-        # while source_slots keeps both raw slot values for audit.
-        result = convert_legacy_router_settings({"fastRouterProfileId": "same", "reviewRouterProfileId": "same"})
-        self.assertEqual(result.settings.router_profile_ids, ("same",))
-        self.assertEqual(result.source_slots, ("same", "same"))
 
-    def test_invalid_legacy_data_is_not_guessed(self):
-        for entry in (None, [], {"decision_profile_id": "old"}, {"routerProfileId": "new"},
-                      {"routerProfileIds": []}, {"routerRetryIntervalSeconds": 600},
-                      {"defaultRoutingMode": None}, {"defaultRoutingMode": "auto"}, {"routingBudget": None},
-                      {"routingBudget": "unlimited"}, {"fastRouterProfileId": False},
-                      {"reviewRouterProfileId": "bad/id"}, {"fastRouterProfileId": None, "reviewRouterProfileId": 5}):
-            with self.subTest(entry=entry), self.assertRaises(BoardError):
-                convert_legacy_router_settings(entry)
 
 
 if __name__ == "__main__":

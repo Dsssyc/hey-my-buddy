@@ -65,7 +65,6 @@ export default {
     refused: "连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。",
     reason: {
       harness: "Harness 不可用",
-      account: "账户已更换",
       gone: "已不在 Harness 的模型目录里",
     },
     empty: {

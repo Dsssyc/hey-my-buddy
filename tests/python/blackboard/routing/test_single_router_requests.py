@@ -287,12 +287,12 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertNotIn("requestedRoutingMode", view)
         self.assertEqual(view["configurationRevision"], 1)
 
-    def test_complete_input_byte_limit_includes_snapshot_schema_and_accounts(self):
+    def test_complete_input_byte_limit_includes_snapshot_and_schema(self):
         board = self.board()
         self.seed(board)
         ordinary = self.audit(board, self.request(board))
         document = ordinary["input"]
-        # The old assembly fits this ceiling; the final schema/account/snapshot
+        # The old assembly fits this ceiling; the final schema/snapshot
         # additions do not. Admission must check the entire actual packet.
         limit = len(canonical_json(document).encode("utf-8")) - 1
         with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", limit):

@@ -29,7 +29,7 @@ Before install, run `backup-preflight '{}'`; resolve refusals ([operations](../.
 
 ## Capabilities and authority
 
-[Harnesses](../../docs/reference/harnesses.md) own capabilities and account controls. Shared login is read-only; keys use private stdin/form, never packets/argv/replay.
+[Harnesses](../../docs/reference/harnesses.md) own capabilities. Shared login is read-only.
 
 Worker sessions stay private; `worker-sessions` lists them ([details](../../docs/reference/operations.md)).
 

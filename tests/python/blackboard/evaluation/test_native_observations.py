@@ -2,7 +2,7 @@
 import json
 
 from hey_my_buddy.blackboard.service.harness_health import read_health
-from hey_my_buddy.blackboard.evaluation.native_observations import quota_view, warnings
+from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, latest_quota, quota_view, record_quota, warnings
 from support import BoardTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
 
@@ -30,6 +30,14 @@ class QuotaVisibilityTests(BoardTestCase):
                "windows": [{"name": "five-hour", "usedPercent": 94, "resetsAt": "2026-09-29T12:00:00Z"}]}
         once = normalize_quota(raw)
         self.assertEqual(normalize_quota(once), once)
+        board = self.board()
+        with board.store.db.write() as db:
+            record_quota(db, "codex", once, now=once["observedAt"])
+            self.assertEqual(latest_quota(db, "codex"), once)
+            for table in ("harness_quota_observations", "quota_current"):
+                row = db.execute(f"SELECT native_account_id FROM {table} WHERE adapter='codex'").fetchone()
+                self.assertEqual(row["native_account_id"], "fixture-account")
+
 
     def test_missing_cache_cannot_be_relabelled_as_an_inclusive_input_total(self):
         from hey_my_buddy.protocol.usage import normalize_token_usage
@@ -44,7 +52,7 @@ class QuotaVisibilityTests(BoardTestCase):
         observed = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
                     "windows": [{"name": "five-hour", "usedPercent": 97, "resetsAt": "2026-09-29T12:00:00Z"}]}
         with board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET quota_json=? WHERE adapter='codex'", (json.dumps(observed),))
+            record_quota(db, "codex", observed, now=observed["observedAt"])
             self.assertEqual(len(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")), 1)
             self.assertEqual(warnings(db, {"adapter": "codex", "provider": "different"}, now="2026-09-29T10:01:00Z"), [])
             self.assertEqual(warnings(db, {"adapter": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
@@ -55,10 +63,20 @@ class QuotaVisibilityTests(BoardTestCase):
         board = self.board()
         quota = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "windows": []}
         with board.store.db.write() as db:
-            db.execute("UPDATE harness_health SET quota_json=?,record_json=? WHERE adapter='codex'",
-                       (json.dumps(quota), json.dumps({"quota": {"source": "stale-embedded-copy"}, "version": "new"})))
+            record_quota(db, "codex", quota, now=quota["observedAt"])
+            db.execute("UPDATE harness_health SET record_json=? WHERE adapter='codex'",
+                       (json.dumps({"quota": {"source": "stale-embedded-copy"}, "version": "new"}),))
             self.assertEqual(read_health(db, "codex")["quota"]["source"], "native-fixture")
             self.assertEqual(read_health(db, "codex")["version"], "new")
+
+    def test_subsecond_newer_observation_replaces_a_whole_second_timestamp(self):
+        board = self.board()
+        with board.store.db.write() as db:
+            record_quota(db, 'codex', {'source': 'native-fixture', 'provider': 'openai',
+                                      'observedAt': '2026-09-29T10:00:00Z', 'windows': []})
+            record_quota(db, 'codex', {'source': 'native-fixture', 'provider': 'openai',
+                                      'observedAt': '2026-09-29T10:00:00.001Z', 'windows': []})
+            self.assertEqual(latest_quota(db, 'codex')['observedAt'], '2026-09-29T10:00:00.001Z')
 
     def test_a_recent_native_quota_failure_warns_without_a_fabricated_window(self):
         from hey_my_buddy.blackboard.evaluation.native_observations import persist
@@ -113,6 +131,51 @@ class QuotaVisibilityTests(BoardTestCase):
                                       now=observed_at)[0]["code"], "HARNESS_QUOTA_EXHAUSTED")
         self.assertEqual(failure_view(result, adapter="claude"), run.native_failure.value)
         self.assertEqual(failure_view(result, adapter="claude")["nativeCode"], "five_hour")
+
+    def test_native_login_identity_is_a_fact_without_reopening_exhaustion(self):
+        from support import FakeClock
+        clock = FakeClock("2026-09-29T10:00:00Z")
+        board = self.board(clock=clock)
+        config = {"adapter": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"}
+        base = {"source": "native-fixture", "provider": "openai", "windows": []}
+        with board.store.db.write() as db:
+            record_quota(db, "codex", {**base, "observedAt": clock(), "reachedType": "usage_limit_reached",
+                         "resetsAt": "2026-09-29T11:00:00Z", "scope": {"nativeAccountId": "first-login"}}, now=clock())
+            clock.advance(60)
+            unknown = {**base, "observedAt": clock(), "scope": {"nativeAccountId": "second-login"}}
+            record_quota(db, "codex", unknown, now=clock())
+            self.assertIsNotNone(exhausted(db, config, now=clock()))
+            self.assertEqual(latest_quota(db, "codex"), unknown)
+            for table in ("harness_quota_observations", "quota_current"):
+                row = db.execute(f"SELECT native_account_id FROM {table} WHERE adapter='codex'").fetchone()
+                self.assertEqual(row["native_account_id"], "second-login")
+            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T09:59:00Z",
+                         "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "first-login"}}, now=clock())
+            self.assertIsNotNone(exhausted(db, config, now=clock()))
+            self.assertEqual(latest_quota(db, "codex"), unknown)
+            clock.advance(3540)
+            self.assertIsNone(exhausted(db, config, now=clock()), "The recorded reset ends the old exhaustion")
+            clock.advance(1)
+            record_quota(db, "codex", {**base, "observedAt": clock(), "reachedType": "usage_limit_reached",
+                         "scope": {"nativeAccountId": "second-login"}}, now=clock())
+            clock.advance(60)
+            record_quota(db, "codex", {**base, "observedAt": clock(),
+                         "scope": {"nativeAccountId": "third-login"}}, now=clock())
+            self.assertIsNotNone(exhausted(db, config, now=clock()))
+            clock.advance(1)
+            record_quota(db, "codex", {**base, "observedAt": clock(), "ordinaryUsageAllowed": True,
+                         "scope": {"nativeAccountId": "third-login"}}, now=clock())
+            self.assertIsNone(exhausted(db, config, now=clock()), "A newer available observation ends exhaustion")
+
+    def test_temporary_rate_limit_warns_without_creating_exhaustion(self):
+        board = self.board()
+        observed = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
+                    "reachedType": "rate_limit_reached", "ordinaryUsageAllowed": False, "windows": []}
+        config = {"adapter": "codex", "provider": "openai", "model": "fixture-model"}
+        with board.store.db.write() as db:
+            record_quota(db, "codex", observed, now=observed["observedAt"])
+            self.assertIsNone(exhausted(db, config, now=observed["observedAt"]))
+            self.assertEqual(warnings(db, config, now=observed["observedAt"])[0]["code"], "HARNESS_RATE_LIMIT_REPORTED")
 
 
 class NativeReceiptTests(WorkflowTestCase):
