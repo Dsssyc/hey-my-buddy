@@ -11,7 +11,6 @@ observing or closing a console. Only the first ``open`` may attach to (or start)
 from __future__ import annotations
 
 from functools import partial
-import re
 from pathlib import Path
 import sys
 import time
@@ -36,31 +35,6 @@ POLL_SECONDS = 2.0
 #: stderr notice carrying the fallback entry URL while a wait blocks stdout.
 FALLBACK_NOTICE = "hey-my-buddy console: the browser was not opened; entry URL: "
 
-#: A public console instance id is exactly 24 lowercase hex characters. An alternate
-#: length, case or encoding is never normalized into one: the daemon contract is exact,
-#: so this CLI refuses anything else instead of forwarding an unfenced guess.
-CONSOLE_ID_RE = re.compile(r"[0-9a-f]{24}")
-#: The one permitted entry URL: numeric loopback, an explicit valid port and exactly
-#: an optional 43-character URL-safe launch ticket, with no userinfo, query, fragment, alternate
-#: host or alternate scheme. ``webbrowser`` must never be pointed at anything else.
-LAUNCH_URL_RE = re.compile(r"http://127\.0\.0\.1:([0-9]{1,5})/(?:launch/([A-Za-z0-9_-]{43}))?")
-
-
-def is_console_id(value: Any) -> bool:
-    """True only for the exact public console instance id shape."""
-    return isinstance(value, str) and CONSOLE_ID_RE.fullmatch(value) is not None
-
-
-def is_launch_url(value: Any) -> bool:
-    """True only for the single permitted loopback launch URL shape."""
-    if not isinstance(value, str):
-        return False
-    match = LAUNCH_URL_RE.fullmatch(value)
-    if match is None:
-        return False
-    return 1 <= int(match.group(1)) <= 65535
-
-
 class Request(NamedTuple):
     """One validated console command: the RPC parameters plus CLI-local choices."""
 
@@ -81,12 +55,9 @@ def parse_request(params: Any) -> Request:
     """Validate one canonical ``console`` JSON argument and strip CLI-local fields.
 
     Strictness is deliberate: a wrong type, an unknown field or either local option on
-    ``status``/``close`` is refused here, before any browser launch or RPC. A close
-    fence is accepted only as the exact daemon identifier: no trimming, lowercasing or
-    decoding, and an explicit ``null`` is refused rather than dropped.
+    ``status``/``close`` is refused here, before any browser launch or RPC.
+    The service validates the close fence.
     """
-    if not isinstance(params, dict):
-        raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
     action = params.get("action", "open")
     if not isinstance(action, str) or action not in CONSOLE_ACTIONS:
         raise BoardError("INVALID_ARGUMENT", "action must be 'open', 'status' or 'close'")
@@ -106,13 +77,7 @@ def parse_request(params: Any) -> Request:
         browser = _local_boolean(params, "browser", True)
         wait = _local_boolean(params, "wait", False)
     if action == "close" and "expectedConsoleId" in params:
-        expected = params["expectedConsoleId"]
-        if not is_console_id(expected):
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                "expectedConsoleId must be exactly 24 lowercase hex characters",
-            )
-        rpc_params["expectedConsoleId"] = expected
+        rpc_params["expectedConsoleId"] = params["expectedConsoleId"]
     return Request(action=action, rpc_params=rpc_params, browser=browser, wait=wait)
 
 
@@ -138,23 +103,6 @@ def _observe_client(factory: Callable[[], Any] | None, state_dir: Path):
     return factory() if factory is not None else _non_autostart_client(state_dir)
 
 
-def _validated_open_reply(reply: Any) -> dict:
-    """Validate the lifecycle open reply before anything local happens.
-
-    Only the daemon's exact lifecycle answer may reach the browser or the wait: a
-    malformed reply is ``INVALID_RESPONSE`` and launches nothing.
-    """
-    if not isinstance(reply, dict):
-        raise BoardError("INVALID_RESPONSE", "The console did not return a lifecycle object")
-    if not is_launch_url(reply.get("url")):
-        raise BoardError("INVALID_RESPONSE", "The console did not return a valid loopback launch URL")
-    if not is_console_id(reply.get("consoleId")):
-        raise BoardError("INVALID_RESPONSE", "The console did not return a valid consoleId")
-    if reply.get("running") is not True:
-        raise BoardError("INVALID_RESPONSE", "The console did not report that it is running")
-    return dict(reply)
-
-
 def _unavailable(code: str, message: str) -> dict:
     return {"status": "unavailable", "error": {"code": code, "message": message}}
 
@@ -174,37 +122,13 @@ def wait_for_console(
             status = client.call("console", {"action": "status"})
         except BoardError as error:
             return _unavailable(error.code, error.message)
-        if not isinstance(status, dict):
-            return _unavailable("INVALID_RESPONSE", "The console status was not a JSON object")
-        running = status.get("running")
-        if not isinstance(running, bool):
-            return _unavailable("INVALID_RESPONSE", "The console status did not report whether it is running")
+        running = status["running"]
         if not running:
             return {"status": "closed"}
-        current = status.get("consoleId")
-        if not is_console_id(current):
-            return _unavailable("INVALID_RESPONSE", "The console status did not identify the running console")
+        current = status["consoleId"]
         if current != console_id:
             return {"status": "replaced", "consoleId": current}
         sleep(poll_seconds)
-
-
-def _close_rejection(reply: Any) -> str | None:
-    """Why an interruption close reply cannot be reported honestly, or ``None``.
-
-    ``closed`` must be a real boolean and a console that stayed open must say why;
-    otherwise the reply is malformed and must not be presented as success. A replied
-    reason (for example ``replaced``) is the honest replacement information.
-    """
-    if not isinstance(reply, dict):
-        return "The console close was not a lifecycle object"
-    if not isinstance(reply.get("closed"), bool):
-        return "The console close did not report whether the console closed"
-    if reply["closed"] is False:
-        reason = reply.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            return "The console close did not report why the console stayed open"
-    return None
 
 
 def _close_after_interrupt(console_id: str, *, client) -> dict:
@@ -215,12 +139,6 @@ def _close_after_interrupt(console_id: str, *, client) -> dict:
         return {
             "status": "interrupted",
             "close": {"closed": False, "error": {"code": error.code, "message": error.message}},
-        }
-    rejection = _close_rejection(closed)
-    if rejection is not None:
-        return {
-            "status": "interrupted",
-            "close": {"closed": False, "error": {"code": "INVALID_RESPONSE", "message": rejection}},
         }
     return {"status": "interrupted", "close": dict(closed)}
 
@@ -252,12 +170,10 @@ def run(
     request = parse_request(params)
     if request.action != "open":
         reply = _observe_client(client_factory, state_dir).call("console", request.rpc_params)
-        if not isinstance(reply, dict):
-            raise BoardError("INVALID_RESPONSE", "The console did not return a lifecycle object")
         return dict(reply)
     reply = (transport._call_service("console", request.rpc_params, state_dir)
              if call_service is None else call_service("console", request.rpc_params))
-    result = _validated_open_reply(reply)
+    result = dict(reply)
     opener = browser_open if browser_open is not None else webbrowser.open
     opened = _launch_browser(result["url"], request.browser, opener)
     result["browserOpened"] = opened
@@ -278,14 +194,10 @@ def run(
 __all__ = [
     "ACTION_FIELDS",
     "CONSOLE_ACTIONS",
-    "CONSOLE_ID_RE",
     "FALLBACK_NOTICE",
-    "LAUNCH_URL_RE",
     "LOCAL_OPTIONS",
     "POLL_SECONDS",
     "Request",
-    "is_console_id",
-    "is_launch_url",
     "parse_request",
     "run",
     "wait_for_console",

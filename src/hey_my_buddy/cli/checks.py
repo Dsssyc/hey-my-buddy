@@ -53,20 +53,10 @@ import tempfile
 import threading
 import time
 
-#: Inherited variables that would otherwise point a test subprocess at a production
-#: runtime or an agent credential instead of its own private roots.
+#: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
-    "HMB_CHECKS_TMPDIR",
-    "HMB_STATE_DIR",
-    "HMB_RUNTIME_ROOT",
-    "HMB_RUNTIME",
-    "HMB_RUNTIME_IDENTITY",
-    "HMB_AGENT_CREDENTIAL_FILE",
-    "HMB_AGENT_CREDENTIAL_FD",
     "VIRTUAL_ENV",
     "UV_PROJECT_ENVIRONMENT",
-    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE",
-    "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
 )
 
 #: A held lock with one of these names observes a live hey-my-buddy daemon.

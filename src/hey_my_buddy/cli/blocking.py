@@ -16,8 +16,8 @@ deadline, never to this wait. Reaching the window returns an honest
 
 * it never starts, resumes, retries or cancels anything, on timeout or otherwise;
 * for an active execution, it consumes one durable reminder when returning it;
-* a transient service failure is recovered by re-reading the SAME durable
-  ``runId`` (bounded reconnects), never by replaying a submission;
+* a service failure returns an unavailable envelope with commands to inspect
+  and await the SAME durable ``runId``;
 * stopping this wait (Ctrl-C, a closed terminal, a killed client, ``waitSeconds``
   expiry) only stops the *wait*. The named run ends through ``hey-my-buddy cancel``
   (micro tasks, with the owner's control file), ``execution-cancel`` (execution
@@ -41,7 +41,6 @@ MAX_WAIT_SECONDS = 86400
 MIN_WAIT_SECONDS = 1
 DEFAULT_AWAIT_SECONDS = 86400
 WAIT_SLICE_MS = 30000
-MAX_RECONNECTS = 3
 
 # ``reconciliation-needed`` is terminal for a wait: the task will not move again
 # without an explicit retry, and no wait may relaunch it.
@@ -135,15 +134,13 @@ def _envelope(
     result: Any = None,
     recovery: dict | None = None,
     error: dict | None = None,
-    reconnects: int = 0,
 ) -> dict:
     """Build the caller-visible envelope.
 
     The success claim is strict and is decided here, once: ``ok`` is true only
     when the run's outcome is ``completed`` *and* this envelope actually carries
     the promised result payload *and* no error was recorded. A completed run
-    whose result was not persisted, could not be read or came back malformed
-    keeps its execution status in ``status`` but is reported as
+    whose result was not persisted keeps its execution status in ``status`` but is reported as
     ``completed-no-result`` with ``ok=False`` and ``resultDelivered=False``,
     never as a successful complete result.
     """
@@ -180,7 +177,6 @@ def _envelope(
         "waitSeconds": wait_seconds,
         "maxWaitSeconds": MAX_WAIT_SECONDS,
         "timedOut": outcome == "wait-timeout",
-        "reconnects": reconnects,
         "result": result,
         "recovery": recovery,
         "error": error,
@@ -205,7 +201,6 @@ def _result_undelivered(
     wait_seconds: int,
     recovery_reason: str,
     error: dict,
-    reconnects: int,
 ) -> dict:
     """Terminal run whose result cannot be delivered: honest status, no success.
 
@@ -221,29 +216,7 @@ def _result_undelivered(
         wait_seconds=wait_seconds,
         recovery=_recovery(request_id, run_id, recovery_reason),
         error=error,
-        reconnects=reconnects,
     )
-
-
-def _malformed_result_response(full: Any, run_id: str) -> dict | None:
-    """Return an error when a ``result`` response cannot deliver this run's result.
-
-    A response is usable only if it is an object for the same run that carries a
-    nonempty result object (the engine persists exactly that shape). Anything
-    else must not be allowed to become a successful complete envelope, so the
-    caller falls back to the honest ``result-unavailable`` path.
-    """
-    if not isinstance(full, dict):
-        return {"code": "INVALID_RESPONSE", "message": "The service returned a non-object result response"}
-    response_run_id = full.get("runId")
-    if isinstance(response_run_id, str) and response_run_id and response_run_id != run_id:
-        return {"code": "RESULT_MISMATCH", "message": "The result response belongs to a different run"}
-    payload = full.get("result")
-    if payload is None:
-        return {"code": "RESULT_MISSING", "message": "The service response did not contain the promised runner result"}
-    if not isinstance(payload, dict) or not payload:
-        return {"code": "INVALID_RESPONSE", "message": "The service returned a malformed runner result"}
-    return None
 
 
 def _result_command(run_id: str) -> str:
@@ -251,7 +224,7 @@ def _result_command(run_id: str) -> str:
 
 
 def _head_text(value, limit: int) -> str | None:
-    if not isinstance(value, str):
+    if value is None:
         return None
     return value if len(value) <= limit else value[:limit]
 
@@ -263,17 +236,16 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
     sealed output; normal await callers get this compact view plus the exact
     command that reads the full record back.
     """
-    if not isinstance(full, dict) or full.get("workflowState") is None:
+    if full.get("workflowState") is None:
         # Infrastructure executions retain their opaque result payload.
         return None
-    result = full.get("result")
-    if not isinstance(result, dict):
+    result = full["result"]
+    if result is None:
         return None
-    turn = result.get("turn") if isinstance(result.get("turn"), dict) else None
-    outcome = turn.get("outcome") if isinstance(turn, dict) and isinstance(turn.get("outcome"), dict) else {}
+    turn = result.get("turn")
+    outcome = turn["outcome"] if turn is not None else {}
     partial = result.get("partialWorkspaceSeal")
-    seal = partial if isinstance(partial, dict) else result.get("workspaceSeal")
-    seal = seal if isinstance(seal, dict) else None
+    seal = partial if partial is not None else result.get("workspaceSeal")
     artifacts = []
     if seal is not None:
         artifacts.append(
@@ -289,7 +261,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         )
     from ..blackboard.evaluation.native_observations import failure_view
     final_text = result.get("finalText")
-    remaining = outcome.get("remaining")
+    remaining = outcome.get("remaining", [])
     disposition = outcome.get("disposition")
     return {
         "status": result.get("status"),
@@ -305,14 +277,14 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
             "sessionId": turn.get("sessionId"),
             "disposition": disposition,
             "summary": _head_text(outcome.get("summary"), 2000),
-            "remaining": [str(item)[:500] for item in remaining[:8]] if isinstance(remaining, list) else [],
+            "remaining": [item[:500] for item in remaining[:8]],
         },
         "request": outcome.get("request") if disposition in ("assistance", "attention") else None,
         "artifacts": artifacts,
         "finalText": _head_text(final_text, 2000),
-        "finalTextTruncated": isinstance(final_text, str) and len(final_text) > 2000,
+        "finalTextTruncated": final_text is not None and len(final_text) > 2000,
         "logPaths": result.get("logPaths"),
-        "processState": {"shutdownConfirmed": bool(full.get("shutdownConfirmed", (result.get("processState") or {}).get("shutdownConfirmed")))},
+        "processState": {"shutdownConfirmed": full["shutdownConfirmed"]},
         "resultCommand": _result_command(run_id),
     }
 
@@ -330,7 +302,6 @@ def _host_boundary(
     wait_seconds: int,
     service: Callable[..., dict],
     state_dir: Path,
-    reconnects: int,
 ) -> dict:
     """Return one micro-task Host decision boundary as a structured checkpoint.
 
@@ -344,17 +315,16 @@ def _host_boundary(
     if run.get("resultAvailable"):
         try:
             full = service("result", {"runId": run_id}, state_dir)
-            if isinstance(full, dict):
-                run = dict(run)
-                run.pop("waitingForHost", None)
-                if "waitingForHost" in full:
-                    run["waitingForHost"] = full["waitingForHost"]
+            run = dict(run)
+            run.pop("waitingForHost", None)
+            if "waitingForHost" in full:
+                run["waitingForHost"] = full["waitingForHost"]
         except ServiceError as failure:
             error = {"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)}
-    result = full.get("result") if isinstance(full, dict) else None
-    workflow = run.get("workflow") if isinstance(run.get("workflow"), dict) else {}
+    result = full["result"] if full is not None else None
+    workflow = run["workflow"]
     routing = workflow.get("requestRouting") is True
-    turn = result.get("turn") if isinstance(result, dict) else None
+    turn = result.get("turn") if result is not None else None
     request_view = None
     if workflow.get("activeRequestId"):
         request_view = {
@@ -401,27 +371,24 @@ def _host_boundary(
                 },
             )
         )
+    boundary = workflow.get("routingBoundary")
     if routing:
-        target = workflow.get("requestTargetRunId")
-        target_params = {"targetRunId": target} if target and target != run_id else {}
-        for mode, choice in (
-            ("reroute", {"reroute": True}),
-            ("buddy", {"buddy": {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")},
-                       "note": "..."}),
-        ):
-            commands.append(_boundary_command("continue", {
-                "runId": run_id, "commandId": f"{run_id}:{mode}:{revision}",
-                "controlFile": "<saved-controlFile>", "expectedRevision": revision,
-                "input": "Host has checked the buddy; continue the authorized micro task.",
-                **target_params, **choice,
-            }))
+        if boundary is not None:
+            templates = boundary["commands"]
+            for choice in templates["continue"]["choices"]:
+                if not choice["blocked"]:
+                    commands.append({"method": choice["method"], "params": choice["params"]})
+            reroute = templates["reroute"]
+            if not reroute["blocked"]:
+                commands.append({"method": reroute["method"], "params": reroute["params"],
+                                 "notBefore": reroute["notBefore"]})
     else:
         commands.append(_boundary_command("continue", {
             "runId": run_id, "commandId": f"{run_id}:continue:{revision}",
             "controlFile": "<saved-controlFile>", "expectedRevision": revision,
             "input": "...", "helperPolicy": "keep",
         }))
-    micro_task_view = _micro_task_result_view(full, run_id) if isinstance(full, dict) else None
+    micro_task_view = _micro_task_result_view(full, run_id) if full is not None else None
     envelope = _envelope(
         run,
         request_id=request_id,
@@ -430,7 +397,6 @@ def _host_boundary(
         wait_seconds=wait_seconds,
         result=micro_task_view if micro_task_view is not None else result,
         error=error,
-        reconnects=reconnects,
     )
     envelope.update(
         {
@@ -440,12 +406,16 @@ def _host_boundary(
             "resultCommand": _result_command(run_id),
             "workflowState": run.get("workflowState"),
             "workflow": workflow,
-            "turn": (micro_task_view or {}).get("turn") if micro_task_view is not None else turn,
-            "artifacts": (micro_task_view or {}).get("artifacts", []) if micro_task_view is not None else [],
+            "turn": micro_task_view["turn"] if micro_task_view is not None else turn,
+            "artifacts": micro_task_view["artifacts"] if micro_task_view is not None else [],
             "request": request_view,
             "nextCommands": commands,
         }
     )
+    if boundary is not None:
+        envelope["routingBoundary"] = boundary
+        if request_view is not None:
+            request_view["routingBoundary"] = boundary
     return envelope
 
 
@@ -467,7 +437,6 @@ def _wait_until_terminal(
     It may consume a reminder, but never starts, resumes, retries or cancels
     the durable run. An abandoned or timed-out wait only stops this CLI call.
     """
-    reconnects = 0
     deadline = started + wait_seconds
     reminder_wait_id = uuid.uuid4().hex
     while True:
@@ -482,7 +451,6 @@ def _wait_until_terminal(
                 waited_seconds=clock() - started,
                 wait_seconds=wait_seconds,
                 recovery=_recovery(request_id, run_id, "A task reminder ended this wait. Inspect the task or await the same run again."),
-                reconnects=reconnects,
             )
             envelope.update(reminder=reminder, microTaskComplete=False)
             return envelope
@@ -496,7 +464,6 @@ def _wait_until_terminal(
                 wait_seconds=wait_seconds,
                 service=service,
                 state_dir=state_dir,
-                reconnects=reconnects,
             )
         if workflow_state is None:
             if run.get("resultAvailable"):
@@ -523,7 +490,6 @@ def _wait_until_terminal(
                     "This call's wait window ended while the durable run was still active. That is a wait/connection "
                     "limit, not an execution failure; the run was neither cancelled nor marked failed.",
                 ),
-                reconnects=reconnects,
             )
         timeout_ms = max(1, int(min(WAIT_SLICE_MS, remaining * 1000)))
         try:
@@ -538,9 +504,7 @@ def _wait_until_terminal(
                 # directly address its internal Router or assistance executions.
                 target = run_id if scoped else shutdown["unconfirmedRunIds"][0]
                 events = service("events", {"runId": target, "limit": 1}, state_dir)
-                head = events.get("head")
-                if isinstance(head, bool) or not isinstance(head, int):
-                    raise ServiceError("INVALID_RESPONSE", "The stopped-evidence wait requires an event cursor")
+                head = events["head"]
                 run = service("status", {"runId": run_id}, state_dir)
                 current = run.get("workflowShutdown")
                 if isinstance(current, dict) and (
@@ -553,45 +517,15 @@ def _wait_until_terminal(
                                        "timeoutMs": timeout_ms,
                                        "consumeReminders": True, "reminderWaitId": reminder_wait_id}, state_dir)
         except ServiceError as failure:
-            # A transient failure re-attaches by reading the SAME durable runId.
-            # It never replays a submission or starts work.
-            if reconnects >= MAX_RECONNECTS:
-                return _envelope(
-                    run,
-                    request_id=request_id,
-                    outcome="unavailable",
-                    waited_seconds=clock() - started,
-                    wait_seconds=wait_seconds,
-                    recovery=_recovery(request_id, run_id, "The hey-my-buddy service could not be reached; the run stays durable"),
-                    error={"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)},
-                    reconnects=reconnects,
-                )
-            reconnects += 1
-            try:
-                run = service("status", {"runId": run_id}, state_dir)
-            except ServiceError as recover_failure:
-                return _envelope(
-                    run,
-                    request_id=request_id,
-                    outcome="unavailable",
-                    waited_seconds=clock() - started,
-                    wait_seconds=wait_seconds,
-                    recovery=_recovery(request_id, run_id, "The service did not answer; await the same runId again later"),
-                    error={"code": getattr(recover_failure, "code", "SERVICE_ERROR"), "message": str(recover_failure)},
-                    reconnects=reconnects,
-                )
-            if not isinstance(run, dict) or run.get("runId") != run_id:
-                return _envelope(
-                    run if isinstance(run, dict) else {},
-                    request_id=request_id,
-                    outcome="unavailable",
-                    waited_seconds=clock() - started,
-                    wait_seconds=wait_seconds,
-                    recovery=_recovery(request_id, run_id, "Re-attaching returned a different run; inspect before continuing"),
-                    error={"code": "RECOVERY_MISMATCH", "message": "Re-attached runId differs from the original runId"},
-                    reconnects=reconnects,
-                )
-            continue
+            return _envelope(
+                run,
+                request_id=request_id,
+                outcome="unavailable",
+                waited_seconds=clock() - started,
+                wait_seconds=wait_seconds,
+                recovery=_recovery(request_id, run_id, "The service did not answer; await the same runId again later"),
+                error={"code": failure.code, "message": str(failure)},
+            )
     waited = clock() - started
     if not run.get("resultAvailable"):
         return _result_undelivered(
@@ -609,42 +543,9 @@ def _wait_until_terminal(
                 "code": "RESULT_NOT_AVAILABLE",
                 "message": "The terminal run has no persisted runner result, so no successful result can be reported",
             },
-            reconnects=reconnects,
         )
-    try:
-        full = service("result", {"runId": run_id}, state_dir)
-    except ServiceError as failure:
-        return _result_undelivered(
-            run,
-            request_id=request_id,
-            run_id=run_id,
-            waited_seconds=clock() - started,
-            wait_seconds=wait_seconds,
-            recovery_reason=(
-                "The run is terminal but its persisted result could not be read, so result delivery is unavailable and "
-                "there is no successful result to report; the execution status is preserved. Re-read the result by runId "
-                "(`hey-my-buddy result`); do not relaunch the job because of this read failure."
-            ),
-            error={"code": getattr(failure, "code", "SERVICE_ERROR"), "message": str(failure)},
-            reconnects=reconnects,
-        )
-    malformed = _malformed_result_response(full, run_id)
-    if malformed is not None:
-        return _result_undelivered(
-            run,
-            request_id=request_id,
-            run_id=run_id,
-            waited_seconds=clock() - started,
-            wait_seconds=wait_seconds,
-            recovery_reason=(
-                "The run is terminal but the result response was unusable (non-object, missing result or a different "
-                "run), so there is no successful result to report; the execution status is preserved. Re-read the result "
-                "by runId; do not relaunch the job because of this response."
-            ),
-            error=malformed,
-            reconnects=reconnects,
-        )
-    micro_task_view = _micro_task_result_view(full, run_id) if isinstance(full, dict) else None
+    full = service("result", {"runId": run_id}, state_dir)
+    micro_task_view = _micro_task_result_view(full, run_id)
     if micro_task_view is not None:
         # A late execution completion does not undo the Host's micro task cancellation.
         micro_task_state = full.get("workflowState", run.get("workflowState"))
@@ -656,7 +557,6 @@ def _wait_until_terminal(
             waited_seconds=clock() - started,
             wait_seconds=wait_seconds,
             result=micro_task_view,
-            reconnects=reconnects,
         )
         envelope.update(
             {
@@ -673,8 +573,7 @@ def _wait_until_terminal(
         outcome=full.get("status", run.get("status", "unknown")),
         waited_seconds=clock() - started,
         wait_seconds=wait_seconds,
-        result=full.get("result"),
-        reconnects=reconnects,
+        result=full["result"],
     )
 
 
@@ -693,11 +592,9 @@ def await_run(
     reuses the same C-Two service and the same run ID. Its wait window is explicit
     and bounded (``waitSeconds``, default 86400, max 86400); reaching it is
     recoverable by awaiting the same run again. It never starts, resumes, retries
-    or cancels work - not even on timeout - and a transient service failure is
-    recovered by re-reading the same runId.
+    or cancels work - not even on timeout. A service failure during a wait
+    returns recovery commands for the same runId.
     """
-    if not isinstance(params, dict):
-        raise ServiceError("INVALID_ARGUMENT", "await requires an object of parameters")
     unknown = sorted(set(params) - {"requestId", "runId", "waitSeconds"})
     if unknown:
         raise ServiceError("INVALID_ARGUMENT", f"Unknown await parameter: {unknown[0]}")
@@ -716,8 +613,6 @@ def await_run(
         started = clock()
         if run_id is not None:
             run = service("status", {"runId": run_id}, state_dir)
-            if not isinstance(run, dict) or not run.get("runId"):
-                raise ServiceError("INVALID_RESPONSE", "The service did not return a run view")
             if request_id is not None and run.get("requestId") != request_id:
                 raise ServiceError("CONFLICT", "runId and requestId do not belong to the same run")
         else:

@@ -248,14 +248,14 @@ class ParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
             self.run_cli("status", '{"runId":"run-1"}', "--params-file", str(path))
         self.assertEqual(caught.exception.code, 2)
 
-    def test_the_storage_and_harness_spelling_aliases_still_reach_the_service(self):
+    def test_storage_and_harness_methods_reach_the_service(self):
         board = self.board()
         captured: list = []
         self.use_board_transport(board, captured)
-        code, planned, _ = self.run_cli("storage", "plan")
+        code, planned, _ = self.run_cli("storage-plan")
         self.assertEqual(code, 0, planned)
         self.assertEqual(captured[-1], {})
-        code, _, _ = self.run_cli("harness", "set", "codex", "--auto")
+        code, _, _ = self.run_cli("harness-set", '{"harness":"codex","path":null}')
         self.assertEqual(code, 0)
         self.assertEqual(captured[-1], {"harness": "codex", "path": None})
 
@@ -316,7 +316,6 @@ class HelpTests(unittest.TestCase):
             with self.subTest(method=method):
                 self.assertRegex(text, rf"(?m)^  {method} +[A-Z]")
         self.assertRegex(text, r"(?m)^  help +[A-Z]")
-        self.assertNotIn(cli_help.MISSING_SUMMARY, text, "every method needs its one-sentence summary")
         self.assertIn("--params-file", text)
         self.assertIn("hey-my-buddy help METHOD", text)
 

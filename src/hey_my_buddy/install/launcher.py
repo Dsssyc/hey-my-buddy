@@ -359,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         state = scoped_state or Path(os.environ.get('HMB_STATE_DIR') or default_state_dir()).expanduser().resolve()
         if scoped_state is not None:
             os.environ['HMB_STATE_DIR'] = str(scoped_state)
-        if args and args[0] not in {'upgrade','install','--help','-h'}:
+        if args and args[0] not in {'install','--help','-h'}:
             marker = state / 'upgrade.json'
             if marker.exists():
                 from hey_my_buddy.errors import BoardError
