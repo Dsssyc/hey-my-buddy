@@ -12,7 +12,8 @@ def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidat
                    facts: dict, router_trials: list, retry_at: str | None,
                    decision_id: str, run_id: str | None = None, revision: int | None = None,
                    shutdown_confirmed: bool = False, continuation_problem: str | None = None,
-                   target_run_id: str | None = None, helper_policy: str | None = None) -> dict:
+                   target_run_id: str | None = None, helper_policy: str | None = None,
+                   explicit_buddy: bool = False) -> dict:
     """Copy frozen facts and explain the Host's existing operations; start nothing.
 
     The caller computes legality, retry times and actual lineage stop evidence.
@@ -47,6 +48,10 @@ def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidat
             choices.append({"buddyId": candidate["buddyId"], "method": "continue", "params": {
                 **base, "commandId": command_id("continue", index=index, identity=identity),
                 "buddy": identity}})
+        if explicit_buddy:
+            identity = {key: f"<{key}>" for key in BUDDY_FIELDS}
+            choices.append({"buddyId": None, "method": "continue", "params": {
+                **base, "commandId": command_id("continue", identity=identity), "buddy": identity}})
     reroute_blocked = blocked or retry_at is None
     reroute_params = None if reroute_blocked else {
         **base, "commandId": command_id("reroute"), "reroute": True}

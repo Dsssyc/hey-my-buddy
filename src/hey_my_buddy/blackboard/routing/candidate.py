@@ -9,7 +9,7 @@ from .quota_routing import cooling
 
 
 def candidate_bound(connection, candidate, request, now, *, frozen=None,
-                    require_health=True, apply_preferences=True, check_cooling=True):
+                    require_health=True, apply_preferences=True, check_cooling=True, has_pins=None):
     if frozen is not None and any(candidate[key] != frozen[key] for key in schemas.BUDDY_FIELDS):
         return "identity-changed"
     if not candidate["enabled"]:
@@ -28,8 +28,9 @@ def candidate_bound(connection, candidate, request, now, *, frozen=None,
                                         (candidate["buddy_id"],)).fetchone()
         if preference and preference[0] == "exclude":
             return "excluded"
-        pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone()
-        if pins and (not preference or preference[0] != "pin"):
+        if has_pins is None:
+            has_pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone() is not None
+        if has_pins and (not preference or preference[0] != "pin"):
             return "not-pinned"
     if require_health:
         health = connection.execute("SELECT status FROM harness_health WHERE harness=?", (candidate["harness"],)).fetchone()

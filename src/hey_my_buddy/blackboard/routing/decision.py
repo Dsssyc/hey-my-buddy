@@ -128,10 +128,11 @@ class DecisionCoordinator:
         request = {"requiredCapabilities": required_capabilities, "constraints": constraints or {},
                    "codingOnly": coding_only}
         selected, cooling_buddies = [], []
+        has_pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone() is not None
         for row in connection.execute(
             "SELECT p.*,f.note AS preference_note FROM buddies p"
             " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id ORDER BY p.rowid"):
-            bound = candidate_bound(connection, row, request, now)
+            bound = candidate_bound(connection, row, request, now, has_pins=has_pins)
             if bound is None:
                 selected.append(row)
             elif bound == "quota-exhausted":
@@ -604,9 +605,7 @@ class DecisionCoordinator:
         """
         spec = json.loads(task["spec_json"])
         descriptor = decision_spec(spec)
-        row = self._row(connection, descriptor["decisionId"]) if descriptor else None
-        if row is None:
-            return "decision-missing"
+        row = self._row(connection, descriptor["decisionId"])
         if row["status"] != "queued":
             return "decision-closed"
         if row["decision_task_id"] != task["task_id"]:
@@ -746,10 +745,11 @@ class DecisionCoordinator:
     def complete(self, connection: sqlite3.Connection, *, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str) -> dict | None:
         """Validate and publish (or refuse) one decision inside the result transaction.
 
-        The publication runs under a savepoint: a validation failure rolls back to it
-        and settles the decision honestly *inside the same transaction*, so one bad
-        model output can never abort the worker's result commit and turn its durable
-        receipt into an endless retry. The worker receipt remains durable either way.
+        A BoardError rolls publication back to its savepoint and settles the
+        decision inside the result transaction. Programming errors propagate and
+        roll back that transaction: the service returns retryable INTERNAL_ERROR,
+        while the execution retains and redelivers its durable receipt. That
+        receipt can settle only after the programming error is fixed.
         """
         spec = json.loads(task["spec_json"])
         descriptor = decision_spec(spec)

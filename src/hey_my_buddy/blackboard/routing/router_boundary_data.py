@@ -13,6 +13,7 @@ from . import router_history, router_sequence
 from ...protocol import schemas
 from ...protocol.reasons import reason_from_json
 from .router_boundary import build_boundary
+from .candidate import candidate_bound
 
 _CHANGED_CODES = frozenset({
     "router-input-changed",
@@ -52,12 +53,6 @@ def _state(connection, buddy_id, facts, now):
                                        interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
 
 
-def _cached_available(connection, harness):
-    """Cached native health; no native probe during routing observation."""
-    health = connection.execute('SELECT status FROM harness_health WHERE harness=?', (harness,)).fetchone()
-    return health is not None and health['status'] == 'ready'
-
-
 def _quota_recovery(connection, buddy, now):
     """Provider cooling ends at its recorded deadline."""
     from .quota_routing import cooling
@@ -71,7 +66,7 @@ def _preflight_no_answer(connection, item, event, state, now):
                 code=event["payload"].get("code"), retryAt=None)
     buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?",
                                  (item["buddyId"],)).fetchone()
-    if buddy is not None and item["code"] == "router-quota-exhausted":
+    if item["code"] == "router-quota-exhausted":
         _, item["retryAt"] = _quota_recovery(connection, buddy, now)
         if (item["retryAt"] and state.get("inSkipWindow")
                 and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"])):
@@ -116,7 +111,7 @@ def router_trials(connection, row, *, now):
         buddy_id = doc["buddyId"] if doc else inspection.get("buddyId")
         identities = facts.get("routerIdentities") or []
         identity = doc["buddy"] if doc else inspection.get("identity") or (
-            identities[index] if index < len(identities) else None)
+            identities[index])
         state = _state(connection, buddy_id, facts, now) if buddy_id else {}
         item = {"buddyId": buddy_id, "identity": deepcopy(identity), "index": index,
                 "phase": "preflight", "outcome": "unknown", "code": inspection.get("code"),
@@ -143,7 +138,7 @@ def router_trials(connection, row, *, now):
             if item["code"] not in (None, "router-skip-window"):
                 item["retryAt"] = None
                 buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
-                if buddy is not None and item["code"] == "router-quota-exhausted":
+                if item["code"] == "router-quota-exhausted":
                     _, item["retryAt"] = _quota_recovery(connection, buddy, now)
                     if item["retryAt"] and state.get("inSkipWindow") and router_history._parse(state["retryAt"]) > router_history._parse(item["retryAt"]):
                         item["retryAt"] = state["retryAt"]
@@ -279,7 +274,6 @@ def _candidate_problem(connection, candidate, request, run, now):
     if run is not None and run["buddy_locked"]:
         spec = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
         constraints = {**constraints, **schemas.buddy_constraints(_json(spec["spec_json"], {}))}
-    from .candidate import candidate_bound
     bound = candidate_bound(connection, published, {**request, "constraints": constraints}, now, frozen=candidate)
     return {"code": "router-out-of-bounds", "bound": bound} if bound is not None else None
 
@@ -293,9 +287,8 @@ def _retry_at(connection, facts, trials, *, now, kind):
     for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
         identity = (facts.get("routerIdentities") or [])[index]
         buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
-        if identity is None or any(buddy[key] != identity[key] for key in schemas.BUDDY_FIELDS) or not buddy["enabled"] or not buddy["available"]:
-            continue
-        if not _cached_available(connection, buddy["harness"]):
+        if candidate_bound(connection, buddy, {"codingOnly": False}, now,
+                           frozen=identity, apply_preferences=False, check_cooling=False) is not None:
             continue
         quota_blocked, quota_at = _quota_recovery(connection, buddy, now)
         if quota_blocked and quota_at is None:
@@ -329,10 +322,18 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     if row["status"] not in ("needs-host", "failed", "cancelled") and not execution_changed:
         return None
     request = _json(row["requested_json"], {})
-    # Direct sole/explicit selections and no-legal-candidates have their own
-    # program boundary; inventing Router trials would misattribute that path.
-    if request.get("routerCalled") is False or (request.get("routingBasis") or {}).get("candidateCount") == 0:
+    if request.get("routerCalled") is False:
         return None
+    if (request.get("routingBasis") or {}).get("candidateCount") == 0:
+        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id)
+        return build_boundary(
+            kind="routing-changed", code=row["reason_code"],
+            reason=reason_from_json(row["reason_code"], row["reason_params_json"]),
+            candidates=[], facts=request, router_trials=[], retry_at=None, decision_id=row["decision_id"],
+            run_id=owner_run_id or run_id, revision=owner_revision if owner_run_id else revision,
+            target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
+            helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
+            explicit_buddy=True)
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     trials = router_trials(connection, row, now=now)
     code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
