@@ -329,9 +329,14 @@ def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
             observation = _inspect_job_identity(record, source, job)
             if observation != "alive":
                 return observation
-            stopped = job.terminate(timeout=settle_seconds)
-            return ("orphan-stopped" if stopped and source.started_at(record["pid"]) != record["startedAt"]
-                    else "unknown")
+            job.terminate()
+            deadline = time.monotonic() + settle_seconds
+            while True:
+                if job.active() == 0 and source.started_at(record["pid"]) != record["startedAt"]:
+                    return "orphan-stopped"
+                if time.monotonic() >= deadline:
+                    return "unknown"
+                time.sleep(0.05)
     except OSError:
         return "unknown"
 

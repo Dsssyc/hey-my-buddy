@@ -50,29 +50,33 @@ def file_fingerprint(path: str | os.PathLike[str], *, record: bool = False) -> d
     """Return a cheap executable identity or a content-backed manager record identity."""
     try:
         target = Path(path)
+        if record:
+            return _read_record(target)[1]
         if not target.is_file():
             return None
         stat = target.stat()
         fingerprint = {"realPath": str(target.resolve()), "size": stat.st_size,
                        "mtimeNs": stat.st_mtime_ns}
-        if record and stat.st_size <= 4096:
-            with target.open("rb") as stream:
-                content = stream.read(4097)
-            if len(content) != stat.st_size:
-                return None
-            fingerprint["sha256"] = hashlib.sha256(content).hexdigest()
         return fingerprint
     except (OSError, ValueError, RuntimeError, TypeError):
         return None
 
 
-def _record_text(path: Path) -> str | None:
+def _read_record(path: Path) -> tuple[str | None, dict | None]:
+    """Read a record once for both version selection and its content fingerprint."""
+    fingerprint = file_fingerprint(path)
+    if fingerprint is None:
+        return None, None
     try:
-        if path.stat().st_size > 4096:
-            return None
-        return path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        return None
+        content = path.read_bytes()
+    except OSError:
+        return None, None
+    fingerprint["sha256"] = hashlib.sha256(content).hexdigest()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeError:
+        text = None
+    return text, fingerprint
 
 
 def _version_parts(value: str) -> tuple[int, ...] | None:
@@ -116,7 +120,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
     records: list[dict] = []
     roots: list[tuple[str, Path]] = []
     for manager, record, root in specs:
-        fingerprint = file_fingerprint(record, record=True)
+        data, fingerprint = _read_record(record)
         if fingerprint is None and record.is_symlink():
             try:
                 stat = record.lstat()
@@ -127,7 +131,6 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
         records.append({"manager": manager, "path": str(record), "fingerprint": fingerprint})
         if fingerprint is None:
             continue
-        data = _record_text(record)
         if manager == "fnm" and data is None and record.is_symlink():
             try:
                 target = record.resolve()
@@ -146,9 +149,10 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
                     alias = home / ".nvm/alias" / version
                     if not alias.is_file():
                         break
+                    text, alias_fingerprint = _read_record(alias)
                     records.append({"manager": "nvm", "path": str(alias),
-                                    "fingerprint": file_fingerprint(alias, record=True)})
-                    value = (_record_text(alias) or "").strip().splitlines()
+                                    "fingerprint": alias_fingerprint})
+                    value = (text or "").strip().splitlines()
                     version = value[0] if value else None
         elif manager == "asdf":
             version = next((part[1] for line in data.splitlines()
@@ -673,7 +677,7 @@ def _entry_exists(target: Path) -> bool:
 
 
 def _cmd_launch(path: Path) -> ScriptLaunch:
-    text = _record_text(path)
+    text, _ = _read_record(path)
     if text is None:
         raise EntryUnsupported()
     # Recognize npm's literal directory helper as a whole, so assignments

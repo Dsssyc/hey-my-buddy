@@ -94,9 +94,68 @@ class PrivateRootCleanupTests(unittest.TestCase):
         error.winerror = code
         return error
 
+    def test_windows_sharing_violation_retries_until_handles_release(self):
+        with private_state_dir() as root:
+            directory = root / 'retired'
+            directory.mkdir()
+            (directory / 'evidence').write_bytes(b'fixture')
+            rmtree = checks.shutil.rmtree
+            attempts = 0
+
+            def remove(path, *, onexc):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    onexc(os.rmdir, str(path), self.failure(32))
+                rmtree(path, onexc=onexc)
+
+            with (patch.object(checks, 'os', wraps=os) as windows,
+                  patch.object(checks.shutil, 'rmtree', side_effect=remove),
+                  patch.object(checks.time, 'monotonic', side_effect=[100, 100]),
+                  patch.object(checks.time, 'sleep') as sleep):
+                windows.name = 'nt'
+                remove_private_test_root(directory)
+            self.assertEqual(attempts, 2)
+            sleep.assert_called_once_with(0.1)
+            self.assertFalse(directory.exists())
+
+    def test_windows_sharing_violation_deadline_raises_original_error_and_preserves_tree(self):
+        with private_state_dir() as root:
+            directory = root / 'retired'
+            directory.mkdir()
+            evidence = directory / 'evidence'
+            evidence.write_bytes(b'fixture')
+            error = self.failure(32)
+            with (patch.object(checks, 'os', wraps=os) as windows,
+                  patch.object(checks.shutil, 'rmtree', side_effect=error) as remove,
+                  patch.object(checks.time, 'monotonic', side_effect=[100, 159.95, 160]),
+                  patch.object(checks.time, 'sleep') as sleep):
+                windows.name = 'nt'
+                with self.assertRaises(PermissionError) as raised:
+                    remove_private_test_root(directory)
+            self.assertIs(raised.exception, error)
+            self.assertEqual(remove.call_count, 2)
+            self.assertEqual(sleep.call_count, 1)
+            self.assertAlmostEqual(sleep.call_args.args[0], 0.05)
+            self.assertEqual(evidence.read_bytes(), b'fixture')
+
+    def test_other_deletion_errors_and_posix_sharing_errors_raise_without_retry(self):
+        with private_state_dir() as root:
+            for platform, code in [('nt', 5), ('nt', 3), ('nt', None), ('posix', 32)]:
+                with self.subTest(platform=platform, code=code):
+                    error = self.failure(code)
+                    with (patch.object(checks, 'os', wraps=os) as platform_os,
+                          patch.object(checks.shutil, 'rmtree', side_effect=error) as remove,
+                          patch.object(checks.time, 'sleep') as sleep):
+                        platform_os.name = platform
+                        with self.assertRaises(PermissionError) as raised:
+                            remove_private_test_root(root)
+                    self.assertIs(raised.exception, error)
+                    remove.assert_called_once()
+                    sleep.assert_not_called()
+
     def test_other_failures_preserve_the_file_without_deleting_a_link_target(self):
         cases = [
-            {'error': self.failure(32)},
             {'error': self.failure(5), 'attributes': 0},
             {'error': self.failure(5), 'mode': stat.S_IFDIR},
             {'error': self.failure(5), 'mode': stat.S_IFLNK},
@@ -119,7 +178,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
         with private_state_dir() as root:
             path = root / 'object'
             path.write_bytes(b'evidence')
-            error = self.failure(32)
+            error = self.failure(5)
             with self.assertRaises(PermissionError) as raised:
                 self.windows_delete(root, path, self.failure(5), delete_error=error)
             self.assertIs(raised.exception, error)

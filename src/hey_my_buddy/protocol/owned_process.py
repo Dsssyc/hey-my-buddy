@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import subprocess
-import time
 import uuid
 
 from .windows_process import WindowsAPI
@@ -28,7 +27,6 @@ class OwnedJob:
         self.api, self.handle, self.name = api, handle, name
         self.empty_confirmed = False
         self.transferred = False
-        self.termination_requested = False
 
     @contextmanager
     def _reopened(self):
@@ -55,42 +53,13 @@ class OwnedJob:
     def members(self):
         return self.api.process_ids(self.handle)
 
-    def wait(self, timeout):
-        """A forced Job must signal completion after its members' resource rundown.
-
-        Natural exits do not signal a Job. TerminateJobObject does, after its
-        asynchronous termination has finished; accounting can reach zero first.
-        """
-        def observed(handle):
-            return ((not self.termination_requested or self.api.wait_job(handle, timeout))
-                    and self.api.active(handle) == 0)
-        if self.handle is not None:
-            return observed(self.handle)
-        if self.empty_confirmed:
-            return True
-        if not self.transferred:
-            return False
-        with self._reopened() as handle:
-            return handle is None or observed(handle)
-
-    def terminate(self, *, timeout=2.0):
-        self.termination_requested = True
+    def terminate(self):
         if self.handle is not None:
             self.api.terminate(self.handle)
-            try:
-                return self.wait(timeout)
-            except OSError:
-                return False
         elif self.transferred and not self.empty_confirmed:
             with self._reopened() as handle:
                 if handle is not None:
                     self.api.terminate(handle)
-                    try:
-                        return self.api.wait_job(handle, timeout) and self.api.active(handle) == 0
-                    except OSError:
-                        return False
-                return True
-        return self.empty_confirmed
 
     def close(self, *, confirmed=False):
         if self.handle is not None:
@@ -206,14 +175,13 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None,
         stopped = True
         if process is not None:
             try:
-                deadline = time.monotonic() + 2
                 if assigned:
-                    job.terminate(timeout=max(0, deadline - time.monotonic()))
+                    job.terminate()
                 else:
                     process.kill()  # Popen's held process handle, never a persisted PID.
-                process.wait(timeout=max(0, deadline - time.monotonic()))
+                process.wait(timeout=2)
                 if assigned:
-                    stopped = job.wait(max(0, deadline - time.monotonic()))
+                    stopped = job.active() == 0
             except (OSError, subprocess.TimeoutExpired):
                 stopped = False
         if job is not None:
