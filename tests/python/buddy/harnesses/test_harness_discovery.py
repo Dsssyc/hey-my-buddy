@@ -55,10 +55,29 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 snapshot = discovery.candidate_snapshot("codex", manual_path=str(cli),
                                                         environment={"PATH": str(bin_dir), "OPENAI_API_KEY": "secret"})
             self.assertEqual(snapshot["candidates"][0]["source"], "manual")
-            self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery._content_fingerprint(cli))
-            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery._content_fingerprint(record))
+            self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery.file_fingerprint(cli))
+            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record))
             self.assertNotIn("secret", str(snapshot))
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
+
+    def test_position_scan_uses_stat_without_opening_candidate_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bin_dir = home / 'bin'
+            bin_dir.mkdir()
+            for name in ('codex', 'node'):
+                (bin_dir / name).write_text('fixture')
+            with patch.object(discovery, '_home', return_value=home), \
+                 patch.object(discovery, '_manager_records', return_value=([], [])), \
+                 patch.object(discovery, '_common_dirs', return_value=[]), \
+                 patch.object(discovery, '_app_paths', return_value=[]), \
+                 patch.object(Path, 'open', side_effect=AssertionError('Position scans must not read candidate bytes')):
+                snapshot = discovery.candidate_snapshot('codex', environment={'PATH': str(bin_dir)})
+                self.assertTrue(discovery.location_fingerprint(snapshot))
+            fingerprints = [item['fingerprint'] for item in snapshot['candidates'] if item['exists']]
+            fingerprints += [item['fingerprint'] for item in snapshot['nodeCandidates'] if item['fingerprint']]
+            self.assertTrue(fingerprints)
+            self.assertTrue(all(set(value) == {'realPath', 'size', 'mtimeNs'} for value in fingerprints))
 
     def test_manual_failure_falls_through_and_manager_version_wins(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -154,14 +173,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("node", environment={"PATH": ""})
-                stamp = record.stat()
                 record.write_text("v24.0.0")
-                os.utime(record, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
                 second = discovery.candidate_snapshot("node", environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
-    def test_location_fingerprint_ignores_empty_paths_but_tracks_present_order_and_content(self):
+    def test_location_fingerprint_ignores_empty_paths_but_tracks_present_order_and_file_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             a, b, empty = (home / name for name in ('a', 'b', 'empty'))
@@ -183,12 +200,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 appeared = fingerprint(a, b)
                 self.assertNotEqual(missing, appeared)
                 self.assertEqual(appeared, fingerprint(empty, b, a))
-                # Same size and restored timestamp must still reveal changed bytes.
-                stamp = cli.stat()
-                os.utime(cli, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1000000000))
-                self.assertEqual(appeared, fingerprint(a, b))
-                cli.write_text('two')
-                os.utime(cli, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                cli.write_text('changed-size')
                 changed = fingerprint(a, b)
                 self.assertNotEqual(appeared, changed)
                 (b / 'codex').write_text('other')

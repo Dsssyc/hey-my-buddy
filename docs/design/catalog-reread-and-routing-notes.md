@@ -6,9 +6,13 @@
 
 `candidate_snapshot` 保留候选、空位置、来源、版本管理器记录和 Node 候选的完整诊断列表；`discover` 的选取与控制台诊断仍使用这份列表。新增 `location_fingerprint` 只把存在的 harness 与 Node 候选按原有顺序、连同版本管理器记录送入哈希，健康检查使用它；原有 `scanFingerprint` 继续标识完整诊断快照。选择在哈希入口投影，是为了避免让位置缓存的判据改变诊断列表的含义。
 
-扫描中的文件身份在 realPath、size、mtimeNs 之外加入 SHA-256 内容摘要；位置哈希排除 mtimeNs，所以单纯 touch 不重建健康记录，同大小且还原时间戳的内容修改仍被发现。版本管理器记录也读内容摘要；指向目录的 fnm 符号链接继续用链接及其目标身份。缺席的固定管理器记录仍在列表中，因此记录出现、消失或改变目标同样改变指纹。原有 `file_fingerprint` 保留命令绑定的 stat 身份，内容摘要仅用于扫描，不扩大其他命令环境或运行路径的读取。
+文件和版本管理器记录使用原有 `file_fingerprint`，字段仍是 realPath、size、mtimeNs，扫描只读 stat 身份，不读可执行文件内容。指向目录的 fnm 符号链接继续用链接及其目标身份；缺席的固定管理器记录仍在列表中，因此记录出现、消失或改变目标同样改变指纹。touch 会引起一次重新检测与目录重读，重读未改变评价表内容时版本保持；同大小且还原时间戳的字节修改不在这一 stat 判据的保证范围内。
 
-原先截断完整候选列表和 Node 列表的 96 项上限已移到 `discover` 排序后的存在候选上，最多握手 96 个存在的文件，20 秒总时限、单次五秒时限和 12 项公开诊断上限继续生效；完整位置哈希包含全部存在候选，空目录不会挤掉后面的文件。服务的 `add_path_hint` 原来还会按目录截断前 64 项，同样会让大量空目录挤掉已有可执行位置，因此去掉该截断；单次 PATH 输入的 32768 字符边界、绝对路径筛选、去重、最新线索优先和只保留在内存的做法继续生效，未改协议中的线索清除或持久化行为。代价是扫描要对全部候选做文件检查与摘要读取，进程存活期间会保留全部去重后的 PATH 目录线索；实际安装上的扫描开销尚未测量。
+完整候选列表和 Node 列表不因空位置占用名额而被截断；96 项上限作用于 `discover` 排序后的存在候选，最多握手 96 个存在的文件，20 秒总时限、单次五秒时限和 12 项公开诊断上限继续生效。完整位置哈希包含全部存在候选，空目录不会挤掉后面的文件。
+
+服务的 `add_path_hint` 最多记住 64 个有效目录；`has_candidate` 复用发现的候选名字和 Windows 后缀规则，逐个用 stat 核对目录当前是否含 dsh、zcode、codex、claude 或 Node 文件，空目录、其他名字与同名目录不占名额。已收录目录保持首次发现的先后，新目录只追加，收录由锁串行化；别的调用方不会重排或覆盖已有线索。重复调用无需重新核对已记住的目录，达到上限后停止收录和额外检查，不让服务运行时长决定列表长度。单次 PATH 输入的 32768 字符边界、绝对路径筛选、去重和只保留在内存的做法继续生效，未改协议中的线索清除或持久化行为。
+
+这项线索收录的取舍是：只来自 caller PATH、当时没有候选文件的目录不会被扫描或显示在服务诊断中，之后出现文件要等另一次提供该目录的调用才会收录；已记住的目录即使后来文件消失仍保留，可以看到消失及重新出现，仍占用一个名额。64 项之后的新有效线索被忽略，Host 可通过手动路径明确选择它；服务自己的 PATH、固定位置、版本管理器和 app 候选仍按原规则发现。两个调用方各有一份有效 CLI 时，第一次收录两者可以引起必要的重新检测，此后交替调用不改变顺序；第一位有效 CLI 不再随最近一次调用方切换。同层级与同版本候选的选择沿用 `discover` 的规则，只把其中 PATH 线索的先后改为首次发现顺序。直接调用 `candidate_snapshot` 或 `discover` 的调用方仍得到它提交的完整候选列表，控制台仍展示实际探测过的有界诊断。
 
 已有健康行里的旧位置哈希不会被解释或迁移，升级后的第一次扫描可能重新检测一次并写入新哈希，之后使用同一个判据；这一轮相同目录读取不会再推进评价表版本。没有新增兼容读法或 schema 字段。
 
@@ -16,7 +20,7 @@
 
 `catalog_store.record` 在同一写事务内比较记录前后的 `evaluation_profiles` 行内容与按 adapter/provider/model 排序的完整 `catalog_pending` 行。profile 的身份、可用性及原因、启用状态、标签、能力、上下文窗口、说明都纳入比较；仅排除 `source`、`created_revision`、`updated_revision`，其中 `source` 是 `catalog:<discovery_id>` 的读取归属指针。行真正变化才写本次 `updated_revision`，新增行的创建 revision 仍是本次 revision；未变化的行保留原 revision，避免每次重读改变 `newlyDiscovered` 标记。
 
-新增模型、模型第一次缺席、缺席超过确认期后的停用、待确认或已停用模型恢复、模型仍在但努力档位消失，以及 metadata 或可用原因变化，都会推进一次 table revision。重复的待确认缺席在一小时内不推进，已确认停用后继续缺席也不推进；相同 discovery_id 在确认期结束后仍可改变表，因此不能用 discovery_id 相同直接跳过处理。一次读取涉及多个 harness 时仍只发布一次表修订，修订里的 `profiles` 数量改为实际内容变化的行数，只有 pending 改变时这个数量可以是 0。
+新增模型、模型第一次缺席、缺席超过确认期后的停用、待确认或已停用模型恢复、模型仍在但努力档位消失，以及 metadata 或可用原因变化，都会推进一次 table revision。重复的待确认缺席在一小时内不推进，已确认停用后继续缺席也不推进；相同 discovery_id 在确认期结束后仍可改变表，因此不能用 discovery_id 相同直接跳过处理。一次读取涉及多个 harness 时仍只发布一次表修订；`evaluation_revisions.counts_json.profiles` 保持已有存储含义，是本次采信并应用的读取条目数，包括内容没变的条目，不含缺席条目。不存储内容变化行数，也不增加计数键；是否发布修订继续按行内容与 pending 的比较决定。
 
 采信与版本判据各自执行：不被采信的读取仍记录 unknown 观察并保留已有目录，不更新确认读取时间；如果没有改变 profile 或 pending，不发布修订或任何事件。ADR-027 现有的保留目录恢复路径仍执行，所以一次 unknown 读取若恢复了先前因健康故障被置为不可用的行，也会推进 revision。晚到的读取仍受 observation 次序及健康 generation fencing 约束，不覆盖较新的事实。
 
@@ -44,7 +48,7 @@
 
 ## 验证记录与 Host 后续验证
 
-最终源码的 13 个受影响测试文件共 341 项通过，命令退出码 0，耗时 38.031 秒；`git diff --check` 通过。测试覆盖路径空位置顺序与长 PATH、候选出现/同大小改字节并恢复时间戳/消失、存在候选换序、管理器记录改变、邻接 Node 改变、服务交替线索不重建健康与目录不重读、观察/确认时间、metadata、增减模型及确认/恢复、未采信和晚到读取、努力档位停用、冻结与两道检查、Host 边界、故障切换以及两类并发发布。本地测试使用 Host 指定的现成只读解释器，源代码优先，清除继承的 runtime/Worker/agent 凭据变量，禁用 pyc 写入，未使用 uv 或安装依赖。
+最终源码的 13 个受影响测试文件共 347 项通过；本次先合并运行 346 项，退出码 0、耗时 35.928 秒，再为候选不读文件内容和目录后来出现文件补充断言，仅重跑改过的 discovery 文件（44 项、5.887 秒）与 harness_health 文件（37 项、3.703 秒），均退出码 0。`git diff --check` 通过。测试覆盖路径空位置顺序与长 PATH、候选出现/stat 可识别的修改/消失、存在候选换序、管理器记录改变、邻接 Node 改变、线索上限及首次发现顺序、两个各有独立 CLI 的调用方交替不重建健康与不重读目录、stat 变化引起重读而内容未变的评价表版本保持、观察/确认时间、metadata、增减模型及确认/恢复、未采信和晚到读取、努力档位停用、读取条目计数、冻结与两道检查、Host 边界、故障切换以及两类并发发布。本地测试使用 Host 指定的现成只读解释器，源代码优先，清除继承的 runtime/Worker/agent 凭据变量，禁用 pyc 写入，未使用 uv 或安装依赖。
 
 运行模块如下，实际命令是在仓库根目录以 `env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT PYTHONPATH=src:tests/python PYTHONDONTWRITEBYTECODE=1 "$PYTHON" -m unittest` 加上下列模块；`$PYTHON` 指向任务给出的现成解释器。
 
@@ -64,7 +68,7 @@ blackboard.routing.test_router_failover_integration
 blackboard.evaluation.test_evaluation
 ```
 
-这些文件全部能使用私有 SQLite、进程内服务与合成 CLI 跑完，没有因沙盒跳过的受影响测试。DSH discovery 测试中“stop unconfirmed; private directory retained”是故意保留未确认停止证据的 fixture 诊断，整个文件通过；未将这条输出当成真实 harness 验证。首次验证失败来自旧测试快照缺少新位置投影需要的结构、一个测试调用了错误的 lifecycle 方法名，以及复用同一个私有看板的 writer requestId；都已修正并在最终测试中通过，没有保留旧的“每次读取推进 revision”断言或注释。
+这些文件使用私有 SQLite、进程内服务与合成 CLI，不涉及真实 harness 调用。DSH discovery 测试中“stop unconfirmed; private directory retained”是故意保留未确认停止证据的 fixture 诊断，未将这条输出当成真实 harness 验证。被取代的“每次读取推进 revision”注释与内容哈希辅助函数已删除，扫描测试保留 stat 能识别的变化；新增回归覆盖线索上限、空目录不占名额、有效目录首次发现顺序、不同 CLI 调用方交替不重读，以及修订 `profiles` 的原有含义。
 
 完整 check suite、安装/冷启动及真实 harness 回合与故障注入留给 Host，不由 Worker 执行；需要真实启动器、服务或共享内存的 `tests/python/install/test_launcher.py`、`tests/python/install/test_upgrade_service.py` 与 `tests/python/buddy/harnesses/test_c_two_live.py` 由 Host 在其允许这些能力的环境运行。Frontend 和浏览器测试本批未运行，未修改 `apps/console`。Host 仍需在私有服务重跑已有 PATH 交替实验，并核对首次采用目录后的 revision 保持、没有新的目录 observation、健康 revision 没有被线索变化推进；超过六小时或强制刷新可以产生新 observation，但相同内容仍不改变 table revision。源码修改不证明已安装服务的行为，验收应绑定实际候选安装。
 
@@ -104,6 +108,6 @@ with TemporaryDirectory(prefix='catalog-change-check-') as directory:
 
 ## 留给 Host 的文档更新
 
-`docs/reference/harnesses.md` 的 Local discovery / Health and execution，以及 `docs/reference/operations.md` 的 Harness discovery 中以 real target、size、modification time 描述服务位置判据的段落需要区分新的内容与存在候选顺序哈希和原有命令 stat 绑定；补充空位置不会引起重读。`docs/reference/architecture.md` 的 Local discovery and installation 可补充同一语义。
+`docs/reference/harnesses.md` 的 Local discovery / Health and execution，以及 `docs/reference/operations.md` 的 Harness discovery 需要补充“空位置不会改变位置指纹”，并说明 PATH 线索只收录含候选文件的目录、最多 64 项且按首次发现顺序排列；real target、size、modification time 的 stat 判据继续成立。`docs/reference/architecture.md` 的 Local discovery and installation 可补充同一语义。
 
 `docs/reference/evaluation.md` 的 Discover and enable profiles、更新记录与草稿并发说明需要明确“读取观察与内容修订不同”：每次照常记录观察，实际表内容改变才发布目录修订，来源指针不算改变。`docs/reference/decision.md` 的共享冻结与 Host 边界说明需要补充 tableRevision 的内容含义及 `router-table-changed` 的显式 reroute 理由。这些页未改；README 与共享 skill 没有找到本批需要删除的“每次读取都加一”文字，不因这次修改扩大它们的内容。ADR-027 规则本身未变。

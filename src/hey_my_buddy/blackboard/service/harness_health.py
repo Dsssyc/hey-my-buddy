@@ -14,6 +14,7 @@ from ...errors import BoardError
 HARNESSES = ('dsh', 'zcode', 'codex', 'claude')
 SCAN_SECONDS = 180
 READY_SECONDS = 3600
+MAX_PATH_HINTS = 64
 
 
 def _later(seconds):
@@ -80,13 +81,22 @@ class HarnessHealth:
         self._closed = False
         self._thread = None
         self._path_hints = ()
+        self._path_hint_lock = threading.Lock()
 
     def add_path_hint(self, path):
         """PATH is an ephemeral low-priority hint, never a stored environment."""
         if not isinstance(path, str) or len(path) > 32768:
             return
-        parts = [part for part in path.split(os.pathsep) if part and Path(part).is_absolute()]
-        self._path_hints = tuple(dict.fromkeys([*parts, *self._path_hints]))
+        from ...buddy.harnesses.discovery import has_candidate
+        parts = dict.fromkeys(part for part in path.split(os.pathsep) if part and Path(part).is_absolute())
+        with self._path_hint_lock:
+            hints = list(self._path_hints)
+            for part in parts:
+                if len(hints) == MAX_PATH_HINTS:
+                    break
+                if part not in hints and has_candidate(Path(part)):
+                    hints.append(part)
+            self._path_hints = tuple(hints)
 
     def environment(self):
         if not self._path_hints:

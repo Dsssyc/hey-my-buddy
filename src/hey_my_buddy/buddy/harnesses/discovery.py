@@ -51,19 +51,6 @@ def file_fingerprint(path: str | os.PathLike[str]) -> dict | None:
         return None
 
 
-def _content_fingerprint(path: str | os.PathLike[str]) -> dict | None:
-    """Content identity for the location scan; command binding keeps its stat identity."""
-    fingerprint = file_fingerprint(path)
-    if fingerprint is None:
-        return None
-    try:
-        with Path(path).open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    except OSError:
-        return None
-    return {**fingerprint, "sha256": digest}
-
-
 def _record_text(path: Path) -> str | None:
     try:
         if path.stat().st_size > 4096:
@@ -113,7 +100,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
     records: list[dict] = []
     roots: list[tuple[str, Path]] = []
     for manager, record, root in specs:
-        fingerprint = _content_fingerprint(record)
+        fingerprint = file_fingerprint(record)
         if fingerprint is None and record.is_symlink():
             try:
                 stat = record.lstat()
@@ -149,7 +136,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
                     if not allowed:
                         break
                     records.append({"manager": "nvm", "path": str(alias),
-                                    "fingerprint": _content_fingerprint(alias)})
+                                    "fingerprint": file_fingerprint(alias)})
                     value = (_record_text(alias) or "").strip().splitlines()
                     version = value[0] if value else None
         elif manager == "asdf":
@@ -226,6 +213,12 @@ def _variants(directory: Path, name: str) -> list[Path]:
     return [directory / name]
 
 
+def has_candidate(directory: Path) -> bool:
+    """Whether this PATH directory currently holds a harness or Node candidate."""
+    return any(file_fingerprint(path) is not None for name in _NAMES.values()
+               for path in _variants(directory, name))
+
+
 def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
                        environment: dict | None = None) -> dict:
     """Full candidate diagnostics and file identities, with PATH as a clue."""
@@ -253,7 +246,7 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
         if label in seen:
             continue
         seen.add(label)
-        fingerprint = _content_fingerprint(path)
+        fingerprint = file_fingerprint(path)
         candidates.append({"path": label, "source": source, "exists": fingerprint is not None,
                            "fingerprint": fingerprint})
     snapshot = {"adapter": adapter, "managerRecords": records, "candidates": candidates}
@@ -267,7 +260,7 @@ def candidate_snapshot(adapter: str, *, manual_path: str | None = None,
             if str(path) in seen_nodes:
                 continue
             seen_nodes.add(str(path))
-            snapshot["nodeCandidates"].append({"path": str(path), "fingerprint": _content_fingerprint(path)})
+            snapshot["nodeCandidates"].append({"path": str(path), "fingerprint": file_fingerprint(path)})
     return snapshot
 
 
@@ -278,15 +271,10 @@ def _scan_hash(snapshot: dict) -> str:
 
 def location_fingerprint(snapshot: dict) -> str:
     """Hash what discovery can find, retaining the order of present candidates."""
-    def identity(item):
-        fingerprint = item["fingerprint"]
-        return {**item, "fingerprint": {key: value for key, value in fingerprint.items()
-                                      if key != "mtimeNs"} if fingerprint is not None else None}
-
     return _scan_hash({"adapter": snapshot["adapter"],
-                       "managerRecords": [identity(item) for item in snapshot["managerRecords"]],
-                       "candidates": [identity(item) for item in snapshot["candidates"] if item["exists"]],
-                       "nodeCandidates": [identity(item) for item in snapshot.get("nodeCandidates", [])
+                       "managerRecords": snapshot["managerRecords"],
+                       "candidates": [item for item in snapshot["candidates"] if item["exists"]],
+                       "nodeCandidates": [item for item in snapshot.get("nodeCandidates", [])
                                           if item["fingerprint"] is not None]})
 
 

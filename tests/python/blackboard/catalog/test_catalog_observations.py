@@ -1,5 +1,6 @@
 """Current native facts change without replacing user history or accepting late results."""
 from copy import deepcopy
+import json
 from unittest.mock import patch
 from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.catalog import catalog_store
@@ -58,6 +59,23 @@ class CatalogObservationTests(BoardTestCase):
             row = db.execute('SELECT source,created_revision,updated_revision FROM evaluation_profiles').fetchone()
         self.assertEqual(row['source'], 'catalog:' + second['discoveryId'])
         self.assertEqual(row['created_revision'], row['updated_revision'])
+
+    def test_catalog_revision_profile_count_keeps_the_number_of_entries_in_the_applied_reading(self):
+        payload = catalog(models=('alpha', 'beta'))
+        self.record(payload)
+        payload['providers'][0]['models'][0]['name'] = 'changed alpha'
+        changed = self.record(payload)
+        missing = deepcopy(payload)
+        missing['providers'][0]['models'].pop()
+        pending = self.record(missing)
+        with self.e.db.read() as db:
+            changed_counts = json.loads(db.execute('SELECT counts_json FROM evaluation_revisions WHERE revision=?',
+                                                  (changed['tableRevision'],)).fetchone()[0])
+            pending_counts = json.loads(db.execute('SELECT counts_json FROM evaluation_revisions WHERE revision=?',
+                                                  (pending['tableRevision'],)).fetchone()[0])
+        self.assertEqual(changed_counts['profiles'], 2, 'The unchanged beta row still belongs to this reading')
+        self.assertEqual(pending_counts['profiles'], 1, 'The absent beta row is outside this reading')
+        self.assertEqual(set(changed_counts), {'profiles', 'observationId', 'provided'})
 
     def test_metadata_fields_each_advance_one_revision(self):
         payload = catalog()
