@@ -8,6 +8,7 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
+from ...private_dirs import directory_mode
 from ...paths import is_absolute_path
 from ... import locking
 from ... import private_dirs, private_files
@@ -304,7 +305,9 @@ def _write_objects(root, objects):
     # marks must reproduce the computed object numbers, so the write semantics
     # stay hash-object's. Blob commands create no ref, branch, tag or stash.
     # https://git-scm.com/docs/git-fast-import
-    with tempfile.TemporaryDirectory(prefix="hey-my-buddy-objects-") as directory:
+    with ExitStack() as cleanup:
+        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-objects-")
+        cleanup.callback(private_dirs.remove_tree, directory)
         marks = Path(directory) / "marks"
         with tempfile.TemporaryFile() as diagnostics, tempfile.TemporaryFile() as output:
             command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
@@ -488,7 +491,9 @@ def _stable_observation(root, selected, *, write=False, require_selected=False):
 def _tree(root, entries):
     # A private index builds raw blob trees without filters or changes to the
     # source index. https://git-scm.com/docs/git-update-index#_using_index_info
-    with tempfile.TemporaryDirectory(prefix="hey-my-buddy-index-") as directory:
+    with ExitStack() as cleanup:
+        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-")
+        cleanup.callback(private_dirs.remove_tree, directory)
         environment = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
         _git(root, "read-tree", "--empty", env=environment)
         records = b"".join(mode.encode() + b" " + oid.encode() + b"\t" + os.fsencode(path) + b"\0"
@@ -517,7 +522,7 @@ def _read(path, *, repository=None):
     try:
         if _WINDOWS and repository is not None:
             return windows_paths.read(path, repository=repository)
-        with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY, check_parents=False), "rb") as stream:
+        with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
         return None
@@ -538,15 +543,13 @@ def _write_once(path, data, *, repository=None):
         windows_paths.write_once(path, data, repository=repository)
         return
     with windows_paths.artifact_publication(path):
-        private_files.publish_bytes(path, data, immutable=True,
-                                    open_file=None if _WINDOWS else
-                                    lambda entry, flags, mode: os.open(entry, flags | os.O_NOFOLLOW, mode))
+        private_files.publish_bytes(path, data, immutable=True)
 
 
 @contextmanager
 def _lock(directory, *, create=True):
     flags = os.O_RDWR | (os.O_CREAT if create else 0)
-    descriptor = private_dirs.open_regular_fd(directory / ".lock", flags, check_parents=False)
+    descriptor = private_dirs.open_regular_fd(directory / ".lock", flags)
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -610,14 +613,14 @@ def _actor_identity(value, label, roles=("host", "lead", "console")):
 
 
 def _mkdir(path):
-    path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
+    path.mkdir(mode=directory_mode(), exist_ok=True)
 
 
 def _workspace_directory(state_dir, request_id):
     if not isinstance(request_id, str) or not request_id or "\0" in request_id:
         raise BoardError("INVALID_WORKSPACE", "request_id must be a nonempty stable identity")
     state_dir = Path(state_dir).resolve()
-    state_dir.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
+    state_dir.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
     workspace_id = "ws-" + _sha(_json([str(state_dir), request_id]))[:32]
     _mkdir(state_dir / "workspaces")
     directory = state_dir / "workspaces" / workspace_id
@@ -951,7 +954,7 @@ def submission_revoke_plan(state_dir, manifest):
         if not _workspace_identifier(manifest["workspaceId"]):
             raise BoardError("WORKSPACE_UNSAFE", "The submission workspace identity is invalid")
         directory = state / "workspaces" / manifest["workspaceId"]
-        if private_dirs.linked_component(directory) is not None:
+        if private_dirs.linked(directory):
             raise BoardError("WORKSPACE_UNSAFE", "The rejected submission's private directory is linked")
         if _record(directory / "manifest.json") != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "The rejected submission's snapshot changed before removal")

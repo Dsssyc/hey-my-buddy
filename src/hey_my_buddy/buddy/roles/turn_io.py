@@ -3,18 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import stat
-import sys
-import secrets
 from pathlib import Path
 from typing import Callable
 
-from ...private_files import publish_bytes
+from ...private_files import publish_bytes, open_read
 from ...errors import BoardError
 from ...protocol.usage import MAX_ASSISTANT_MESSAGE_BYTES
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
-from ...private_dirs import context_root, ensure_private_dir, linked
+from ...private_dirs import context_root, ensure_private_dir
 from ..harnesses.base import ExecutionContext
 from ..harnesses.session_receipts import MAX_OUTCOME_BYTES  # noqa: F401 - the shared byte bound
 
@@ -28,62 +24,14 @@ def input_hash(value: dict) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
-def guard_private_path(path: Path) -> Path:
-    """Inspect every component without resolving away a hostile link/reparse point."""
-    path = Path(path).absolute()
-    # Only canonicalize the macOS root aliases, as the private-directory API does.
-    if sys.platform == "darwin" and len(path.parts) > 1 and path.parts[1] in ("var", "tmp"):
-        path = Path("/private", *path.parts[1:])
-    if os.name == 'nt':
-        return path
-    for component in (*reversed(path.parents), path):
-        if linked(component):
-            raise BoardError("PRIVATE_PATH_UNSAFE", "Private path contains a linked component", path=str(component))
-    return path
-
-
 def private_json(path: Path, value: object, *, exclusive: bool = False) -> None:
-    """Publish ordinary JSON without following links, including any parent component."""
-    _private_bytes(path, canonical_json(value).encode(), exclusive=exclusive)
-
-
-def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
-    if os.name == "nt":
-        publish_bytes(path, raw, immutable=exclusive)
-        return
-    path = guard_private_path(path)
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        if not stat.S_ISREG(metadata.st_mode):
-            raise BoardError("PRIVATE_PATH_UNSAFE", "Private artifact target is not a regular file", path=str(path))
-    parent = None
-    # Pin each POSIX directory without following links so a replacement after the
-    # component checks cannot redirect the temporary file or its publication.
-    if os.name != "nt":
-        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        parent = os.open(path.anchor, flags)
-        try:
-            for part in path.parent.parts[1:]:
-                child = os.open(part, flags, dir_fd=parent)
-                os.close(parent)
-                parent = child
-        except BaseException:
-            os.close(parent)
-            raise
-    try:
-        publish_bytes(path, raw, immutable=exclusive, directory_fd=parent,
-                      validate=guard_private_path if parent is None else None)
-    finally:
-        if parent is not None:
-            os.close(parent)
+    """Publish a complete private JSON fact through the shared publisher."""
+    publish_bytes(path, canonical_json(value).encode(), immutable=exclusive)
 
 
 def prepare_turn(context: ExecutionContext) -> None:
     ensure_private_dir(context.directory)
-    _private_bytes(context.task_file(), context.spec["task"].encode())
+    publish_bytes(context.task_file(), context.spec["task"].encode())
     write_turn_files(context)
     verify_workspace(context)
 
@@ -213,7 +161,7 @@ def read_turn(context: ExecutionContext, shutdown_confirmed: bool, exit_code: in
     if not shutdown_confirmed:
         return None, "runner shutdown is not confirmed, so no turn outcome is imported"
     try:
-        with context.turn_output_file().open("rb") as stream:
+        with open_read(context.turn_output_file()) as stream:
             raw = stream.read(MAX_RECORD_BYTES + 1)
         if len(raw) > MAX_RECORD_BYTES:
             return None, "the turn record exceeds its byte bound"

@@ -55,7 +55,8 @@ def load_fixture(state: Path) -> dict:
     if state.is_symlink() or (state.exists() and (not state.is_dir() or any(state.iterdir()))):
         raise ValueError("Fixture destination must be an absent or empty private directory")
     state = state.resolve()
-    state.mkdir(parents=True, exist_ok=True)
+    from hey_my_buddy.private_dirs import ensure_private_dir
+    ensure_private_dir(state)
     fixture_root = state / "fixture-root"
     repository = fixture_root / "repository"
     repository.mkdir(parents=True)

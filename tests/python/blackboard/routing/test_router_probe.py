@@ -86,7 +86,8 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         RunResult)
     from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
     from hey_my_buddy.buddy.roles import run_execution
-    from hey_my_buddy.buddy.roles.turn_io import _private_bytes, canonical_json, guard_private_path
+    from hey_my_buddy.buddy.roles.turn_io import canonical_json
+    from hey_my_buddy.private_files import publish_bytes
     from hey_my_buddy.private_dirs import context_root, ensure_private_dir
 
     ensure_private_dir(context.directory)
@@ -113,8 +114,6 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
                     "nativeReceipt": native_receipt, "elapsedMs": elapsed_ms},
     }
     control.update(invocationId=identity.invocation_id)
-    for log_path in context.log_paths().values():
-        guard_private_path(Path(log_path))
     # —— 原生运行替身：真实角色请求构造器，随后直接交对象 ——
     built_request, _services, _observer, _correction = run_execution.review_request(control, None)
     if mutation:
@@ -133,7 +132,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     evidence_refs = ()
     if native_receipt is not None:
         receipt_path = private / "native-receipt.json"
-        _private_bytes(receipt_path, canonical_json(native_receipt).encode(), exclusive=True)
+        publish_bytes(receipt_path, canonical_json(native_receipt).encode(), immutable=True)
         raw = receipt_path.read_bytes()
         evidence_refs = (EvidenceRef(kind="review-thread-receipt", location=str(receipt_path),
                                      size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()),)

@@ -116,7 +116,7 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_missing_ipc_is_a_direct_read_only_condition(self):
         with patch.object(transport, "_read_endpoint", return_value=self.endpoint), patch.object(transport, "_request") as request:
-            self.assertIsNone(transport._healthy(self.root / "absent"))
+            self.assertIsNone(transport._attach_read_only(self.root / "absent"))
             request.assert_not_called()
 
     def test_windows_attach_does_not_require_a_posix_ipc_directory(self):

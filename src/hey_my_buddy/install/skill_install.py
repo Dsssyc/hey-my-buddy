@@ -154,6 +154,12 @@ def install(params: dict) -> dict:
     if os.name == 'nt':
         from ..windows_files import validate_state_root
         validate_state_root(state, create=True)
+    else:
+        from ..private_dirs import ensure_private_dir
+        from ..protocol.transport import _trusted_directory
+        ensure_private_dir(state)
+        if not _trusted_directory(state):
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'State directory must be owner-private with trusted ancestors')
     from .runtime import runtime_root
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION

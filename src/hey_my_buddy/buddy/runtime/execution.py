@@ -898,7 +898,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--startup", required=True)
     args = parser.parse_args()
-    from ..roles.turn_io import guard_private_path
     from ...private_dirs import open_regular_fd
     with os.fdopen(open_regular_fd(Path(args.startup), os.O_RDONLY), 'rb') as stream:
         material = decode_strict_json(stream.read())

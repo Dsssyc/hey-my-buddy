@@ -210,7 +210,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                 blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
                 continue
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked_component(repository) is not None
+            if (private_dirs.linked(repository)
                     or workspace._identity(repository) != manifest["repositoryId"]):
                 skipped.append(_skip("allocation", str(directory), "REPOSITORY_CHANGED", identifier))
                 blocked.add((manifest["repositoryId"], manifest["checkoutId"]))
@@ -244,7 +244,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
             continue
         if not directory.exists() and not directory.is_symlink():
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked_component(repository) is not None
+            if (private_dirs.linked(repository)
                     or workspace._identity(repository) != manifest["repositoryId"]):
                 skipped.append(_skip("ref", _PREFIX + identifier + "/", "REPOSITORY_CHANGED", identifier))
                 continue
@@ -264,7 +264,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict]) -> li
                 skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
                 continue
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            if (private_dirs.linked_component(repository) is not None
+            if (private_dirs.linked(repository)
                     or workspace._identity(repository) != manifest["repositoryId"]):
                 skipped.append(_skip("allocation", str(directory), "REPOSITORY_CHANGED", identifier))
                 continue

@@ -504,9 +504,9 @@ class PlainEvidenceReadTests(unittest.TestCase):
         self.path.write_bytes(b'{"status": "ok"}')
         self.assertEqual(controller.read_plain_evidence(self.path), {"status": "ok"})
         linked = self.root / "linked"
-        linked.symlink_to(self.root / "outside", target_is_directory=True)
+        linked.symlink_to(self.path)
         with self.assertRaises(BoardError):
-            controller.read_plain_evidence(linked / "request.json")
+            controller.read_plain_evidence(linked)
 
     def test_router_read_enforces_bound_on_open_file(self):
         from hey_my_buddy.errors import BoardError

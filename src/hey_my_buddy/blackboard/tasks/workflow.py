@@ -5988,11 +5988,12 @@ class WorkflowCoordinator:
         if row is None or row["adapter"] not in ("codex", "dsh"):
             return {}
         from ...private_dirs import attempt_root, native_root
-        from ...buddy.roles.turn_io import guard_private_path, validated_checkpoint
+        from ...buddy.roles.turn_io import validated_checkpoint
+        from ...private_files import open_read
 
         def private_record(path: Path) -> dict | None:
             try:
-                with guard_private_path(path).open("rb") as stream:
+                with open_read(path) as stream:
                     raw = stream.read(128 * 1024 + 1)
                 if len(raw) > 128 * 1024:
                     return None

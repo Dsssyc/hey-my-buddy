@@ -33,8 +33,7 @@ OWNER_LOCK_TIMEOUT_SECONDS = 15
 
 def write_journal(path: Path, value: dict) -> None:
     from ..private_files import publish_bytes
-    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"),
-                  validate=backup._guard, directory_nofollow=True)
+    publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
 
 
 def clear_journal(path: Path) -> None:
@@ -242,9 +241,8 @@ def start(state: Path, target: Path) -> dict:
 def _restore_guard(path: Path, *, regular: bool = False) -> None:
     if '..' in path.parts:
         raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a parent traversal', path=str(path))
-    component = private_dirs.linked_component(path)
-    if component is not None:
-        raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a link or reparse point', path=str(component))
+    if private_dirs.linked(path):
+        raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a link or reparse point', path=str(path))
     if regular:
         try:
             metadata = path.lstat()
@@ -255,8 +253,7 @@ def _restore_guard(path: Path, *, regular: bool = False) -> None:
 
 
 def restore(state: Path, current: Path) -> None:
-    # Keep lexical paths until every component has been checked; resolve() would
-    # erase the evidence of a linked state or backup parent.
+    # Keep lexical paths until the state and backup entries have been checked.
     state, current = Path(state), Path(current)
     for path in (state, current):
         _restore_guard(path)
@@ -298,7 +295,7 @@ def restore(state: Path, current: Path) -> None:
         _restore_guard(board, regular=True)
         os.replace(snapshot, board)
     finally:
-        if private_dirs.linked_component(snapshot) is None:
+        if not private_dirs.linked(snapshot):
             snapshot.unlink(missing_ok=True)
     for source, destination in destinations:
         _restore_guard(source)
@@ -312,7 +309,7 @@ def restore(state: Path, current: Path) -> None:
             _restore_guard(destination, regular=True)
             os.replace(temporary, destination)
         finally:
-            if private_dirs.linked_component(temporary) is None:
+            if not private_dirs.linked(temporary):
                 temporary.unlink(missing_ok=True)
     backup._guard(state)
     private_files.sync_directory(state, follow_symlinks=False)
@@ -482,6 +479,10 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     if os.name == 'nt':
         from ..windows_files import validate_state_root
         validate_state_root(state)
+    else:
+        from ..protocol.transport import _trusted_directory
+        if not _trusted_directory(state):
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'State directory must be owner-private with trusted ancestors')
     root = Path(os.environ.get('HMB_RUNTIME_ROOT') or runtime.DEFAULT_RUNTIME_ROOT).resolve()
     if (state / 'upgrade.json').exists():
         with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):

@@ -232,7 +232,7 @@ class TrustBoundaryTests(AttachFixture):
             recorder.chmod.assert_not_called()
         else:
             self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
-            recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
+            recorder.chmod.assert_not_called()
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 
@@ -240,8 +240,10 @@ class TrustBoundaryTests(AttachFixture):
     def test_group_or_world_accessible_directory_is_not_trusted(self):
         self.directory.chmod(0o755)
         self.assert_rejected_by_validation()
-        self.assert_falls_back_to_cold_start()
-        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
+        with self.assertRaises(ServiceError) as failure:
+            ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, 'LAUNCH_ACCESS_DENIED')
+        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o755)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_group_writable_state_directory_is_not_trusted_even_with_private_group(self):
@@ -255,10 +257,10 @@ class TrustBoundaryTests(AttachFixture):
         parent = Path(self.temp.name) / "group-writable"
         parent.mkdir(mode=0o770)
         parent.chmod(0o770)
-        directory = parent / "state"
-        directory.mkdir(mode=0o700)
         self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o770)
-        for private in (True, False):
+        for private in (False, True):
+            directory = parent / ("state-" + str(private))
+            directory.mkdir(mode=0o700)
             with self.subTest(private=private), \
                     patch.object(transport, "_private_primary_group", return_value=private) as group:
                 self.assertEqual(_trusted_directory(directory), private)
@@ -354,17 +356,24 @@ class TrustBoundaryTests(AttachFixture):
             fields[4] = os.geteuid() + 1  # st_uid
             return os.stat_result(fields)
 
-        real_lstat, real_fstat = os.lstat, os.fstat
+        real_lstat = os.lstat
         with patch("hey_my_buddy.protocol.transport.os.lstat", side_effect=lambda *args, **kwargs: as_other_owner(real_lstat(*args, **kwargs))):
             self.assertFalse(_trusted_directory(self.directory))
-        with patch("hey_my_buddy.protocol.transport.os.fstat", side_effect=lambda *args, **kwargs: as_other_owner(real_fstat(*args, **kwargs))):
             self.assertIsNone(_read_endpoint(self.directory))
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
-    def test_unsafe_endpoint_file_mode_is_not_trusted(self):
+    def test_endpoint_file_does_not_repeat_the_directory_privacy_check(self):
         self.write_endpoint(ENDPOINT, 0o644)
-        self.assert_rejected_by_validation()
-        self.assert_falls_back_to_cold_start()
+        self.assertEqual(_read_endpoint(self.directory), ENDPOINT)
+
+    @unittest.skipIf(os.name == "nt", "POSIX directory boundary")
+    def test_repeated_attachment_checks_directory_trust_once(self):
+        with patch.object(transport, '_private_directory', wraps=transport._private_directory) as private, \
+                patch.object(transport, '_trusted_ancestors', wraps=transport._trusted_ancestors) as ancestors:
+            for _ in range(3):
+                self.assertEqual(_attach_read_only(self.directory), ENDPOINT)
+        private.assert_called_once_with(self.directory)
+        ancestors.assert_called_once_with(self.directory)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_endpoint_outside_a_private_directory_is_not_trusted(self):
@@ -583,7 +592,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(failure.exception.message, str(error))
 
     def test_startup_error_from_another_pid_is_not_attributed_to_the_new_daemon(self):
-        self.directory.mkdir()
+        self.directory.mkdir(mode=0o700)
         from hey_my_buddy.blackboard.service.daemon import atomic_json
         atomic_json(self.directory / "startup-error.json", {
             "pid": 4241, "code": "SERVICE_START_TIMEOUT", "message": "earlier daemon timeout",

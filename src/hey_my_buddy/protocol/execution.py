@@ -124,9 +124,6 @@ def self_execution_process_identity(job_name: str | None) -> dict:
 def _private_json(path: Path, maximum: int = 32768) -> dict:
     fd = open_regular_fd(path, os.O_RDONLY)
     with os.fdopen(fd, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.geteuid()):
-            raise BoardError("PRIVATE_PATH_UNSAFE", "Execution material is not private")
         raw = stream.read(maximum + 1)
     if len(raw) > maximum:
         raise BoardError("INVALID_ARGUMENT", "Private execution material exceeds its bound")
@@ -151,9 +148,6 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     except FileNotFoundError:
         return None
     with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.geteuid()):
-            raise BoardError("PRIVATE_PATH_UNSAFE", "Execution receipt is not private")
         raw = stream.read()
     if sha256 is not None and hashlib.sha256(raw).hexdigest() != sha256:
         raise BoardError("RECEIPT_MISMATCH", "Execution receipt digest does not match")

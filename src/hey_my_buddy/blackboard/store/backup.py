@@ -1,7 +1,7 @@
 """Verified, single-generation archive for installation rollback."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, ExitStack
 from ... import locking
 import gzip
 import hashlib
@@ -11,7 +11,6 @@ from pathlib import Path
 import shutil
 import stat
 import sqlite3
-import tempfile
 import time
 import zlib
 
@@ -41,14 +40,9 @@ def _shown_path(relative: str) -> str:
     return text
 
 
-def _linked_component(path: Path) -> Path | None:
-    return private_dirs.linked_component(path)
-
-
 def _guard(path: Path) -> None:
-    component = _linked_component(path)
-    if component is not None:
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup path contains a linked component', path=str(component))
+    if _linked(path):
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup path contains a linked component', path=str(path))
 
 
 def _open_fd(path: Path, flags: int, mode: int = 0o600) -> int:
@@ -82,7 +76,7 @@ def _regular_files(root: Path):
         with os.scandir(parent) as entries:
             children = sorted(Path(entry.path) for entry in entries)
         for path in children:
-            if _linked_component(path):
+            if _linked(path):
                 shown = report(path)
                 raise BoardError('BACKUP_UNSAFE_PATH',
                                  'Backup source contains a linked path: ' + shown, path=shown)
@@ -189,8 +183,9 @@ def _verify(directory: Path) -> dict:
         path = directory / relative
         if path.lstat().st_size != row['bytes'] or digest(path) != row['sha256']:
             raise BoardError('BACKUP_INVALID', 'Backup payload hash mismatch', file=relative)
-    with tempfile.TemporaryDirectory(prefix='.verify-', dir=directory.parent) as raw:
-        trial = Path(raw)
+    with ExitStack() as cleanup:
+        trial = private_dirs.make_temporary_dir(prefix='.verify-', directory=directory.parent)
+        cleanup.callback(private_dirs.remove_tree, trial)
         with _open(directory / 'board.sqlite3.gz', 'rb') as compressed, _open(trial / 'board.sqlite3', 'xb') as destination:
             try:
                 with gzip.GzipFile(fileobj=compressed, mode='rb') as source:
@@ -237,8 +232,7 @@ def _publication_journal(root: Path, *, had_current: bool) -> None:
     if journal.exists():
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
     raw = json.dumps({'format': 1, 'hadCurrent': had_current}).encode('utf-8')
-    publish_bytes(journal, raw, immutable=True, open_file=_open_fd,
-                  validate=_guard, directory_nofollow=True)
+    publish_bytes(journal, raw, immutable=True)
 
 
 def _recover_publication(root: Path) -> None:
@@ -348,7 +342,7 @@ def recover(state: Path) -> Path:
 
 def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | None, contract_version: str) -> dict:
     started = time.monotonic()
-    if _linked_component(state):
+    if _linked(state):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
     state = state.resolve()
     wal = state / 'board.sqlite3-wal'
@@ -392,8 +386,7 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
                     'files': files}
         manifest_path = incoming / 'manifest.json'
         raw = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode('utf-8')
-        publish_bytes(manifest_path, raw, immutable=True, open_file=_open_fd,
-                      validate=_guard, directory_nofollow=True)
+        publish_bytes(manifest_path, raw, immutable=True)
         verify(incoming)
         for directory, _, _ in os.walk(incoming, topdown=False):
             directory_path = Path(directory)

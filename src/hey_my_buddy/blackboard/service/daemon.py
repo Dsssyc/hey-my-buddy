@@ -127,6 +127,13 @@ class Daemon:
         rpc_config._validate_path(self.directory)
         from ...private_dirs import ensure_private_dir
         ensure_private_dir(self.directory)
+        if os.name == 'nt':
+            from ...windows_files import validate_state_root
+            validate_state_root(self.directory)
+        else:
+            from ...protocol.transport import _trusted_directory
+            if not _trusted_directory(self.directory):
+                raise BoardError('PRIVATE_PATH_UNSAFE', 'State directory must be owner-private with trusted ancestors')
         self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:

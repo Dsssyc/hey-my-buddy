@@ -13,7 +13,7 @@ from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 from ...protocol.reasons import reason as make_reason
 
-HARNESSES = ('dsh', 'zcode', 'codex', 'claude')
+from ...protocol.harness_names import HARNESS_NAMES as HARNESSES
 SCAN_SECONDS = 180
 READY_SECONDS = 3600
 MAX_PATH_HINTS = 64

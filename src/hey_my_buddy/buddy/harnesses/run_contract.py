@@ -62,7 +62,9 @@ FORMAT_VERSION = 1
 NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": "turn_id",
                   "inputId": "input_id", "callId": "call_id"}
 
-HarnessName = Literal["codex", "claude", "zcode", "dsh"]
+from ...protocol.harness_names import HARNESS_NAMES
+
+HarnessName = Literal[*HARNESS_NAMES]
 PermissionLevel = Literal["none", "read", "write", "full"]
 EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]

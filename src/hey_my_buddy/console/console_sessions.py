@@ -10,7 +10,7 @@ import secrets
 import time
 from typing import Callable
 
-from ..private_files import publish_bytes
+from ..private_files import publish_bytes, read_text
 from ..errors import BoardError
 
 ENTRY_SECONDS = 10 * 60
@@ -41,7 +41,7 @@ class ConsoleSessions:
         self.sessions: dict[str, BrowserSession] = {}
         if path is not None and path.exists():
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                data = json.loads(read_text(path))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 raise BoardError("CONSOLE_SESSION_STORE", "Invalid persistent console session store") from error
             for row in data["sessions"]:

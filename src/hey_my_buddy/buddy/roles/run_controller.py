@@ -27,7 +27,6 @@ from ...private_files import read_bytes
 from ...protocol import schemas
 from ..harnesses.run_contract import HARNESS_NAMES
 from ..harnesses.registry import run_seam
-from .turn_io import guard_private_path
 
 
 NATIVE_OPERATIONS = {
@@ -86,7 +85,7 @@ def main() -> int:
                 *((signal.SIGBREAK,) if hasattr(signal, "SIGBREAK") else ())):
         signal.signal(sig, _interrupt)
     try:
-        control = decode_strict_json(read_bytes(guard_private_path(Path(args.control))))
+        control = decode_strict_json(read_bytes(Path(args.control)))
         frame, code = execute(control, _cancelled, Path(selected))
     except BoardError as error:
         frame, code = canonical_json({"status": "error", "modelStarted": False, **error.payload(),

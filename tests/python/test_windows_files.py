@@ -95,6 +95,15 @@ class HandleBoundaryTests(unittest.TestCase):
             files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
         api.close.assert_not_called()
 
+    def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
+        api = mock.Mock()
+        for path, flags in ((Path('parent/../leaf'), os.O_RDONLY),
+                            (Path('leaf'), os.O_WRONLY | os.O_TRUNC),
+                            (Path('leaf'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
+            with self.subTest(path=path, flags=flags), self.assertRaises(BoardError):
+                files.open_regular_fd(path, flags, api=api)
+        api._open.assert_not_called()
+
     def test_directory_open_pins_against_rename(self):
         api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
         api.kernel = mock.Mock()
@@ -184,6 +193,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             root.rename(moved)
             result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(root), str(outside)], capture_output=True)
             self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
+            files._validated_roots.discard(root)
             try:
                 with self.assertRaises(BoardError):
                     files.validate_state_root(root)
@@ -201,6 +211,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             dacl.AddAccessAllowedAce(security.ACL_REVISION, 1, security.CreateWellKnownSid(security.WinWorldSid))
             security.SetNamedSecurityInfo(str(root), security.SE_FILE_OBJECT,
                                           security.DACL_SECURITY_INFORMATION, None, None, dacl, None)
+            files._validated_roots.discard(root)
             with self.assertRaisesRegex(BoardError, 'foreign ACE'):
                 files.validate_state_root(root)
 

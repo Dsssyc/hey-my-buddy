@@ -7,14 +7,13 @@ import os
 from pathlib import Path
 import re
 import stat
-import sys
 import tempfile
 import secrets
 
 from .paths import is_absolute_path
+from .protocol.harness_names import ADAPTER_NAMES as ADAPTERS
 from .errors import BoardError
 
-ADAPTERS = frozenset({'codex', 'claude', 'zcode', 'dsh', 'command'})
 _ATTEMPT_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z')
 _REPARSE_POINT = 0x400
 _CREDENTIAL_FILES = frozenset({
@@ -33,68 +32,31 @@ def linked(path: Path) -> bool:
     except FileNotFoundError:
         return False
     return (stat.S_ISLNK(metadata.st_mode)
-            or bool(getattr(metadata, 'st_file_attributes', 0) & _REPARSE_POINT)
-            or path.is_junction())
+            or bool(getattr(metadata, 'st_file_attributes', 0) & _REPARSE_POINT))
 
 
 def _absolute(path: Path) -> Path:
     path = Path(path).absolute()
     if not is_absolute_path(path):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path must be absolute')
-    # macOS spells /private/var and /private/tmp through root-level aliases.
-    # Canonicalize only these OS-owned aliases; resolving the whole path would hide a hostile link
-    # inside the hey-my-buddy state tree before the component guard can inspect it.
-    if sys.platform == 'darwin' and len(path.parts) > 1 and path.parts[1] in ('var', 'tmp'):
-        path = Path('/private', *path.parts[1:])
+    if '..' in path.parts:
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path contains a parent traversal', path=str(path))
     return path
 
 
-def linked_component(path: Path) -> Path | None:
-    """Check ancestors before inspecting any entry below them."""
+def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
+    """Open an ordinary leaf without following a link or reparse point."""
     path = _absolute(path)
-    for component in (*reversed(path.parents), path):
-        if linked(component):
-            return component
-    return None
-
-
-def _guard_parents(path: Path) -> None:
-    """Refuse links and reparse points anywhere on a filesystem operation path."""
-    component = linked_component(path)
-    if component is not None:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path contains a linked component', path=str(component))
-
-
-def open_regular_fd(path: Path, flags: int, mode: int = 0o600, *, check_parents: bool = True) -> int:
-    """Open an ordinary leaf, optionally pinning and checking POSIX ancestors."""
-    path = _absolute(path)
+    if flags & os.O_TRUNC and not flags & os.O_EXCL:
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
     if os.name == 'nt':
         from .windows_files import open_regular_fd as windows_open
         return windows_open(path, flags, mode)
-    if check_parents:
-        _guard_parents(path)
-    if '..' in path.parts or flags & os.O_TRUNC and not flags & os.O_EXCL:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
     fd = None
-    parent_fd = None
     try:
-        flags |= getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
-        if check_parents and os.open in os.supports_dir_fd:
-            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            parent_fd = os.open(path.anchor, directory_flags)
-            for name in path.parts[1:-1]:
-                next_fd = os.open(name, directory_flags, dir_fd=parent_fd)
-                os.close(parent_fd)
-                parent_fd = next_fd
-            fd = os.open(path.name, flags, mode, dir_fd=parent_fd)
-        else:
-            fd = os.open(path, flags, mode)
-        metadata = os.fstat(fd)
-        if (not stat.S_ISREG(metadata.st_mode)
-                or getattr(metadata, 'st_file_attributes', 0) & _REPARSE_POINT):
+        fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK, mode)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path))
-        if check_parents:
-            _guard_parents(path)
         return fd
     except BaseException as error:
         if fd is not None:
@@ -102,9 +64,6 @@ def open_regular_fd(path: Path, flags: int, mode: int = 0o600, *, check_parents:
         if isinstance(error, OSError) and error.errno in (errno.ELOOP, errno.EISDIR):
             raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path)) from error
         raise
-    finally:
-        if parent_fd is not None:
-            os.close(parent_fd)
 
 
 def _adapter(adapter: str) -> str:
@@ -152,12 +111,13 @@ def context_root(context, adapter: str | None = None) -> Path:
     return attempt_root(Path(state), selected, context.task_id, context.attempt_id)
 
 
+def directory_mode() -> int:
+    """Inherit Windows ACLs; restrict newly created POSIX directories."""
+    return 0o777 if os.name == 'nt' else 0o700
+
+
 def ensure_private_dir(path: Path) -> Path:
     path = _absolute(path)
-    if os.name == 'nt':
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-    _guard_parents(path)
     missing = []
     current = path
     while not current.exists():
@@ -165,13 +125,12 @@ def ensure_private_dir(path: Path) -> Path:
         current = current.parent
     for directory in reversed(missing):
         try:
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=directory_mode())
         except FileExistsError:
-            pass
-    _guard_parents(path)
+            if not directory.is_dir():
+                raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(directory)) from None
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
-    path.chmod(0o700)
     return path
 
 
@@ -220,14 +179,16 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
 def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt_id: str) -> dict:
     """Remove credentials after the caller has independently proved native stop."""
     root = attempt_root(state, adapter, task_id, attempt_id)
-    _guard_parents(root)
+    if linked(root):
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is linked', path=str(root))
     if not root.exists():
         return {'count': 0, 'paths': []}
     if not root.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private attempt root is not a directory', path=str(root))
     removed = []
     def inspect(directory: Path) -> None:
-        _guard_parents(directory)
+        if linked(directory):
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Credential directory is linked', path=str(directory))
         with os.scandir(directory) as entries:
             children = [Path(entry.path) for entry in entries]
         for child in children:
@@ -269,7 +230,6 @@ def validate_private_fd(fd: int) -> None:
 def validate_private_dir(path: Path) -> None:
     path = _absolute(path)
     if os.name != 'nt':
-        _guard_parents(path)
-        info = path.stat()
+        info = path.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise BoardError('PRIVATE_PATH_UNSAFE', 'Directory must be owner-private', path=str(path))

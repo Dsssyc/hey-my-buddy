@@ -172,19 +172,24 @@ def _trusted_ancestors(directory: Path) -> bool:
         return False
 
 
+_trusted_directories: dict[Path, bool] = {}
+_trust_lock = threading.Lock()
+
+
 def _trusted_directory(directory: Path) -> bool:
-    return _private_directory(directory) and _trusted_ancestors(directory)
+    with _trust_lock:
+        if directory not in _trusted_directories:
+            _trusted_directories[directory] = _private_directory(directory) and _trusted_ancestors(directory)
+        return _trusted_directories[directory]
 
 
 def _read_endpoint(directory: Path) -> dict | None:
     """Read control.json without following links and without touching permissions."""
-    if os.name != 'nt' and (not _private_directory(directory) or not _trusted_ancestors(directory)):
-        return None
     fd = -1
     try:
         fd = private_dirs.open_regular_fd(directory / "control.json", os.O_RDONLY)
-        if os.name != 'nt':
-            private_dirs.validate_private_fd(fd)
+        if os.name != 'nt' and not _trusted_directory(directory):
+            return None
         value = json.loads(os.read(fd, MAX_MESSAGE_BYTES + 1))
         if (
             not isinstance(value, dict)
@@ -277,13 +282,8 @@ def _call_board_read_only(operation: str, params: dict | None, directory: Path, 
     return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
 
 
-def _healthy(directory: Path) -> dict | None:
-    """Return a trusted endpoint only when its service answers, without any write."""
-    endpoint = _read_endpoint(directory)
+def _ping_endpoint(directory: Path, endpoint: dict | None) -> dict | None:
     if endpoint:
-        if (os.name != "nt" and not (directory / "ipc").exists()
-                and not private_dirs.linked(directory / "ipc")):
-            return None
         try:
             _request(endpoint, "ping", {}, state_dir=directory)
             return endpoint
@@ -293,9 +293,20 @@ def _healthy(directory: Path) -> dict | None:
     return None
 
 
+def _healthy(directory: Path) -> dict | None:
+    """Read control.json and ping after the state boundary has been checked."""
+    return _ping_endpoint(directory, _read_endpoint(directory))
+
+
 def _attach_read_only(directory: Path) -> dict | None:
     """Read-only attachment: never creates, chmods, locks, logs or spawns."""
-    return _healthy(directory)
+    endpoint = _read_endpoint(directory)
+    if endpoint is None:
+        return None
+    if (os.name != "nt" and not (directory / "ipc").exists()
+            and not private_dirs.linked(directory / "ipc")):
+        return None
+    return _ping_endpoint(directory, endpoint)
 
 
 def _cold_start_preflight(directory: Path) -> None:
@@ -311,9 +322,9 @@ def _cold_start_preflight(directory: Path) -> None:
             rpc_config.configure_local_endpoint(directory)
         else:
             private_dirs.ensure_private_dir(directory)
-            rpc_config.configure_local_endpoint(directory)
             if not _trusted_directory(directory):
                 raise OSError('State directory is not owner-private')
+            rpc_config.configure_local_endpoint(directory)
         fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         if os.name == 'nt':

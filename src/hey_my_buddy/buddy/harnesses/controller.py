@@ -15,6 +15,7 @@ from ...protocol.process_controller import launch_controller
 from ...protocol.process_handle import ProcessHandle
 from ...json_codec import decode_strict_json
 from ...private_dirs import open_regular_fd
+from ...private_files import open_read
 
 #: The strict discovery result and retained native evidence bound.
 STRICT_RESULT_BYTES = 512 * 1024
@@ -32,7 +33,7 @@ def read_strict_result(path: Path) -> dict | None:
     included) are refused on all three paths alike.
     """
     try:
-        with path.open("rb") as stream:
+        with open_read(path) as stream:
             raw = stream.read(STRICT_RESULT_BYTES + 1)
         if len(raw) > STRICT_RESULT_BYTES:
             return None

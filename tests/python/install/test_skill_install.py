@@ -11,6 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.install import skill_package, skill_install, upgrade as upgrade_module
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import ensure_private_dir
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 
@@ -52,7 +53,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def _upgrade_state(self, root: Path) -> Path:
         state = root / 'state'
-        state.mkdir()
+        ensure_private_dir(state)
         (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")
         (state / 'control.json').write_text('{}', encoding="utf-8", newline="\n")
         return state
@@ -104,7 +105,7 @@ class SkillPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state, home = root / 'state', root / 'skills'
-            state.mkdir()
+            ensure_private_dir(state)
             (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")
             source = root / 'source'
             active = root / 'runtime' / ('a' * 32)
@@ -130,7 +131,7 @@ class SkillPackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = root / 'state'
-            state.mkdir()
+            ensure_private_dir(state)
             (state / 'board.sqlite3').touch()
             journal = state / 'upgrade.json'
             journal.write_text('{}', encoding="utf-8", newline="\n")
@@ -173,7 +174,7 @@ class SkillPackageTests(unittest.TestCase):
             root = Path(temporary)
             _source, _target = self._upgrade_pair(root)
             state = root / 'state'
-            state.mkdir()
+            ensure_private_dir(state)
             # A pointer is not a contract declaration; reading its package is
             # unnecessary when the installed skill already records the contract.
             (state / 'active-runtime.json').write_text('{}', encoding="utf-8", newline="\n")

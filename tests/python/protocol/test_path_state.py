@@ -68,26 +68,29 @@ def run_path_case(name, work):
 
     try:
         with patch.dict(os.environ, environment, clear=True):
-            if name == 'cold-755':
+            if name in ('cold-755', 'daemon-755'):
                 state.chmod(0o755)
-                preflight = transport._cold_start_preflight
-
-                def observe(selected):
-                    preflight(selected)
-                    evidence['preflightMode'] = stat.S_IMODE(state.stat().st_mode)
-                    assert evidence['preflightMode'] == 0o700, 'preflight did not repair owner mode'
-                with patch.object(transport, '_cold_start_preflight', side_effect=observe), \
-                        patch.object(transport.subprocess, 'Popen', side_effect=collect):
-                    reply = transport.call_service('health', state_dir=state)
-                assert handles
-                endpoint = transport._read_endpoint(state)
-                assert endpoint['pid'] == handles[0].pid
-            else:
-                if name == 'daemon-755':
-                    state.chmod(0o755)
-                child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
-                endpoint, reply = ready(child)
-            assert stat.S_IMODE(state.stat().st_mode) == 0o700, 'Daemon.run did not repair owner mode'
+                if name == 'cold-755':
+                    try:
+                        transport.call_service('health', state_dir=state)
+                    except BoardError as error:
+                        assert error.code == 'LAUNCH_ACCESS_DENIED', error.payload()
+                        evidence['refusal'] = error.payload()
+                    else:
+                        raise AssertionError('cold start accepted a non-private state root')
+                else:
+                    child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
+                    assert child.wait(timeout=20) == 2
+                    evidence['processes'][-1]['waitExit'] = child.returncode
+                    evidence['refusedProcesses'] = [evidence['processes'].pop()]
+                    handles.remove(child)
+                    evidence['refusal'] = json.loads((state / 'startup-error.json').read_bytes())
+                    assert evidence['refusal']['code'] == 'PRIVATE_PATH_UNSAFE'
+                assert stat.S_IMODE(state.stat().st_mode) == 0o755
+                return
+            child = collect(DAEMON_COMMAND, env=environment, stdout=log, stderr=log)
+            endpoint, reply = ready(child)
+            assert stat.S_IMODE(state.stat().st_mode) == 0o700
             evidence['serviceId'] = reply['serviceId']
             evidence['stateDir'] = reply['stateDir']
             assert reply['stateDir'] == str(state)
@@ -168,35 +171,28 @@ class PathStateTests(unittest.TestCase):
             rpc_config.configure_client(self.state / 'missing' / '..')
         self.assertEqual(caught.exception.details.get('path'), str(self.state / 'missing' / '..'))
 
-    def test_path03_preflight_repairs_755_without_test_environment(self):
+    def test_path03_preflight_refuses_755_without_changing_permissions(self):
         self.state.mkdir(mode=0o755)
         self.state.chmod(0o755)
-        before = set(self.state.iterdir())
-        # Supplemental local preflight check: sockets alone are substitutes.
-        # Real cold startup is separately exercised below.
         sockets = Mock()
-        sockets.return_value.accept.return_value = (Mock(), None)
-        with patch.dict(os.environ, {}, clear=True), patch.object(transport.socket, 'socket', sockets), \
-                patch.object(transport.tempfile, 'mkdtemp', wraps=tempfile.mkdtemp) as temporary:
-            try:
+        with patch.dict(os.environ, {}, clear=True), patch.object(transport.socket, 'socket', sockets):
+            with self.assertRaises(BoardError) as failure:
                 transport._cold_start_preflight(self.state)
-            except BoardError as error:
-                self.fail('owner preflight refused its 0755 state: ' + json.dumps(error.payload()))
-        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
-        self.assertEqual(set(self.state.iterdir()), before | {self.state / 'ipc'})
-        temporary.assert_called_once_with(prefix='hey-my-buddy-ipc-')
+        self.assertEqual(failure.exception.code, 'LAUNCH_ACCESS_DENIED')
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o755)
+        sockets.assert_not_called()
 
-    def test_path03_daemon_run_repairs_before_rpc_configuration(self):
+    def test_path03_daemon_refuses_755_before_rpc_configuration(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
         self.state.mkdir(mode=0o755)
         self.state.chmod(0o755)
         daemon = Daemon(self.state)
-        stop = RuntimeError('stop before local registration')
-        with patch.object(rpc_config, 'configure_server', side_effect=stop):
-            with self.assertRaises(RuntimeError) as caught:
+        with patch.object(rpc_config, 'configure_server') as configure:
+            with self.assertRaises(BoardError) as caught:
                 daemon.run()
-        self.assertIs(caught.exception, stop)
-        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
+        self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
+        configure.assert_not_called()
+        self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o755)
 
     def test_path03_both_owner_entries_create_before_rpc_configuration(self):
         from hey_my_buddy.blackboard.service.daemon import Daemon
@@ -271,10 +267,10 @@ class RealPathStateTests(unittest.TestCase):
     def test_path01_linked_cli_health_and_canonical_native_root(self):
         self.case('linked-cli')
 
-    def test_path03_real_cold_start_repairs_755(self):
+    def test_path03_real_cold_start_refuses_755(self):
         self.case('cold-755')
 
-    def test_path03_real_direct_daemon_repairs_755(self):
+    def test_path03_real_direct_daemon_refuses_755(self):
         self.case('daemon-755')
 
 

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from . import cli_help, cli_views
 from ..protocol import transport
-from ..private_files import publish_bytes
+from ..private_files import publish_bytes, open_read
 from ..errors import BoardError
 from ..home import control_file_path, submission_file_path
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
@@ -248,7 +248,7 @@ def _read_control(path_value: str) -> dict:
         raise BoardError("INVALID_ARGUMENT", "controlFile must be a nonempty path string")
     try:
         path = Path(path_value).expanduser()
-        with path.open("rb") as handle:
+        with open_read(path) as handle:
             raw = handle.read(MAX_PARAMS_BYTES + 1)
         if len(raw) > MAX_PARAMS_BYTES:
             raise ValueError("document is too large")

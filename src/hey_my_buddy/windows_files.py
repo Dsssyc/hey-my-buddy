@@ -11,6 +11,7 @@ import ntpath
 import os
 from pathlib import Path
 import struct
+import threading
 
 from .errors import BoardError
 
@@ -245,11 +246,25 @@ def _validate_root_acl(handle):
                  bool(control & security.SE_DACL_PRESENT), aces)
 
 
+_validated_roots: set[Path] = set()
+_root_lock = threading.Lock()
+
+
 def validate_state_root(path, *, create=False):
+    with _root_lock:
+        path = Path(path).absolute()
+        if path not in _validated_roots:
+            _validate_state_root(path, create=create)
+            _validated_roots.add(path)
+
+
+def _validate_state_root(path, *, create=False):
     """Check the Windows state boundary once at installation or cold start."""
-    from .private_dirs import _guard_parents
-    path = Path(path).absolute()
-    _guard_parents(path)
+    from .private_dirs import _absolute, linked
+    path = _absolute(path)
+    for component in (*reversed(path.parents), path):
+        if linked(component):
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'State root contains a linked component', path=str(component))
     if create:
         path.mkdir(parents=True, exist_ok=True)
     api = WindowsFileAPI()
@@ -276,10 +291,9 @@ def open_regular_fd(path, flags, mode=0o600, *, delete=False, api=None):
         access |= GENERIC_WRITE
     else:
         access |= GENERIC_READ
-    disposition = (CREATE_NEW if flags & os.O_EXCL else
-                   2 if flags & os.O_CREAT and flags & os.O_TRUNC else
-                   OPEN_ALWAYS if flags & os.O_CREAT else
-                   5 if flags & os.O_TRUNC else OPEN_EXISTING)
+    if '..' in Path(path).parts or flags & os.O_TRUNC and not flags & os.O_EXCL:
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
+    disposition = CREATE_NEW if flags & os.O_EXCL else OPEN_ALWAYS if flags & os.O_CREAT else OPEN_EXISTING
     handle = api._open(path, access, disposition, share_delete=True)
     try:
         attributes, _ = api.info(handle)
