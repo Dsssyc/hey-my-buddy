@@ -39,6 +39,7 @@ from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.protocol import owned_process as windows_process
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 from hey_my_buddy.buddy.harnesses.run_contract import (
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
@@ -378,7 +379,7 @@ class FastSeamTests(SeamCase):
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
-        self.assertTrue(any(event["toolName"] == "commandExecution" for event in package["events"]))
+        self.assertEqual([call["categories"] for call in read_tool_calls(package)], [["execute"]])
         self.assertTrue(result.stop_evidence.interrupt.requested)
 
     def test_unknown_events_continue_through_the_observer_to_a_result(self):
@@ -1420,9 +1421,9 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertTrue(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(package["binding"]["taskId"], "micro-task-1")
-        self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
-        self.assertEqual([event["toolName"] for event in package["events"]],
-                         ["commandExecution", "commandExecution"])
+        self.assertEqual([(call["categories"], call["phases"], call["consistent"])
+                          for call in read_tool_calls(package)],
+                         [(["execute"], ["end", "start"], True)])
         # This run's one root turn is the package's own native root.
         self.assertEqual(package["nativeIdentity"],
                          [{"sessionId": result.native_identity.session_id,

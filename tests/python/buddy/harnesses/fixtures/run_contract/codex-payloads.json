@@ -62,12 +62,13 @@
       "answerValid": true,
       "correctionCount": 0,
       "usage": {"toolCalls": 0, "bytesRead": null},
-      "toolEvidence": {"version": 1,
+      "toolEvidence": {"version": 2,
                        "binding": {"harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture",
                                    "generation": 1},
                        "nativeIdentity": [{"sessionId": "thread-fixture-0002", "turnId": "turn-fixture-0003"}],
-                       "streamComplete": true, "events": [], "toolCalls": 0, "unsettledToolCalls": 0,
-                       "truncated": false},
+                       "streamComplete": true, "toolCalls": 0, "unsettledToolCalls": 0,
+                       "calls": {"path": "<private-state>/tool-evidence/empty.jsonl",
+                                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
     "fastFormatCorrected": {
@@ -85,13 +86,14 @@
       "nativeTurns": [{"sessionId": "thread-fixture-0003", "turnId": "turn-fixture-0004", "started": true, "completed": true},
                       {"sessionId": "thread-fixture-0003", "turnId": "turn-fixture-0005", "started": true, "completed": true}],
       "usage": {"toolCalls": 0, "bytesRead": null},
-      "toolEvidence": {"version": 1,
+      "toolEvidence": {"version": 2,
                        "binding": {"harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture",
                                    "generation": 1},
                        "nativeIdentity": [{"sessionId": "thread-fixture-0003", "turnId": "turn-fixture-0004"},
                                           {"sessionId": "thread-fixture-0003", "turnId": "turn-fixture-0005"}],
-                       "streamComplete": true, "events": [], "toolCalls": 0, "unsettledToolCalls": 0,
-                       "truncated": false},
+                       "streamComplete": true, "toolCalls": 0, "unsettledToolCalls": 0,
+                       "calls": {"path": "<private-state>/tool-evidence/empty.jsonl",
+                                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 0}
     },
     "failureIncompleteRoots": {
@@ -103,12 +105,13 @@
       "resolved": null,
       "observed": null,
       "modelStarted": true,
-      "toolEvidence": {"version": 1,
+      "toolEvidence": {"version": 2,
                        "binding": {"harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture",
                                    "generation": 1},
                        "nativeIdentity": [],
-                       "streamComplete": false, "events": [], "toolCalls": 0, "unsettledToolCalls": 0,
-                       "truncated": false},
+                       "streamComplete": false, "toolCalls": 0, "unsettledToolCalls": 0,
+                       "calls": {"path": "<private-state>/tool-evidence/empty.jsonl",
+                                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "bytes": 0}},
       "processState": {"shutdownConfirmed": true, "nativeExitCode": 1}
     }
   }

@@ -482,9 +482,8 @@ class FailoverTests(RouterDispatchTestCase):
             collector.observe(normalize_tool_event("dsh", {"nativeIdentity": identity,
                 "callId": "private-read", "toolName": "read", "phase": phase}))
         output["toolEvidence"] = collector.finish([root], True)
-        if kind == "truncated":
-            # Truncation is a controller stream fact, independent of root shape.
-            output["toolEvidence"]["truncated"] = True
+        if kind == "unclosed":
+            output["toolEvidence"]["streamComplete"] = False
         return output
 
     def test_review_legal_read_and_unknown_bytes_can_publish(self):
@@ -631,7 +630,7 @@ install_no_answer_case("review_failed_missing_verification", lambda self, claim,
 install_no_answer_case("review_answer_missing_verification", lambda self, claim, o: {**o, "inputVerification": None},
                       "router-input-changed", review=True)
 
-for stream in ("child", "late", "reversed", "unfinished", "truncated"):
+for stream in ("child", "late", "reversed", "unfinished", "unclosed"):
     install_no_answer_case("stream_" + stream, lambda self, claim, output, stream=stream: self.bad_native_stream(claim, stream),
                            "router-tool-evidence-unverified", review=True)
 install_no_answer_case("foreign_binding", lambda self, claim, o: {**o, "toolEvidence": {**o["toolEvidence"],

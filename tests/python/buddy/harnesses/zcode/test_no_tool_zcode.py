@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.zcode.native_run import NoToolProtocol
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
+from hey_my_buddy.protocol import tool_evidence
 
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests
 
@@ -137,7 +138,8 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
                 if code == "no-tool-violation":
                     self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
                     self.assertFalse(outcome.result["toolEvidence"]["streamComplete"])
-                    self.assertTrue(outcome.result["toolEvidence"]["events"])
+                    calls = list(tool_evidence.read_tool_calls(outcome.result["toolEvidence"]))
+                    self.assertTrue(calls)
 
     def test_deadline(self):
         outcome = self.execute("timeout", timeout=1)

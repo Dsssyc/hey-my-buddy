@@ -41,6 +41,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnection
 from hey_my_buddy.buddy.harnesses.dsh.native_run import SessionServices, prepare_session_service, run
+from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -260,7 +261,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNone(result.usage, "no record exists, so the usage stays unknown, never zero")
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertEqual(package["nativeIdentity"][0].get("sessionId"),
                          result.native_identity.session_id)
 
@@ -409,10 +410,12 @@ class FastSeamTests(NativeRunCase):
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
-        categories = {event["category"] for event in package["events"]}
-        self.assertEqual(categories, {"other"},
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["categories"], ["other"],
                          "an unrecognized native tool name stays other")
-        self.assertTrue(all(event["toolName"] == "run-command" for event in package["events"]))
+        self.assertEqual(calls[0]["phases"], ["end", "start"])
+        self.assertTrue(calls[0]["belongsToRoot"])
 
     def test_an_unknown_event_is_retained_and_continues_to_a_result(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--emit-unknown-update",
@@ -853,8 +856,8 @@ class WorkerSeamTests(NativeRunCase):
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         # The checkpoint refusal and the finish call are the verified delivery
-        # calls: their events leave the published package, nothing else hides.
-        self.assertEqual(package["events"], [])
+        # calls: their summaries leave the published package, nothing else hides.
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["nativeIdentity"],
                          [{"sessionId": result.native_identity.session_id}])
@@ -975,7 +978,9 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(package["toolCalls"], 1,
                          "the natively failed finish call stays a task-tool fact; "
                          "only its verified retry is the delivery evidence")
-        self.assertEqual({event["callId"] for event in package["events"]}, {"call_finish_1"})
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual([call["callId"] for call in calls], ["call_finish_1"])
+        self.assertTrue(calls[0]["belongsToRoot"])
 
     def test_a_completed_turn_without_a_finish_tool_fails(self):
         request, bound, mount = self.worker_request()

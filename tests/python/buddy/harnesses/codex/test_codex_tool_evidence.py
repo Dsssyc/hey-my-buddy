@@ -15,6 +15,7 @@ from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+from hey_my_buddy.protocol import tool_evidence
 from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS, item_frames
 
 FIXTURE = Path(__file__).parent / "fixtures" / "mock_codex.py"
@@ -44,6 +45,10 @@ def new_projector() -> CodexToolEventProjector:
     return CodexToolEventProjector(dict(BINDING))
 
 
+def calls(package):
+    return list(tool_evidence.read_tool_calls(package))
+
+
 class CodexToolEventProjectionTests(unittest.TestCase):
     """The projector's facts over real typed and raw frame shapes."""
 
@@ -52,18 +57,20 @@ class CodexToolEventProjectionTests(unittest.TestCase):
 
     def test_protocol_variants_and_future_items_in_both_router_modes(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
-        for name, _carrier, _fields, calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
+        for name, _carrier, _fields, expected_calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
             with self.subTest(name=name):
                 projector = new_projector()
                 self.observe_root(projector)
                 for method, item in item_frames(name):
                     projector.observe_notification(frame(method, item))
                 package = projector.finish(True)
-                self.assertEqual(package["toolCalls"], calls)
-                self.assertEqual(tuple(event["phase"] for event in package["events"]), phases)
+                self.assertEqual(package["toolCalls"], expected_calls)
+                self.assertEqual(tuple(calls(package)[0]["phases"]) if phases else (),
+                                 tuple(sorted(phase for phase in phases if phase is not None)))
                 self.assertEqual(package["streamComplete"], complete)
                 self.assertEqual(package["unsettledToolCalls"], int(phases == ("start",)))
-                self.assertEqual({event["category"] for event in package["events"]}, {"other"} if phases else set())
+                self.assertEqual({category for call in calls(package) for category in call["categories"]},
+                                 {"other"} if phases else set())
                 for permission in ("none", "read"):
                     self.assertEqual(judge_tool_evidence(package, permission),
                                      "router-tool-evidence-unverified" if not complete
@@ -78,8 +85,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             projector.observe_notification(frame(method, item))
         package = projector.finish(True)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
-        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
-                         [("shell", "start"), ("shell", "end")])
+        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package)],
+                         [("item-1", ["execute"], ["end", "start"])])
         self.assertIsNone(judge_tool_evidence(package, "read"))
         self.assertEqual(judge_tool_evidence(package, "none"), "router-tools-forbidden")
 
@@ -91,7 +98,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 projector.observe_notification(frame(method, item))
         package = projector.finish(True)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
-        self.assertEqual({event["toolName"] for event in package["events"]}, {"tool_search_call"})
+        self.assertEqual([(call["callId"], call["categories"], call["phases"]) for call in calls(package)],
+                         [("item-1", ["other"], ["end", "start"])])
 
     def test_typed_execution_and_raw_native_call_join_by_actual_call_id(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -105,7 +113,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 projector.observe_notification(frame('item/completed', {'type': 'commandExecution', 'id': 'call-1'}))
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
-                self.assertEqual({event['toolName'] for event in package['events']}, {name, 'commandExecution'})
+                self.assertEqual([(call['categories'], call['phases'], call['consistent']) for call in calls(package)],
+                                 [(['execute'], ['end', 'start'], True)])
                 self.assertIsNone(judge_tool_evidence(package, 'read'))
 
     def test_mcp_namespace_cannot_borrow_builtin_execution_classification(self):
@@ -116,7 +125,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                                             'namespace': 'mcp__server', 'call_id': 'mcp-1'}))
         projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'mcp-1'}))
         package = projector.finish(True)
-        self.assertEqual({event['category'] for event in package['events']}, {'other'})
+        self.assertEqual([call['categories'] for call in calls(package)], [['other']])
         self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tools-forbidden')
 
     def test_two_raw_names_or_conflicting_categories_are_not_execution_aliases(self):
@@ -130,6 +139,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                     projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'call-1'}))
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
+                self.assertFalse(calls(package)[0]['consistent'])
                 self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tool-evidence-unverified')
 
     def test_typed_call_projects_start_and_end_over_the_real_identity(self):
@@ -141,13 +151,12 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertTrue(package["streamComplete"])
-        self.assertFalse(package["truncated"])
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": ROOT, "callId": "item-1", "toolName": "commandExecution",
-             "category": "execute", "phase": "start"},
-            {"nativeIdentity": ROOT, "callId": "item-1", "toolName": "commandExecution",
-             "category": "execute", "phase": "end"},
-        ])
+        self.assertEqual(calls(package), [{
+            "nativeIdentity": ROOT, "callId": "item-1", "categories": ["execute"],
+            "phases": ["end", "start"], "facts": [{"toolName": "commandExecution", "category": "execute"}],
+            "consistent": True, "endBeforeStart": False,
+            "incomplete": False, "malformed": False, "belongsToRoot": True,
+        }])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
 
     def test_raw_call_is_the_start_and_only_the_output_is_the_end(self):
@@ -161,12 +170,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 2)
         # The typed fileChange item was started but never completed.
         self.assertEqual(package["unsettledToolCalls"], 1)
-        raw_events = [event for event in package["events"] if event["callId"] == "call-1"]
-        self.assertEqual(raw_events, [
-            {"nativeIdentity": ROOT, "callId": "call-1", "toolName": "shell", "category": "execute", "phase": "start"},
-            {"nativeIdentity": ROOT, "callId": "call-1", "toolName": "shell", "category": "execute", "phase": "end"},
-        ])
-        self.assertEqual(package["events"][0]["category"], "edit")
+        raw_calls = [call for call in calls(package) if call["callId"] == "call-1"]
+        self.assertEqual([(call["categories"], call["phases"]) for call in raw_calls],
+                         [(["execute"], ["end", "start"])])
+        self.assertEqual(calls(package)[0]["categories"], ["edit"])
 
     def test_replayed_frames_collapse_but_two_native_calls_count_separately(self):
         projector = new_projector()
@@ -183,9 +190,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # distinct native calls and each counts.
         self.assertEqual(package["toolCalls"], 3)
         self.assertEqual(package["unsettledToolCalls"], 2)
-        self.assertEqual(len(package["events"]), 4)
-        self.assertEqual([event["callId"] for event in package["events"]],
-                         ["call-1", "call-1", "call-2", "item-9"])
+        self.assertEqual(len(calls(package)), 3)
+        self.assertEqual([call["callId"] for call in calls(package)],
+                         ["call-1", "call-2", "item-9"])
+        self.assertEqual(calls(package)[0]["phases"], ["end", "start"])
 
     def test_fixed_classification_for_the_native_operation_types(self):
         projector = new_projector()
@@ -198,11 +206,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         # A named call whose name is "reasoning" is still a call, classified other.
         projector.observe_notification(raw({"type": "function_call", "call_id": "r-1", "name": "reasoning"}))
         package = projector.finish(True)
-        categories = {event["callId"]: event["category"] for event in package["events"]}
-        self.assertEqual(categories, {"w-1": "fetch", "s-1": "execute", "m-1": "other",
-                                      "d-1": "other", "r-1": "other"})
-        self.assertEqual({event["toolName"] for event in package["events"] if event["callId"] == "r-1"},
-                         {"reasoning"})
+        categories = {call["callId"]: call["categories"] for call in calls(package)}
+        self.assertEqual(categories, {"w-1": ["fetch"], "s-1": ["execute"], "m-1": ["other"],
+                                      "d-1": ["other"], "r-1": ["other"]})
+        self.assertEqual(package["toolCalls"], 5)
 
     def test_conversation_items_and_raw_message_frames_are_not_tool_events(self):
         projector = new_projector()
@@ -213,7 +220,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({"type": "message", "role": "assistant"}))
         projector.observe_notification(raw({"type": "reasoning"}))
         package = projector.finish(True)
-        self.assertEqual(package["events"], [])
+        self.assertEqual(calls(package), [])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertTrue(package["streamComplete"])
 
@@ -226,11 +233,12 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         package = projector.finish(True)
         self.assertEqual(package["toolCalls"], 1, "only the fully identified call counts")
         self.assertFalse(package["streamComplete"])
-        unbound = [event for event in package["events"] if event["callId"] == "item-1"]
+        unbound = [call for call in calls(package) if call["callId"] == "item-1"]
         self.assertEqual(unbound[0]["nativeIdentity"], {"sessionId": "thread-1"})
-        missing = [event for event in package["events"] if event["toolName"] == "shell"]
+        missing = [call for call in calls(package) if call["callId"] is None]
         self.assertIsNone(missing[0]["callId"])
         self.assertEqual(missing[0]["nativeIdentity"], ROOT)
+        self.assertTrue(missing[0]["incomplete"])
 
     def test_unrecognized_raw_shape_and_progress_frame_stay_incomplete(self):
         projector = new_projector()
@@ -241,7 +249,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         package = projector.finish(True)
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
-        self.assertGreaterEqual(len(package["events"]), 2)
+        self.assertGreaterEqual(len(calls(package)), 2)
 
     def test_typed_item_outside_the_known_tools_is_kept_as_other(self):
         projector = new_projector()
@@ -249,7 +257,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(frame("item/started", {"type": "todoList", "id": "t-1"}))
         projector.observe_notification(frame("item/completed", {"type": "todoList", "id": "t-1"}))
         package = projector.finish(True)
-        self.assertEqual(package["events"][0]["category"], "other")
+        self.assertEqual(calls(package)[0]["categories"], ["other"])
         self.assertEqual(package["toolCalls"], 1)
 
     def test_uncorrelated_output_keeps_only_its_own_frame_type(self):
@@ -257,9 +265,9 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.observe_root(projector)
         projector.observe_notification(raw({"type": "custom_tool_call_output", "call_id": "u-1", "output": "x"}))
         package = projector.finish(True)
-        self.assertEqual(package["events"], [{"nativeIdentity": ROOT, "callId": "u-1",
-                                              "toolName": "custom_tool_call_output", "category": "other",
-                                              "phase": "end"}])
+        self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"], call["phases"],
+                           call["endBeforeStart"]) for call in calls(package)],
+                         [(ROOT, "u-1", ["other"], ["end"], True)])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["unsettledToolCalls"], 0)
 
@@ -275,16 +283,18 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 2)
         self.assertEqual(package["nativeIdentity"], [ROOT])
 
-    def test_event_bound_of_128_is_reported_as_truncated(self):
+    def test_more_than_128_settled_calls_have_bounded_rows_and_remain_judgeable(self):
         projector = new_projector()
         self.observe_root(projector)
         for number in range(129):
             projector.observe_notification(frame("item/started", {"type": "commandExecution", "id": f"i-{number}"}))
             projector.observe_notification(frame("item/completed", {"type": "commandExecution", "id": f"i-{number}"}))
         package = projector.finish(True)
-        self.assertEqual(len(package["events"]), 128)
-        self.assertTrue(package["truncated"])
+        self.assertEqual(len(calls(package)), 129)
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (129, 0))
+        self.assertLess(package["calls"]["bytes"], 129 * 512)
+        self.assertLess(len(json.dumps(package)), 2048)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_arguments_and_output_bodies_never_enter_the_package(self):
         projector = new_projector()
@@ -293,7 +303,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                                             "name": "shell", "arguments": '{"secret":"tok- inside"}'}))
         projector.observe_notification(raw({"type": "function_call_output", "call_id": "call-1",
                                             "output": "secret output body"}))
-        encoded = json.dumps(projector.finish(True))
+        package = projector.finish(True)
+        encoded = json.dumps(package) + Path(package["calls"]["path"]).read_text(encoding="utf-8")
         self.assertNotIn("tok- inside", encoded)
         self.assertNotIn("secret output body", encoded)
 
@@ -425,19 +436,20 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
 
     def test_protocol_variants_retain_answers_and_report_tools_for_publication(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
-        for index, (name, _carrier, _fields, calls, phases, complete) in enumerate(PROTOCOL_ITEMS + FUTURE_ITEMS):
+        for index, (name, _carrier, _fields, expected_calls, phases, complete) in enumerate(PROTOCOL_ITEMS + FUTURE_ITEMS):
             with self.subTest(name=name):
                 outcome, _context = self.run_review("protocol-" + name, index="protocol-" + str(index))
                 self.assertEqual(outcome.status, "ok", outcome.result)
                 self.assertEqual(json.loads(outcome.result["rawAnswer"])["buddyId"], "legal")
                 evidence = outcome.result["toolEvidence"]
-                self.assertEqual(evidence["toolCalls"], calls)
-                self.assertEqual(outcome.result["usage"]["toolCalls"], calls)
-                self.assertEqual(tuple(event["phase"] for event in evidence["events"]), phases)
+                self.assertEqual(evidence["toolCalls"], expected_calls)
+                self.assertEqual(outcome.result["usage"]["toolCalls"], expected_calls)
+                self.assertEqual(tuple(calls(evidence)[0]["phases"]) if phases else (),
+                                 tuple(sorted(phase for phase in phases if phase is not None)))
                 self.assertEqual(evidence["streamComplete"], complete)
                 self.assertEqual(judge_tool_evidence(evidence, "read"),
                                  "router-tool-evidence-unverified" if not complete
-                                 else "router-tools-forbidden" if phases else None)
+                                     else "router-tools-forbidden" if phases else None)
 
     def test_settled_typed_and_raw_calls_project_as_two_counted_calls(self):
         outcome, context = self.run_review("readonly-evidence", index=1)
@@ -447,15 +459,13 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertFalse(evidence["truncated"])
+        self.assertEqual(evidence["version"], 2)
         self.assertEqual(evidence["toolCalls"], 2)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
-        self.assertEqual([(event["callId"], event["toolName"], event["category"], event["phase"])
-                          for event in evidence["events"]],
-                         [("item-1", "commandExecution", "execute", "start"),
-                          ("item-1", "commandExecution", "execute", "end"),
-                          ("call-1", "shell", "execute", "start"),
-                          ("call-1", "shell", "execute", "end")])
+        self.assertEqual([(call["callId"], call["categories"], call["phases"])
+                          for call in calls(evidence)],
+                         [("item-1", ["execute"], ["end", "start"]),
+                          ("call-1", ["execute"], ["end", "start"])])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 2)
         # The prior bounded capture keeps its raw replayed frame unchanged.
         self.assertEqual(len(outcome.result["nativeRawToolEvents"]), 3)
@@ -465,9 +475,9 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual(evidence["toolCalls"], 1)
-        facts = {(event["toolName"], event["phase"]) for event in evidence["events"] if event["callId"] == "call-1"}
-        self.assertEqual(facts, {("commandExecution", "start"), ("commandExecution", "end"),
-                                 ("shell", "start"), ("shell", "end")})
+        self.assertEqual([(call["categories"], call["phases"], call["consistent"])
+                          for call in calls(evidence) if call["callId"] == "call-1"],
+                         [(["execute"], ["end", "start"], True)])
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
         self.assertIsNone(judge_tool_evidence(evidence, 'read'))
 
@@ -475,7 +485,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         outcome, _context = self.run_review("readonly-foreign", index=3)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        identities = {json.dumps(event["nativeIdentity"], sort_keys=True) for event in evidence["events"]}
+        identities = {json.dumps(call["nativeIdentity"], sort_keys=True) for call in calls(evidence)}
         self.assertEqual(identities, {json.dumps(identity, sort_keys=True) for identity in (
             {"sessionId": "thread-sub", "turnId": "sub-turn-1"},
             {"sessionId": "thread-1", "turnId": "native-turn-99"})})
@@ -483,14 +493,16 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "native-turn-1"}])
         self.assertEqual(evidence["toolCalls"], 2)
 
-    def test_stream_bound_marks_the_package_truncated(self):
+    def test_stream_above_old_bound_keeps_all_judgeable_calls(self):
         outcome, _context = self.run_review("readonly-truncated", index=4, toolCalls=500)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual(len(evidence["events"]), 128)
-        self.assertTrue(evidence["truncated"])
+        self.assertEqual(len(calls(evidence)), 130)
         self.assertEqual(evidence["toolCalls"], 130)
         self.assertEqual(evidence["unsettledToolCalls"], 0)
+        self.assertLess(evidence["calls"]["bytes"], 130 * 512)
+        self.assertLess(len(json.dumps(evidence)), 2048)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read"))
         self.assertTrue(outcome.result["nativeEvidenceTruncated"])
 
     def test_correction_accumulates_roots_tool_counts_and_keeps_old_turn_facts(self):
@@ -502,10 +514,9 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                       {"sessionId": "thread-1", "turnId": "native-turn-2"}])
         self.assertEqual(evidence["toolCalls"], 3)
         self.assertEqual(evidence["unsettledToolCalls"], 1)
-        stale = [event for event in evidence["events"] if event["callId"] == "item-stale"]
-        self.assertEqual(stale, [{"nativeIdentity": {"sessionId": "thread-1", "turnId": "native-turn-1"},
-                                  "callId": "item-stale", "toolName": "commandExecution",
-                                  "category": "execute", "phase": "start"}])
+        stale = [call for call in calls(evidence) if call["callId"] == "item-stale"]
+        self.assertEqual([(call["nativeIdentity"], call["categories"], call["phases"]) for call in stale],
+                         [({"sessionId": "thread-1", "turnId": "native-turn-1"}, ["execute"], ["start"])])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 3)
         self.assertFalse(evidence["streamComplete"])
 
@@ -519,7 +530,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                                                "attemptId": context.attempt_id, "generation": context.generation})
         self.assertEqual(evidence["nativeIdentity"], [])
         self.assertFalse(evidence["streamComplete"])
-        self.assertEqual(evidence["events"], [])
+        self.assertEqual(calls(evidence), [])
 
     def test_budget_interrupt_leaves_the_open_call_unsettled_in_the_package(self):
         outcome, _context = self.run_review("readonly-budget", index=7, toolCalls=0)

@@ -7,6 +7,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls, write_tool_calls
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
@@ -125,8 +126,12 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                 self.args.output_root = Path(self.temp.name) / harness
                 packet = self.prepared()
                 outcome = self.outcome(packet)
-                for event in outcome.result['toolEvidence']['events']:
-                    event.update(toolName='native-command', category='execute')
+                evidence = outcome.result['toolEvidence']
+                calls = list(read_tool_calls(evidence))
+                for call in calls:
+                    call['categories'] = ['execute']
+                    call['facts'] = [{'toolName': 'native-command', 'category': 'execute'}]
+                evidence['calls'] = write_tool_calls(evidence['binding'], calls)
                 self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'passed')
                 packet['permission'] = 'none'
                 self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'failed')

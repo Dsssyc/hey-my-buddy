@@ -32,7 +32,7 @@ from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_rec
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles.turn_io import validate_outcome
 from hey_my_buddy.protocol.tool_evidence import (
-    MAX_TOOL_EVENTS, TOOL_EVIDENCE_UNVERIFIED, TOOLS_FORBIDDEN, judge_tool_evidence)
+    TOOL_EVIDENCE_UNVERIFIED, TOOLS_FORBIDDEN, judge_tool_evidence, read_tool_calls)
 
 BINDING = {"harness": "dsh", "taskId": "task", "attemptId": "attempt", "generation": 1}
 
@@ -53,9 +53,11 @@ class DshToolFactsTests(unittest.TestCase):
                 collector.observe(update(call_id=f"call-{name}", name=name, kind="tool_call_update",
                                          status="completed"))
                 package = collector.finish(True)
-                events = [event for event in package["events"] if event["toolName"] == name]
-                self.assertEqual([event["category"] for event in events], [category, category],
-                                 "start and end carry the same fixed category")
+                calls = list(read_tool_calls(package))
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0]["categories"], [category])
+                self.assertEqual(calls[0]["phases"], ["end", "start"])
+                self.assertTrue(calls[0]["consistent"])
                 self.assertEqual(package["toolCalls"], 1)
                 if category in ("edit", "other"):
                     self.assertEqual(judge_tool_evidence(package, "read"), TOOLS_FORBIDDEN)
@@ -71,7 +73,7 @@ class DshToolFactsTests(unittest.TestCase):
         collector.observe(update(name="grep", kind="tool_call", status="completed"))
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
+        self.assertEqual(list(read_tool_calls(package))[0]["phases"], ["end", "start"])
 
     def test_a_pending_update_settles_only_on_its_terminal_frame(self):
         collector = DshToolFacts(dict(BINDING))
@@ -90,13 +92,15 @@ class DshToolFactsTests(unittest.TestCase):
         collector.observe(update(call_id="call-no-name", name=None))
         collector.observe(update(session_id=None, call_id="call-no-session", name="read"))
         package = collector.finish(True)
-        self.assertEqual(len(package["events"]), 3, "each broken fact stays a bounded retained fact")
-        self.assertEqual([event["callId"] for event in package["events"]],
+        calls = list(read_tool_calls(package))
+        self.assertEqual(len(calls), 3, "each broken fact stays a bounded retained call")
+        self.assertEqual([call["callId"] for call in calls],
                          [None, "call-no-name", "call-no-session"])
+        self.assertTrue(all(call["incomplete"] for call in calls))
         self.assertFalse(package["streamComplete"],
                          "a broken fact means the stream can never pass as complete")
         self.assertEqual(package["toolCalls"], 0,
-                         "a call with no identity is not a countable call")
+                         "a missing name cannot establish a normalized started call")
 
     def test_correction_roots_accumulate_without_resetting_counts(self):
         collector = DshToolFacts(dict(BINDING))
@@ -113,17 +117,21 @@ class DshToolFactsTests(unittest.TestCase):
         self.assertEqual([root["sessionId"] for root in package["nativeIdentity"]],
                          ["session-1", "session-2"])
 
-    def test_the_identity_cap_keeps_every_surplus_call_a_retained_fact(self):
+    def test_more_than_128_named_calls_remain_complete_and_keep_their_categories(self):
         collector = DshToolFacts(dict(BINDING))
         collector.add_root("session-1")
-        for index in range(MAX_TOOL_EVENTS + 3):
-            collector.observe(update(call_id=f"call-{index}", name="read"))
+        for index in range(131):
+            collector.observe(update(call_id=f"call-{index}", name="read" if index != 130 else "write"))
+            collector.observe(update(call_id=f"call-{index}", name="read" if index != 130 else "write",
+                                     kind="tool_call_update", status="completed"))
         package = collector.finish(True)
-        self.assertEqual(package["toolCalls"], MAX_TOOL_EVENTS,
-                         "only provable identities count as calls")
-        self.assertFalse(package["streamComplete"],
-                         "the surplus facts are incomplete and can never prove the stream")
-        self.assertGreaterEqual(len(package["events"]), MAX_TOOL_EVENTS)
+        calls = list(read_tool_calls(package))
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (131, 0))
+        self.assertTrue(package["streamComplete"])
+        self.assertEqual(len(calls), 131)
+        self.assertEqual(calls[-1]["categories"], ["edit"])
+        self.assertTrue(all(call["consistent"] and not call["incomplete"] for call in calls))
+        self.assertEqual(judge_tool_evidence(package, "read"), TOOLS_FORBIDDEN)
 
     def test_stream_and_verdicts_stay_separate_facts(self):
         collector = DshToolFacts(dict(BINDING))
@@ -152,9 +160,9 @@ class DshToolFactsTests(unittest.TestCase):
         self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "none"),
                          TOOLS_FORBIDDEN,
                          "a clearly disallowed call invalidates the answer even on a broken stream")
-        self.assertEqual(judge_tool_evidence({**package, "truncated": True}, "read"),
+        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "read"),
                          TOOL_EVIDENCE_UNVERIFIED,
-                         "a truncated package is unverified, never silently allowed")
+                         "an incomplete stream cannot establish permission")
 
 
 class DshReceiptSeamTests(unittest.TestCase):

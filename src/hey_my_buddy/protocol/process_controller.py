@@ -37,35 +37,7 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
                 raise
             evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=False,
                                                exit_code=process.returncode)
-            try:
-                handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
-            except BaseException as error:
-                # Popen has returned. Preserve its held process even if a
-                # replacement or faulty constructor raises before returning.
-                prior = getattr(error, "owned_popen_evidence", None)
-                from .process_handle import ProcessHandle as OwnedProcessHandle
-
-                partial = (getattr(error, "execution_handle", None)
-                           or OwnedProcessHandle.adopt_unregistered(
-                               process, own_group=True, log_paths=log_paths))
-                error.execution_handle = partial
-                if prior is not None and prior.shutdown_confirmed:
-                    raise
-                try:
-                    partial.terminate(grace_seconds=0)
-                    process.wait(timeout=2)
-                    stopped = partial.shutdown_confirmed(settle_seconds=0)
-                except BaseException:
-                    stopped = False
-                receipt = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,
-                                                  exit_code=process.returncode)
-                if not stopped:
-                    failure = RuntimeError("controller child shutdown is unconfirmed after handle construction failure")
-                    failure.owned_popen_evidence = receipt
-                    failure.execution_handle = partial
-                    raise failure from error
-                error.owned_popen_evidence = receipt
-                raise
+            handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
         finally:
             try:
                 os.close(stdout)

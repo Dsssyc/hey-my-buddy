@@ -21,9 +21,22 @@ from pydantic import ValidationError
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy import paths as local_paths
+from hey_my_buddy.protocol import tool_evidence
 
 FIXTURES = Path(__file__).parent / "fixtures" / "run_contract"
-PAYLOADS = {"codex": json.loads((FIXTURES / "codex-payloads.json").read_text(encoding="utf-8"))}
+def fixture_payloads():
+    payloads = json.loads((FIXTURES / "codex-payloads.json").read_text(encoding="utf-8"))
+    for payload in payloads["payloads"].values():
+        if "toolEvidence" in payload:
+            package = payload["toolEvidence"]
+            reference = tool_evidence.write_tool_calls(package["binding"], [])
+            assert reference["sha256"] == package["calls"]["sha256"]
+            assert reference["bytes"] == package["calls"]["bytes"]
+            package["calls"] = reference
+    return {"codex": payloads}
+
+
+PAYLOADS = fixture_payloads()
 
 IDENTITY = {"taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1,
             "invocationId": "invocation-fixture", "turnId": "turn-fixture", "inputSha256": "a" * 64}
@@ -69,11 +82,9 @@ def full_result() -> rc.RunResult:
         value=rc.RunValue(schema_status="valid",  parsed=rc.FrozenJson({"a": 1}),
                            correction_count=0),
         completion_evidence=rc.CompletionEvidence( stream_end=True),
-        tool_evidence=rc.FrozenJson({"version": 1,
-                                     "binding": {"harness": "zcode", "taskId": "task-fixture",
-                                                 "attemptId": "attempt-fixture", "generation": 1},
-                                     "nativeIdentity": [{"sessionId": "s1"}], "streamComplete": True,
-                                     "events": [], "toolCalls": 0, "unsettledToolCalls": 0, "truncated": False}),
+        tool_evidence=rc.FrozenJson(tool_evidence.ToolEventEvidence({
+            "harness": "zcode", "taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1,
+        }).finish([{"sessionId": "s1"}], True)),
 
         effective_policy=rc.EffectivePolicy(
             tools=rc.PolicyFact(
@@ -348,24 +359,21 @@ class CodecRoundtripTests(unittest.TestCase):
         self.assertEqual(len(value.raw), 70000 + len('{"answer": 1}'))
         with self.assertRaises(BoardError):
             rc.RunValue(schema_status="valid",  raw="x" * (rc.MAX_VALUE_BYTES + 1))
-        # The fact-package bound holds a maximal legal tool-evidence package
-        # (128 events at the spec's own field bounds), which the old strict
-        # read could carry.
-        package = {"version": 1,
-                   "binding": {"harness": "codex", "taskId": "task-fixture",
-                               "attemptId": "attempt-fixture", "generation": 1},
-                   "nativeIdentity": [{"sessionId": "s" * 128}], "streamComplete": True,
-                   "events": [], "toolCalls": 64, "unsettledToolCalls": 0, "truncated": False}
-        for index in range(64):
+        # Growing call facts exceed a message without enlarging its envelope.
+        collector = tool_evidence.ToolEventEvidence({
+            "harness": "codex", "taskId": "task-fixture", "attemptId": "attempt-fixture", "generation": 1})
+        root = {"sessionId": "s" * 128}
+        for index in range(1000):
             for phase in ("start", "end"):
-                package["events"].append({"nativeIdentity": {"sessionId": "s" * 128},
-                                          "callId": f"c{index}" + "x" * 120,
-                                          "toolName": "mcp_" + "n" * 500,
-                                          "category": "other", "phase": phase})
-        self.assertGreater(len(json.dumps(package).encode()), 100000)
+                collector.observe({"nativeIdentity": root, "callId": f"c{index}" + "x" * 120,
+                                   "toolName": "mcp_" + "n" * 500, "category": "other", "phase": phase})
+        package = collector.finish([root], True)
+        self.assertGreater(package["calls"]["bytes"], rc.MAX_PACKAGE_BYTES)
+        self.assertLess(len(json.dumps(package).encode()), 4096)
         payload = full_result().to_payload()
         payload["toolEvidence"] = package
-        self.assertEqual(len(rc.RunResult.from_payload(payload).tool_evidence.value["events"]), 128)
+        decoded = rc.RunResult.from_payload(payload).tool_evidence.value
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(decoded))), 1000)
         payload = full_result().to_payload()
         payload["evidenceRefs"] = [{"kind": "blob", "location": "x" * 900000}]
         with self.assertRaises(BoardError):
@@ -649,28 +657,33 @@ class InterfaceSurfaceTests(unittest.TestCase):
         decoded = rc.RunResult.from_payload(payload)
         self.assertEqual(decoded.tool_evidence.value["nativeIdentity"], [])
         self.assertFalse(decoded.tool_evidence.value["streamComplete"])
-        # The projection's own incomplete event facts — an empty identity and
-        # missing callId/toolName/phase — ride losslessly since the Host's
-        # step 2-B continuation decision; the closed key set, the version and
-        # the category enum stay exactly the collector's.
+        # Incomplete calls remain bounded, digest-bound facts. The run boundary
+        # validates the envelope; the service validates rows and judges them.
         carried = json.loads(json.dumps(package))
-        carried["events"].append({"nativeIdentity": {}, "callId": None, "toolName": None,
-                                  "category": "other", "phase": None})
+        row = {"nativeIdentity": {}, "callId": None, "categories": ["other"], "phases": [],
+               "facts": [{"toolName": None, "category": "other"}], "consistent": True,
+               "endBeforeStart": False, "incomplete": True, "malformed": True, "belongsToRoot": False}
+        carried["calls"] = tool_evidence.write_tool_calls(carried["binding"], [row])
         payload = full_result().to_payload()
         payload["toolEvidence"] = carried
         decoded = rc.RunResult.from_payload(payload)
-        self.assertIsNone(decoded.tool_evidence.value["events"][-1]["callId"])
-        for mutation in ({"version": 2}, {"events": [{"nativeIdentity": {}, "callId": "c",
-                                                      "toolName": "Read", "category": "navigate",
-                                                      "phase": "start"}]},
-                          {"events": [{"nativeIdentity": {"bogus": "x"}, "callId": "c",
-                                       "toolName": "Read", "category": "other", "phase": "start"}]}):
+        self.assertEqual(list(tool_evidence.read_tool_calls(decoded.tool_evidence.value)), [row])
+        for mutation in ({"version": 1}, {"calls": []},
+                         {"calls": {**package["calls"], "sha256": "x" * 64}},
+                         {"calls": {**package["calls"], "path": str(Path(tempfile.gettempdir()) / "foreign.jsonl")}},
+                         {"calls": {**package["calls"], "bytes": True}}):
             broken = json.loads(json.dumps(package))
             broken.update(mutation)
             payload = full_result().to_payload()
             payload["toolEvidence"] = broken
             with self.assertRaises(BoardError):
                 rc.RunResult.from_payload(payload)
+
+    def test_frozen_json_rejects_nonfinite_numbers_at_canonicalization(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(BoardError):
+                rc.FrozenJson.from_value({"number": value}, "fixture", maximum=1024)
+
 
 
 if __name__ == "__main__":

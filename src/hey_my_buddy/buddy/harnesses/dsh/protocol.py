@@ -27,7 +27,7 @@ from ....protocol.activity import (
     MAX_EVENT_SEQ,
     native_tool_name,
 )
-from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
+from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ..session_receipts import refusal_shaped, verify_inquiry_receipt, verify_receipt, verify_tool_refusal
 
 HARNESS = "dsh"
@@ -139,9 +139,6 @@ class DshToolFacts:
         if identity and call_id and name:
             key = (identity["sessionId"], call_id)
             if phase == "start":
-                if key not in self._names and len(self._names) >= MAX_TOOL_EVENTS:
-                    self._incomplete(identity, call_id, name, phase)
-                    return
                 self._names.setdefault(key, name)
             event = normalize_tool_event(HARNESS, {
                 "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})

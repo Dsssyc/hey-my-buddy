@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import os
-import stat
 from pathlib import Path
 
 from .. import locking
+from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
+from ..private_dirs import open_regular_fd
 from .run_identity import RunIdentity
 
 #: Byte cap of the inquiry journal one attempt replays; the controller writer
@@ -21,7 +22,7 @@ MAX_JOURNAL_BYTES = 1024 * 1024
 INQUIRY_JOURNAL_VERSION = 1
 
 
-def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
+def read_shared_snapshot(path, max_bytes: int, *, raise_missing: bool = False) -> bytes | None:
     """One bounded, shared-locked read of the inquiry journal file.
 
     This is the reader side of the journal's cross-process barrier (POSIX flock,
@@ -29,19 +30,23 @@ def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
     controller writer holds the exclusive side through its append/fsync/commit
     transaction, this read waits, so a reader can never observe a record that
     the writer has not fully committed — neither an in-flight append nor the
-    remains of a failed one. Returns ``None`` when the file cannot be opened and
-    at most ``max_bytes + 1`` bytes so the caller can distinguish an empty
-    journal from a snapshot that exceeds its bound.
+    remains of a failed one. Returns ``None`` when the file cannot be opened
+    (or raises for a missing file when requested), and at most
+    ``max_bytes + 1`` bytes to distinguish empty from over-limit snapshots.
     """
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
+        fd = open_regular_fd(Path(path), os.O_RDONLY)
+    except FileNotFoundError:
+        if raise_missing:
+            raise
+        return None
+    except (OSError, BoardError, ValueError):
         return None
     try:
         locking.lock(fd, shared=True)
         chunks = bytearray()
         while len(chunks) <= max_bytes:
-            block = os.read(fd, 65536)
+            block = os.read(fd, min(65536, max_bytes + 1 - len(chunks)))
             if not block:
                 break
             chunks.extend(block)
@@ -66,16 +71,12 @@ def _journal_rejection_reason(record: dict, bound: dict) -> str:
 def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path | None) -> dict:
     """The journal as one availability fact over the shared-locked snapshot read.
 
-    The availability reasons follow the direct reader's own semantics,
-    decided by a minimal state check beside the shared-locked read: no
-    path, not written (the state check itself fails), unreadable (the state
-    check passed but the locked open did not), actually over the byte cap,
-    and — a real, readable file — empty with zero entries. ``entries`` is
-    the reader's own deduplicated per-question count over every
-    well-formed record, rejected ones included.
+    An absent path or file is not written; an open or read failure is
+    unreadable. An ordinary file is read under the writer's lock up to the
+    byte cap plus one. ``entries`` counts deduplicated well-formed questions,
+    including rejected ones.
 
-    Each question's fact follows its final effective record, the same
-    last-record-per-id rule the direct reader applies: a latest legal
+    Each question's fact follows its final effective record: a latest legal
     record clears the id's older rejection and contributes its bound
     records (their source continuity intact), a latest foreign record
     contributes exactly one rejection with its own reason — never an
@@ -83,23 +84,14 @@ def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path 
     the last write was legal.
     """
     if not journal_path:
-        return {"available": False, "reason": "no-journal-path", "entries": 0,
-                "records": [], "rejections": []}
-    try:
-        info = os.stat(journal_path)
-    except OSError:
         return {"available": False, "reason": "journal-not-written", "entries": 0,
                 "records": [], "rejections": []}
-    if not stat.S_ISREG(info.st_mode):
-        return {"available": False, "reason": "journal-unreadable", "entries": 0,
+    try:
+        raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES, raise_missing=True)
+    except FileNotFoundError:
+        return {"available": False, "reason": "journal-not-written", "entries": 0,
                 "records": [], "rejections": []}
-    if info.st_size > MAX_JOURNAL_BYTES:
-        return {"available": False, "reason": "journal-exceeds-limit", "entries": 0,
-                "records": [], "rejections": []}
-    raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES)
     if raw is None:
-        # The state check passed and the locked open still failed: the
-        # direct reader called this unreadable, not missing.
         return {"available": False, "reason": "journal-unreadable", "entries": 0,
                 "records": [], "rejections": []}
     if len(raw) > MAX_JOURNAL_BYTES:
@@ -150,8 +142,7 @@ def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path 
         bound_records.setdefault(question_id, []).append(record)
         anchors[question_id] = {**previous, **record}
         rejection.pop(question_id, None)
-    # The final effective record per id decides, exactly like the direct
-    # reader's last-record rule: an id whose latest record was foreign
+    # The final effective record per id decides: an id whose latest record was foreign
     # contributes its one rejection and none of its earlier records.
     records = [record for question_id, question_records in bound_records.items()
                if question_id not in rejection

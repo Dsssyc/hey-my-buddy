@@ -423,7 +423,7 @@ class TestInquiry(BoardTestCase):
 
     def test_journal_reading_is_bounded_and_never_throws(self):
         directory = self.workdir("journal")
-        self.assertEqual(read_inquiry_journal({}, None)["reason"], "no-journal-path")
+        self.assertEqual(read_inquiry_journal({}, None)["reason"], "journal-not-written")
         self.assertEqual(read_inquiry_journal({}, str(directory / "absent.jsonl"))["reason"], "journal-not-written")
         big = directory / "big.jsonl"
         big.write_bytes(b"x" * (MAX_JOURNAL_BYTES + 1))

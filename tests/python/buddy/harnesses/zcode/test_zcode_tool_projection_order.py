@@ -73,13 +73,18 @@ class NativeProjectionTests(unittest.TestCase):
         self.assertIsNone(self.judge())
         package = self.facts.finish(True)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["phases"], ["end", "start"])
+        self.assertEqual(calls[0]["categories"], ["read"])
+        self.assertTrue(calls[0]["belongsToRoot"])
 
     def test_metadata_terminal_cannot_replace_canonical_result(self):
         self.scheduled()
         self.metadata("completed")
         self.assertIsNotNone(self.judge())
-        self.assertEqual([event["phase"] for event in self.facts.finish(True)["events"]], ["start"])
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[0]["phases"],
+                         ["start"])
 
     def test_metadata_start_without_canonical_start_stays_incomplete(self):
         self.operation("scheduled")
@@ -93,13 +98,14 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("tool.updated", {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}, turnId=None)
         self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
         self.assertIsNotNone(self.judge())
-        self.assertTrue(any(event["nativeIdentity"] == {"sessionId": "session"}
-                            for event in self.facts.finish(True)["events"]))
+        self.assertTrue(any(call["nativeIdentity"] == {"sessionId": "session"}
+                            for call in tool_evidence.read_tool_calls(self.facts.finish(True))))
 
     def test_unknown_optional_turn_is_not_invented(self):
         self.metadata("started", turn=None)
         self.assertIsNotNone(self.judge())
-        self.assertEqual(self.facts.finish(True)["events"][0]["nativeIdentity"], {"sessionId": "session"})
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[0]["nativeIdentity"],
+                         {"sessionId": "session"})
 
     def test_optional_turn_requires_a_unique_known_native_call(self):
         self.scheduled()
@@ -109,7 +115,8 @@ class NativeProjectionTests(unittest.TestCase):
             "payload": {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}}})
         self.metadata("started", turn=None)
         self.assertFalse(self.facts.finish(True)["streamComplete"])
-        self.assertEqual(self.facts.finish(True)["events"][-1]["nativeIdentity"], {"sessionId": "session"})
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True)))[-1]["nativeIdentity"],
+                         {"sessionId": "session"})
 
     def test_names_scope_and_foreign_metadata_remain_incomplete(self):
         for extra in ({"toolName": "Bash"}, {"childSessionId": "child"}, {"background": True},
@@ -126,7 +133,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.facts.observe({"method": "v4/telemetry/event", "params": {
             "kind": "tool.lifecycle", "sessionId": "foreign", "turnId": "foreign-turn",
             "eventSeq": 1, "phase": "scheduled", "toolCallId": "read", "toolName": "Bash"}})
-        self.assertTrue(self.facts.finish(False)["events"])
+        self.assertTrue(list(tool_evidence.read_tool_calls(self.facts.finish(False))))
         self.assertIsNotNone(self.judge())
 
     def test_late_metadata_and_conflicting_terminal_facts_remain_incomplete(self):
@@ -240,9 +247,11 @@ class NativeDenialTests(unittest.TestCase):
         self.append(self.denial("write", "Write"))
         package = self.complete()
         self.assertEqual(package["unsettledToolCalls"], 0)
-        self.assertEqual([(event["callId"], event["toolName"], event["phase"])
-                          for event in package["events"]],
-                         [("write", "Write", "start"), ("write", "Write", "end")])
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual([(call["callId"], call["categories"], call["phases"])
+                          for call in calls],
+                         [("write", ["edit"], ["end", "start"])])
+        self.assertTrue(calls[0]["belongsToRoot"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
@@ -253,7 +262,7 @@ class NativeDenialTests(unittest.TestCase):
         self.append(denial)
         package = self.complete()
         self.assertEqual(package["unsettledToolCalls"], 0)
-        self.assertEqual(len(package["events"]), 2)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_incomplete_log_line_waits_for_the_rest(self):

@@ -7,6 +7,7 @@ import uuid
 from contextlib import nullcontext
 from unittest import mock
 
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
@@ -73,7 +74,7 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertEqual(code, 1)
         self.assertEqual(payload["code"], "readonly-budget-exhausted")
         self.assertEqual(payload["usage"]["toolCalls"], 2)
-        self.assertEqual(payload["toolEvidence"]["events"][0]["toolName"], "Read")
+        self.assertEqual(list(read_tool_calls(payload["toolEvidence"]))[0]["categories"], ["read"])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
     def test_correction_keeps_review_budget_and_the_original_review_prompt(self):

@@ -18,6 +18,7 @@ from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
 from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation
 from hey_my_buddy.buddy.roles.structured_call import collect, correction_code
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "no_tool_codex.py"
@@ -78,8 +79,8 @@ class NoToolCodexTests(unittest.TestCase):
                                                "attemptId": "router-attempt", "generation": 7})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": "thread-1", "turnId": "turn-1"}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual((evidence["events"], evidence["toolCalls"], evidence["unsettledToolCalls"],
-                          evidence["truncated"]), ([], 0, 0, False))
+        self.assertEqual((list(read_tool_calls(evidence)), evidence["toolCalls"],
+                          evidence["unsettledToolCalls"]), ([], 0, 0))
         trace = json.loads((directory / "trace.json").read_text(encoding="utf-8"))
         self.assertEqual(trace["home"], str(self.home))
         self.assertEqual(trace["userHome"], str(self.root))
@@ -95,18 +96,20 @@ class NoToolCodexTests(unittest.TestCase):
     def test_protocol_variants_preserve_non_tool_answers_and_conservative_tool_evidence(self):
         from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
-        for name, carrier, _fields, calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
+        for name, carrier, _fields, expected_calls, phases, complete in PROTOCOL_ITEMS + FUTURE_ITEMS:
             with self.subTest(name=name):
                 outcome, _control, _directory = self.run_case("protocol-" + name)
                 evidence = outcome.result["toolEvidence"]
-                self.assertEqual(evidence["toolCalls"], calls)
+                self.assertEqual(evidence["toolCalls"], expected_calls)
                 # Fast calls interrupt on the first tool marker. A typed result
                 # has no end fact yet when its display's started frame arrives.
                 fast_phases = (() if name == "functionCallOutput" else phases[:1]) if carrier == "typed" else phases
-                self.assertEqual(tuple(event["phase"] for event in evidence["events"]), fast_phases)
+                rows = list(read_tool_calls(evidence))
+                self.assertEqual(tuple(rows[0]["phases"]) if fast_phases else (),
+                                 tuple(sorted(phase for phase in fast_phases if phase is not None)))
                 self.assertEqual(judge_tool_evidence(evidence, "none"),
-                                 "router-tool-evidence-unverified" if not complete or name == "functionCallOutput"
-                                 else "router-tools-forbidden" if phases else None)
+                                 "router-tool-evidence-unverified" if name == "functionCallOutput" or not complete
+                                 else "router-tools-forbidden" if rows else None)
                 if phases and complete:
                     self.assertEqual(outcome.status, "failed", outcome.result)
                     self.assertEqual(outcome.result["code"], "no-tool-violation")
@@ -173,20 +176,20 @@ class NoToolCodexTests(unittest.TestCase):
                 # never silently absent on a refused fast call.
 
     def test_projected_facts_survive_rejections_and_corrections_add_roots(self):
-        for case, tool_name in (("typed", "commandExecution"), ("collab", "collabAgentToolCall"),
-                                ("raw", "exec_command"), ("late", "custom_tool_call_output")):
+        for case, category in (("typed", "execute"), ("collab", "other"),
+                               ("raw", "execute"), ("late", "other")):
             with self.subTest(case=case):
                 outcome, _control, _directory = self.run_case(case)
                 evidence = outcome.result["toolEvidence"]
                 self.assertFalse(evidence["streamComplete"])
-                self.assertTrue(any(event["toolName"] == tool_name for event in evidence["events"]),
-                                (case, evidence["events"]))
+                rows = list(read_tool_calls(evidence))
+                self.assertTrue(any(category in row["categories"] for row in rows), (case, rows))
                 self.assertEqual(evidence["binding"]["taskId"], "router-task")
         outcome, _control, _directory = self.run_case("format")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         evidence = outcome.result["toolEvidence"]
         self.assertEqual([identity["turnId"] for identity in evidence["nativeIdentity"]], ["turn-1", "turn-2"])
-        self.assertEqual(evidence["events"], [])
+        self.assertEqual(list(read_tool_calls(evidence)), [])
         self.assertTrue(evidence["streamComplete"])
 
     def test_unknown_event_keeps_a_valid_answer(self):

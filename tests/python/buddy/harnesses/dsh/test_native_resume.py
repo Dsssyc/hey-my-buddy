@@ -30,6 +30,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.native_run import run
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
+from hey_my_buddy.protocol import tool_evidence
 
 from buddy.harnesses.dsh.test_native_run import NativeRunCase
 
@@ -227,7 +228,7 @@ class ResumeTurnTests(NativeResumeCase):
         self.assertEqual(_record_facts(result2)["bootstrapUpdates"], 4)
         package = result2.tool_evidence.value
         self.assertEqual(package["toolCalls"], 0)
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertEqual(package["nativeIdentity"], [{"sessionId": previous}])
         self.assertEqual(result2.activity.value["counts"]["modelTurns"], 1)
         # The replayed old tool pair is not this turn's activity: only this
@@ -360,9 +361,10 @@ class ResumeFailureTests(NativeResumeCase):
         self.assertEqual(result2.end.status, "error")
         self.assertEqual(result2.end.reason_code, "missing-finish")
         package = result2.tool_evidence.value
-        foreign = [event for event in package["events"]
-                   if event["nativeIdentity"].get("sessionId") == "foreign-live-root"]
+        foreign = [call for call in tool_evidence.read_tool_calls(package)
+                   if call["nativeIdentity"].get("sessionId") == "foreign-live-root"]
         self.assertTrue(foreign, "the foreign root's finish attempt stays a retained fact")
+        self.assertTrue(all(not call["belongsToRoot"] for call in foreign))
         self.assertEqual(self.methods_after_last_initialize(),
                          ["initialize", "session/resume", "session/set_config_option",
                           "session/set_config_option", "session/prompt", "session/cancel"])

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
 from .. import locking, private_dirs
+import errno
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ import uuid
 from typing import Any
 
 import c_two as cc
+from c_two._native import CoreError
+from c_two.error import CCError
 
 from . import rpc_config
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
@@ -102,6 +105,24 @@ class ServiceError(BoardError):
     """A board failure raised on the client side of the boundary."""
 
 
+def _local_rpc_error(error: CoreError | CCError) -> ServiceError:
+    """Keep C-Two's local I/O cause visible at the Host boundary."""
+    details = dict(getattr(error, 'details', None) or {})
+    details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
+               'io_kind', 'raw_os_error', 'io_operation')
+               if (value := getattr(error, key, None)) is not None})
+    kind = details.get('io_kind')
+    if kind == 'permission_denied':
+        code = 'LAUNCH_ACCESS_DENIED'
+    elif kind in ('not_found', 'connection_refused'):
+        code = 'SERVICE_UNAVAILABLE'
+    elif isinstance(error, CCError):
+        code = error.code.name
+    else:
+        code = 'C_TWO_' + str(getattr(error, 'category', 'UNKNOWN')).upper()
+    return ServiceError(code, str(error), **details)
+
+
 def encode_message(value: Any) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -144,8 +165,8 @@ def _invoke(service, endpoint: dict, operation: str, params: dict) -> dict:
     request = encode_message(payload)
     try:
         raw = getattr(service, operation)(request)
-    except Exception as exc:
-        raise ServiceError("SERVICE_UNAVAILABLE", "The board service did not answer this operation") from exc
+    except (CoreError, CCError) as exc:
+        raise _local_rpc_error(exc) from exc
     if not isinstance(raw, str) or len(raw.encode()) > MAX_MESSAGE_BYTES:
         raise ServiceError("INVALID_RESPONSE", "Invalid or oversized service response")
     try:
@@ -171,8 +192,8 @@ def _connection(endpoint: dict, resource: str, directory: Path):
     with ExitStack() as stack:
         try:
             service = stack.enter_context(cc.connect(contract, name=name, address=endpoint["address"]))
-        except Exception as exc:
-            raise ServiceError("SERVICE_UNAVAILABLE", "The board service did not answer this operation") from exc
+        except (CoreError, CCError) as exc:
+            raise _local_rpc_error(exc) from exc
         yield service
 
 
@@ -243,58 +264,62 @@ def _cold_start_preflight(directory: Path) -> None:
     directory = check_state_root(directory, create=True)
     probe = directory / ('.launch-probe-' + uuid.uuid4().hex[:12])
     socket_directory = None
-    address = None
+    socket_directory_fd = None
+    operation = 'configure_local_endpoint'
     try:
         rpc_config.configure_local_endpoint(directory)
+        operation = 'state_write'
         fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
-        if os.name == 'nt':
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            connector = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                listener.settimeout(1)
-                connector.settimeout(1)
-                listener.bind(('127.0.0.1', 0))
-                listener.listen(1)
-                connector.connect(listener.getsockname())
-                accepted, _ = listener.accept()
-                accepted.close()
-            finally:
-                connector.close()
-                listener.close()
-        else:
+        if os.name != 'nt':
             # State paths need not fit sockaddr_un; C-Two also uses short private
             # IPC names. Keep the probe independent of a deeply nested checkout.
+            operation = 'make_socket_directory'
             socket_directory = Path(tempfile.mkdtemp(prefix='hey-my-buddy-ipc-'))
+            socket_directory_fd = os.open(socket_directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             address = str(socket_directory / 's')
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             connector = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 listener.settimeout(1)
                 connector.settimeout(1)
+                operation = 'bind'
                 listener.bind(address)
                 listener.listen(1)
+                operation = 'connect'
                 connector.connect(address)
+                operation = 'accept'
                 accepted, _ = listener.accept()
                 accepted.close()
             finally:
                 connector.close()
                 listener.close()
     except OSError as error:
-        raise ServiceError('LAUNCH_ACCESS_DENIED',
-                           'Cold start needs state-directory writes and local IPC; allow this skill launcher outside the Host sandbox and retry') from error
+        if not isinstance(error, PermissionError) and error.errno not in (errno.EACCES, errno.EPERM):
+            raise
+        raise ServiceError('LAUNCH_ACCESS_DENIED', str(error),
+                           raw_os_error=error.errno, io_operation=operation) from error
     finally:
         try:
             probe.unlink(missing_ok=True)
         except OSError:
             pass
         try:
-            if address:
-                Path(address).unlink(missing_ok=True)
-            if socket_directory:
-                socket_directory.rmdir()
+            if socket_directory_fd is not None:
+                try:
+                    os.unlink('s', dir_fd=socket_directory_fd)
+                except FileNotFoundError:
+                    pass
+                # A replacement path is never used to clean up the opened directory.
+                opened = os.fstat(socket_directory_fd)
+                current = os.stat(socket_directory, follow_symlinks=False)
+                if (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino):
+                    socket_directory.rmdir()
         except OSError:
             pass
+        finally:
+            if socket_directory_fd is not None:
+                os.close(socket_directory_fd)
 
 
 def _retire_stale_endpoint(directory: Path) -> None:
@@ -314,7 +339,7 @@ def _retire_stale_endpoint(directory: Path) -> None:
                 locking.lock(fd, blocking=False)
             except BlockingIOError:
                 raise ServiceError('SERVICE_UNAVAILABLE',
-                    'The recorded owner did not answer; allow this launcher outside the Host sandbox or inspect the existing service') from None
+                    'The recorded owner did not answer while its lifetime lock is held') from None
         (directory / 'control.json').unlink(missing_ok=True)
     finally:
         for fd in reversed(locks):

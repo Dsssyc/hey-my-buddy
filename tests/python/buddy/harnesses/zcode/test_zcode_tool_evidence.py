@@ -232,9 +232,9 @@ class ProjectionTests(unittest.TestCase):
         facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'open', 'toolName': 'Bash'}))
         package = facts.finish(True, exclude_calls={(canonical_json(ROOT), "shared")})
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 1))
-        self.assertEqual([(event["nativeIdentity"]["sessionId"], event["callId"])
-                          for event in package["events"]],
-                         [("s-foreign", "shared"), ("s-foreign", "shared"), ("s-1", "open")])
+        self.assertEqual([(call["nativeIdentity"]["sessionId"], call["callId"])
+                          for call in tool_evidence.read_tool_calls(package)],
+                         [("s-foreign", "shared"), ("s-1", "open")])
 
     def test_native_started_and_progress_belong_to_the_existing_call(self):
         facts = self.facts()
@@ -246,7 +246,7 @@ class ProjectionTests(unittest.TestCase):
             facts.observe(frame(payload, seq=seq))
         package = facts.finish(True)
         self.assertEqual(package['toolCalls'], 1)
-        self.assertEqual([event['phase'] for event in package['events']], ['start', 'end'])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package))[0]['phases'], ['end', 'start'])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'read'))
 
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
@@ -267,21 +267,23 @@ class ProjectionTests(unittest.TestCase):
         facts.observe(frame({'kind': 'progress', 'toolCallId': 'read'}, seq=4))
         self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'read'))
 
-    def test_settled_pair_keeps_the_scheduled_name_and_fixed_fields_only(self):
+    def test_settled_pair_keeps_the_scheduled_category_and_fixed_fields_only(self):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read",
                              "title": "Reading main.py", "input": {"path": "/etc/passwd"}}))
         facts.observe(frame({"kind": "result", "toolCallId": "c-1",
                              "result": {"content": "whole file body"}}, seq=3))
         package = facts.finish(True)
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": dict(ROOT), "callId": "c-1", "toolName": "Read", "category": "read", "phase": "start"},
-            {"nativeIdentity": dict(ROOT), "callId": "c-1", "toolName": "Read", "category": "read", "phase": "end"}])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [
+            {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["read"],
+             "phases": ["end", "start"], "facts": [{"toolName": "Read", "category": "read"}],
+             "consistent": True, "endBeforeStart": False,
+             "incomplete": False, "malformed": False, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertTrue(package["streamComplete"])
-        self.assertFalse(package["truncated"])
+        self.assertEqual(set(package), tool_evidence.PACKAGE_FIELDS)
         # The blackboard consumes the projection: the recorded read call is a
         # legal review fact, and fast mode's zero-call rule rejects it.
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
@@ -294,9 +296,9 @@ class ProjectionTests(unittest.TestCase):
         facts.observe(frame({"kind": "error", "toolCallId": "c-1",
                              "error": {"message": "the pattern failed"}}, seq=3))
         package = facts.finish(True)
-        self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
-        self.assertEqual(package["events"][1]["toolName"], "Grep")
-        self.assertEqual(package["events"][1]["category"], "search")
+        call = list(tool_evidence.read_tool_calls(package))[0]
+        self.assertEqual(call["phases"], ["end", "start"])
+        self.assertEqual(call["categories"], ["search"])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
 
     def test_each_known_tool_maps_and_unknown_names_stay_other(self):
@@ -307,16 +309,19 @@ class ProjectionTests(unittest.TestCase):
             with self.subTest(name=name):
                 facts = self.facts()
                 facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": name}))
-                event = facts.finish(True)["events"][0]
-                self.assertEqual((event["toolName"], event["category"]), (name, category))
+                call = list(tool_evidence.read_tool_calls(facts.finish(True)))[0]
+                self.assertEqual(call["categories"], [category])
+                self.assertEqual(call["callId"], "c-1")
 
     def test_result_before_its_scheduled_stays_an_unnamed_end_fact(self):
         facts = self.facts()
         facts.observe(frame({"kind": "result", "toolCallId": "c-1"}, seq=2))
         package = facts.finish(True)
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": dict(ROOT), "callId": "c-1", "toolName": None,
-             "category": "other", "phase": "end"}])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [
+            {"nativeIdentity": dict(ROOT), "callId": "c-1", "categories": ["other"],
+             "phases": ["end"], "facts": [{"toolName": None, "category": "other"}],
+             "consistent": True, "endBeforeStart": True,
+             "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
@@ -326,9 +331,11 @@ class ProjectionTests(unittest.TestCase):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolName": "Bash"}))
         package = facts.finish(True)
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": dict(ROOT), "callId": None, "toolName": "Bash",
-             "category": "execute", "phase": "start"}])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [
+            {"nativeIdentity": dict(ROOT), "callId": None, "categories": ["execute"],
+             "phases": ["start"], "facts": [{"toolName": "Bash", "category": "execute"}],
+             "consistent": True, "endBeforeStart": False,
+             "incomplete": True, "malformed": True, "belongsToRoot": True}])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -345,35 +352,40 @@ class ProjectionTests(unittest.TestCase):
                 for key, value in params.items():
                     if not (isinstance(value, str) and value):
                         surviving.pop(key, None)
-                self.assertEqual(package["events"][0]["nativeIdentity"], surviving)
-                self.assertEqual(package["events"][0]["callId"], "c-1")
+                call = list(tool_evidence.read_tool_calls(package))[0]
+                self.assertEqual(call["nativeIdentity"], surviving)
+                self.assertEqual(call["callId"], "c-1")
+                self.assertTrue(call["incomplete"])
                 self.assertFalse(package["streamComplete"])
 
     def test_unknown_payload_kind_is_an_incomplete_fact_without_a_phase(self):
         facts = self.facts()
         facts.observe(frame({"kind": "updated", "toolCallId": "c-1", "toolName": "Read"}))
-        event = facts.finish(True)["events"][0]
-        self.assertEqual((event["phase"], event["toolName"], event["category"]), (None, None, "other"))
+        call = list(tool_evidence.read_tool_calls(facts.finish(True)))[0]
+        self.assertEqual((call["phases"], call["categories"], call["incomplete"]), ([], ["other"], True))
 
     def test_a_title_never_becomes_the_tool_name(self):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "title": "Read /etc/passwd"}))
-        event = facts.finish(True)["events"][0]
-        self.assertIsNone(event["toolName"])
-        self.assertEqual(event["category"], "other")
+        call = list(tool_evidence.read_tool_calls(facts.finish(True)))[0]
+        self.assertEqual(call["categories"], ["other"])
+        self.assertTrue(call["incomplete"])
 
     def test_identical_projections_collapse_and_conflicting_names_are_kept(self):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}, seq=3))
         package = facts.finish(True)
-        self.assertEqual(len(package["events"]), 1)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
         self.assertEqual(package["toolCalls"], 1)
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Write"}, seq=3))
         package = facts.finish(True)
-        self.assertEqual(len(package["events"]), 2)
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["categories"], ["edit", "read"])
+        self.assertFalse(calls[0]["consistent"])
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -386,9 +398,12 @@ class ProjectionTests(unittest.TestCase):
                                      "source": "sub-agent", "parentToolCallId": "c-root",
                                      "childSessionId": "s-deep"}, session=session, turn=turn))
                 package = facts.finish(True)
-                self.assertEqual(package["events"], [
-                    {"nativeIdentity": {"sessionId": session, "turnId": turn}, "callId": "c-9",
-                     "toolName": "Read", "category": "read", "phase": "start"}])
+                calls = list(tool_evidence.read_tool_calls(package))
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0]["nativeIdentity"], {"sessionId": session, "turnId": turn})
+                self.assertEqual(calls[0]["callId"], "c-9")
+                self.assertEqual(calls[0]["categories"], ["read"])
+                self.assertFalse(calls[0]["belongsToRoot"])
                 self.assertEqual(package["toolCalls"], 1)
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -424,7 +439,7 @@ class ProjectionTests(unittest.TestCase):
                          "type": "message.upserted", "payload": {"message": {"parts": []}}}}):
             facts.observe(message)
         package = facts.finish(True)
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertTrue(package["streamComplete"])
 
     def test_correction_sessions_accumulate_in_one_collector(self):
@@ -441,8 +456,27 @@ class ProjectionTests(unittest.TestCase):
         package = facts.finish(True)
         self.assertEqual(package["nativeIdentity"], [ROOT, {"sessionId": "s-2", "turnId": "t-2"}])
         self.assertEqual(package["toolCalls"], 2)
-        self.assertEqual(len(package["events"]), 4)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 2)
         self.assertTrue(package["streamComplete"])
+
+    def test_batch_acknowledges_more_than_128_identified_calls(self):
+        facts = self.facts()
+        ids = [f"c-{index}" for index in range(131)]
+        for index, call_id in enumerate(ids):
+            facts.observe(frame({"kind": "scheduled", "toolCallId": call_id,
+                                 "toolName": "Read"}, seq=index * 2 + 2))
+            facts.observe(frame({"kind": "result", "toolCallId": call_id,
+                                 "result": {"success": True}}, seq=index * 2 + 3))
+        facts.observe(frame({"kind": "batch", "toolCallIds": ids,
+                             "successCount": len(ids), "errorCount": 0}, seq=300))
+        package = facts.finish(True)
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (131, 0))
+        self.assertEqual(len(calls), 131)
+        self.assertTrue(package["streamComplete"])
+        self.assertTrue(all(call["categories"] == ["read"] and call["phases"] == ["end", "start"]
+                            and call["consistent"] and not call["incomplete"] for call in calls))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
 
 class ProjectionOrderingTests(unittest.TestCase):
@@ -482,7 +516,7 @@ class ProjectionOrderingTests(unittest.TestCase):
                                  "stop")
                 self.assertEqual(correction.stop_reason, "no-tool-violation")
                 package = facts.finish(False)
-                self.assertEqual(len(package["events"]), 1)
+                self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
                 self.assertEqual(package["toolCalls"], 1)
                 self.assertFalse(package["streamComplete"])
 
@@ -509,7 +543,7 @@ class ProjectionOrderingTests(unittest.TestCase):
         with self.assertRaises(NativeError) as caught:
             protocol.observe(stale, 2)
         self.assertEqual(caught.exception.code, "invalid-protocol")
-        self.assertEqual(facts.finish(False)["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(facts.finish(False))), [])
 
 
 class FakeAppServerTests(unittest.TestCase):
@@ -571,12 +605,12 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["version"], 1)
+        self.assertEqual(package["version"], 2)
         self.assertEqual(package["binding"], {"harness": "zcode", "taskId": "task",
                                               "attemptId": "attempt", "generation": 1})
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
-        self.assertEqual(package["events"], [])
-        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["truncated"]), (0, 0, False))
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertTrue(package["streamComplete"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "none"))
@@ -599,9 +633,12 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         package = outcome.result["toolEvidence"]
         # The fixture's frame carries no toolCallId: the fact is kept unnamed
         # and the observed count stays unknown rather than inventing one call.
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": {"sessionId": "s-1", "turnId": "t-1"}, "callId": None,
-             "toolName": "shell", "category": "other", "phase": "start"}])
+        calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["nativeIdentity"], ROOT)
+        self.assertIsNone(calls[0]["callId"])
+        self.assertEqual(calls[0]["categories"], ["other"])
+        self.assertTrue(calls[0]["incomplete"])
         self.assertEqual(package["toolCalls"], 0)
         self.assertFalse(package["streamComplete"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
@@ -612,8 +649,10 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("tool-foreign")
         self.assertEqual(outcome.result["code"], "no-tool-violation")
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["events"][0]["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
-        self.assertEqual(package["events"][0]["callId"], "c-f")
+        call = list(tool_evidence.read_tool_calls(package))[0]
+        self.assertEqual(call["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
+        self.assertEqual(call["callId"], "c-f")
+        self.assertFalse(call["belongsToRoot"])
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
@@ -624,7 +663,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(outcome.result["code"], "no-tool-violation")
         package = outcome.result["toolEvidence"]
         self.assertEqual(package["toolCalls"], 0)
-        self.assertEqual(len(package["events"]), 1)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
         self.assertFalse(package["streamComplete"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
 
@@ -633,7 +672,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result["code"], "session-close-unconfirmed")
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertEqual(package["toolCalls"], 0)
         self.assertFalse(package["streamComplete"])
 
@@ -641,7 +680,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         outcome = self.execute("timeout", timeout=10, cancel=True)
         self.assertIn(outcome.status, ("failed", "cancelled"))
         package = outcome.result["toolEvidence"]
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
 
@@ -685,7 +724,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         package = result.tool_evidence.value
         self.assertIsNotNone(package)
         self.assertEqual(package["nativeIdentity"], [{"sessionId": "s-1", "turnId": "t-1"}])
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package)), [])
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 0)
 

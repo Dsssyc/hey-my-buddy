@@ -450,10 +450,11 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def test_handle_registration_failure_stops_and_hands_out_the_created_child(self):
         error = ValueError("fixture handle registration failed")
-        with controller_log_close_failure(log=None) as state, \
-             mock.patch.object(process_controller, "ProcessHandle", side_effect=error):
-            with self.assertRaises(ValueError) as caught:
-                self.launch()
+        from hey_my_buddy.protocol import process_identity
+        with controller_log_close_failure(log=None) as state:
+            with mock.patch.object(process_identity, "_creation_time", side_effect=error):
+                with self.assertRaises(ValueError) as caught:
+                    self.launch()
             self.assertIs(caught.exception, error)
             self.assertEqual(error.owned_popen_evidence,
                              ProcessCreationEvidence(True, True, state["process"].returncode))

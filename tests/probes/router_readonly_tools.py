@@ -100,9 +100,9 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'permission': packet.get('permission') == 'read',
         'nativeIdentity': bool(reported) and all(isinstance(item, dict) and item in roots for item in reported),
         'toolEvidence': tool_problem is None,
-        'readCompleted': isinstance(evidence, dict) and any((event.get('category') in ('read', 'execute'))
-                                                          and event.get('phase') == 'end'
-                                                          for event in evidence.get('events', [])),
+        'readCompleted': tool_problem is None and any(
+            set(call['categories']) & {'read', 'execute'} and 'end' in call['phases']
+            for call in tool_evidence.read_tool_calls(evidence)),
         'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
         'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
         'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,

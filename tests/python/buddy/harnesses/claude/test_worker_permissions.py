@@ -13,6 +13,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.roles.run_execution import worker_delivery
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 
 
 class WorkerPermissionTests(NativeRunCase):
@@ -65,7 +66,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(result.end.reason_code, "unsupported-capability")
                 self.assertIn("cannot provide", result.end.message)
                 self.assertIsNone(result.value)
-                self.assertEqual(result.tool_evidence.value["events"], [])
+                self.assertEqual(list(read_tool_calls(result.tool_evidence.value)), [])
                 self.assertEqual(self.observations(result)["permissionMode"], "default")
 
     def test_unread_mode_is_a_fact_and_does_not_reject_the_turn(self):

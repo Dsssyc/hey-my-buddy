@@ -346,7 +346,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.path.write_text("".join(json.dumps(value) + "\n" for value in values), encoding="utf-8", newline="\n")
 
     def test_missing_empty_unreadable_and_over_limit_keep_complete_read_semantics(self):
-        self.assertEqual(journal.read_inquiry_journal(RUN, None)["reason"], "no-journal-path")
+        self.assertEqual(journal.read_inquiry_journal(RUN, None)["reason"], "journal-not-written")
         self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-not-written")
         self.path.touch()
         empty = journal.read_inquiry_journal(RUN, self.path)
@@ -359,6 +359,13 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         with mock.patch.object(journal.locking, "lock", side_effect=OSError("journal lock failed")):
             self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
         self.assertEqual(journal.read_inquiry_journal(RUN, self.directory)["reason"], "journal-unreadable")
+        if os.name != "nt":
+            linked = self.directory / "linked.jsonl"
+            linked.symlink_to(self.path)
+            self.assertEqual(journal.read_inquiry_journal(RUN, linked)["reason"], "journal-unreadable")
+            fifo = self.directory / "journal.fifo"
+            os.mkfifo(fifo)
+            self.assertEqual(journal.read_inquiry_journal(RUN, fifo)["reason"], "journal-unreadable")
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
         self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-exceeds-limit")

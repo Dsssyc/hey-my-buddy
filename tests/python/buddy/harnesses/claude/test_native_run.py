@@ -785,7 +785,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "native-turn-started-early")
         # The premature tool fact was projected before the boundary rejection.
         package = result.tool_evidence.value
-        self.assertEqual(package["events"][0]["toolName"], "Read")
+        self.assertEqual(list(tool_evidence.read_tool_calls(package))[0]["categories"], ["read"])
         self.assertFalse(package["streamComplete"])
 
     def test_the_native_identity_is_published_only_after_native_confirmation(self):
@@ -967,7 +967,7 @@ class ObserverContractTests(NativeRunCase):
         self.assertTrue(result.stop_evidence.interrupt.requested)
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
-        self.assertTrue(package["events"])
+        self.assertTrue(list(tool_evidence.read_tool_calls(package)))
         # The cumulative counts reached the role before the stop; unknown
         # events stay the honest absence this harness never classified.
         self.assertTrue(any(facts["toolCalls"] > 0 for facts in seen))
@@ -1274,14 +1274,14 @@ class StructuredDeliveryTests(NativeRunCase):
         package = self.package_of(result)
         # The real Read call counts and settles; the delivery and its
         # tool_result pairing are gone from the ordinary tool facts.
-        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
-                         [("Read", "start"), ("Read", "end")])
+        self.assertEqual([(call["categories"], call["phases"]) for call in tool_evidence.read_tool_calls(package)],
+                         [(["read"], ["end", "start"])])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertTrue(package["streamComplete"])
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
         # The verified delivery is excluded from the tool facts by its call
         # identity and delivered as the run's own value.
-        self.assertNotIn("StructuredOutput", [event["toolName"] for event in package["events"]])
+        self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(package)], ["toolu_1"])
         self.assertTrue(result.completion_evidence.stream_end)
         self.assertEqual(result.value.parsed.value, self.delivered())
 
@@ -1297,7 +1297,7 @@ class StructuredDeliveryTests(NativeRunCase):
             return FEEDBACK_CONTINUE
         result = self.execute(self.review_request(), observer=budget_observer)
         package = self.package_of(result)
-        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+        self.assertEqual((package["toolCalls"], list(tool_evidence.read_tool_calls(package))), (0, []))
         # The delivery is the run's own value, never a charged tool call.
         self.assertEqual(result.value.parsed.value, self.delivered())
         # The role's cumulative count never charged the value carrier.
@@ -1324,10 +1324,10 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertTrue(any(facts["settled"] and facts["toolCalls"] == 1 for facts in seen))
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(len(package["events"]), 2)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package))), 1)
         # The unqualified call is no one's delivery: it stays an ordinary
         # counted tool fact under its own native call id.
-        self.assertEqual([event["callId"] for event in package["events"]], ["toolu_so_1"] * 2)
+        self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(package)], ["toolu_so_1"])
 
     def shared_review_observer(self, budget: int):
         try:
@@ -1357,7 +1357,7 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request(), observer=review.observer)
         package = self.package_of(result)
         self.assertIsNone(review.stop_reason)
-        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+        self.assertEqual((package["toolCalls"], list(tool_evidence.read_tool_calls(package))), (0, []))
         self.assertEqual(result.value.parsed.value, self.delivered())
         self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
@@ -1369,8 +1369,8 @@ class StructuredDeliveryTests(NativeRunCase):
                 result = self.execute(self.review_request())
                 package = self.package_of(result)
                 self.assertEqual(package["toolCalls"], 1)
-                self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
-                                 [("StructuredOutput", "start"), ("StructuredOutput", "end")])
+                self.assertEqual([(call["categories"], call["phases"]) for call in tool_evidence.read_tool_calls(package)],
+                                 [(["other"], ["end", "start"])])
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOLS_FORBIDDEN)
 
@@ -1405,7 +1405,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.fixture_case("structured-dupes")
         result = self.execute(self.review_request())
         package = self.package_of(result)
-        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], list(tool_evidence.read_tool_calls(package))),
                          (0, 0, []))
         # The one verified delivery is excluded from the facts and delivered
         # as the run's own value.
@@ -1418,11 +1418,11 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request())
         package = self.package_of(result)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
+        self.assertEqual([call["categories"] for call in tool_evidence.read_tool_calls(package)], [["other"]])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
         # The turn still completed; the call simply proves no delivery.
-        self.assertEqual([event["callId"] for event in package["events"]], ["toolu_so_1"] * 2)
+        self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(package)], ["toolu_so_1"])
 
     def test_a_mounted_same_name_mcp_tool_is_never_exempted(self):
         self.use_fixture(STREAM_FIXTURE)
@@ -1430,8 +1430,9 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request())
         package = self.package_of(result)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["toolName"] for event in package["events"]],
-                         ["mcp__server__StructuredOutput"] * 2)
+        self.assertEqual([(call["callId"], call["categories"], call["phases"])
+                          for call in tool_evidence.read_tool_calls(package)],
+                         [("toolu_1", ["other"], ["end", "start"])])
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
@@ -1443,10 +1444,10 @@ class StructuredDeliveryTests(NativeRunCase):
         # The root's delivery is excluded; the subagent's look-alike call stays
         # a fact under its parent-call identity and fails the root check.
         self.assertEqual(package["toolCalls"], 1)
-        subagent_events = [event for event in package["events"]
-                           if event["toolName"] == "StructuredOutput"]
-        self.assertEqual(len(subagent_events), 2)
-        self.assertTrue(all("callId" in event["nativeIdentity"] for event in subagent_events))
+        subagent_calls = list(tool_evidence.read_tool_calls(package))
+        self.assertEqual(len(subagent_calls), 1)
+        self.assertTrue(all("callId" in call["nativeIdentity"] and not call["belongsToRoot"]
+                            for call in subagent_calls))
         # The look-alike call settles as a disallowed other call; its foreign
         # identity is kept in the facts on top of that.
         self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),

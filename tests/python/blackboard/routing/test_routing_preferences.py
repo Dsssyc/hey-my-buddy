@@ -58,7 +58,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     "spec": {"task": "nested helper"}}]}, integrator={"role": "host", "id": "fixture-host"})
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
-    def test_duplicate_workspace_fields_are_rejected_and_derived_instead(self):
+    def test_workspace_fields_are_derived_from_submission(self):
         with tempfile.TemporaryDirectory() as root:
             for duplicate in ("cwd", "integrator"):
                 field = {"cwd": root} if duplicate == "cwd" else {"integrator": "host-1"}
@@ -67,7 +67,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                         schemas.normalize_workflow_submit({**self.submit_params(root),
                             "executionWorkspace": {"kind": "existing", "access": "write", **field}})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn(f"executionWorkspace.{duplicate}", raised.exception.message)
+                    self.assertEqual(raised.exception.details["field"], duplicate)
             # The normalized intent still carries both, derived from the top level.
             normalized = schemas.normalize_workflow_submit(self.submit_params(root))
             self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
@@ -79,6 +79,26 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                 "executionWorkspace": {"kind": "existing", "access": "write"}}]}, integrator={"role": "host", "id": "fixture-host"})[0]
             self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
             self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "fixture-host"})
+
+    def test_helper_role_selects_the_single_integrator(self):
+        with tempfile.TemporaryDirectory() as root:
+            helper = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
+                      "executionWorkspace": {"kind": "existing", "access": "write"}}
+            authority = {"role": "host", "id": "fixture-host"}
+            default = schemas.normalize_helpers({"helpers": [helper]}, integrator=authority)[0]
+            self.assertEqual((default["role"], default["integrator"]), ("helper", False))
+            selected = schemas.normalize_helpers({"helpers": [{**helper, "role": "integrator"}]},
+                                                 integrator=authority)[0]
+            self.assertEqual((selected["role"], selected["integrator"]), ("integrator", True))
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [{**helper, "integrator": True}]}, integrator=authority)
+            self.assertEqual(raised.exception.details["field"], "integrator")
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [
+                    {**helper, "role": "integrator"},
+                    {**helper, "requestId": "second", "role": "integrator"},
+                ]}, integrator=authority)
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_owner_attribution_never_changes_the_host_or_submission_identity(self):
         with tempfile.TemporaryDirectory() as root:

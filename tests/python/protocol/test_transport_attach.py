@@ -793,9 +793,11 @@ class RpcReadOnlySetupTests(unittest.TestCase):
                 with MutationRecorder() as recorder:
                     with self.assertRaises(ServiceError) as refused:
                         _request(endpoint, "ping", {}, state_dir=self.directory)
-                    self.assertIsNone(_attach_read_only(self.directory))
+                    with self.assertRaises(ServiceError) as attach_refused:
+                        _attach_read_only(self.directory)
                 recorder.assert_no_mutation()
-                self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                self.assertEqual(refused.exception.code, "LAUNCH_ACCESS_DENIED")
+                self.assertEqual(attach_refused.exception.code, "LAUNCH_ACCESS_DENIED")
                 self.assertRegex(str(refused.exception.__cause__).lower(),
                                  r"(group|world|other).*(writ|permission)|(writ|permission).*(group|world|other)",
                                  "the SDK must reject writable access, not an arbitrary transport error")
