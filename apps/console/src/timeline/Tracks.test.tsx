@@ -120,11 +120,11 @@ describe("timeline drawings follow recorded facts", () => {
   });
   it("draws hollow inquiries, acceptance checks and dots for separate Host events, excluding dispatch and integration", () => {
     const events = ["dispatch", "accept", "decide", "continue", "integrate", "reject", "conclude", "cancel", "takeover"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(16 + seq * 2), note: "Explanation" }));
-    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] })], { events });
+    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), state: "answered" }] })], { events });
     expect(slot("inquiry-mark")?.getAttribute("class")).toContain("fill-card");
     expect(document.querySelectorAll('[data-slot=accept-mark]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(6);
-    expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), author: "host-1", state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
+    expect(spanReadout(execution({ inquiries: [{ inquiryId: "q", createdAt: at(10), state: "answered" }] }), Date.parse(at(40)))).toContain("已答复");
   });
   it("keeps the acceptance mark's word for its readout and hover, off the track itself", () => {
     track([], { events: [{ ...base.events[0]!, seq: 3, kind: "accept", at: at(20) }] });
@@ -160,7 +160,7 @@ describe("timeline drawings follow recorded facts", () => {
   });
   it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
     const user = userEvent.setup();
-    const inquiry = { inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" as const };
+    const inquiry = { inquiryId: "q", createdAt: at(20), state: "answered" as const };
     const event = { ...base.events[0]!, seq: 7, kind: "reject", at: at(20), note: "Decision" };
     const onOpen = vi.fn();
     track([execution({ inquiries: [inquiry] })], { events: [event], onOpen, tabKey: "cluster:event:7" });
@@ -181,7 +181,7 @@ describe("timeline drawings follow recorded facts", () => {
   it("selects and opens a single inquiry on click or Enter", async () => {
     const onOpen = vi.fn();
     const onSelect = vi.fn();
-    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" }] })], { onOpen, onSelect, tabKey: "inquiry:q" });
+    track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), state: "answered" }] })], { onOpen, onSelect, tabKey: "inquiry:q" });
     const inquiry = document.querySelector<SVGGElement>('[data-key="inquiry:q"]')!;
     expect(inquiry.getAttribute("tabindex")).toBe("0");
     await userEvent.setup().click(inquiry);

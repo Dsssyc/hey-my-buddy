@@ -186,7 +186,7 @@ describe("what a decision was bound by", () => {
 });
 
 describe("the inquiries", () => {
-  const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, inquiryId: `question-${id}`, attemptId: "a1", question: "问", author: "host", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
+  const message = (id: string, state: string, extra: Record<string, unknown> = {}) => ({ messageId: id, inquiryId: `question-${id}`, attemptId: "a1", question: "问", createdAt: "t", state, reason: null, delivery: null, answer: null, ...extra });
 
   it("lists the oldest first, as the board returns them newest first, and says when the page may not hold all", () => {
     const parsed = parseInquiries({ messages: [message("new", "delivered"), message("old", "answered", { answer: { text: "答", at: "t2", truncated: true } })] }, 2);
@@ -199,6 +199,11 @@ describe("the inquiries", () => {
 
   it("keeps an inquiry that names no attempt", () => {
     expect(parseInquiries({ messages: [message("x", "queued", { attemptId: null })] }, 200).items[0]!.attemptId).toBeNull();
+  });
+
+  it("reads admitted cooperative delivery from the stored delivery record", () => {
+    const parsed = parseInquiries({ messages: [message("x", "queued", { delivery: { admittedDelivery: "cooperative-checkpoint" } })] }, 200);
+    expect(parsed.items[0]!.deliveryMode).toBe("cooperative-checkpoint");
   });
 
   it("reads program reasons separately from a Host's original note and rejects a string reason", () => {

@@ -13,7 +13,7 @@ export const tasks = {
     stopUnconfirmed: "Stop unconfirmed",
     queue: "Queued {{duration}}",
     expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silentLegend: "Possibly stuck",
-    waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
+    waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{at}} · {{state}}",
     gap: "Idle {{start}}–{{end}} · {{duration}}", routingMode: "Routing · {{mode}}",
     events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", takeover: "Takeover" },
   },

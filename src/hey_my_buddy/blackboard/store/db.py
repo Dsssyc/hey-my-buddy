@@ -19,7 +19,8 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
+UPGRADE_BASE_SCHEMA = 27
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -81,6 +82,39 @@ MESSAGE_STATES = ("queued", "claimed", "delivered", "answered", "discarded", "un
 TERMINAL_MESSAGE_STATES = frozenset({"answered", "discarded", "unavailable"})
 
 from ...protocol.stop import TERMINATION_REASONS  # noqa: F401 - shared receipt vocabulary
+
+MESSAGES_DDL = """
+CREATE TABLE IF NOT EXISTS messages (
+    message_id      TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    attempt_id      TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    inquiry_id      TEXT NOT NULL,
+    direction       TEXT NOT NULL,
+    author_role     TEXT,
+    author_id       TEXT,
+    body            TEXT NOT NULL,
+    payload_hash    TEXT NOT NULL,
+    state           TEXT NOT NULL
+        CHECK (state IN ('queued','claimed','delivered','answered','discarded','unavailable')),
+    reason_code     TEXT,
+    reason_params_json TEXT,
+    delivery_json   TEXT,
+    answer_json     TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    revision        INTEGER NOT NULL DEFAULT 1,
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'
+            AND state IN ('delivered','unavailable'))),
+    CHECK (state != 'unavailable' OR reason_code IS NOT NULL),
+    CHECK ((author_role IS NULL AND author_id IS NULL)
+        OR (author_role IS NOT NULL AND author_id IS NOT NULL)),
+    UNIQUE(task_id, inquiry_id)
+);
+CREATE INDEX IF NOT EXISTS messages_task_idx ON messages(task_id, created_at);
+CREATE INDEX IF NOT EXISTS messages_state_idx ON messages(state);
+"""
 
 CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -206,36 +240,6 @@ CREATE TABLE IF NOT EXISTS service_issues (
     message             TEXT NOT NULL,
     observed_at         TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS messages (
-    message_id      TEXT PRIMARY KEY,
-    task_id         TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    attempt_id      TEXT REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    inquiry_id      TEXT NOT NULL,
-    direction       TEXT NOT NULL,
-    author          TEXT NOT NULL,
-    recipient       TEXT,
-    body            TEXT NOT NULL,
-    payload_hash    TEXT NOT NULL,
-    state           TEXT NOT NULL
-        CHECK (state IN ('queued','claimed','delivered','answered','discarded','unavailable')),
-    reason_code     TEXT,
-    reason_params_json TEXT,
-    delivery_json   TEXT,
-    answer_json     TEXT,
-    attempts_count  INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    revision        INTEGER NOT NULL DEFAULT 1,
-    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
-        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
-            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'
-            AND state IN ('delivered','unavailable'))),
-    CHECK (state != 'unavailable' OR reason_code IS NOT NULL),
-    UNIQUE(task_id, inquiry_id)
-);
-CREATE INDEX IF NOT EXISTS messages_task_idx ON messages(task_id, created_at);
-CREATE INDEX IF NOT EXISTS messages_state_idx ON messages(state);
 
 CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id     TEXT PRIMARY KEY,
@@ -995,7 +999,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
 """
-SCHEMA = "\n".join((CORE_SCHEMA, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+SCHEMA = "\n".join((CORE_SCHEMA, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 

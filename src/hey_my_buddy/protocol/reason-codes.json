@@ -132,6 +132,7 @@
   "inquiry-no-live-agent": [],
   "inquiry-observe-only": [],
   "inquiry-queued-at-attempt-end": [],
+  "inquiry-delivered-at-attempt-end": [],
   "inquiry-root-turn-ended": [],
   "interrupted-before-delivery": [],
   "journal-attempt-mismatch": [],

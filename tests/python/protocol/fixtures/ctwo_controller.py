@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.harnesses.live import (
     InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
 )
@@ -140,6 +141,12 @@ def simulated_run(module, request, *, services, **options):
     root = Path(request.private_state.invocation_root)
     write_fact(root / "fixture-request.json", request.to_payload())
     endpoint = services.live
+    bridge = InquiryBridge(identity={key: request.identity.to_payload()[key]
+                                     for key in ("taskId", "attemptId", "generation", "turnId")},
+                           journal_path=services.inquiry["resultsPath"],
+                           error_factory=lambda _code, message: RuntimeError(message), event_metadata=lambda _message: {})
+    bridge.start()
+    bridge.activate("simulated-native")
     process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", start_new_session=True)
     owned = ProcessHandle(process, own_group=True, log_paths={})
@@ -153,6 +160,9 @@ def simulated_run(module, request, *, services, **options):
             committed = exchange(process, incoming.to_payload())
             if not committed["committed"]:
                 raise AssertionError("native commit missing")
+            queued = bridge._ask({"inquiryId": incoming.payload.question_id, "question": incoming.payload.question},
+                                 lambda ok, **fields: {"ok": ok, **fields})
+            assert queued["ok"], queued
             endpoint.publish_journal(LiveJournal(available=True, entries=committed["entries"]))
             endpoint.publish_inquiry_state(InquiryState(
                 question_id=incoming.payload.question_id, status="queued"))
@@ -166,6 +176,7 @@ def simulated_run(module, request, *, services, **options):
             write_fact(root / "native-collected.json", {
                 "exitCode": process.returncode, "shutdownConfirmed": stopped})
         finally:
+            bridge.close()
             process.stdout.close()
     return RunResult(identity=request.identity, harness=request.harness,
         end=RunEnd(status="error", reason_code="native-refused", message="model-free fixture"),

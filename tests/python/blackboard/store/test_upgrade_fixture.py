@@ -1,4 +1,4 @@
-"""The fixed schema-27 stock is the accepted current upgrade base."""
+"""The fixed schema-27 stock exercises the pending schema-28 upgrade."""
 from __future__ import annotations
 
 import hashlib
@@ -84,6 +84,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (raw, hashlib.sha256(raw.encode()).hexdigest(), row['turn_id']))
         self.assertTrue(turns)
         connection.commit()
+        upgrade.migrate_schema(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -112,13 +113,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         self.assertEqual(fixture['sourceCommit'], 'ea7ff3a4967154b2d2bf258aa2412f744d252b59')
         self.assertEqual(fixture['sourceVersion'], '0.49.0')
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], upgrade.UPGRADE_BASE_SCHEMA)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(SCHEMA_VERSION))
+                         str(upgrade.UPGRADE_BASE_SCHEMA))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'capability_secret'})
+        self.assertEqual(tuple(connection.execute(
+            'SELECT author,recipient,attempts_count FROM messages').fetchone()),
+            ('cli', 'fixture-retired-recipient', 3))
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
         encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), fixture['schemaSha256'])
@@ -190,12 +194,28 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_base_is_accepted_unchanged_and_matches_fresh_structure(self):
+    def test_base_migrates_once_and_matches_fresh_structure(self):
         fixture, connection = self.restored()
         state = fixture['state']
-        stock = list(connection.iterdump())
+        old_columns = [row['name'] for row in connection.execute('PRAGMA table_info(messages)')]
+        self.assertIn('author', old_columns)
+        self.assertIn('recipient', old_columns)
+        self.assertIn('attempts_count', old_columns)
+        retained = [tuple(row) for row in connection.execute(
+            'SELECT ' + ','.join(upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')]
+        event_stock = [tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')]
+        before = upgrade.idle_snapshot(state)
         files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
+        self.assertEqual(before['schema'], upgrade.UPGRADE_BASE_SCHEMA)
+        self.assertEqual(upgrade.preflight(state, contract_changed=True)['schema'], upgrade.UPGRADE_BASE_SCHEMA)
+        with self.assertRaises(Corruption):
+            Database(state).initialize()
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(state, contract_changed=False)
+        self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
+        upgrade.migrate_schema(state)
+        upgrade.migrate_schema(state)
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
         self.addCleanup(fresh.close)
@@ -209,7 +229,14 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
         for changed in (False, True):
             self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
-        self.assertEqual(list(connection.iterdump()), stock)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT ' + ','.join(upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')], retained)
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT author_role,author_id FROM messages')], [(None, None)])
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')], event_stock)
+        self.assertEqual(upgrade.idle_snapshot(state)['tables'], before['tables'])
+        self.assertEqual(upgrade.idle_snapshot(state, message_columns=upgrade.RETAINED_MESSAGE_COLUMNS)
+                         ['fingerprints']['messages'], before['fingerprints']['messages'])
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
 
@@ -217,6 +244,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         from hey_my_buddy.blackboard.tasks import macro_task_deletion
 
         fixture, connection = self.restored()
+        upgrade.migrate_schema(fixture['state'])
         store = BoardStore(fixture['state'])
         store.initialize()
         self.addCleanup(store.db.close)
@@ -405,10 +433,22 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_started_verification_rejects_rewritten_command_receipts(self):
         fixture, connection = self.restored()
         before = upgrade.idle_snapshot(fixture['state'])
+        upgrade.migrate_schema(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):
             self.assertTrue(upgrade.verify_started(fixture['state'], target, health, before)['retainedDataFingerprints'])
+        secret = connection.execute("SELECT value FROM meta WHERE key='capability_secret'").fetchone()[0]
+        connection.execute("UPDATE meta SET value=? WHERE key='capability_secret'", ('00' * 32,))
+        connection.commit()
+        with mock.patch.object(upgrade, 'command') as command:
+            with self.assertRaises(BoardError) as caught:
+                upgrade.verify_started(fixture['state'], target, health, before)
+            self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+            self.assertEqual(caught.exception.details['tables'], ['meta'])
+            command.assert_not_called()
+        connection.execute("UPDATE meta SET value=? WHERE key='capability_secret'", (secret,))
+        connection.commit()
         command_id = connection.execute("SELECT command_id FROM commands WHERE response_json!='{}' LIMIT 1").fetchone()[0]
         connection.execute("UPDATE commands SET response_json='{}' WHERE command_id=?", (command_id,))
         connection.commit()

@@ -71,8 +71,8 @@ export default {
     lastTool: "Last tool activity {{when}}", lastNative: "Last native activity {{when}}", event: "Event number {{n}}",
   },
   inquiry: {
-    head: "Inquiry · {{who}}", queued: "Queued", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
-    discarded: "Discarded", unavailable: "Could not be delivered", truncated: "The answer is cut short", more: "Earlier inquiries may not be listed.",
+    head: "Inquiry", queued: "Queued", queuedCheckpoint: "Will be delivered at the Worker's next checkpoint; not delivered yet", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
+    discarded: "Discarded", unavailable: "Unavailable", truncated: "The answer is cut short", more: "Earlier inquiries may not be listed.",
   },
   ending: { cause: "End cause: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {

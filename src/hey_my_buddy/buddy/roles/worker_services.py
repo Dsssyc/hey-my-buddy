@@ -35,20 +35,18 @@ import secrets
 from copy import deepcopy
 from pathlib import Path
 
+from ...protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records
 from .turn_io import canonical_json, validate_outcome
 from .prompts import worker_prompt
 from ..harnesses.session_receipts import (
-    INQUIRY_JOURNAL_VERSION,
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
     MAX_INQUIRY_ID_BYTES,
     MAX_INQUIRY_RECEIPT_BYTES,
-    MAX_JOURNAL_BYTES,
     MAX_QUESTION_BYTES,
     MAX_TOOL_REFUSAL_BYTES,
     MAX_TOOL_REFUSAL_DETAIL_BYTES,
     MAX_TOOL_REFUSAL_PREFIX_BYTES,
-    read_shared_snapshot,
     serialized_footprint,
     sign_receipt,
 )
@@ -170,46 +168,12 @@ def attention_requests(configuration: dict) -> int:
 
 
 def read_inquiry_entries(configuration: dict) -> dict[str, dict] | None:
-    """Read-only merged view of the bridge journal for this attempt's turn.
-
-    The controller is the only writer; this merge replays its linear records so
-    a committed question hash, delivery or answer survives every later record.
-    The read takes the shared side of the journal's cross-process ``flock``
-    barrier (see ``session_receipts.read_shared_snapshot``), so while the
-    controller holds the exclusive side through an append/fsync/commit
-    transaction this read waits instead of observing an in-flight or
-    rolled-back record. Replay is strictly attempt-bound: a record replays only
-    with the current journal version and an exact ``taskId``/``attemptId``/
-    ``generation``/``turnId`` binding to this configuration's identity, so
-    malformed, foreign and unbound lines — including a stale journal from
-    another attempt — are ignored rather than exposed to the session tools.
-    """
+    """The shared reader's merged facts for this attempt's session tools."""
     journal = configuration.get("inquiryJournalPath")
     identity = configuration.get("identity")
     if not isinstance(journal, str) or not journal or not isinstance(identity, dict):
         return None
-    raw = read_shared_snapshot(journal, MAX_JOURNAL_BYTES)
-    if raw is None or not raw or len(raw) > MAX_JOURNAL_BYTES:
-        return {}
-    text = raw.decode("utf-8", errors="replace")
-    entries: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue  # a torn line is ignored, never fatal
-        if not isinstance(record, dict) or not isinstance(record.get("inquiryId"), str):
-            continue
-        if record.get("version") != INQUIRY_JOURNAL_VERSION:
-            continue
-        if any(key not in record or record[key] != identity.get(key)
-               for key in ("taskId", "attemptId", "generation", "turnId")):
-            continue
-        entries[record["inquiryId"]] = {**entries.get(record["inquiryId"], {}), **record}
-    return entries
+    return merged_inquiry_records(read_inquiry_journal(identity, journal)["records"])
 
 
 def pending_inquiries(configuration: dict) -> list[dict] | None:

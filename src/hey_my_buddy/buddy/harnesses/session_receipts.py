@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 from typing import Callable, NamedTuple
 
-from ... import locking
 from ...json_codec import canonical_json, decode_strict_json
 
 #: The byte bound of one micro task outcome document, shared by the Worker role's
@@ -40,16 +38,6 @@ MAX_QUESTION_BYTES = 4000
 MAX_ANSWER_BYTES = 4000
 MAX_INQUIRIES = 32
 MAX_INQUIRY_ID_BYTES = 128
-
-#: Byte cap of the inquiry journal one attempt replays; the controller writer
-#: and every session-tool reader agree on this bound.
-MAX_JOURNAL_BYTES = 1024 * 1024
-
-#: The only inquiry-journal record format the writers write and the readers
-#: replay. Every reader requires exactly this version and the record's attempt
-#: identity, so a malformed, foreign or unbound line is ignored instead of
-#: merged.
-INQUIRY_JOURNAL_VERSION = 1
 
 #: Honest bounds of the signed inquiry receipts the session tools return. A
 #: checkpoint receipt may carry every queued question, so its budget covers
@@ -92,36 +80,6 @@ def serialized_footprint(text: str) -> int:
     length.
     """
     return len(canonical_json(text).encode()) - 2
-
-
-def read_shared_snapshot(path, max_bytes: int) -> bytes | None:
-    """One bounded, shared-locked read of the inquiry journal file.
-
-    This is the reader side of the journal's cross-process barrier (POSIX flock,
-    the same primitive the service uses for its lifetime locks): while the
-    controller writer holds the exclusive side through its append/fsync/commit
-    transaction, this read waits, so a reader can never observe a record that
-    the writer has not fully committed — neither an in-flight append nor the
-    remains of a failed one. Returns ``None`` when the file cannot be opened and
-    ``b""`` when it exceeds its byte bound.
-    """
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        return None
-    try:
-        locking.lock(fd, shared=True)
-        if os.fstat(fd).st_size > max_bytes:
-            return b""
-        chunks = bytearray()
-        while len(chunks) <= max_bytes:
-            block = os.read(fd, 65536)
-            if not block:
-                break
-            chunks.extend(block)
-        return bytes(chunks[:max_bytes + 1])
-    finally:
-        os.close(fd)  # closing releases the shared lock
 
 
 # -- the shared session-receipt verification --------------------------------------

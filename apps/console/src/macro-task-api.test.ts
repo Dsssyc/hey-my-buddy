@@ -164,7 +164,7 @@ describe("work macro task reads", () => {
       inquiries: [],
     });
     expect(timeline.spans.find(span => span.spanId === "s-r2-e1")?.inquiries).toEqual([
-      { inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", author: "codex-desktop", state: "answered" },
+      { inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", state: "answered" },
     ]);
     expect(timeline.spans.find(span => span.spanId === "s-r2-e1")?.reminders).toBeNull();
     expect(timeline.spans.find(span => span.spanId === "s-r1-q")).toMatchObject({
@@ -193,8 +193,8 @@ describe("work macro task reads", () => {
       { spanId: execution.spanId, reminders: { ...execution.reminders, toolInProgress: undefined } },
       { spanId: execution.spanId, inquiries: undefined },
       { spanId: execution.spanId, inquiries: null },
-      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "now", author: "host" }] },
-      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "invalid", author: "host", state: "queued" }] },
+      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "now" }] },
+      { spanId: execution.spanId, inquiries: [{ inquiryId: "i", createdAt: "invalid", state: "queued" }] },
       { spanId: queue.spanId, expectedSeconds: undefined },
       { spanId: queue.spanId, reminders: { overdue: false, possiblyStuck: false, lastNativeEventAt: null, toolInProgress: false } },
       { spanId: queue.spanId, inquiries: [] },

@@ -61,7 +61,7 @@ type TimelineReminders = {
   overdue: boolean; possiblyStuck: boolean; lastNativeEventAt: string | null; toolInProgress: boolean;
 };
 type TimelineInquiry = {
-  inquiryId: string; createdAt: string; author: string; state: string;
+  inquiryId: string; createdAt: string; state: string;
 };
 export type TimelineRow = {
   runId: string; parentRunId: string | null; rootRunId: string;

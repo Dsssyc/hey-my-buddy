@@ -137,5 +137,14 @@ def load_fixture(state: Path) -> dict:
                 if changes:
                     fields = ",".join(f'"{name}"=?' for name in changes)
                     connection.execute(f'UPDATE "{table}" SET {fields} WHERE rowid=?', [*changes.values(), row[0]])
+        # The released writer records author but has no path that fills these
+        # retired fields. Seed their old form in this private restoration so a
+        # schema upgrade must discard non-default values from both columns.
+        seeded = connection.execute(
+            "UPDATE messages SET recipient=?, attempts_count=? WHERE inquiry_id=?",
+            ("fixture-retired-recipient", 3, "fixture-inquiry"),
+        )
+        if seeded.rowcount != 1:
+            raise ValueError("Fixed fixture has no message for retired-field stock")
     return {**metadata, "state": state, "fixtureRoot": fixture_root,
             "operations": bind(json.loads(stock["operations.json"])), "bindings": bindings}

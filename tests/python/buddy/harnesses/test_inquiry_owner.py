@@ -6,6 +6,8 @@ and feed actual session MCP receipts through ZCode's native root evidence.
 The endpoint's queued reply is never treated as a native delivery receipt.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol import inquiry_journal as journal
+from hey_my_buddy.protocol.inquiry_journal import INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES
 
 import hashlib
 import inspect
@@ -30,9 +32,6 @@ from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import inquiry_bridge as ib
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-from hey_my_buddy.buddy.harnesses.session_receipts import (
-    INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES,
-)
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeError, RootTurnEvidence,
 )
@@ -153,7 +152,7 @@ class InquiryOwnerTests(unittest.TestCase):
                 self.assertEqual(self.bridge.entries, {})
                 self.assertEqual(direct_snapshot(self.endpoint, fields=("inquiries",)).inquiries, ())
                 reader = threading.Thread(target=lambda: reader_results.append(
-                    ib.read_inquiry_journal(RUN, self.bridge.journal_path)), daemon=True)
+                    journal.read_inquiry_journal(RUN, self.bridge.journal_path)), daemon=True)
                 reader.start()
                 time.sleep(0.05)
                 self.assertEqual(reader_results, [], "shared reader crossed an uncommitted writer")
@@ -279,21 +278,21 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.path.write_text("".join(json.dumps(value) + "\n" for value in values), encoding="utf-8", newline="\n")
 
     def test_missing_empty_unreadable_and_over_limit_keep_complete_read_semantics(self):
-        self.assertEqual(ib.read_inquiry_journal(RUN, None)["reason"], "no-journal-path")
-        self.assertEqual(ib.read_inquiry_journal(RUN, self.path)["reason"], "journal-not-written")
+        self.assertEqual(journal.read_inquiry_journal(RUN, None)["reason"], "no-journal-path")
+        self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-not-written")
         self.path.touch()
-        empty = ib.read_inquiry_journal(RUN, self.path)
+        empty = journal.read_inquiry_journal(RUN, self.path)
         self.assertEqual(empty, {"available": True, "reason": None, "entries": 0,
                                  "records": [], "rejections": []})
-        with mock.patch.object(ib, "read_shared_snapshot", return_value=None):
-            self.assertEqual(ib.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
-        self.assertEqual(ib.read_inquiry_journal(RUN, self.directory)["reason"], "journal-unreadable")
+        with mock.patch.object(journal, "read_shared_snapshot", return_value=None):
+            self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
+        self.assertEqual(journal.read_inquiry_journal(RUN, self.directory)["reason"], "journal-unreadable")
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
-        self.assertEqual(ib.read_inquiry_journal(RUN, self.path)["reason"], "journal-exceeds-limit")
+        self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-exceeds-limit")
 
     def test_final_effective_record_rejects_foreign_and_recovers_continuous_bound_history(self):
-        queued = self.record("q-recovered", question="question", questionSha256="a" * 64)
+        queued = self.record("q-recovered", question="question", questionSha256=hashlib.sha256(b"question").hexdigest())
         delivered = self.record("q-recovered", "delivered", via="tool:hey_my_buddy_checkpoint")
         self.write_records([queued, {**queued, "attemptId": "foreign"}, delivered,
                             self.record("q-rejected"),
@@ -302,7 +301,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         with self.path.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write("{torn tail")
         original = self.path.read_bytes()
-        fact = ib.read_inquiry_journal(RUN, self.path)
+        fact = journal.read_inquiry_journal(RUN, self.path)
         self.assertTrue(fact["available"])
         self.assertEqual(fact["entries"], 3)
         self.assertEqual(fact["records"], [queued, delivered])
@@ -313,13 +312,23 @@ class InquiryJournalProjectionTests(unittest.TestCase):
                           "q-version": "journal-attempt-unbound"})
         self.assertEqual(self.path.read_bytes(), original)
 
+    def test_reader_rejects_a_changed_question_hash_and_noninteger_version(self):
+        queued = self.record("q-hash", question="question", questionSha256=hashlib.sha256(b"question").hexdigest())
+        self.write_records([queued, self.record("q-hash", "answered", questionSha256="f" * 64,
+                                               answer={"text": "wrong question"}),
+                            self.record("q-version-type", version=True)])
+        fact = journal.read_inquiry_journal(RUN, self.path)
+        self.assertEqual(fact["records"], [])
+        self.assertEqual({item["questionId"]: item["reason"] for item in fact["rejections"]},
+                         {"q-hash": "journal-record-invalid", "q-version-type": "journal-attempt-unbound"})
+
     def test_projection_uses_only_shared_locked_read_and_preserves_answer_source_fields(self):
         answer = {"text": "verified", "bytes": 8, "truncated": False,
                   "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "call-native-answer",
                   "at": "2026-10-07T00:00:00Z"}
         self.write_records([self.record("q-answer", "answered", answer=answer)])
         with mock.patch.object(locking, "lock", wraps=locking.lock) as lock:
-            fact = ib.read_inquiry_journal(RUN, self.path)
+            fact = journal.read_inquiry_journal(RUN, self.path)
         self.assertEqual(lock.call_count, 1)
         self.assertTrue(lock.call_args.kwargs["shared"])
         bridge = make_bridge(self.directory, make_endpoint(self.directory / "state"))

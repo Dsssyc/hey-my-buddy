@@ -27,7 +27,7 @@ function comparison(timeline: MacroTaskTimeline): MacroTaskTimeline {
     piece(3, "queued", "queue", "09:04", "09:05", { state: "admitted" }),
     piece(3, "router", "routing", "09:05", "09:06", { routing: router.routing }),
     piece(3, "live", "execution", "09:06", null, { reminders: { overdue: true, possiblyStuck: true, lastNativeEventAt: at("09:12"), toolInProgress: false } }),
-    piece(4, "repair", "execution", "09:15", "09:22", { inquiries: [{ inquiryId: "comparison-question", createdAt: at("09:19"), author: "preview-host", state: "answered" }] })];
+    piece(4, "repair", "execution", "09:15", "09:22", { inquiries: [{ inquiryId: "comparison-question", createdAt: at("09:19"), state: "answered" }] })];
   const event = timeline.events[0]!;
   timeline.events = [{ ...event, seq: 1, runId: ids[0]!, kind: "accept", at: at("09:08"), verdict: "accepted", note: "Review passed" }];
   timeline.totals = { rows: 5, allRows: 5, spans: timeline.spans.length, events: timeline.events.length };

@@ -10,6 +10,7 @@ the controller writer and the session-tool readers. End-to-end turn flows with
 the real runner and fixture live in ``test_zcode_checkpoint.py``.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.inquiry_journal import MAX_JOURNAL_BYTES
 
 import hashlib
 import json
@@ -27,14 +28,13 @@ from pathlib import Path
 from buddy.harnesses.test_c_two_live import TEST_CRM, decode_snapshot, wire_observe
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import activity as activity_module
-from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
+from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.worker_services import attention_requests, pending_inquiries, read_inquiry_entries
 from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
-    MAX_JOURNAL_BYTES,
     sign_receipt,
 )
 from hey_my_buddy.buddy.roles.session_mcp import respond
@@ -568,12 +568,12 @@ class BridgeQueueTests(unittest.TestCase):
         receipt["signature"] = sign_receipt(receipt, "c" * 64)
         self.harness.bridge.record_answer(verify_inquiry_receipt(json.dumps(receipt), {"identity": IDENTITY, "key": "c" * 64},
                                                                  "inquiry-answer"), "root-answer-call")
-        journal = inquiry_module.read_journal(self.harness.credentials["resultsPath"])
+        journal = read_inquiry_journal(IDENTITY, self.harness.credentials["resultsPath"])
         self.assertTrue(journal["available"])
-        merged = journal["entries"]["q-import"]
+        merged = merged_inquiry_records(journal["records"])["q-import"]
         self.assertEqual(merged["state"], "answered")
         self.assertEqual(merged["taskId"], "task-1")
-        answer = inquiry_module.normalize_journal_answer(merged)
+        answer = normalize_inquiry_record(merged)["answer"]
         self.assertEqual(answer["text"], "proceed")
         self.assertEqual(answer["toolCallId"], "root-answer-call")
         self.assertEqual(answer["via"], "tool:hey_my_buddy_answer_inquiry")
@@ -683,7 +683,7 @@ class JournalBarrierTests(unittest.TestCase):
 
         flaky_write.triggered = False
         record = {**bridge._identity_fields(), "inquiryId": "q-rollback", "state": "queued",
-                  "question": "rolled back?", "questionSha256": "a" * 64, "askedAt": "t"}
+                  "question": "rolled back?", "questionSha256": hashlib.sha256(b"rolled back?").hexdigest(), "askedAt": "t"}
         with mock.patch("hey_my_buddy.buddy.harnesses.inquiry_bridge.os.write", side_effect=flaky_write):
             self.assertFalse(bridge._journal(record))
         path = Path(harness.credentials["resultsPath"])
@@ -707,7 +707,7 @@ class JournalBarrierTests(unittest.TestCase):
         # The next append isolates the remains so only that one line is lost.
         self.assertTrue(bridge._journal({**bridge._identity_fields(), "inquiryId": "q-after",
                                          "state": "queued", "question": "after the crash?",
-                                         "questionSha256": "b" * 64, "askedAt": "t"}))
+                                         "questionSha256": hashlib.sha256(b"after the crash?").hexdigest(), "askedAt": "t"}))
         restarted = self.bridge()
         restarted._load_journal()
         self.assertEqual(set(restarted.entries), {"q-good", "q-after"})
@@ -864,7 +864,7 @@ class FinishToolTests(unittest.TestCase):
              "answer": {"text": "foreign", "bytes": 7, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
             # Missing identity fields: unbound, ignored.
             {"version": 1, "inquiryId": "q-unbound", "state": "queued", "question": "no identity",
-             "questionSha256": "b" * 64, "askedAt": "t"},
+             "questionSha256": hashlib.sha256(b"after the crash?").hexdigest(), "askedAt": "t"},
             # Old/unversioned record shape: no fallback, ignored.
             {"inquiryId": "q-old", "state": "answered", "question": "legacy", "questionSha256": "c" * 64,
              "askedAt": "t", **IDENTITY, "answer": {"text": "legacy", "bytes": 6, "truncated": False,

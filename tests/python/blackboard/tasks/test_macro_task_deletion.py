@@ -426,11 +426,11 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 db.execute("INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,"
                            "tool_in_progress,created_at) VALUES(?,?,?,?,?,?)",
                            (task_id, attempt_id, "expected-duration", 2, 0, now))
-                db.execute("INSERT INTO messages(message_id,task_id,attempt_id,inquiry_id,direction,author,"
+                db.execute("INSERT INTO messages(message_id,task_id,attempt_id,inquiry_id,direction,"
                            "body,payload_hash,state,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                           " VALUES(?,?,?,?,?,?,?,?,?,?)",
                            (f"message-{generation}", task_id, attempt_id, f"inquiry-{generation}",
-                            "outbound", "fixture", "private content", "hash", "delivered", now, now))
+                            "outbound", "private content", "hash", "delivered", now, now))
                 db.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,kind,location,content_hash,"
                            "size_bytes,created_at) VALUES(?,?,?,?,?,?,?,?)",
                            (f"artifact-{generation}", task_id, attempt_id, "fixture", "private-location",

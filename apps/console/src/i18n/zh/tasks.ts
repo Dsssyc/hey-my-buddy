@@ -12,7 +12,7 @@ export const tasks = {
     stopUnconfirmed: "停止未确认",
     queue: "排队 {{duration}}",
     expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silentLegend: "可能卡住",
-    waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{author}} · {{at}} · {{state}}",
+    waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{at}} · {{state}}",
     gap: "空闲 {{start}}–{{end}} · {{duration}}", routingMode: "路由 · {{mode}}",
     events: { dispatch: "派发", decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", takeover: "接管" },
   },
