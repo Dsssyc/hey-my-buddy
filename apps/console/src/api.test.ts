@@ -561,7 +561,7 @@ describe("conditional reads (ETag / If-None-Match / 304)", () => {
 describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
   const planEnvelope = {
     planId: "plan-9", createdAt: "2026-09-27T12:00:00Z", expiresAt: "2026-09-27T12:15:00Z",
-    categories: [{ id: "zcode", label: "", bytes: 1, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: [] }],
+    categories: [{ id: "harnesses", label: "", bytes: 1, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: [] }],
     candidates: [], orphanProcesses: [],
   };
   function commandApi(result: unknown) {
@@ -583,9 +583,9 @@ describe("storage wire shapes (0.16, operations.md 3b0a2e6)", () => {
       { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], count: -1 }] },
       { ...planEnvelope, categories: [{ ...planEnvelope.categories[0], reasons: [null] }] },
       { ...planEnvelope, categories: [...planEnvelope.categories, ...planEnvelope.categories] },
-      { ...planEnvelope, candidates: [{ id: "c", category: "zcode", path: "/p", bytes: 1, eligible: true, reasons: [3] }] },
+      { ...planEnvelope, candidates: [{ id: "c", category: "harnesses", path: "/p", bytes: 1, eligible: true, reasons: [3] }] },
       { ...planEnvelope, orphanProcesses: [{ pid: 12, kind: "execution", stateDir: false, runtimeDir: null }] },
-      { ...planEnvelope, categories: [{ id: "zcode", bytes: "1", reclaimableBytes: 0, count: 0, eligibleCount: 0, reasons: [] }] },
+      { ...planEnvelope, categories: [{ id: "harnesses", bytes: "1", reclaimableBytes: 0, count: 0, eligibleCount: 0, reasons: [] }] },
     ]) {
       await expect(commandApi(broken).storagePlan("csrf")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }

@@ -25,6 +25,34 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
+    def test_legacy_cleanup_keeps_link_targets_and_current_private_files(self):
+        state = self.root / 'state'
+        state.mkdir()
+        outside = self.root / 'outside'
+        (outside / 'goals').mkdir(parents=True)
+        survivor = outside / 'goals/native.jsonl'
+        survivor.write_bytes(b'outside history')
+        harnesses = state / 'harnesses'
+        harnesses.mkdir()
+        (harnesses / 'codex').symlink_to(outside, target_is_directory=True)
+        (state / 'decisions').symlink_to(outside, target_is_directory=True)
+        retired = harnesses / 'claude/goals'
+        retired.mkdir(parents=True)
+        (retired / 'external').symlink_to(outside, target_is_directory=True)
+        current = harnesses / 'claude/micro-tasks/current/native.jsonl'
+        current.parent.mkdir(parents=True)
+        current.write_bytes(b'current private native history')
+        (state / 'worker.log').write_bytes(b'retired log')
+        result = schema_upgrade.cleanup_legacy_layout(state)
+        self.assertFalse(result['complete'])
+        self.assertEqual({item['path'] for item in result['failures']}, {'harnesses/codex/goals', 'decisions'})
+        self.assertEqual({item['code'] for item in result['failures']}, {'PRIVATE_PATH_UNSAFE'})
+        self.assertEqual(survivor.read_bytes(), b'outside history')
+        self.assertEqual(current.read_bytes(), b'current private native history')
+        self.assertFalse(retired.exists())
+        self.assertFalse((state / 'worker.log').exists())
+
+
     def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')

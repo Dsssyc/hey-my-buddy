@@ -428,37 +428,6 @@ def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
                 'note':'Upgrade verified; cleanup can be retried independently'}
 
 
-def cleanup_legacy_layout(state: Path) -> dict:
-    """Remove retired private entries only after the replacement is verified."""
-    from ..protocol.harness_names import HARNESS_NAMES
-
-    state = Path(state).absolute()
-    directories = [state / 'harnesses' / harness / 'goals' for harness in HARNESS_NAMES]
-    directories.append(state / 'decisions')
-    files = [state / 'legacy-worker-cleanup.lock', state / 'worker.log']
-    removed, failures = [], []
-    for path in (*directories, *files):
-        relative_path = path.relative_to(state)
-        relative = relative_path.as_posix()
-        try:
-            # Guard every parent inside state before the private remover walks
-            # it; a linked harness directory must never reach its target.
-            for depth in range(len(relative_path.parts) + 1):
-                _restore_guard(state.joinpath(*relative_path.parts[:depth]))
-            if path in directories:
-                deleted = private_dirs.remove_tree(path)
-            else:
-                deleted = path.exists()
-                path.unlink(missing_ok=True)
-            if deleted:
-                removed.append(relative)
-        except (BoardError, OSError) as error:
-            failures.append({'path': relative,
-                             'code': error.code if isinstance(error, BoardError) else type(error).__name__,
-                             'message': str(error)})
-    return {'complete': not failures, 'removed': removed, 'failures': failures}
-
-
 @contextmanager
 def _prepare_runtime(state: Path, *, skill_source: Path | None):
     """Fence the installed service's reclaimer until it stops.
@@ -621,10 +590,11 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 clear_journal(marker)
             except OSError as error:
                 journal_error = str(error)
+            legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
+                              if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA else {})
             pruning = retain_runtimes(state, target, previous)
-            legacy_cleanup = cleanup_legacy_layout(state)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
-                    'rollback':None, 'runtimePruning':pruning, 'legacyLayoutCleanup':legacy_cleanup,
+                    'rollback':None, 'runtimePruning':pruning, **legacy_cleanup,
                     **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                     **({'journalError':journal_error} if journal_error is not None else {})}
 
@@ -654,10 +624,11 @@ def recover(state: Path, root: Path) -> dict:
             clear_journal(marker)
         except OSError as error:
             journal_error = str(error)
+        legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
+                          if contract_changed and journal['expected']['schema'] == UPGRADE_BASE_SCHEMA else {})
         pruning = retain_runtimes(state, target, previous)
-        legacy_cleanup = cleanup_legacy_layout(state)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
-                'legacyLayoutCleanup':legacy_cleanup,
+                **legacy_cleanup,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}

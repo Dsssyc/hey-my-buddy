@@ -9,6 +9,7 @@ import sqlite3
 
 from .db import (DB_FILE, EVENTS_ROUTER_CLAIMED_INDEX_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA,
                  WORKFLOW_CHILDREN_DDL, WORKFLOW_RUNS_DDL)
+from ... import private_dirs
 from ...errors import BoardError
 
 # Task and attempt identity already live in the event columns.
@@ -58,6 +59,47 @@ COALESCE(
     CASE WHEN source.owner_generation = 1 THEN source.host_id END
 )
 """
+
+
+# These retired entries belong to the schema-28 stock, not to future installs.
+LEGACY_LAYOUT = (
+    ('harnesses/codex/goals', True),
+    ('harnesses/claude/goals', True),
+    ('harnesses/zcode/goals', True),
+    ('harnesses/dsh/goals', True),
+    ('decisions', True),
+    ('legacy-worker-cleanup.lock', False),
+    ('worker.log', False),
+)
+
+
+def cleanup_legacy_layout(state: Path) -> dict:
+    """Remove retired private entries after the pending conversion is verified."""
+    state = private_dirs._absolute(state)
+    removed, failures = [], []
+    for relative, directory in LEGACY_LAYOUT:
+        path = state / relative
+        try:
+            # Check parents from state outward before the private remover can
+            # reach a linked harness directory or the target of any link.
+            parts = Path(relative).parts
+            for depth in range(len(parts) + 1):
+                parent = state.joinpath(*parts[:depth])
+                if private_dirs.linked(parent):
+                    raise BoardError('PRIVATE_PATH_UNSAFE', 'Legacy cleanup path contains a link or reparse point',
+                                     path=str(parent))
+            if directory:
+                deleted = private_dirs.remove_tree(path)
+            else:
+                deleted = path.exists()
+                path.unlink(missing_ok=True)
+            if deleted:
+                removed.append(relative)
+        except (BoardError, OSError) as error:
+            failures.append({'path': relative,
+                             'code': error.code if isinstance(error, BoardError) else type(error).__name__,
+                             'message': str(error)})
+    return {'complete': not failures, 'removed': removed, 'failures': failures}
 
 
 def _rebuild_workflow_tables(connection) -> None:

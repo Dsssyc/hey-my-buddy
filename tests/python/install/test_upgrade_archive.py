@@ -159,13 +159,44 @@ class UpgradeCutoverTests(BoardTestCase):
         migrated_board = (self.state / 'board.sqlite3').read_bytes()
 
         second = self.runtime_root / ("c" * 32)
-        result = self.cutover(first, second)
+        later = self.state / 'harnesses/codex/goals/after-conversion.jsonl'
+        later.parent.mkdir(parents=True)
+        later.write_bytes(b'preserve after the one conversion')
+        with mock.patch.object(schema_upgrade, 'cleanup_legacy_layout',
+                               side_effect=AssertionError('unexpected legacy cleanup')) as cleanup:
+            result = self.cutover(first, second)
+        cleanup.assert_not_called()
         self.assertTrue(result["upgraded"], result)
+        self.assertNotIn('legacyLayoutCleanup', result)
+        self.assertEqual(later.read_bytes(), b'preserve after the one conversion')
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
         self.assert_history_preserved(migrated=True)
         self.assertEqual((self.state / 'board.sqlite3').read_bytes(), migrated_board)
         self.assertEqual(self.started_runtimes, [first, second])
+
+    def test_verified_base_conversion_recovery_cleans_legacy_layout(self):
+        target = self.runtime_root / ('b' * 32)
+        target.mkdir()
+        schema_upgrade.migrate_schema(self.state)
+        journal = {'phase': 'verified', 'contractChanged': True,
+                   'previous': str(self.previous), 'target': str(target),
+                   'before': self.before, 'expected': self.before,
+                   'backup': {'path': str(self.state / 'backups/current')}}
+        upgrade.write_journal(self.state / 'upgrade.json', journal)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
+             mock.patch.object(upgrade, 'probe', side_effect=lambda _state, runtime: health if runtime == target else None), \
+             mock.patch.object(upgrade, 'write_active_runtime'), \
+             mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
+             mock.patch.object(upgrade, 'start', side_effect=AssertionError('unexpected restart')):
+            result = upgrade.recover(self.state, self.runtime_root)
+        self.assertTrue(result['upgraded'], result)
+        self.assertTrue(result['recoveredJournal'])
+        self.assertTrue(result['legacyLayoutCleanup']['complete'])
+        self.assertEqual(len(result['legacyLayoutCleanup']['removed']), 7)
+        self.assertFalse((self.state / 'upgrade.json').exists())
+        self.assert_history_preserved(migrated=True)
 
     def test_legacy_cleanup_failure_is_reported_after_verified_cutover(self):
         target = self.runtime_root / ('b' * 32)
@@ -241,6 +272,8 @@ class UpgradeCutoverTests(BoardTestCase):
 
         def failed_retention(*_args):
             self.assertFalse((self.state / 'upgrade.json').exists())
+            for relative in self.legacy_files:
+                self.assertFalse((self.state / relative).exists(), relative)
             (self.state / 'console-settings.json').write_text('{"theme":"after-verification"}', encoding='utf-8')
             raise TypeError('retention defect')
 
