@@ -70,7 +70,12 @@ def _require_running(process: psutil.Process) -> None:
 
 
 def _processes() -> tuple[list[psutil.Process], bool]:
-    """A fresh PID snapshot; a lost or unreadable entry makes it incomplete."""
+    """One PID snapshot in this effective user's scope; unreadable is unknown.
+
+    POSIX private state and runtimes belong to this effective user. Other users,
+    including setuid/root processes, are outside the product's observation scope.
+    Failure to read a process's effective UID cannot establish that exclusion.
+    """
     try:
         pids = psutil.pids()
         if pids is None:
@@ -79,11 +84,18 @@ def _processes() -> tuple[list[psutil.Process], bool]:
         return [], False
     processes = []
     known = True
+    effective_uid = None if psutil.WINDOWS else os.geteuid()
     # process_iter silently skips disappearing processes and caches identities.
     # Explicit construction lets this boundary retain those races as unknown.
     for pid in pids:
         try:
             process = psutil.Process(pid)
+            if not psutil.WINDOWS:
+                uid = process.uids().effective
+                if uid is None:
+                    raise AttributeError('process effective uid unavailable')
+                if uid != effective_uid:
+                    continue
             if process.create_time() is None:
                 raise AttributeError('process creation time unavailable')
             processes.append(process)
@@ -130,16 +142,11 @@ def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], 
     """
     processes, known = _processes()
     problems = [] if known else ['psutil process enumeration incomplete']
+    if not processes and not psutil.WINDOWS:
+        return {}, '; '.join(problems) or None, True
     paths: dict[int, set[str]] = {}
-    selected = []
     for process in processes:
         try:
-            if not psutil.WINDOWS:
-                uids = process.uids()
-                uid = uids.effective if psutil.LINUX else uids.real
-                if uid != os.getuid():
-                    continue  # Match the existing lsof user scope.
-            selected.append(process)
             observed = paths.setdefault(process.pid, set())
             cwd = process.cwd()
             if cwd is None:
@@ -168,8 +175,8 @@ def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], 
             excluded = '^cwd,^mem,^DEL,^txt' if psutil.LINUX else '^cwd'
             try:
                 result = subprocess.run(
-                    [binary, '-nP', '-a', '-u', str(os.getuid()),
-                     '-p', ','.join(str(process.pid) for process in selected),
+                    [binary, '-nP', '-a',
+                     '-p', ','.join(str(process.pid) for process in processes),
                      '-d', excluded, '-Fpn'],
                     capture_output=True, text=True, encoding=locale.getencoding(), timeout=120,
                     check=False)
@@ -179,7 +186,7 @@ def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], 
                 if result.returncode or result.stderr.strip():
                     problems.append(f'lsof observation incomplete (exit {result.returncode})')
                 current_pid = None
-                selected_pids = {process.pid for process in selected}
+                selected_pids = {process.pid for process in processes}
                 for line in result.stdout.splitlines():
                     if line.startswith('p'):
                         current_pid = int(line[1:]) if line[1:].isdigit() else None
@@ -191,7 +198,7 @@ def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], 
             # psutil.open_files filters out deleted/non-regular fd targets. Keep
             # only the existing fd observation here, with psutil supplying PIDs,
             # cwd and mappings; failures can no longer disappear into a continue.
-            for process in selected:
+            for process in processes:
                 try:
                     for handle in (Path('/proc') / str(process.pid) / 'fd').iterdir():
                         paths[process.pid].add(os.readlink(handle))
@@ -199,7 +206,7 @@ def observe_open_paths(*, proc_fds: bool = False) -> tuple[dict[int, set[str]], 
                     problems.append(f'/proc fd observation failed: {type(error).__name__}')
         else:
             available = False
-    for process in selected:
+    for process in processes:
         try:
             _require_running(process)
         except _INSPECTION_ERRORS as error:

@@ -7,12 +7,13 @@ from unittest.mock import Mock, patch
 from hey_my_buddy.blackboard.tasks import storage
 
 
-def process(pid, argv=(), *, files=(), cwd='/', mappings=(), uid=None):
-    uid = getattr(os, 'getuid', lambda: 0)() if uid is None else uid
+def process(pid, argv=(), *, files=(), cwd='/', mappings=(), uid=None, effective_uid=None):
+    uid = getattr(os, 'geteuid', lambda: 0)() if uid is None else uid
+    effective_uid = uid if effective_uid is None else effective_uid
     return SimpleNamespace(
         pid=pid, create_time=Mock(return_value=123.0), is_running=Mock(return_value=True),
         cmdline=Mock(return_value=list(argv)), cwd=Mock(return_value=cwd),
-        uids=Mock(return_value=SimpleNamespace(real=uid, effective=uid)),
+        uids=Mock(return_value=SimpleNamespace(real=uid, effective=effective_uid)),
         open_files=Mock(return_value=[SimpleNamespace(path=str(path)) for path in files]),
         memory_maps=Mock(return_value=[SimpleNamespace(path=str(path)) for path in mappings]))
 

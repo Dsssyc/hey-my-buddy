@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -221,18 +222,22 @@ class PrivateRootTeardownTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True, encoding="utf-8",
         )
+        # This test owns the child and must reap it while teardown observes it;
+        # waiting after teardown would keep an unreadable zombie in the snapshot.
+        reaper = threading.Thread(target=process.wait, daemon=True)
+        reaper.start()
         try:
             self.assertEqual(process.stdout.readline().strip(), "LOCKED")
             lock.unlink()
             self.assertFalse(lock.exists())
             self.assertIsNone(checks.teardown_private_root(root, drain_seconds=20))
             self.assertFalse(root.exists())
-            process.wait(timeout=10)
             self.assertEqual(process.returncode, 0, "the live holder must have exited before clean")
         finally:
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=10)
+            reaper.join(timeout=10)
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
@@ -269,7 +274,9 @@ class PrivateRootTeardownTests(unittest.TestCase):
             self.assertTrue(root.exists())
             report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
             self.assertIn(process.pid, [entry["pid"] for entry in report["processes"]])
-            self.assertEqual(report["observation"]["problems"], [])
+            # Positive residue must be retained even if another in-scope process
+            # disappears during the global observation. The unknown-channel tests
+            # separately require that incomplete observations cannot clear a root.
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -289,7 +296,54 @@ class ProcessObservationTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(storage.psutil, 'WINDOWS', False))
         self.enterContext(patch.object(storage.psutil, 'LINUX', True))
-        self.enterContext(patch.object(storage.os, 'getuid', return_value=0, create=True))
+        self.enterContext(patch.object(storage.os, 'geteuid', return_value=0, create=True))
+
+    def test_different_effective_uid_excludes_denied_argv_and_cwd(self):
+        included = process(123, ['python'], uid=1, effective_uid=0)
+        excluded = process(456, ['login'], uid=0, effective_uid=1)
+        excluded.cmdline.side_effect = storage.psutil.AccessDenied(456)
+        excluded.cwd.side_effect = storage.psutil.AccessDenied(456)
+        with processes(included, excluded), native_references() as native:
+            self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
+            self.assertTrue(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNone(error)
+        self.assertTrue(available)
+        excluded.cmdline.assert_not_called()
+        excluded.cwd.assert_not_called()
+        excluded.create_time.assert_not_called()
+        command = native.call_args.args[0]
+        self.assertEqual(command[command.index('-p') + 1], '123')
+        self.assertNotIn('-u', command)  # The shared effective-UID selection is final.
+
+    def test_same_effective_uid_denied_argv_and_cwd_are_unknown(self):
+        included = process(123, uid=1, effective_uid=0)
+        included.cmdline.side_effect = storage.psutil.AccessDenied(123)
+        included.cwd.side_effect = storage.psutil.AccessDenied(123)
+        with processes(included), native_references():
+            self.assertIsNone(checks._ps_argv_table())
+            self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNotNone(error)
+        self.assertTrue(available)
+
+    def test_unreadable_uids_are_unknown_and_cannot_exclude_a_process(self):
+        included = process(123, effective_uid=0)
+        included.uids.side_effect = storage.psutil.AccessDenied(123)
+        with processes(included), native_references() as native:
+            self.assertIsNone(checks._ps_argv_table())
+            self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNotNone(error)
+        self.assertTrue(available)
+        native.assert_not_called()
+
+    def test_effective_uid_is_read_once_per_pid_snapshot(self):
+        included = process(123)
+        with processes(included), native_references():
+            _, error, _ = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNone(error)
+        included.uids.assert_called_once_with()
 
     def test_native_argv_tokens_keep_spaces_and_chinese_without_matching_text(self):
         root = Path('/private/检查 fixture with spaces')
