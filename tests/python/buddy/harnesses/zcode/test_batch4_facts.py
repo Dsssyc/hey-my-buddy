@@ -2,6 +2,7 @@
 import json
 import os
 import queue
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -103,6 +104,43 @@ class BoundaryAndDrainTests(unittest.TestCase):
                 self.assertEqual(error.exception.code, code)
                 connection.call.assert_not_called()
 
+    def test_a_readable_target_row_is_judged_on_its_own(self):
+        spec = {"provider": "api", "model": "model", "effort": "low"}
+        refusing = {"ref": {"providerId": "api", "modelId": "model"},
+                    "reasoning": {"levels": [{"value": "high"}]}}
+        supporting = {"ref": {"providerId": "api", "modelId": "model"},
+                      "reasoning": {"levels": [{"value": "low"}]}}
+        other = {"ref": {"providerId": "api", "modelId": "other"},
+                 "reasoning": {"levels": [{"value": "low"}]}}
+        unreadable = {"ref": []}
+        with self.subTest(case="target-effort-refused-despite-an-unreadable-row"):
+            connection = mock.Mock()
+            snapshot = {"session": {"sessionId": "root"},
+                        "settings": {"model": {"available": [refusing, unreadable]}}}
+            with self.assertRaises(NativeError) as error:
+                native_run.configure_session(connection, snapshot, spec)
+            self.assertEqual(error.exception.code, "invalid-configuration")
+            connection.call.assert_not_called()
+        with self.subTest(case="target-supported-effort-continues-with-the-fact"):
+            unknown = []
+            connection = mock.Mock()
+            connection.call.side_effect = [{}, {}]
+            snapshot = {"session": {"sessionId": "root"},
+                        "settings": {"model": {"available": [supporting, unreadable]}}}
+            result = native_run.configure_session(connection, snapshot, spec, note_unknown=unknown.append)
+            self.assertEqual([call.args[0] for call in connection.call.call_args_list],
+                             ["session/setModel", "session/setThoughtLevel"])
+            self.assertIn("configuration-catalog-unrecognized", unknown)
+            self.assertEqual(result, {"provider": None, "model": None, "effort": None})
+        with self.subTest(case="readable-catalog-without-the-target-refuses"):
+            connection = mock.Mock()
+            snapshot = {"session": {"sessionId": "root"},
+                        "settings": {"model": {"available": [other]}}}
+            with self.assertRaises(NativeError) as error:
+                native_run.configure_session(connection, snapshot, spec)
+            self.assertEqual(error.exception.code, "configuration-unavailable")
+            connection.call.assert_not_called()
+
     def test_blank_configuration_fields_are_refused_at_the_request_boundary(self):
         for key in ("provider", "model", "effort"):
             spec = {"provider": "api", "model": "model", "effort": "low", key: " \t"}
@@ -119,16 +157,32 @@ class BoundaryAndDrainTests(unittest.TestCase):
             mode="native-session", previous_session_id="root"))
         self.assertEqual(native_run._continuation_of(request), ("native-session", "root"))
 
-    def test_shared_unknown_events_summary_stays_bounded_and_keeps_the_total(self):
-        self.assertIsNone(native_run._shared_unknown_events(native_run._RunFacts()))
+    def test_unknown_event_types_stop_growing_at_the_cap_and_keep_the_total(self):
         facts = native_run._RunFacts()
         for index in range(70):
             facts.note_unknown(f"future-method-{index}")
-        summary = native_run._shared_unknown_events(facts)
-        self.assertEqual(len(summary.unknown_events.counts_by_type), 64)
-        self.assertEqual(summary.unknown_events.total, 70)
-        self.assertEqual(sum(count for _, count in summary.unknown_events.counts_by_type), 70)
-        self.assertEqual(summary.unconfirmed, ())
+        self.assertEqual(len(facts.unknown_counts), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(sum(facts.unknown_counts.values()), 70)
+        self.assertEqual(facts.unknown_counts[native_run._UNLISTED_UNKNOWN_TYPES], 7)
+        facts.note_unknown("future-method-0")
+        self.assertEqual(len(facts.unknown_counts), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(sum(facts.unknown_counts.values()), 71)
+
+    def test_the_evidence_file_and_the_shared_outcome_carry_the_same_bounded_counts(self):
+        facts = native_run._RunFacts()
+        for index in range(70):
+            facts.note_unknown(f"future-method-{index}")
+        with tempfile.TemporaryDirectory(prefix="buddy-zcode-facts-") as root:
+            invocation = native_run.ensure_private_dir(Path(root))
+            refs = native_run._evidence_refs(invocation_root=invocation,
+                                             stderr_path=invocation / "missing-stderr.log",
+                                             state=native_run._RunState(), facts=facts, record=None)
+            ref = next(item for item in refs if item.kind == "native-run-facts")
+            retained = json.loads(Path(ref.location).read_text())["unknownEvents"]
+        shared = native_run._shared_unknown_events(facts)
+        self.assertEqual(len(retained["countsByType"]), native_run.MAX_UNKNOWN_EVENT_TYPES)
+        self.assertEqual(retained["countsByType"], dict(shared.unknown_events.counts_by_type))
+        self.assertEqual(retained["total"], shared.unknown_events.total)
 
     def drain(self, message):
         connection = types.SimpleNamespace(messages=queue.Queue())
